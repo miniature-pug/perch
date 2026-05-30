@@ -44,6 +44,11 @@ tool_version() {
   grep "^$1 " "${REPO_ROOT}/.tool-versions" | awk '{print $2}'
 }
 
+# Return the version reported by a CLI tool (last whitespace-delimited field).
+installed_version() {
+  "$1" --version 2>/dev/null | awk '{print $NF}'
+}
+
 # Determine whether to use sudo (never call sudo when already root).
 if [ "$(id -u)" = "0" ]; then
   SUDO=""
@@ -105,6 +110,9 @@ fi
 # Step 1: Go
 # ---------------------------------------------------------------------------
 GO_VERSION="$(tool_version golang)"
+if [ -z "$GO_VERSION" ]; then
+  die "Could not resolve golang version from .tool-versions — ensure the file exists and has a 'golang <version>' line"
+fi
 GO_MIN_MAJOR=1
 GO_MIN_MINOR=24
 
@@ -137,6 +145,8 @@ else
   # Fetch SHA256 from go.dev JSON — grep/awk only, no jq.
   # The JSON lists filename, os, arch, version, sha256 in that order; -A5 covers it.
   EXPECTED_SHA="$(curl -fsSL 'https://go.dev/dl/?mode=json&include=all' \
+    || die "Failed to fetch Go release metadata from go.dev")"
+  EXPECTED_SHA="$(printf '%s' "$EXPECTED_SHA" \
     | grep -A5 "\"${TARBALL}\"" \
     | grep '"sha256"' \
     | awk -F'"' '{print $4}')"
@@ -146,10 +156,13 @@ else
   fi
 
   TMPFILE="$(mktemp /tmp/go-install-XXXXXX.tar.gz)"
-  # Remove tmpfile on exit to avoid leaking even on error.
-  trap 'rm -f "$TMPFILE"' EXIT
+  # Staging dir on the same filesystem as /usr/local for atomic mv.
+  STAGE_DIR="/usr/local/.perch-go-$$"
+  # Remove tmpfile and staging dir on any exit (including errors).
+  trap '$SUDO rm -rf "$TMPFILE" "$STAGE_DIR"' EXIT
 
-  curl -fsSL -o "$TMPFILE" "$DOWNLOAD_URL"
+  curl -fsSL -o "$TMPFILE" "$DOWNLOAD_URL" \
+    || die "Failed to download Go tarball from ${DOWNLOAD_URL}"
 
   # Verify checksum.
   if [ "$GOOS" = "linux" ]; then
@@ -162,10 +175,22 @@ else
     die "SHA256 mismatch for ${TARBALL}: got ${ACTUAL_SHA}, expected ${EXPECTED_SHA}"
   fi
 
-  # Extract — remove any previous installation first.
+  # Atomic extraction: extract into a staging dir, verify, then swap.
+  $SUDO mkdir -p "$STAGE_DIR"
+  $SUDO tar -C "$STAGE_DIR" -xzf "$TMPFILE"
+
+  # Verify the expected binary exists in the staged tree before committing the swap.
+  if [ ! -x "${STAGE_DIR}/go/bin/go" ]; then
+    die "Extraction of ${TARBALL} did not produce go/bin/go — aborting (no change made to /usr/local/go)"
+  fi
+
+  # Swap: remove old installation, move staged tree into place.
   $SUDO rm -rf /usr/local/go
-  $SUDO tar -C /usr/local -xzf "$TMPFILE"
+  $SUDO mv "${STAGE_DIR}/go" /usr/local/go
+
+  # Cleanup temp files (trap will also fire on EXIT but clean eagerly here).
   rm -f "$TMPFILE"
+  $SUDO rm -rf "$STAGE_DIR"
   trap '' EXIT
 
   printf '[ok]    go %s installed at /usr/local/go\n' "$GO_VERSION"
@@ -285,8 +310,11 @@ if [ "$SKIP_AGENTS" = "1" ]; then
   printf '[skip] claude (--skip-agents)\n'
 else
   CLAUDE_VERSION="$(tool_version claude)"
+  if [ -z "$CLAUDE_VERSION" ]; then
+    die "Could not resolve claude version from .tool-versions — ensure the file has a 'claude <version>' line"
+  fi
   if command -v claude >/dev/null 2>&1; then
-    INSTALLED_CLAUDE="$(claude --version 2>/dev/null | awk '{print $NF}' || true)"
+    INSTALLED_CLAUDE="$(installed_version claude || true)"
     if [ "$INSTALLED_CLAUDE" = "$CLAUDE_VERSION" ]; then
       printf '[skip] claude %s already installed\n' "$INSTALLED_CLAUDE"
     else
@@ -297,7 +325,7 @@ else
   else
     printf '[install] claude via https://cli.anthropic.com/install.sh\n'
     curl -fsSL https://cli.anthropic.com/install.sh | sh
-    INSTALLED_CLAUDE="$(claude --version 2>/dev/null | awk '{print $NF}' || true)"
+    INSTALLED_CLAUDE="$(installed_version claude || true)"
     if [ "$INSTALLED_CLAUDE" = "$CLAUDE_VERSION" ]; then
       printf '[ok]    claude %s installed\n' "$INSTALLED_CLAUDE"
     else
@@ -315,8 +343,11 @@ if [ "$SKIP_AGENTS" = "1" ]; then
   printf '[skip] opencode (--skip-agents)\n'
 else
   OPENCODE_VERSION="$(tool_version opencode)"
+  if [ -z "$OPENCODE_VERSION" ]; then
+    die "Could not resolve opencode version from .tool-versions — ensure the file has an 'opencode <version>' line"
+  fi
   if command -v opencode >/dev/null 2>&1; then
-    INSTALLED_OPENCODE="$(opencode --version 2>/dev/null | awk '{print $NF}' || true)"
+    INSTALLED_OPENCODE="$(installed_version opencode || true)"
     if [ "$INSTALLED_OPENCODE" = "$OPENCODE_VERSION" ]; then
       printf '[skip] opencode %s already installed\n' "$INSTALLED_OPENCODE"
     else
@@ -327,7 +358,7 @@ else
   else
     printf '[install] opencode via https://opencode.ai/install\n'
     curl -fsSL https://opencode.ai/install | sh
-    INSTALLED_OPENCODE="$(opencode --version 2>/dev/null | awk '{print $NF}' || true)"
+    INSTALLED_OPENCODE="$(installed_version opencode || true)"
     if [ "$INSTALLED_OPENCODE" = "$OPENCODE_VERSION" ]; then
       printf '[ok]    opencode %s installed\n' "$INSTALLED_OPENCODE"
     else
@@ -358,7 +389,7 @@ if [ "$SKIP_BUILD" = "1" ]; then
   printf '[skip] perch build (--skip-build)\n'
 else
   printf '[install] building perch -> %s/perch\n' "$INSTALL_PREFIX"
-  cd "$REPO_ROOT"
+  cd "$REPO_ROOT" || die "Cannot cd to repo root: ${REPO_ROOT}"
   go build -trimpath \
     -ldflags "-s -w -X main.version=$(git describe --tags --always 2>/dev/null || printf 'dev')" \
     -o "${INSTALL_PREFIX}/perch" ./cmd/perch
@@ -371,7 +402,13 @@ fi
 if [ "$SKIP_SETUP" = "1" ]; then
   printf '[skip] perch setup (--skip-setup)\n'
 else
-  printf '[install] running perch setup\n'
-  "${INSTALL_PREFIX}/perch" setup
-  printf '[ok]    perch setup complete\n'
+  PERCH_BIN="${INSTALL_PREFIX}/perch"
+  if [ ! -x "$PERCH_BIN" ]; then
+    printf '[warn]  perch setup skipped — binary not found at %s (run without --skip-build first)\n' \
+      "$PERCH_BIN"
+  else
+    printf '[install] running perch setup\n'
+    "$PERCH_BIN" setup
+    printf '[ok]    perch setup complete\n'
+  fi
 fi
