@@ -110,20 +110,22 @@ make it available). Milestones M4+ and all integration tests may use it.
 Build in this order (mirrors `plan.md §16`). Each milestone ends at a **checkpoint**:
 report status, prove the DoD green, wait for review.
 
-### M0 — Bootstrap: `.tool-versions` + `install.sh`  *(no tmux needed for build; podman for container test)*
+### M0 — Bootstrap: `.tool-versions` + `install.sh`  ✅ DONE (commits 1641f50→8dee82b)  *(no tmux needed for build; podman for container test)*
 
-- [ ] Objective: pin all external tool versions and provide a POSIX install script.
+- [x] Objective: pin all external tool versions and provide a POSIX install script.
 - Spec refs: `plan.md §21` (whole), `§16.0`.
 - Deliverables:
-  - [ ] `/.tool-versions` (repo root) with the LOCKED pins above:
+  - [x] `/.tool-versions` (repo root) with the LOCKED pins above:
         `golang 1.26.2`, `tmux 3.6`, `claude 2.1.158`, `opencode 1.15.12`. (`git` omitted
         — system-managed, `plan.md §21.2`.) One `<tool> <version>` per line.
-  - [ ] `/install.sh` (repo root, `#!/bin/sh`, POSIX, no bashisms) exactly per
+  - [x] `/install.sh` (repo root, `#!/bin/sh`, POSIX, no bashisms) exactly per
         `plan.md §21.3`: arch/OS detect → `tool_version()` reader → ordered steps
         (go, tmux, git, claude, opencode, build perch, `perch setup`) → flags
         (`--skip-agents`, `--skip-build`, `--skip-setup`, `--prefix=`, `--yes`) →
-        `[skip]/[install]/[ok]/[warn]` output → idempotent.
-  - [ ] `shellcheck install.sh` clean (it's part of `make lint` per §21.3).
+        `[skip]/[install]/[ok]/[warn]` output → idempotent. Hardened: atomic go
+        extraction (temp→verify→swap), loud `curl||die`, fail-fast unknown flags,
+        tmux pin-drift warn, `perch setup` via full binary path.
+  - [x] `shellcheck install.sh` clean (it's part of `make lint` per §21.3).
 - DoD (`plan.md §16.0`): script exits 0 inside `podman run --rm -v "$PWD":/perch ubuntu:24.04 sh /perch/install.sh --skip-agents` **and** the fedora:41 equivalent (podman substitutes for docker). `perch version` and `perch doctor` are stubs until M1 — so for M0 the install-script DoD is the container exit-0 (build step `--skip-build` until the binary exists, or run after M1). **Sequencing note:** `install.sh` step 6 (build) and step 7 (`perch setup`) depend on M1's binary; in M0 verify steps 1–5 + idempotency with `--skip-build --skip-setup`, then close the loop at end of M1.
 
 ### M1 — Skeleton: module, CLI, config, state, `doctor`  *(no tmux needed)*
