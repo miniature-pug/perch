@@ -27,7 +27,10 @@ for arg in "$@"; do
     --skip-setup)  SKIP_SETUP=1  ;;
     --prefix=*)    INSTALL_PREFIX="${arg#--prefix=}" ;;
     --yes)         YES=1         ;;
-    *) printf '[warn] unknown flag: %s\n' "$arg" ;;
+    *)
+      printf 'error: unknown flag: %s\n' "$arg" >&2
+      exit 2
+      ;;
   esac
 done
 
@@ -212,6 +215,30 @@ else
   fi
 fi
 
+# Pin-drift check: warn if installed tmux is at/above minimum but below the
+# pinned version in .tool-versions (§21.1/§21.2 single-source-of-truth).
+# Read the pin — never hardcode a version here.
+TMUX_PINNED="$(tool_version tmux)"
+if command -v tmux >/dev/null 2>&1 && [ -n "$TMUX_PINNED" ]; then
+  _inst_ver="$(tmux -V | awk '{print $2}')"
+  _inst_major="$(printf '%s' "$_inst_ver" | cut -d. -f1)"
+  _inst_minor="$(printf '%s' "$_inst_ver" | cut -d. -f2 | sed 's/[^0-9].*//')"
+  _pin_major="$(printf '%s' "$TMUX_PINNED" | cut -d. -f1)"
+  _pin_minor="$(printf '%s' "$TMUX_PINNED" | cut -d. -f2 | sed 's/[^0-9].*//')"
+  # Only warn when installed is below the pin (and at/above min, so still usable).
+  _below_pin=0
+  if [ "$_inst_major" -lt "$_pin_major" ]; then
+    _below_pin=1
+  elif [ "$_inst_major" -eq "$_pin_major" ] && [ "$_inst_minor" -lt "$_pin_minor" ]; then
+    _below_pin=1
+  fi
+  if [ "$_below_pin" = "1" ] && tmux_meets_minimum; then
+    printf '[warn]  tmux %s installed; .tool-versions pins %s\n' \
+      "$_inst_ver" "$TMUX_PINNED"
+    printf '        Run '"'"'tmux update'"'"' or upgrade via your package manager to match.\n'
+  fi
+fi
+
 # ---------------------------------------------------------------------------
 # Step 3: git (non-fatal install check; exit 1 if absent or too old)
 # ---------------------------------------------------------------------------
@@ -312,20 +339,24 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Resolve INSTALL_PREFIX once — used by both step 6 (build) and step 7 (setup).
+# Must be set before either step so that --skip-build + run-setup still works.
+# ---------------------------------------------------------------------------
+if [ -z "$INSTALL_PREFIX" ]; then
+  if [ -w /usr/local/bin ]; then
+    INSTALL_PREFIX="/usr/local/bin"
+  else
+    INSTALL_PREFIX="${HOME}/.local/bin"
+    mkdir -p "$INSTALL_PREFIX"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # Step 6: build perch
 # ---------------------------------------------------------------------------
 if [ "$SKIP_BUILD" = "1" ]; then
   printf '[skip] perch build (--skip-build)\n'
 else
-  if [ -z "$INSTALL_PREFIX" ]; then
-    if [ -w /usr/local/bin ]; then
-      INSTALL_PREFIX="/usr/local/bin"
-    else
-      INSTALL_PREFIX="${HOME}/.local/bin"
-      mkdir -p "$INSTALL_PREFIX"
-    fi
-  fi
-
   printf '[install] building perch -> %s/perch\n' "$INSTALL_PREFIX"
   cd "$REPO_ROOT"
   go build -trimpath \
@@ -341,6 +372,6 @@ if [ "$SKIP_SETUP" = "1" ]; then
   printf '[skip] perch setup (--skip-setup)\n'
 else
   printf '[install] running perch setup\n'
-  perch setup
+  "${INSTALL_PREFIX}/perch" setup
   printf '[ok]    perch setup complete\n'
 fi
