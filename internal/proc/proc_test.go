@@ -3,6 +3,7 @@ package proc_test
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -169,5 +170,98 @@ func TestExecRunner_NonZeroExit_ReturnsErrorAndOutput(t *testing.T) {
 	// stderr should be non-empty (go env writes usage/error there).
 	if len(stderr) == 0 {
 		t.Error("expected non-empty stderr for invalid go env flag")
+	}
+}
+
+func TestExecRunner_RunInDir_UsesGivenCwd(t *testing.T) {
+	tmp := t.TempDir()
+	want, err := filepath.EvalSymlinks(tmp)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%q): %v", tmp, err)
+	}
+
+	var r proc.ExecRunner
+	stdout, _, err := r.RunInDir(context.Background(), tmp, "pwd")
+	if err != nil {
+		t.Fatalf("RunInDir: unexpected error: %v", err)
+	}
+	got, err := filepath.EvalSymlinks(strings.TrimSpace(string(stdout)))
+	if err != nil {
+		t.Fatalf("EvalSymlinks(stdout): %v", err)
+	}
+	if got != want {
+		t.Errorf("RunInDir cwd: got %q, want %q", got, want)
+	}
+}
+
+// ── FakeRunner RunInDir ───────────────────────────────────────────────────────
+
+func TestFakeRunner_RunInDir_RecordsDir(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Stdout: []byte("ok\n")}, "ls", "-la")
+
+	ctx := context.Background()
+	_, _, err := r.RunInDir(ctx, "/some/dir", "ls", "-la")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(r.Calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(r.Calls))
+	}
+	if r.Calls[0].Dir != "/some/dir" {
+		t.Errorf("Call.Dir: got %q, want %q", r.Calls[0].Dir, "/some/dir")
+	}
+}
+
+func TestFakeRunner_Run_RecordsDirEmpty(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Stdout: []byte("hi\n")}, "echo", "hi")
+
+	_, _, err := r.Run(context.Background(), "echo", "hi")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(r.Calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(r.Calls))
+	}
+	if r.Calls[0].Dir != "" {
+		t.Errorf("Run should record Dir as empty string, got %q", r.Calls[0].Dir)
+	}
+}
+
+func TestFakeRunner_RunInDir_CannedLookupIgnoresCwd(t *testing.T) {
+	// The response key is name+args only; cwd does not affect routing.
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Stdout: []byte("result\n")}, "git", "log")
+
+	ctx := context.Background()
+	stdout, _, err := r.RunInDir(ctx, "/project/a", "git", "log")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(stdout) != "result\n" {
+		t.Errorf("stdout: got %q, want %q", stdout, "result\n")
+	}
+	// Same response returned for a different dir.
+	stdout2, _, err := r.RunInDir(ctx, "/project/b", "git", "log")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(stdout2) != "result\n" {
+		t.Errorf("stdout: got %q, want %q", stdout2, "result\n")
+	}
+}
+
+func TestFakeRunner_Run_DelegatesViaRunInDir(t *testing.T) {
+	// Run delegates to RunInDir; the canned lookup must still work.
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Stdout: []byte("delegated\n")}, "cat", "file")
+
+	stdout, _, err := r.Run(context.Background(), "cat", "file")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(stdout) != "delegated\n" {
+		t.Errorf("stdout: got %q, want %q", stdout, "delegated\n")
 	}
 }

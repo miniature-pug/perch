@@ -17,6 +17,10 @@ import (
 // real processes.
 type Runner interface {
 	Run(ctx context.Context, name string, args ...string) (stdout, stderr []byte, err error)
+	// RunInDir is like Run but executes the command with its working directory
+	// set to dir. When dir is empty the parent process cwd is inherited
+	// unchanged, making RunInDir(ctx, "", ...) identical to Run(ctx, ...).
+	RunInDir(ctx context.Context, dir, name string, args ...string) (stdout, stderr []byte, err error)
 }
 
 // ── ExecRunner ────────────────────────────────────────────────────────────────
@@ -27,13 +31,18 @@ type Runner interface {
 //	var r proc.ExecRunner
 type ExecRunner struct{}
 
-// Run executes name with args under ctx. Stdout and stderr are captured into
-// separate buffers — callers need stderr distinct from stdout for diagnostics
-// (e.g. git writes progress to stderr and the requested data to stdout). The
-// command's error is returned verbatim so callers can inspect *exec.ExitError
-// exit codes; partial output is always returned regardless of error.
-func (e ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte, []byte, error) {
+// RunInDir executes name with args under ctx with the working directory set to
+// dir. When dir is empty the parent cwd is inherited. Stdout and stderr are
+// captured into separate buffers — callers need stderr distinct from stdout for
+// diagnostics (e.g. git writes progress to stderr and the requested data to
+// stdout). The command's error is returned verbatim so callers can inspect
+// *exec.ExitError exit codes; partial output is always returned regardless of
+// error.
+func (e ExecRunner) RunInDir(ctx context.Context, dir, name string, args ...string) ([]byte, []byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &errBuf
@@ -41,12 +50,17 @@ func (e ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byt
 	return outBuf.Bytes(), errBuf.Bytes(), err
 }
 
+func (e ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte, []byte, error) {
+	return e.RunInDir(ctx, "", name, args...)
+}
+
 // ── FakeRunner ────────────────────────────────────────────────────────────────
 
-// Call records a single invocation of FakeRunner.Run.
+// Call records a single invocation of FakeRunner.Run or FakeRunner.RunInDir.
 type Call struct {
 	Name string
 	Args []string
+	Dir  string
 }
 
 // FakeResult is the canned response returned by FakeRunner for a matched command.
@@ -105,10 +119,11 @@ func cmdline(name string, args []string) string {
 	return name + "\x00" + strings.Join(args, "\x00")
 }
 
-// Run records the call, looks up a canned response, and returns it. If no
-// response is found and Default is nil, it returns a descriptive error.
-func (f *FakeRunner) Run(_ context.Context, name string, args ...string) ([]byte, []byte, error) {
-	f.Calls = append(f.Calls, Call{Name: name, Args: args})
+// RunInDir records the call (including dir) and returns the canned response
+// keyed by name+args only. cwd is deliberately excluded from the response key;
+// tests assert the working directory via Call.Dir rather than response routing.
+func (f *FakeRunner) RunInDir(_ context.Context, dir, name string, args ...string) ([]byte, []byte, error) {
+	f.Calls = append(f.Calls, Call{Name: name, Args: args, Dir: dir})
 	key := cmdline(name, args)
 	if res, ok := f.Responses[key]; ok {
 		return res.Stdout, res.Stderr, res.Err
@@ -121,4 +136,8 @@ func (f *FakeRunner) Run(_ context.Context, name string, args ...string) ([]byte
 		human = name + " " + strings.Join(args, " ")
 	}
 	return nil, nil, fmt.Errorf("proc: FakeRunner: no canned response for %q", human)
+}
+
+func (f *FakeRunner) Run(ctx context.Context, name string, args ...string) ([]byte, []byte, error) {
+	return f.RunInDir(ctx, "", name, args...)
 }
