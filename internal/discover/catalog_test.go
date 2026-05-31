@@ -236,6 +236,12 @@ func TestProjects_TreesAttached(t *testing.T) {
 			t.Errorf("trees[%d].Project.Path = %q, want %q", i, tr.Project.Path, mainPath)
 		}
 	}
+
+	// Pointer-identity invariant: every Tree.Project must point at the
+	// element's own Project field — not a stale copy from the build loop.
+	if pt.Trees[0].Project != &pt.Project {
+		t.Errorf("Tree.Project must point at the element's own Project (shared identity)")
+	}
 }
 
 // ── Skip-and-continue on runner error ────────────────────────────────────────

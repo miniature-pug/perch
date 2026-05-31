@@ -33,7 +33,7 @@ func Projects(
 	opts Options,
 	stats map[string]state.ProjectStat,
 	now int64,
-) ([]ProjectTrees, error) {
+) ([]*ProjectTrees, error) {
 	paths, err := Scan(root, opts)
 	if err != nil {
 		return nil, err
@@ -88,9 +88,9 @@ func Projects(
 
 	ordered := state.SortedPaths(discovered, now)
 
-	result := make([]ProjectTrees, 0, len(ordered))
+	result := make([]*ProjectTrees, 0, len(ordered))
 	for _, p := range ordered {
-		result = append(result, *byPath[p])
+		result = append(result, byPath[p])
 	}
 	return result, nil
 }
