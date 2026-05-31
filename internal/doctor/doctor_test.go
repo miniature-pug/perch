@@ -293,6 +293,25 @@ func TestRunExitCode_OneAgentMissing_IsWarn(t *testing.T) {
 	}
 }
 
+func TestRunExitCode_ClaudeMissing_IsWarn(t *testing.T) {
+	// Reverse of the opencode-missing case: opencode present, claude absent.
+	// Must be exit 0 (warn, not fail) and the claude row must name opencode as sibling.
+	sys := fullSystem("/home/tester")
+	delete(sys.paths, "claude")
+	var out strings.Builder
+	code := Run("v0.1.0-dev", &out, sys)
+	if code != 0 {
+		t.Errorf("expected exit 0 when claude missing and opencode present, got %d", code)
+	}
+	output := out.String()
+	if !strings.Contains(output, "at least one agent is required") {
+		t.Errorf("expected one-of-agents message in output; got:\n%s", output)
+	}
+	if !strings.Contains(output, "ok if opencode present") {
+		t.Errorf("expected sibling name 'opencode' in claude-absent message; got:\n%s", output)
+	}
+}
+
 func TestRunExitCode_GoMissing_IsWarn(t *testing.T) {
 	sys := fullSystem("/home/tester")
 	delete(sys.paths, "go")
@@ -305,19 +324,29 @@ func TestRunExitCode_GoMissing_IsWarn(t *testing.T) {
 // ── Drift warning logic ───────────────────────────────────────────────────────
 
 func TestRunDrift_NewerInstalled_NoWarn(t *testing.T) {
-	// go 1.26.3 installed, pin is 1.26.2 → no drift warn (installed > pinned).
+	// go 1.26.3 installed, pin is 1.26.2 → installed > pinned → go row must be [ok].
+	// fullSystem already reports go1.26.3; no override needed.
 	sys := fullSystem("/home/tester")
-	sys.outputs["go version"] = fakeOutput{out: []byte("go version go1.26.3 linux/amd64")}
 	var out strings.Builder
 	Run("v0.1.0-dev", &out, sys)
-	if strings.Contains(out.String(), "[warn]") && strings.Contains(out.String(), "go") {
-		// Only fail if the warn is about go drift, not hooks or other things.
-		lines := strings.Split(out.String(), "\n")
-		for _, l := range lines {
-			if strings.Contains(l, "[warn]") && strings.Contains(l, "go") && strings.Contains(l, "drift") {
-				t.Error("unexpected drift warn for go: installed newer than pin should be [ok]")
-			}
+	output := out.String()
+
+	// Find the go row by its binary path (tabwriter may vary spacing).
+	var goLine string
+	for _, l := range strings.Split(output, "\n") {
+		if strings.Contains(l, "/usr/local/go/bin/go") {
+			goLine = l
+			break
 		}
+	}
+	if goLine == "" {
+		t.Fatal("go row not found in output:\n" + output)
+	}
+	if !strings.Contains(goLine, "[ok]") {
+		t.Errorf("expected [ok] on go row when installed > pin; got: %s", goLine)
+	}
+	if strings.Contains(goLine, "[warn]") || strings.Contains(goLine, "(below pin") {
+		t.Errorf("unexpected below-pin warn on go row when installed > pin; got: %s", goLine)
 	}
 }
 

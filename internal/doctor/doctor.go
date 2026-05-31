@@ -419,6 +419,17 @@ func Run(version string, w io.Writer, sys system) int {
 	return 0
 }
 
+// siblingAgent returns the name of the other agent tool in the descriptor table.
+// Used to build the absence message so it names the partner rather than itself.
+func siblingAgent(name string) string {
+	for _, t := range tools {
+		if t.agentTool && t.name != name {
+			return t.name
+		}
+	}
+	return ""
+}
+
 // checkTool evaluates a single toolDescriptor and returns a checkResult.
 //
 // Drift rule: warn only when installed < pinned. installed >= pinned → [ok].
@@ -440,10 +451,11 @@ func checkTool(td toolDescriptor, pinned map[string]string, sys system) checkRes
 		if td.buildOnly {
 			msg = "not found (build-only; not required to run perch)"
 		}
-		// One-of-agents: the absence message includes the "at least one required" rationale.
+		// One-of-agents: the absence message names the sibling agent so the row is
+		// self-consistent (e.g. "ok if opencode present" appears on the claude row).
 		// Whether this is a hard fail is resolved at the Run level; here it is just a warn.
 		if td.agentTool {
-			msg = "not found (at least one agent is required — ok if claude present)"
+			msg = fmt.Sprintf("not found (at least one agent is required — ok if %s present)", siblingAgent(td.name))
 		}
 		return checkResult{
 			name:    td.name,
