@@ -41,7 +41,7 @@ type item struct {
 	// project is the repo/project name this session belongs to.
 	// Populated by live data (M5-3+); empty for scaffold fixtures.
 	project string
-	// tree is the worktree or branch identifier for this session.
+	// tree is the branch name for this session's working tree.
 	// Populated by live data (M5-3+); empty for scaffold fixtures.
 	tree string
 	// title is the session/project title shown in the list.
@@ -61,6 +61,12 @@ type item struct {
 	live bool
 	// captureTarget is the tmux pane ID to capture for preview (empty when idle).
 	captureTarget string
+	// projectPath is the absolute path to the repository root — used for SessionName + frecency.
+	projectPath string
+	// treePath is the absolute working directory — used as Launch dir and SaveWindow.Tree.
+	treePath string
+	// liveTarget is the pre-built WindowTarget of the live pane's window; empty when idle.
+	liveTarget string
 }
 
 // FilterValue returns the fuzzy-search key: project + tree + title + tool.

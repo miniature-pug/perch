@@ -271,6 +271,35 @@ func TestKillServer_ExecFailure_Returned(t *testing.T) {
 	}
 }
 
+// ── AttachTargetArgs ──────────────────────────────────────────────────────────
+
+func TestAttachTargetArgs_InsideTmux_SwitchClient(t *testing.T) {
+	o := Tmux{
+		Getenv: func(s string) string {
+			if s == "TMUX" {
+				return "/tmp/tmux-1000/default,1234,0"
+			}
+			return ""
+		},
+	}
+	got := o.AttachTargetArgs("=s:=w")
+	want := []string{"switch-client", "-t", "=s:=w"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("AttachTargetArgs (inside tmux) = %v, want %v", got, want)
+	}
+}
+
+func TestAttachTargetArgs_OutsideTmux_AttachSession(t *testing.T) {
+	o := Tmux{
+		Getenv: func(s string) string { return "" },
+	}
+	got := o.AttachTargetArgs("=s:=w")
+	want := []string{"attach-session", "-t", "=s:=w"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("AttachTargetArgs (outside tmux) = %v, want %v", got, want)
+	}
+}
+
 // ── AttachArgs ────────────────────────────────────────────────────────────────
 
 func TestAttachArgs_InsideTmux_SwitchClient(t *testing.T) {
@@ -297,6 +326,41 @@ func TestAttachArgs_OutsideTmux_AttachSession(t *testing.T) {
 	want := []string{"attach-session", "-t", "=myproj"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("AttachArgs (outside tmux) = %v, want %v", got, want)
+	}
+}
+
+// ── SwitchClient ──────────────────────────────────────────────────────────────
+
+func TestSwitchClient_HappyPath(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{}, "tmux", "switch-client", "-t", "=proj:=feat")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	if err := o.SwitchClient(context.Background(), "=proj:=feat"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(r.Calls) != 1 {
+		t.Fatalf("want 1 call, got %d", len(r.Calls))
+	}
+	wantArgs := []string{"switch-client", "-t", "=proj:=feat"}
+	if !reflect.DeepEqual(r.Calls[0].Args, wantArgs) {
+		t.Errorf("Call.Args = %v, want %v", r.Calls[0].Args, wantArgs)
+	}
+}
+
+func TestSwitchClient_ErrorWrapped(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Err: proc.FakeExitError{Code: 1}, Stderr: []byte("no client")},
+		"tmux", "switch-client", "-t", "=proj:=feat")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	err := o.SwitchClient(context.Background(), "=proj:=feat")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "no client") {
+		t.Errorf("error should contain stderr: %v", err)
 	}
 }
 

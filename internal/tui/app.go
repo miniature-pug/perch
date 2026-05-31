@@ -9,6 +9,8 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/Miniature-Pug/perch/internal/tmux"
 )
 
 const (
@@ -34,6 +36,10 @@ type Model struct {
 	// loadErr holds the last whole-load failure message for display in the UI.
 	// Empty string means no error. Cleared on successful reload.
 	loadErr string
+
+	// launchErr holds the last launch/attach failure message. Separate from
+	// loadErr so the two categories can be displayed distinctly.
+	launchErr string
 
 	// previewContent holds the current text shown in the preview pane.
 	// Stored separately from the viewport so tests can assert without rendering.
@@ -90,6 +96,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Refresh the preview for the newly-selected item.
 		return m, m.previewCmd()
+
+	case launchedMsg:
+		if msg.err != nil {
+			m.launchErr = msg.err.Error()
+			return m, nil
+		}
+		m.launchErr = ""
+		target := tmux.WindowTarget(msg.session, msg.window)
+		return m.attachTo(target)
+
+	case switchedMsg:
+		if msg.err != nil {
+			m.launchErr = msg.err.Error()
+		} else {
+			m.launchErr = ""
+		}
+		return m, nil
+
+	case attachFinishedMsg:
+		if msg.err != nil {
+			m.launchErr = msg.err.Error()
+		} else {
+			m.launchErr = ""
+		}
+		// Reloading the list after detach is deferred.
+		return m, nil
 
 	case previewMsg:
 		m.capturing = false
@@ -149,12 +181,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.previewCmd()
 
 		case key.Matches(msg, m.keys.Enter):
-			// TODO(M5-4): launch or attach to the selected session.
-			return m, nil
+			it, ok := m.selectedItem()
+			if !ok || !it.isSession {
+				return m, nil
+			}
+			if it.live && it.liveTarget != "" {
+				// Switch to the existing window — NEVER relaunch a live session:
+				// concurrent --resume can corrupt the shared transcript.
+				return m.attachTo(it.liveTarget)
+			}
+			return m, m.launchCmd(launchSpec{
+				tool:        it.tool,
+				sessionID:   it.id,
+				branch:      it.tree,
+				treePath:    it.treePath,
+				projectPath: it.projectPath,
+				resume:      true,
+			})
 
 		case key.Matches(msg, m.keys.New):
-			// TODO(M5-4): launch a new session in the selected tree.
-			return m, nil
+			it, ok := m.selectedItem()
+			if !ok {
+				// Need a tree context; no-op without a selection
+				// (tool/model picker is deferred to M9).
+				return m, nil
+			}
+			return m, m.launchCmd(launchSpec{
+				tool:        it.tool,
+				branch:      it.tree,
+				treePath:    it.treePath,
+				projectPath: it.projectPath,
+				resume:      false,
+			})
 		}
 	}
 
@@ -184,6 +242,11 @@ func (m Model) View() string {
 	footer := styles.footer.Render(
 		"↵ switch · n new · / filter · q quit",
 	)
+
+	if m.launchErr != "" {
+		errBar := styles.errorBar.Render("Launch failed: " + m.launchErr)
+		return lipgloss.JoinVertical(lipgloss.Left, errBar, body, footer)
+	}
 
 	if m.loadErr != "" {
 		errBar := styles.errorBar.Render("Error loading sessions: " + m.loadErr)

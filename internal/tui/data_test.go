@@ -21,11 +21,15 @@ import (
 
 func TestBuildLiveIndex_LivePane(t *testing.T) {
 	panes := []tmux.Pane{
-		{ID: "%10", PerchSession: "session-abc", Dead: false},
+		{ID: "%10", PerchSession: "session-abc", Dead: false, Session: "proj", Window: "main"},
 	}
 	idx := buildLiveIndex(panes)
-	if got, ok := idx["session-abc"]; !ok || got != "%10" {
-		t.Errorf("want session-abc → %%10, got ok=%v val=%q", ok, got)
+	p, ok := idx["session-abc"]
+	if !ok || p.ID != "%10" {
+		t.Errorf("want session-abc → Pane{ID:%%10}, got ok=%v ID=%q", ok, p.ID)
+	}
+	if p.Session != "proj" || p.Window != "main" {
+		t.Errorf("want Session=proj Window=main, got Session=%q Window=%q", p.Session, p.Window)
 	}
 }
 
@@ -71,9 +75,11 @@ func mkSession(id, tool, dir, title string, updated int64) model.Session {
 // Test 1: live pane matching PerchSession == session.ID → item is live, captureTarget == pane.ID.
 func TestBuildItemFromSession_LivePaneMatches(t *testing.T) {
 	s := mkSession("sess-1", "claude", "/repo", "My Task", 1000)
-	liveBySession := map[string]string{"sess-1": "%17"}
+	liveBySession := map[string]tmux.Pane{
+		"sess-1": {ID: "%17", Session: "myproj", Window: "main"},
+	}
 
-	it := buildItemFromSession(s, "myrepo", "main", 2000, liveBySession).(item)
+	it := buildItemFromSession(s, "myrepo", "main", "/proj/root", "/repo", 2000, liveBySession).(item)
 
 	if !it.live {
 		t.Error("want live=true, got false")
@@ -93,6 +99,16 @@ func TestBuildItemFromSession_LivePaneMatches(t *testing.T) {
 	if it.tree != "main" {
 		t.Errorf("tree = %q, want main", it.tree)
 	}
+	wantLiveTarget := tmux.WindowTarget("myproj", "main")
+	if it.liveTarget != wantLiveTarget {
+		t.Errorf("liveTarget = %q, want %q", it.liveTarget, wantLiveTarget)
+	}
+	if it.projectPath != "/proj/root" {
+		t.Errorf("projectPath = %q, want /proj/root", it.projectPath)
+	}
+	if it.treePath != "/repo" {
+		t.Errorf("treePath = %q, want /repo", it.treePath)
+	}
 }
 
 // Test 2: pane with Dead==true never reaches liveBySession, so session is idle.
@@ -105,7 +121,7 @@ func TestBuildItemFromSession_DeadPaneNotLive(t *testing.T) {
 	}
 	liveBySession := buildLiveIndex(deadPanes)
 
-	it := buildItemFromSession(s, "myrepo", "main", 2000, liveBySession).(item)
+	it := buildItemFromSession(s, "myrepo", "main", "/proj/root", "/repo", 2000, liveBySession).(item)
 
 	if it.live {
 		t.Error("want live=false for dead pane, got true")
@@ -116,14 +132,19 @@ func TestBuildItemFromSession_DeadPaneNotLive(t *testing.T) {
 	if it.status != StatusIdle {
 		t.Errorf("status = %v, want StatusIdle for dead pane", it.status)
 	}
+	if it.liveTarget != "" {
+		t.Errorf("liveTarget = %q, want empty for idle item", it.liveTarget)
+	}
 }
 
 // Test 3: session with no matching live pane → idle, empty captureTarget.
 func TestBuildItemFromSession_NoMatchingPaneIsIdle(t *testing.T) {
 	s := mkSession("sess-3", "opencode", "/repo", "Idle Task", 1000)
-	liveBySession := map[string]string{"other-session": "%30"} // no match for sess-3
+	liveBySession := map[string]tmux.Pane{
+		"other-session": {ID: "%30", Session: "other", Window: "main"},
+	}
 
-	it := buildItemFromSession(s, "myrepo", "feature", 2000, liveBySession).(item)
+	it := buildItemFromSession(s, "myrepo", "feature", "/proj/root", "/repo", 2000, liveBySession).(item)
 
 	if it.live {
 		t.Error("want live=false when no matching pane, got true")
@@ -133,6 +154,9 @@ func TestBuildItemFromSession_NoMatchingPaneIsIdle(t *testing.T) {
 	}
 	if it.status != StatusIdle {
 		t.Errorf("status = %v, want StatusIdle", it.status)
+	}
+	if it.liveTarget != "" {
+		t.Errorf("liveTarget = %q, want empty", it.liveTarget)
 	}
 }
 
@@ -145,12 +169,15 @@ func TestBuildItemFromSession_EmptyPanes(t *testing.T) {
 	liveBySession := buildLiveIndex(nil) // empty index
 
 	for _, s := range sessions {
-		it := buildItemFromSession(s, "proj", "main", 5000, liveBySession).(item)
+		it := buildItemFromSession(s, "proj", "main", "/proj/root", "/r1", 5000, liveBySession).(item)
 		if it.live {
 			t.Errorf("session %s: want live=false with empty panes, got true", s.ID)
 		}
 		if it.captureTarget != "" {
 			t.Errorf("session %s: captureTarget = %q, want empty", s.ID, it.captureTarget)
+		}
+		if it.liveTarget != "" {
+			t.Errorf("session %s: liveTarget = %q, want empty", s.ID, it.liveTarget)
 		}
 	}
 }
@@ -342,6 +369,11 @@ func TestLoaderLivePaneJoin(t *testing.T) {
 	if byID["oc-live"].captureTarget != "%10" {
 		t.Errorf("oc-live: captureTarget = %q, want %%10", byID["oc-live"].captureTarget)
 	}
+	// live pane was reported as session=perch window=w1 in the pane line.
+	wantLiveTarget := tmux.WindowTarget("perch", "w1")
+	if byID["oc-live"].liveTarget != wantLiveTarget {
+		t.Errorf("oc-live: liveTarget = %q, want %q", byID["oc-live"].liveTarget, wantLiveTarget)
+	}
 
 	// oc-idle has no matching pane.
 	if byID["oc-idle"].live {
@@ -349,6 +381,9 @@ func TestLoaderLivePaneJoin(t *testing.T) {
 	}
 	if byID["oc-idle"].captureTarget != "" {
 		t.Errorf("oc-idle: captureTarget = %q, want empty", byID["oc-idle"].captureTarget)
+	}
+	if byID["oc-idle"].liveTarget != "" {
+		t.Errorf("oc-idle: liveTarget = %q, want empty", byID["oc-idle"].liveTarget)
 	}
 }
 
@@ -450,7 +485,7 @@ func TestAssembleItems_FrecencyOrder(t *testing.T) {
 		"/a/proj-b": {sessB},
 	}
 
-	items := assembleItems(pts, claudeByDir, nil, map[string]string{}, 2000)
+	items := assembleItems(pts, claudeByDir, nil, map[string]tmux.Pane{}, 2000)
 
 	if len(items) != 2 {
 		t.Fatalf("want 2 items, got %d", len(items))

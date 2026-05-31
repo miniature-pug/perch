@@ -97,7 +97,7 @@ func assembleItems(
 	pts []*discover.ProjectTrees,
 	claudeByDir map[string][]model.Session,
 	ocByTree map[string][]model.Session,
-	liveBySession map[string]string,
+	liveBySession map[string]tmux.Pane,
 	now int64,
 ) []list.Item {
 	var items []list.Item
@@ -108,19 +108,19 @@ func assembleItems(
 
 			// Claude sessions bound to this tree's directory.
 			for _, s := range claudeByDir[tree.Path] {
-				items = append(items, buildItemFromSession(s, proj.Name, tree.Branch, now, liveBySession))
+				items = append(items, buildItemFromSession(s, proj.Name, tree.Branch, proj.Path, tree.Path, now, liveBySession))
 			}
 
 			// Opencode sessions pre-fetched for this tree.
 			for _, s := range ocByTree[tree.Path] {
-				items = append(items, buildItemFromSession(s, proj.Name, tree.Branch, now, liveBySession))
+				items = append(items, buildItemFromSession(s, proj.Name, tree.Branch, proj.Path, tree.Path, now, liveBySession))
 			}
 		}
 	}
 	return items
 }
 
-// buildLiveIndex returns a map of session ID → live pane ID from the pane
+// buildLiveIndex returns a map of session ID → live Pane from the pane
 // snapshot. Panes where Dead == true are excluded. Panes with an empty
 // PerchSession are skipped so a spurious empty-string key never matches
 // sessions that have no live pane.
@@ -128,8 +128,8 @@ func assembleItems(
 // First-write-wins: by convention one live pane exists per session; if that
 // invariant is violated (duplicate PerchSession tags), we keep the first pane
 // encountered and ignore subsequent ones.
-func buildLiveIndex(panes []tmux.Pane) map[string]string {
-	idx := make(map[string]string, len(panes))
+func buildLiveIndex(panes []tmux.Pane) map[string]tmux.Pane {
+	idx := make(map[string]tmux.Pane, len(panes))
 	for _, p := range panes {
 		if p.Dead || p.PerchSession == "" {
 			continue
@@ -137,7 +137,7 @@ func buildLiveIndex(panes []tmux.Pane) map[string]string {
 		if _, exists := idx[p.PerchSession]; exists {
 			continue // first-write-wins: skip duplicate PerchSession tags
 		}
-		idx[p.PerchSession] = p.ID
+		idx[p.PerchSession] = p
 	}
 	return idx
 }
@@ -148,14 +148,17 @@ func buildLiveIndex(panes []tmux.Pane) map[string]string {
 // Real Working/Waiting/Done detection requires @perch_status and is deferred.
 func buildItemFromSession(
 	s model.Session,
-	projectName, branch string,
+	projectName, branch, projectPath, treePath string,
 	now int64,
-	liveBySession map[string]string,
+	liveBySession map[string]tmux.Pane,
 ) list.Item {
-	paneID, isLive := liveBySession[s.ID]
+	pane, isLive := liveBySession[s.ID]
 	status := StatusIdle
+	var captureTarget, liveTarget string
 	if isLive {
 		status = StatusLive
+		captureTarget = pane.ID
+		liveTarget = tmux.WindowTarget(pane.Session, pane.Window)
 	}
 	return item{
 		id:            s.ID,
@@ -167,7 +170,10 @@ func buildItemFromSession(
 		relTime:       relativeTime(s.Updated, now),
 		isSession:     true,
 		live:          isLive,
-		captureTarget: paneID,
+		captureTarget: captureTarget,
+		projectPath:   projectPath,
+		treePath:      treePath,
+		liveTarget:    liveTarget,
 	}
 }
 

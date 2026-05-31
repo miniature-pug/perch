@@ -94,6 +94,21 @@ func (o Tmux) KillServer(ctx context.Context) error {
 	return fmt.Errorf("tmux kill-server: %w: %s", err, strings.TrimSpace(string(stderr)))
 }
 
+// AttachTargetArgs returns the tmux SUBCOMMAND args (switch-client or
+// attach-session) needed to reach a pre-built target token. It is the
+// primitive underlying AttachArgs; callers that already hold a WindowTarget
+// (e.g. launchCmd after a new session) use this directly to avoid
+// re-building a SessionTarget from parts they don't have.
+//
+// Same environment-driven branching as AttachArgs: switch-client when TMUX
+// is set (perch runs inside tmux), attach-session otherwise.
+func (o Tmux) AttachTargetArgs(target string) []string {
+	if o.getenv()("TMUX") != "" {
+		return []string{"switch-client", "-t", target}
+	}
+	return []string{"attach-session", "-t", target}
+}
+
 // AttachArgs returns the tmux SUBCOMMAND args (switch-client or attach-session)
 // needed to reach session. It returns switch-client args when TMUX is set in
 // the environment (perch is running inside tmux), and attach-session args
@@ -109,10 +124,20 @@ func (o Tmux) KillServer(ctx context.Context) error {
 // Do NOT exec the slice returned by AttachArgs directly; that would run
 // "switch-client" as a binary and silently drop socket isolation.
 func (o Tmux) AttachArgs(session string) []string {
-	if o.getenv()("TMUX") != "" {
-		return []string{"switch-client", "-t", SessionTarget(session)}
+	return o.AttachTargetArgs(SessionTarget(session))
+}
+
+// SwitchClient runs switch-client -t <target> via the runner. target is a
+// pre-built target token (e.g. WindowTarget(session, window)). When perch runs
+// inside tmux ($TMUX set) the client handover is instant and requires no
+// terminal takeover, so the TUI dispatches this as a plain tea.Cmd rather than
+// tea.ExecProcess.
+func (o Tmux) SwitchClient(ctx context.Context, target string) error {
+	_, stderr, err := o.runner().Run(ctx, o.bin(), o.args("switch-client", "-t", target)...)
+	if err != nil {
+		return fmt.Errorf("tmux switch-client: %w: %s", err, strings.TrimSpace(string(stderr)))
 	}
-	return []string{"attach-session", "-t", SessionTarget(session)}
+	return nil
 }
 
 // Connect ensures a window exists for the given session/window/dir and returns
