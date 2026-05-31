@@ -165,18 +165,27 @@ func TestRun_Version_ContainsPlatformInfo(t *testing.T) {
 
 func TestRun_Doctor_Routes(t *testing.T) {
 	// We don't fully control doctor's environment in this test, but we can assert
-	// that the verb "doctor" dispatches and returns an int (not crash/panic).
-	// The detailed doctor logic is tested in internal/doctor.
+	// that the verb "doctor" actually dispatches into doctor.Run (not a stub).
+	// doctor.Run always emits a "\nperch <version>\n" header and then tool rows
+	// (tmux, git, etc.) regardless of whether those tools are present.
+	// A routing regression to an unimplemented stub would print none of these.
 	var out strings.Builder
 	var errBuf strings.Builder
 	code := run([]string{"doctor"}, &out, &errBuf)
-	// Just check we get a valid exit code (0 or 1) and some output.
 	if code != 0 && code != 1 {
 		t.Errorf("doctor returned unexpected code %d", code)
 	}
-	combined := out.String() + errBuf.String()
-	if len(combined) == 0 {
-		t.Error("expected some output from doctor")
+	output := out.String()
+	// The doctor report header always contains the version string.
+	if !strings.Contains(output, "perch") {
+		t.Errorf("expected doctor report header ('perch ...') in output; got:\n%s", output)
+	}
+	// doctor.Run always emits rows for every tool in the descriptor table.
+	if !strings.Contains(output, "tmux") {
+		t.Errorf("expected 'tmux' row in doctor output (proves real routing); got:\n%s", output)
+	}
+	if !strings.Contains(output, "git") {
+		t.Errorf("expected 'git' row in doctor output (proves real routing); got:\n%s", output)
 	}
 }
 

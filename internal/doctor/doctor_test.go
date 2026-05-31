@@ -287,9 +287,14 @@ func TestRunExitCode_OneAgentMissing_IsWarn(t *testing.T) {
 	if code != 0 {
 		t.Errorf("expected exit 0 when one agent missing (other present), got %d", code)
 	}
+	output := out.String()
 	// The missing agent row should carry the one-of-agents rationale.
-	if !strings.Contains(out.String(), "at least one agent is required") {
-		t.Errorf("expected one-of-agents message in output; got:\n%s", out.String())
+	if !strings.Contains(output, "at least one agent is required") {
+		t.Errorf("expected one-of-agents message in output; got:\n%s", output)
+	}
+	// The opencode row must name the sibling agent so the message is self-consistent.
+	if !strings.Contains(output, "ok if claude present") {
+		t.Errorf("expected sibling name 'claude' in opencode-absent message; got:\n%s", output)
 	}
 }
 

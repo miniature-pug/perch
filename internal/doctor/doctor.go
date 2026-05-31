@@ -68,15 +68,16 @@ func (r *realSystem) readFile(path string) ([]byte, error) {
 // a leading "go" word are never matched by themselves.
 var versionRe = regexp.MustCompile(`\d+(?:\.\d+)+`)
 
+// versionPrefixRe strips a leading "v" immediately before a digit so that
+// "v1.2.3" is normalised to "1.2.3" before versionRe runs.
+var versionPrefixRe = regexp.MustCompile(`\bv(\d)`)
+
 // extractVersionToken extracts the first dotted version token from raw output
 // (e.g. "go version go1.26.3 linux/amd64" → "1.26.3"). It strips any leading
 // "v" prefix so "v1.2.3" yields "1.2.3". Returns "" when no token is found.
 func extractVersionToken(raw string) string {
 	raw = strings.TrimSpace(raw)
-	// Strip leading "v" from individual tokens so "v1.2.3" matches.
-	// The regex won't match "v1.2.3" directly because of the "v" prefix —
-	// normalise by replacing "v" immediately before a digit.
-	normalised := regexp.MustCompile(`\bv(\d)`).ReplaceAllString(raw, "$1")
+	normalised := versionPrefixRe.ReplaceAllString(raw, "$1")
 	match := versionRe.FindString(normalised)
 	return match
 }
@@ -308,12 +309,12 @@ func Run(version string, w io.Writer, sys system) int {
 	// results collects all tool-check rows for tabwriter rendering.
 	var results []checkResult
 	hardFail := false
-	var warnings []string
+	warnings := 0
 	hookWarnings := 0
 
 	// Track agent presence for the one-of-agents rule.
-	claudePresent := false
-	opencodePresent := false
+	agentsPresent := 0
+	agentToolCount := 0
 
 	for _, td := range tools {
 		r := checkTool(td, pinnedVersions, sys)
@@ -322,15 +323,15 @@ func Run(version string, w io.Writer, sys system) int {
 		if r.isHard && r.tag != "[ok]" {
 			hardFail = true
 		} else if r.tag == "[warn]" {
-			warnings = append(warnings, r.name+": "+r.version)
+			warnings++
 		}
 
-		// Track agent presence (present if found, regardless of drift state).
-		switch td.name {
-		case "claude":
-			claudePresent = r.path != ""
-		case "opencode":
-			opencodePresent = r.path != ""
+		// Track agent presence generically via the agentTool flag.
+		if td.agentTool {
+			agentToolCount++
+			if r.path != "" {
+				agentsPresent++
+			}
 		}
 	}
 
@@ -338,7 +339,7 @@ func Run(version string, w io.Writer, sys system) int {
 	// Neither agent's checkTool sets hardFail; we resolve the combined state here.
 	// Both absent → hard fail with a synthetic row. The synthetic row is not
 	// added to warnings (it is a hard fail, not a warning count contributor).
-	if !claudePresent && !opencodePresent {
+	if agentToolCount > 0 && agentsPresent == 0 {
 		hardFail = true
 		results = append(results, checkResult{
 			name:    "agents",
@@ -355,7 +356,7 @@ func Run(version string, w io.Writer, sys system) int {
 			tag:     "[warn]",
 			version: msg,
 		})
-		warnings = append(warnings, "claude "+msg)
+		warnings++
 		hookWarnings++
 	}
 	if ok, msg := opencodePluginOk(sys); !ok {
@@ -364,7 +365,7 @@ func Run(version string, w io.Writer, sys system) int {
 			tag:     "[warn]",
 			version: msg,
 		})
-		warnings = append(warnings, "opencode: "+msg)
+		warnings++
 		hookWarnings++
 	}
 
@@ -378,7 +379,7 @@ func Run(version string, w io.Writer, sys system) int {
 				tag:     "[warn]",
 				version: msg,
 			})
-			warnings = append(warnings, "tmux: "+msg)
+			warnings++
 		}
 	}
 
@@ -397,19 +398,19 @@ func Run(version string, w io.Writer, sys system) int {
 
 	// ── Summary ───────────────────────────────────────────────────────────────
 	_, _ = fmt.Fprintln(w)
-	if len(warnings) == 0 {
+	if warnings == 0 {
 		_, _ = fmt.Fprintln(w, "All checks passed.")
 	} else {
 		noun := "warnings"
-		if len(warnings) == 1 {
+		if warnings == 1 {
 			noun = "warning"
 		}
 		// Only mention 'perch setup' when hook warnings are actually present,
 		// since setup won't help with missing agents or go/tmux drift.
 		if hookWarnings > 0 {
-			_, _ = fmt.Fprintf(w, "%d %s. Run 'perch setup' to fix hook issues.\n", len(warnings), noun)
+			_, _ = fmt.Fprintf(w, "%d %s. Run 'perch setup' to fix hook issues.\n", warnings, noun)
 		} else {
-			_, _ = fmt.Fprintf(w, "%d %s.\n", len(warnings), noun)
+			_, _ = fmt.Fprintf(w, "%d %s.\n", warnings, noun)
 		}
 	}
 
@@ -421,13 +422,14 @@ func Run(version string, w io.Writer, sys system) int {
 
 // siblingAgent returns the name of the other agent tool in the descriptor table.
 // Used to build the absence message so it names the partner rather than itself.
+// Falls back to "the other agent" when the table has fewer than two agent entries.
 func siblingAgent(name string) string {
 	for _, t := range tools {
 		if t.agentTool && t.name != name {
 			return t.name
 		}
 	}
-	return ""
+	return "the other agent"
 }
 
 // checkTool evaluates a single toolDescriptor and returns a checkResult.
