@@ -17,13 +17,12 @@ import (
 // Adapter is the seam between perch's orchestration logic and a specific AI
 // coding tool. Each tool (claude, opencode) provides one Adapter implementation.
 //
-// Methods intentionally absent from this interface:
-// The master plan §4 also enumerates InstallStatusHook, ReadyHeuristic, and
-// TrustPrompt. These are deliberately not included here because neither has an
-// honest implementation until the setup and TUI milestones land: status hooks
-// belong to "perch setup" and readiness/trust heuristics require UI surfaces
-// that do not exist yet. They will be added to this interface at those
-// milestones, not speculatively now.
+// The following methods from master-plan §4 are intentionally absent from this interface:
+// InstallStatusHook, ReadyHeuristic, and TrustPrompt are deliberately not
+// included here because neither has an honest implementation until the setup
+// and TUI milestones land: status hooks belong to "perch setup" and
+// readiness/trust heuristics require UI surfaces that do not exist yet. They
+// will be added to this interface at those milestones, not speculatively now.
 type Adapter interface {
 	// Name returns the canonical tool identifier — "claude" or "opencode" —
 	// matching the model.Tool constants. Used in log messages, session records,
@@ -60,9 +59,7 @@ type Adapter interface {
 	NewArgs(opts NewOpts) []string
 }
 
-// NewOpts carries the per-session configuration for a fresh launch. Fields
-// that do not apply to a given tool are silently ignored by that tool's
-// NewArgs implementation.
+// NewOpts carries the per-session configuration for a fresh launch.
 type NewOpts struct {
 	// Model is the provider/model string passed to the tool's model flag —
 	// claude --model / opencode -m. Empty means "use the tool's default."
