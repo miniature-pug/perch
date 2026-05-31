@@ -912,12 +912,13 @@ Build in this order; each milestone is independently runnable/testable.
    ordering, fuzzy filter, capture-pane live preview, D6 live/idle join, `↵`
    resume/switch-or-relaunch split + `n` new, attach via `switch-client`/`tea.ExecProcess`,
    frecency bump + window shadow record. Gates green (unit 12/12, integration 12/12 on
-   real tmux, lint 0, `go mod verify` clean). **Honesty note:** the sentinel integration
-   test proves the launch path *executes* and the D6 join works end-to-end against a real
-   server; binaries present (claude 2.1.159, opencode 1.15.12). Interactive resume/attach
-   *from the TUI* (real handover into an alt-screen tmux window) needs a TTY and remains a
-   **manual smoke-test** — claude has 124 resumable sessions; opencode had none to resume
-   in this environment. Deferred to M6+: `w`/`d`/`x` worktree+cleanup keys, window-reuse on
+   real tmux, lint 0, `go mod verify` clean, coverage 92.2% on `internal/` excl. `internal/tui`).
+   **Honesty note:** the sentinel integration test proves the launch path *executes* and the D6
+   join works end-to-end against a real server. Real **claude resume is demonstrated** — perch's
+   `claude --resume <id>` argv launched into a tmux pty rendered full prior history (no auth/
+   not-found error). Still manual: the **opencode** resume half (no sessions existed to resume —
+   create-then-resume smoke-test) and the final alt-screen **handover into the user's own
+   terminal** (can't be driven headlessly). Deferred to M6+: `w`/`d`/`x` worktree+cleanup keys, window-reuse on
    Connect (M6); resurrect/boot_id reconcile (M7); `@perch_status` pipeline (M8); command
    bar/help/modals/theme (M9). See `docs/superpowers/plans/2026-05-31-perch-m5-tui-open.md`.
 6. **Worktree lifecycle + state** — create (file seeding, post_create), the 3-way
