@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/Miniature-Pug/perch/internal/agent"
+	"github.com/Miniature-Pug/perch/internal/discover"
 	"github.com/Miniature-Pug/perch/internal/model"
 	"github.com/Miniature-Pug/perch/internal/proc"
 	"github.com/Miniature-Pug/perch/internal/tmux"
@@ -202,7 +204,8 @@ func TestModel_PreviewMsgSetsContent(t *testing.T) {
 	}
 }
 
-// Test 5b: stale previewMsg (wrong target) is ignored.
+// Test 5b: stale previewMsg (wrong target) does not apply the stale content.
+// With no loader, the re-fire path shows static detail (not the stale bytes).
 func TestModel_PreviewMsgStaleIsIgnored(t *testing.T) {
 	liveItem := item{
 		id:            "sess-live",
@@ -213,16 +216,16 @@ func TestModel_PreviewMsgStaleIsIgnored(t *testing.T) {
 		captureTarget: "%99",
 		isSession:     true,
 	}
-	m := New([]list.Item{liveItem})
+	m := New([]list.Item{liveItem}) // no loader
 	updated0, _ := m.Update(windowMsg)
 	m = updated0.(Model)
-	m.previewContent = "old content"
 
 	updated, _ := m.Update(previewMsg{content: "stale output", target: "%00"})
 	m = updated.(Model)
 
-	if m.previewContent != "old content" {
-		t.Errorf("stale previewMsg changed previewContent to %q, want old content", m.previewContent)
+	// Stale content must never appear; with no loader the re-fire renders static detail.
+	if m.previewContent == "stale output" {
+		t.Error("stale previewMsg content was applied; it should be ignored")
 	}
 }
 
@@ -387,10 +390,7 @@ func TestLoaderNoLivePanesAllIdle(t *testing.T) {
 }
 
 // TestLoaderFrecencyOrder verifies that the loader uses frecency state without
-// error. Because FakeRunner keys responses by name+args only (not Dir), we
-// cannot assert cross-project ordering through the full loader — that is already
-// tested by the discover package. We assert: no error, state.json is read, and
-// the loader degrades gracefully when opencode returns no sessions.
+// error and degrades gracefully when opencode returns no sessions.
 func TestLoaderFrecencyOrder(t *testing.T) {
 	repoA := makeRepoDir(t)
 
@@ -421,6 +421,54 @@ func TestLoaderFrecencyOrder(t *testing.T) {
 	}
 	// No sessions produced (empty opencode, no claude) — no panic, clean return.
 	_ = msg.items
+}
+
+// TestAssembleItems_FrecencyOrder is a pure-function test that verifies
+// assembleItems preserves the order of pts (the frecency-ordered project list).
+// Two projects A and B: A is supplied first in pts; items for A must appear
+// before items for B regardless of alphabetical order.
+func TestAssembleItems_FrecencyOrder(t *testing.T) {
+	projA := model.Project{Path: "/z/proj-a", Name: "proj-a"}
+	projB := model.Project{Path: "/a/proj-b", Name: "proj-b"}
+
+	treeA := model.Tree{Path: "/z/proj-a", Branch: "main", IsMain: true, Project: &projA}
+	treeB := model.Tree{Path: "/a/proj-b", Branch: "main", IsMain: true, Project: &projB}
+
+	// pts in frecency order: A before B (even though B is alphabetically first).
+	pts := []*discover.ProjectTrees{
+		{Project: projA, Trees: []model.Tree{treeA}},
+		{Project: projB, Trees: []model.Tree{treeB}},
+	}
+
+	sessA := mkSession("id-a", "claude", "/z/proj-a", "Task A", 1000)
+	sessB := mkSession("id-b", "claude", "/a/proj-b", "Task B", 1000)
+
+	claudeByDir := map[string][]model.Session{
+		"/z/proj-a": {sessA},
+		"/a/proj-b": {sessB},
+	}
+
+	items := assembleItems(pts, claudeByDir, nil, map[string]string{}, 2000)
+
+	if len(items) != 2 {
+		t.Fatalf("want 2 items, got %d", len(items))
+	}
+	first := items[0].(item)
+	second := items[1].(item)
+
+	if first.id != "id-a" {
+		t.Errorf("first item id = %q, want id-a (frecency order: A before B)", first.id)
+	}
+	if second.id != "id-b" {
+		t.Errorf("second item id = %q, want id-b", second.id)
+	}
+	// Confirm project names are set correctly.
+	if first.project != "proj-a" {
+		t.Errorf("first.project = %q, want proj-a", first.project)
+	}
+	if second.project != "proj-b" {
+		t.Errorf("second.project = %q, want proj-b", second.project)
+	}
 }
 
 // writeStateWithProjects writes a minimal state.json with project ranks.
@@ -524,4 +572,86 @@ func TestModel_CaptureGatePreventsDuplicates(t *testing.T) {
 		t.Log("note: capturing was reset without a previewMsg (acceptable if list cmd ran)")
 	}
 	_ = cmd
+}
+
+// TestModel_StalePreviewMsgReFires verifies that after a stale previewMsg
+// (target ≠ current selection), the model re-fires a capture cmd for the
+// now-current live selection. This covers navigate-during-capture: the stale
+// result must not strand the preview on the new item.
+func TestModel_StalePreviewMsgReFires(t *testing.T) {
+	// A live item with a loader so previewCmd actually fires a capture cmd.
+	r := proc.NewFakeRunner()
+	// CapturePane will be called by the returned cmd via the loader's Tmux.
+	r.Respond(proc.FakeResult{Stdout: []byte("captured!")},
+		"tmux", "capture-pane", "-t", "%99", "-p")
+
+	liveItem := item{
+		id:            "sess-live",
+		title:         "live session",
+		tool:          "claude",
+		status:        StatusWorking,
+		live:          true,
+		captureTarget: "%99",
+		isSession:     true,
+	}
+	ldr := loader{Tmux: tmux.Tmux{Runner: r}}
+	m := New([]list.Item{liveItem}).WithLoader(ldr)
+	updated0, _ := m.Update(windowMsg)
+	m = updated0.(Model)
+
+	// A stale previewMsg arrives (target is %old, not %99).
+	updated, cmd := m.Update(previewMsg{content: "stale output", target: "%old"})
+	m = updated.(Model)
+
+	// A re-fire cmd must have been returned since current item is live with %99.
+	if cmd == nil {
+		t.Error("expected a non-nil re-fire cmd after stale previewMsg for live selection")
+	}
+	// The stale content must not have been applied.
+	if m.previewContent == "stale output" {
+		t.Error("stale previewMsg content was applied; should be ignored")
+	}
+	// capturing is true again because previewCmd set it when firing the re-capture.
+	if !m.capturing {
+		t.Error("capturing should be true after re-fire cmd was issued")
+	}
+
+	// Execute the re-fire cmd to completion.
+	if cmd != nil {
+		resultMsg := cmd()
+		updated2, _ := m.Update(resultMsg)
+		m = updated2.(Model)
+		if m.previewContent != "captured!" {
+			t.Errorf("after re-fire resolved: previewContent = %q, want %q",
+				m.previewContent, "captured!")
+		}
+	}
+}
+
+// ── claude ctx-cancellation test ──────────────────────────────────────────────
+
+// TestClaude_ListSessionsRespectsCtxCancellation verifies that a pre-cancelled
+// context causes ListSessions to return promptly with a non-nil error, rather
+// than walking all slug directories. Uses the testdata/claude fixture (which has
+// real slug directories) so the cancellation check is exercised.
+func TestClaude_ListSessionsRespectsCtxCancellation(t *testing.T) {
+	c := agent.Claude{}
+	c.Home = "../agent/testdata/claude"
+	c.Bin = "claude"
+	c.LookPath = func(string) (string, error) { return "/usr/bin/claude", nil }
+	c.Exists = func(path string) bool {
+		return path == "/home" || path == "/home/user" || path == "/home/user/myproject" ||
+			path == "/home/user/noai" || path == "/home/user/slugonly"
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel before calling
+
+	_, err := c.ListSessions(ctx)
+	if err == nil {
+		t.Error("want non-nil error from cancelled context, got nil")
+	}
+	if ctx.Err() == nil {
+		t.Error("ctx.Err() should be non-nil after cancel")
+	}
 }

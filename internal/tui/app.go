@@ -85,13 +85,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.previewCmd()
 
 	case previewMsg:
-		// Stale-guard: ignore captures for a target that is no longer selected.
-		if sel, ok := m.selectedItem(); ok && msg.target == sel.captureTarget {
+		m.capturing = false
+		sel, ok := m.selectedItem()
+		if ok && msg.target == sel.captureTarget {
+			// Matching target: apply the content and stop.
 			m.previewContent = msg.content
 			m.preview.SetContent(msg.content)
+			return m, nil
 		}
-		m.capturing = false
-		return m, nil
+		// Stale target: the user navigated during the in-flight capture.
+		// Re-fire a capture for the now-current selection.
+		return m, m.previewCmd()
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width

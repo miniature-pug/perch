@@ -63,35 +63,61 @@ func (l loader) load() tea.Cmd {
 		claudeSessions, _ := l.Claude.ListSessions(ctx) // degrade: skip tool
 		claudeByDir := agent.GroupByDirectory(claudeSessions)
 
-		// Build items in frecency order (discover.Projects returns ordered pts).
-		var items []list.Item
+		// Fetch opencode sessions per tree.
+		// FakeRunner keys responses by name+args only (not Dir), so in tests a
+		// single canned response is shared across all trees. Production code
+		// naturally scopes per tree via Dir.
+		ocByTree := make(map[string][]model.Session, len(pts))
 		for _, pt := range pts {
-			proj := &pt.Project
 			for i := range pt.Trees {
 				tree := &pt.Trees[i]
-
-				// Claude sessions bound to this tree's directory.
-				for _, s := range claudeByDir[tree.Path] {
-					it := buildItemFromSession(s, proj.Name, tree.Branch, l.Now, liveBySession)
-					items = append(items, it)
-				}
-
-				// Opencode sessions are scoped per-tree: one subprocess per tree.
 				oc := agent.Opencode{
 					Runner: l.Runner,
 					Bin:    "opencode",
 					Dir:    tree.Path,
 				}
-				ocSessions, _ := oc.ListSessions(ctx) // degrade: skip tree on error
-				for _, s := range ocSessions {
-					it := buildItemFromSession(s, proj.Name, tree.Branch, l.Now, liveBySession)
-					items = append(items, it)
-				}
+				sessions, _ := oc.ListSessions(ctx) // degrade: skip tree on error
+				ocByTree[tree.Path] = sessions
 			}
 		}
 
+		items := assembleItems(pts, claudeByDir, ocByTree, liveBySession, l.Now)
 		return itemsLoadedMsg{items: items}
 	}
+}
+
+// assembleItems is a pure function that builds the ordered []list.Item slice
+// from pre-fetched data. It is separated from load() so tests can drive the
+// join and ordering logic without touching the filesystem or spawning processes.
+//
+// pts is already in frecency order (as returned by discover.Projects). The
+// output preserves that order: for each project, all trees, then all sessions
+// per tree.
+func assembleItems(
+	pts []*discover.ProjectTrees,
+	claudeByDir map[string][]model.Session,
+	ocByTree map[string][]model.Session,
+	liveBySession map[string]string,
+	now int64,
+) []list.Item {
+	var items []list.Item
+	for _, pt := range pts {
+		proj := &pt.Project
+		for i := range pt.Trees {
+			tree := &pt.Trees[i]
+
+			// Claude sessions bound to this tree's directory.
+			for _, s := range claudeByDir[tree.Path] {
+				items = append(items, buildItemFromSession(s, proj.Name, tree.Branch, now, liveBySession))
+			}
+
+			// Opencode sessions pre-fetched for this tree.
+			for _, s := range ocByTree[tree.Path] {
+				items = append(items, buildItemFromSession(s, proj.Name, tree.Branch, now, liveBySession))
+			}
+		}
+	}
+	return items
 }
 
 // buildLiveIndex returns a map of session ID → live pane ID from the pane
