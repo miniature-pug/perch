@@ -4,9 +4,9 @@ package tui
 import "github.com/charmbracelet/bubbles/key"
 
 // keyMap holds all key bindings used by the root model.
+// Up/Down navigation is intentionally omitted: the bubbles/list model owns
+// those bindings via its built-in keymap.
 type keyMap struct {
-	Up          key.Binding
-	Down        key.Binding
 	Filter      key.Binding
 	ClearFilter key.Binding
 	Enter       key.Binding
@@ -17,14 +17,6 @@ type keyMap struct {
 // defaultKeys returns the standard key map for perch.
 func defaultKeys() keyMap {
 	return keyMap{
-		Up: key.NewBinding(
-			key.WithKeys("k", "up"),
-			key.WithHelp("↑/k", "up"),
-		),
-		Down: key.NewBinding(
-			key.WithKeys("j", "down"),
-			key.WithHelp("↓/j", "down"),
-		),
 		Filter: key.NewBinding(
 			key.WithKeys("/"),
 			key.WithHelp("/", "filter"),

@@ -63,10 +63,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		previewWidth := msg.Width - listWidth
 		paneHeight := msg.Height - footerHeight - 2*borderSize
 
-		m.list.SetWidth(listWidth - 2*borderSize)
-		m.list.SetHeight(paneHeight)
-		m.preview.Width = previewWidth - 2*borderSize
-		m.preview.Height = paneHeight
+		// Clamp all derived dimensions to ≥ 0 so subcomponents never receive
+		// negative sizes on very small terminals.
+		m.list.SetWidth(max(0, listWidth-2*borderSize))
+		m.list.SetHeight(max(0, paneHeight))
+		m.preview.Width = max(0, previewWidth-2*borderSize)
+		m.preview.Height = max(0, paneHeight)
 		m.ready = true
 
 		m.preview.SetContent(m.detailContent())
