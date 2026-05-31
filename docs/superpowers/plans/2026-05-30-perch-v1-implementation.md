@@ -194,17 +194,48 @@ report status, prove the DoD green, wait for review.
       same output today. `attach` verb, persistence-on-select, worktree `add`/`remove`
       (§7.1/§7.2) all later milestones.
 
-### M3 — Adapters: claude + opencode  *(no tmux needed)*
+### M3 — Adapters: claude + opencode  *(no tmux needed)* ✅ DONE
 
-- [ ] Objective: `Adapter` interface with both agents' `ListSessions` + arg builders.
+- [x] Objective: `Adapter` interface with both agents' `ListSessions` + arg builders.
 - Spec refs: `plan.md §4` (whole), `§16.3`, `§18.2/3/4`.
-- Deliverables: `internal/agent/adapter.go` (interface + `Session`), `claude.go`
+- Deliverables: `internal/agent/adapter.go` (interface + `NewOpts`), `claude.go`
       (JSONL enumerate + slug decode + pid-tracker discovery, fault-tolerant),
-      `opencode.go` (`session list --format json`, `{roots:true}`, group by `directory`).
-      Resume/fork/new arg builders. Fixtures: `testdata/claude/*`, `testdata/opencode/
-      session-list.json`. Tests: `§20.3 agent` cases (slug decode incl. ambiguous,
-      malformed-JSONL skip, empty, opencode valid/empty/malformed).
+      `opencode.go` (`session list --format json`, group by `directory`).
+      Resume/fork/new arg builders. Fixtures: `internal/agent/testdata/claude/*`,
+      `internal/agent/testdata/opencode/*`. Tests: `§20.3 agent` cases (slug decode
+      incl. ambiguous, malformed-JSONL skip, empty, opencode valid/empty/malformed).
 - DoD (`plan.md §16.3`): unit tests parse real fixtures; sessions group by directory. §0 gate.
+
+> **Sub-plan:** `docs/superpowers/plans/2026-05-30-perch-m3-adapters.md` (the
+> authoritative M3 spec — supersedes the master plan where tagged `[DIVERGENCE]`).
+>
+> **Verification:** commit chain `6ccb06a`→`978bd51` (proc RunInDir) → `594f854`
+> (sub-plan) → `b8511a0`→`b7cde9d` (Adapter interface) → `bed66a3` (claude) →
+> `da65667` (opencode) → `d06d21b` (final-review polish). Gates green: full suite
+> `go test -race` (10 pkgs), `make lint` 0 issues, `go vet`, `go build`, gofmt
+> clean. Coverage: `internal/agent` 94.0%, `internal/proc` 100%. Real-world smoke
+> (against this machine's installs): claude enumerated 11 real sessions with correct
+> directories/titles; opencode listed its 1 session (ms→s correct) and returned
+> 0-sessions-no-error from an empty-scope dir; both `Detect()` true.
+>
+> **Plan↔reality corrections recorded** (in the sub-plan + `plan.md §4`/`§18`):
+> opencode list is **project-scoped not global** (§18.3 was wrong); claude fork is
+> **native `--fork-session`, no file copy** (§18.2 was wrong); no opencode `--roots`
+> flag; opencode JSON is `{id,title,directory,created,updated,projectId}` with
+> **unix-ms** timestamps and **empty-bytes (not `[]`)** empty output; claude title =
+> last `ai-title`.aiTitle (fallback first non-meta user msg); interactive resume =
+> top-level `opencode --session`; adapters return `model.Session` (not a separate
+> `agent.Session`).
+>
+> **Architecture:** `internal/proc.Runner` gained `RunInDir(ctx, dir, …)` — opencode
+> session scope is set only by process cwd, so M5 enumerates per-tree via RunInDir
+> (DB-read stays forbidden). Directory precedence for claude: in-transcript `cwd` →
+> pid-tracker `cwd` → greedy stat-guided slug-decode.
+>
+> **Deferred:** `InstallStatusHook`/`ReadyHeuristic`/`TrustPrompt` (setup/TUI
+> milestones — M8); opencode `--fork` support (post-v1, returns `ErrForkUnsupported`);
+> `ListSessions` ctx-threading through the claude FS walk (M5, currently `_ ctx`);
+> claude fork-session-into-worktree end-to-end verification (M6).
 
 ### M4 — tmux control  *(tmux REQUIRED — now available)*
 

@@ -1,6 +1,6 @@
 # M3 — Adapters: claude + opencode
 
-**Status:** IN PROGRESS
+**Status:** ✅ DONE (commit chain `6ccb06a`…`d06d21b`; agent 94.0% / proc 100% coverage; all gates green)
 **Milestone (master plan):** M3 — Adapters: claude + opencode *(no tmux needed)*
 **Package:** `internal/agent/` (+ a small `internal/proc` extension)
 **Spec refs:** `plan.md §4`, `§16.3`, `§18.2/3/4`, `§20.1`, `§20.3 agent`.

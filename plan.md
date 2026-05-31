@@ -231,33 +231,39 @@ type Session struct {
 > `Adapter` as **data** (a ready-state heuristic and the trust-prompt
 > text/keystrokes), so a new agent never requires touching the tmux package.
 
-### Claude adapter (`internal/agent/claude.go`) — verified
-- **List**: no native list CLI. Enumerate `~/.claude/projects/<dir-slug>/*.jsonl`;
-  parse first/last JSONL line for id, title/summary, and use file mtime for
-  `Updated`. The dir-slug encodes the project path (slashes → dashes) — decode it
-  to recover `Directory`. Also read `~/.claude/sessions/<pid>.json`
-  (`{sessionId, cwd, status}`) to **discover sessions started outside perch**.
-  Treat the pid file as undocumented/version-fragile — discovery only, never the
-  status source.
+### Claude adapter (`internal/agent/claude.go`) — verified (2.1.158)
+- **List**: no native list CLI. Enumerate `<claudeHome>/projects/<dir-slug>/*.jsonl`
+  (top-level only; never descend into the sibling `<id>/` data dirs). The session
+  **id is the filename stem**; use file mtime for `Updated`. **Title = the last
+  `ai-title` record's `aiTitle` field**, falling back to the first non-meta user
+  message (no `summary` record type exists; first/last line are unreliable).
+  **Directory** precedence: the in-transcript `cwd` field → pid-tracker `cwd` →
+  slug-decode (dashes↔slashes is lossy, so decode greedily stat-guided). Read
+  `<claudeHome>/sessions/<pid>.json` for the pid-tracker `cwd` (undocumented,
+  version-fragile, defensive). `claudeHome` = `$CLAUDE_CONFIG_DIR` else `~/.claude`.
 - **Resume**: `claude --resume <id>` (works from any cwd).
-- **Fork into a worktree**: copy `~/.claude/projects/<src-slug>/<id>.jsonl` (and its
-  `<id>/` data dir) into the target worktree's `<dst-slug>/`, then run
-  `claude --resume <id>` in that dir. claude keys sessions by directory, so the file
-  must live under the target dir's slug. (Verified approach — this is what workmux does.)
-- **New**: `claude` (optionally `-p`/`--model`).
+- **Fork into a worktree**: `claude --resume <id> --fork-session`, launched with the
+  target worktree as cwd — claude forks **natively**, no `.jsonl`/data-dir copy.
+  (Corrected at M3; supersedes the earlier copy-then-resume approach.)
+- **New**: `claude` (optionally `--model`, `--session-id <uuid>`, prompt positional).
 
 ### opencode adapter (`internal/agent/opencode.go`) — verified (v1.15.12, npm)
 - **List**: `opencode session list --format json` → array of
-  `{id, title, directory, created, updated, projectId}` (field names confirmed in
-  opencode `src/cli/cmd/session.ts`). The list call uses `{roots:true}` so forked
-  child sessions are excluded. Group by **`directory`** (the per-session field), not
-  `projectId`. Session list is **global**, not directory-scoped — filter by
-  `directory` client-side to show a project's sessions.
-- **Resume**: `opencode run --session <id> "<prompt>"` (alias `-s`), or `-c` for the
-  most recent session.
+  `{id, title, directory, created, updated, projectId}` (confirmed empirically on
+  v1.15.12: flat camelCase fields, `created`/`updated` are **unix-ms numbers**,
+  `id` is `ses_`-prefixed). There is **no `--roots` flag** (the assumed
+  `{roots:true}` does not exist). Empty scope prints **zero bytes, not `[]`** —
+  treat empty/whitespace and `[]` alike as zero sessions. The list is
+  **project-scoped** (project = the registered worktree root that cwd resolves to),
+  **not global**: run `session list` with the target dir as cwd (via
+  `proc.RunInDir`) to scope it. Group by **`directory`** (the per-session field).
+- **Resume**: perch launches interactive panes, so resume uses the top-level TUI
+  form `opencode --session <id>` (alias `-s`), or `-c` for the most recent — **not**
+  `opencode run` (which is the one-shot non-interactive form).
 - **Fork into a worktree**: `opencode --fork` exists (requires `-c`/`-s`) but
-  cross-directory conversation fork is unproven; **v1 starts a fresh session** in the
-  worktree (`ForkInto` returns unsupported). Revisit once fork-into-dir is verified.
+  **v1 deliberately starts a fresh session** in the worktree (`ForkInto` returns
+  the `ErrForkUnsupported` sentinel). Enabling `--fork` later is a small scope
+  change, not a technical limitation.
 - **New**: `opencode` (optionally `--agent`/`--model`/`--prompt`).
 - **On disk** (for discovery/debugging only, never as the status source): sessions
   live in a SQLite DB at `~/.local/share/opencode/opencode.db`. We do **not** read
@@ -906,14 +912,28 @@ Build in this order; each milestone is independently runnable/testable.
    installed plugin (§9). Remaining: confirm the installed opencode version's plugin
    loader/location still matches when `perch setup` writes `perch-status.ts`, and that
    `permission.asked`/`question.asked` still fire (they lag the typed v1 union).
-2. **Fork-into-worktree** — mechanism resolved (§4/§7): claude = copy the session
-   `.jsonl` (+ data subdir) into the target worktree's `~/.claude/projects/<slug>/`
-   then `--resume`; opencode = fresh session for v1. Verify claude copy+resume
-   end-to-end at milestone 6.
-3. **opencode `session list` scope** — confirmed global; filter by `directory`
-   client-side.
-4. **claude pid tracker** (`~/.claude/sessions/<pid>.json`) — undocumented; discovery
-   of externally-started sessions only; guard against format drift.
+2. **Fork-into-worktree** — ✅ RESOLVED at M3 (empirically, claude-code 2.1.158):
+   claude forks **natively** via `--resume <id> --fork-session` (launched with the
+   target worktree as cwd) — **no `.jsonl`/data-dir copy is needed**. The earlier
+   "copy then --resume" plan is superseded. opencode = fresh session for v1
+   (`--fork` flag exists but is a deliberate post-v1 scope deferral). Verify claude
+   fork-session-into-worktree end-to-end at milestone 6.
+3. **opencode `session list` scope** — ✅ CORRECTED at M3: it is **project-scoped**
+   (the project is the registered worktree root that cwd resolves to), **NOT
+   global**. There is no scope-broadening flag (the assumed `{roots:true}` does not
+   exist). The only scoping lever is the process cwd, so M5 enumerates per-directory
+   via `proc.RunInDir` (one `session list` per tree). Reading the SQLite DB directly
+   stays forbidden.
+4. **claude pid tracker** (`~/.claude/sessions/<pid>.json`) — ✅ verified at M3:
+   real shape is `{pid, sessionId, cwd, status(idle|busy), startedAt/updatedAt(unix
+   ms), …}` (more fields than `{sessionId,cwd,status}`). Used as a Directory
+   fallback (after in-transcript `cwd`, before slug-decode); parsed defensively,
+   undocumented, guarded against format drift.
+
+> M3 evidence + the full list of plan↔reality corrections (opencode JSON field
+> names/ms timestamps, no `--roots`, claude title source = `ai-title`.aiTitle,
+> interactive resume = top-level `--session`, `agent.Session`→`model.Session`) are
+> recorded in `docs/superpowers/plans/2026-05-30-perch-m3-adapters.md`.
 5. **Charm stack — decided, not open.** Locked to the stable v1 line (bubbletea
    v1.3.10 / lipgloss v1.1.0 / bubbles v1.0.0, mutually pinned; requires Go 1.24+).
    No v2 in v1. Listed here only so nobody reopens it.
@@ -941,17 +961,23 @@ Build in this order; each milestone is independently runnable/testable.
 ### 20.2 `testdata/` layout
 
 Committed sanitized fixtures; tests load them via `os.ReadFile("testdata/...")`.
+**Fixtures are co-located per package** (Go idiom): `internal/git/testdata/`,
+`internal/agent/testdata/`, etc. — not a single repo-root `testdata/`. The tree
+below shows the logical grouping; physically each block lives under its package.
 
 ```
-testdata/
+(internal/agent/)testdata/
 ├── claude/
 │   ├── projects/
 │   │   └── -home-user-myproject/
-│   │       └── abc123.jsonl          # first + last line of a real session transcript
+│   │       └── <uuid>.jsonl          # real-shaped records incl. an ai-title record
 │   └── sessions/
-│       └── 12345.json                # sample pid-tracker record
+│       └── <pid>.json                # sample pid-tracker record
 ├── opencode/
-│   └── session-list.json             # real `opencode session list --format json` output
+│   ├── session-list.json             # real `opencode session list --format json` output (multi-session)
+│   ├── session-list-empty            # zero-byte file (the real empty-scope output, not "[]")
+│   └── session-list-malformed.json   # `{broken`
+(internal/git/)testdata/
 ├── git/
 │   ├── worktree-list-porcelain-multi.txt   # project with two worktrees
 │   ├── worktree-list-porcelain-single.txt  # main checkout only
@@ -972,7 +998,7 @@ testdata/
 | Claude JSONL parse — malformed line | line 3 is invalid JSON | lines 1, 2, 4 parsed; line 3 skipped + logged; no panic |
 | Claude JSONL parse — empty file | empty file | zero sessions, no error |
 | opencode session list — valid | `testdata/opencode/session-list.json` | N sessions with correct ID/dir/updated |
-| opencode session list — empty | `[]` | zero sessions, no error |
+| opencode session list — empty | empty bytes (real empty-scope output) and `[]` | zero sessions, no error |
 | opencode session list — malformed | `{broken` | error returned, no panic |
 
 **`internal/state/` (frecency)**
