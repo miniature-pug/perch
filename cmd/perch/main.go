@@ -5,14 +5,17 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"time"
 
 	"github.com/Miniature-Pug/perch/internal/discover"
 	"github.com/Miniature-Pug/perch/internal/doctor"
+	"github.com/Miniature-Pug/perch/internal/model"
 	"github.com/Miniature-Pug/perch/internal/proc"
 	"github.com/Miniature-Pug/perch/internal/state"
+	"github.com/Miniature-Pug/perch/internal/tmux"
 )
 
 // version is injected at build time via ldflags:
@@ -136,11 +139,133 @@ func printUsage(w io.Writer) {
 // handleDebug dispatches hidden debug sub-commands. These are not part of the
 // public CLI and must never appear in printUsage.
 func handleDebug(args []string, stdout, stderr io.Writer) int {
-	if len(args) >= 1 && args[0] == "discover" {
-		return handleDebugDiscover(args[1:], stdout, stderr)
+	if len(args) >= 1 {
+		switch args[0] {
+		case "discover":
+			return handleDebugDiscover(args[1:], stdout, stderr)
+		case "tmux":
+			return handleDebugTmux(args[1:], stdout, stderr)
+		}
 	}
 	_, _ = fmt.Fprintln(stderr, "Usage: perch debug discover [path]")
+	_, _ = fmt.Fprintln(stderr, "       perch debug tmux [path]")
 	return 2
+}
+
+// handleDebugTmux implements `perch debug tmux [path]`.
+// It creates a tmux session/window for the given tree path (defaulting to cwd),
+// sets and reads back the @perch_session pane option, writes a shadow record,
+// and prints a summary report to stdout. Intentionally uses the user's real tmux
+// server (default socket) so the session can be inspected after the command runs.
+func handleDebugTmux(args []string, stdout, stderr io.Writer) int {
+	var tree string
+	if len(args) >= 1 {
+		tree = args[0]
+	} else {
+		var err error
+		tree, err = os.Getwd()
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "perch debug tmux: cannot determine working directory: %v\n", err)
+			return 2
+		}
+	}
+
+	info, err := os.Stat(tree)
+	if err != nil || !info.IsDir() {
+		_, _ = fmt.Fprintf(stderr, "perch debug tmux: %q is not an existing directory\n", tree)
+		_, _ = fmt.Fprintln(stderr, "Usage: perch debug tmux [path]")
+		return 2
+	}
+
+	t := tmux.New()
+	base := filepath.Base(tree)
+	session := tmux.SessionName(base)
+	window := tmux.WindowName(base)
+	ctx := context.Background()
+
+	paneID, err := t.Connect(ctx, session, window, tree)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "perch debug tmux: connect: %v\n", err)
+		return 1
+	}
+
+	syntheticID := "perch-debug-" + paneID
+	target := tmux.WindowTarget(session, window)
+
+	if err := t.SetPaneOption(ctx, target, "@perch_session", syntheticID); err != nil {
+		_, _ = fmt.Fprintf(stderr, "perch debug tmux: set-option: %v\n", err)
+		return 1
+	}
+
+	got, err := t.GetPaneOption(ctx, target, "@perch_session")
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "perch debug tmux: get-option: %v\n", err)
+		return 1
+	}
+	if got != syntheticID {
+		_, _ = fmt.Fprintf(stderr, "perch debug tmux: @perch_session round-trip mismatch: set %q got %q\n", syntheticID, got)
+		return 1
+	}
+
+	bootID, err := t.BootID(ctx)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "perch debug tmux: boot-id: %v\n", err)
+		return 1
+	}
+
+	w := model.Window{
+		PaneKey:     paneID,
+		Tool:        model.ToolClaude,
+		SessionID:   syntheticID,
+		Tree:        tree,
+		TmuxSession: session,
+		TmuxWindow:  window,
+		BootID:      bootID,
+		Updated:     time.Now().Unix(),
+	}
+
+	// StateDir resolves the path only — it does not create it. SaveWindow
+	// creates baseDir/windows/ itself via os.MkdirAll, so no manual mkdir needed.
+	baseDir, err := state.StateDir()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "perch debug tmux: state dir: %v\n", err)
+		return 1
+	}
+
+	if err := state.SaveWindow(baseDir, w); err != nil {
+		_, _ = fmt.Fprintf(stderr, "perch debug tmux: save window: %v\n", err)
+		return 1
+	}
+
+	windows, err := state.LoadWindows(baseDir)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "perch debug tmux: load windows: %v\n", err)
+		return 1
+	}
+
+	found := false
+	for _, rec := range windows {
+		if rec.PaneKey == paneID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		_, _ = fmt.Fprintf(stderr, "perch debug tmux: shadow record for pane %q not found after save\n", paneID)
+		return 1
+	}
+
+	shadowPath := filepath.Join(baseDir, "windows", state.EncodePaneKey(paneID)+".json")
+
+	_, _ = fmt.Fprintf(stdout, "tmux session : %s\n", session)
+	_, _ = fmt.Fprintf(stdout, "tmux window  : %s\n", window)
+	_, _ = fmt.Fprintf(stdout, "pane id      : %s\n", paneID)
+	_, _ = fmt.Fprintf(stdout, "@perch_session set=%q got=%q (round-trip OK)\n", syntheticID, got)
+	_, _ = fmt.Fprintf(stdout, "boot id      : %s\n", bootID)
+	_, _ = fmt.Fprintf(stdout, "shadow record: %s\n", shadowPath)
+	_, _ = fmt.Fprintf(stdout, "\nWindow left open for inspection.\n")
+	_, _ = fmt.Fprintf(stdout, "To remove: tmux kill-session -t '=%s'\n", session)
+	return 0
 }
 
 // handleDebugDiscover implements `perch debug discover [path]`.
