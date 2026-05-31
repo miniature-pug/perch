@@ -1,13 +1,18 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
 	"runtime"
 	"runtime/debug"
+	"time"
 
+	"github.com/Miniature-Pug/perch/internal/discover"
 	"github.com/Miniature-Pug/perch/internal/doctor"
+	"github.com/Miniature-Pug/perch/internal/proc"
+	"github.com/Miniature-Pug/perch/internal/state"
 )
 
 // version is injected at build time via ldflags:
@@ -41,6 +46,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return doctor.Run(version, stdout, doctor.RealSystem())
 	case "version":
 		return handleVersion(stdout)
+	// debug is intentionally hidden from printUsage — it is a diagnostic
+	// surface, not part of the public CLI contract.
+	case "debug":
+		return handleDebug(args[1:], stdout, stderr)
 	default:
 		// Treat the first argument as a path to a project root.
 		return handlePathArg(args[0], stdout, stderr)
@@ -114,6 +123,7 @@ func handlePathArg(arg string, stdout, stderr io.Writer) int {
 }
 
 // printUsage writes the usage summary to w.
+// Note: "debug" is intentionally absent — it is a hidden diagnostic surface.
 func printUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "Usage: perch [path]")
 	_, _ = fmt.Fprintln(w, "       perch setup")
@@ -121,4 +131,67 @@ func printUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "       perch status set <working|waiting|done>")
 	_, _ = fmt.Fprintln(w, "       perch doctor")
 	_, _ = fmt.Fprintln(w, "       perch version")
+}
+
+// handleDebug dispatches hidden debug sub-commands. These are not part of the
+// public CLI and must never appear in printUsage.
+func handleDebug(args []string, stdout, stderr io.Writer) int {
+	if len(args) >= 1 && args[0] == "discover" {
+		return handleDebugDiscover(args[1:], stdout, stderr)
+	}
+	_, _ = fmt.Fprintln(stderr, "Usage: perch debug discover [path]")
+	return 2
+}
+
+// handleDebugDiscover implements `perch debug discover [path]`.
+// It lists all git projects under root (defaulting to cwd) with their
+// worktrees, ordered by frecency (cold start → alphabetical).
+func handleDebugDiscover(args []string, stdout, stderr io.Writer) int {
+	var root string
+	if len(args) >= 1 {
+		root = args[0]
+	} else {
+		var err error
+		root, err = os.Getwd()
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "perch debug discover: cannot determine working directory: %v\n", err)
+			return 2
+		}
+	}
+
+	info, err := os.Stat(root)
+	if err != nil || !info.IsDir() {
+		_, _ = fmt.Fprintf(stderr, "perch debug discover: %q is not an existing directory\n", root)
+		return 2
+	}
+
+	projects, err := discover.Projects(
+		context.Background(),
+		proc.ExecRunner{},
+		root,
+		discover.Options{},
+		map[string]state.ProjectStat{},
+		time.Now().Unix(),
+	)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "perch debug discover: %v\n", err)
+		return 1
+	}
+
+	if len(projects) == 0 {
+		_, _ = fmt.Fprintf(stdout, "no git projects found under %s\n", root)
+		return 0
+	}
+
+	for _, pt := range projects {
+		_, _ = fmt.Fprintf(stdout, "%s  %s\n", pt.Project.Name, pt.Project.Path)
+		for _, tr := range pt.Trees {
+			marker := " "
+			if tr.IsMain {
+				marker = "*"
+			}
+			_, _ = fmt.Fprintf(stdout, "  %s %s  %s\n", marker, tr.Branch, tr.Path)
+		}
+	}
+	return 0
 }

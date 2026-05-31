@@ -201,3 +201,62 @@ func TestRun_UnknownVerb_Exit2(t *testing.T) {
 		t.Errorf("expected usage on stderr; got: %q", errOut)
 	}
 }
+
+// ── debug discover: empty dir → exit 0, "no projects found" ─────────────────
+
+func TestRun_DebugDiscover_EmptyDir_Exit0(t *testing.T) {
+	dir := t.TempDir() // no .git entries → Scan returns nothing
+	out, _, code := callRun([]string{"debug", "discover", dir})
+	if code != 0 {
+		t.Errorf("expected exit 0 for empty dir, got %d", code)
+	}
+	if !strings.Contains(out, "no") || !strings.Contains(out, "projects found") {
+		t.Errorf("expected 'no ... projects found' message; got: %q", out)
+	}
+}
+
+// ── debug discover: nonexistent path → exit 2 ────────────────────────────────
+
+func TestRun_DebugDiscover_NonexistentPath_Exit2(t *testing.T) {
+	_, errOut, code := callRun([]string{"debug", "discover", "/does/not/exist/perch-test-debug"})
+	if code != 2 {
+		t.Errorf("expected exit 2 for nonexistent path, got %d", code)
+	}
+	if errOut == "" {
+		t.Errorf("expected error message on stderr; got empty")
+	}
+}
+
+// ── debug: unknown subcommand → exit 2 ───────────────────────────────────────
+
+func TestRun_DebugUnknownSubcommand_Exit2(t *testing.T) {
+	_, errOut, code := callRun([]string{"debug", "bogus"})
+	if code != 2 {
+		t.Errorf("expected exit 2 for unknown debug subcommand, got %d", code)
+	}
+	if errOut == "" {
+		t.Errorf("expected usage message on stderr; got empty")
+	}
+}
+
+// ── debug: no subcommand → exit 2 ────────────────────────────────────────────
+
+func TestRun_DebugNoSubcommand_Exit2(t *testing.T) {
+	_, errOut, code := callRun([]string{"debug"})
+	if code != 2 {
+		t.Errorf("expected exit 2 for bare debug, got %d", code)
+	}
+	if errOut == "" {
+		t.Errorf("expected usage message on stderr; got empty")
+	}
+}
+
+// ── debug absent from printUsage ─────────────────────────────────────────────
+
+func TestPrintUsage_NoDebug(t *testing.T) {
+	// Trigger a bad verb to capture the usage output that printUsage emits.
+	_, errOut, _ := callRun([]string{"doctr"})
+	if strings.Contains(errOut, "debug") {
+		t.Errorf("printUsage must not mention 'debug' (hidden command); stderr: %q", errOut)
+	}
+}
