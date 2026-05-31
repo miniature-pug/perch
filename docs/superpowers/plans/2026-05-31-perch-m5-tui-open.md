@@ -109,7 +109,7 @@ carried from M4 evidence (`docs/superpowers/plans/2026-05-30-perch-m4-tmux.md`).
 - [ ] M5-1 launch builder + tests (green, reviewed)
 - [ ] M5-2 scaffold + Charm deps vendored + teatest nav/filter (green, reviewed)
 - [ ] M5-3 live data + preview + ctx/Opencode.Dir closures (green, reviewed)
-- [ ] M5-4 ↵/`n` launch + attach split + frecency bump (green, reviewed)
+- [x] M5-4 ↵/`n` launch + attach split + frecency bump (green, reviewed)
 - [ ] M5-5 cmd wiring + sentinel integration test + closeout docs (green, reviewed)
 - [ ] Final whole-milestone review
 - [ ] `make fmt vet lint test` + `make test-integration` green; `go mod verify` clean

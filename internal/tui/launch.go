@@ -153,7 +153,7 @@ func (m Model) attachTo(target string) (tea.Model, tea.Cmd) {
 	}
 	// attach-session: genuine terminal handover; use tea.ExecProcess.
 	full := m.loader.Tmux.ExecArgs(argv...)
-	c := exec.Command(full[0], full[1:]...) //nolint:gosec
+	c := exec.Command(full[0], full[1:]...)
 	return m, tea.ExecProcess(c, func(err error) tea.Msg {
 		return attachFinishedMsg{err: err}
 	})
