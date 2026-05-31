@@ -84,7 +84,7 @@ carried from M4 evidence (`docs/superpowers/plans/2026-05-30-perch-m4-tmux.md`).
 
 ### M5-4 — ↵ launch / attach + `n` new + frecency bump
 - **Files:** extend `internal/tui/app.go`; `internal/tui/launch.go` (handler glue) + tests.
-- **Build:** `↵` on a session → `adapter.ResumeArgs(id)`; `n` → `adapter.NewArgs(NewOpts{...})` (implement **both** — advisor). Handler: `tmux.Launch(...)` (M5-1) to spawn+send (returns the pane id), **then stamp `@perch_session` (D6):** `SetPaneOption(paneID,"@perch_session",sessionID)` so the M5-3 live/idle join + preview can match this pane to the agent session. For **resume** the session id is known and always stamped; for **new** the agent assigns its id at runtime → stamping may be deferred/empty (documented, D6). Then attach per **D1/E8** — `$TMUX` set → `switch-client` argv as a plain `tea.Cmd` returning `switchedMsg`; unset → `attach-session` argv via `tea.ExecProcess`, callback returns **non-nil** `attachFinishedMsg{err}` (E6). Argv for attach built as `ExecArgs(AttachArgs(session)...)` (E9) — never exec AttachArgs directly. On select, frecency bump: `state.LoadState` → `BumpProject` + `AgeProjects` → `SaveState`; write the §6.2 window shadow record via `state.SaveWindow` (E15c).
+- **Build:** `↵` on a session → `adapter.ResumeArgs(id)`; `n` → `adapter.NewArgs(NewOpts{...})` (implement **both** — advisor). Handler: `tmux.Launch(...)` (M5-1) to spawn+send (returns the pane id), **then stamp `@perch_session` (D6):** `SetPaneOption(paneID,"@perch_session",sessionID)` so the M5-3 live/idle join + preview can match this pane to the agent session. For **resume** the session id is known and always stamped; for **new** the agent assigns its id at runtime → stamping may be deferred/empty (documented, D6). Then attach per **D1/E8** — `$TMUX` set → `switch-client` argv as a plain `tea.Cmd` returning `switchedMsg`; unset → `attach-session` argv via `tea.ExecProcess`, callback returns **non-nil** `attachFinishedMsg{err}` (E6). Argv for attach built as `ExecArgs(AttachArgs(session)...)` (E9) — never exec AttachArgs directly. **[M5-4 correction]** implemented at the *window* level: `ExecArgs(AttachTargetArgs(target)...)` where `target = WindowTarget(session,window)` of the live pane; `AttachArgs(session)` now delegates to `AttachTargetArgs(SessionTarget(session))`. This lets `↵` on a live session jump to its exact window (and avoids relaunch). On select, frecency bump: `state.LoadState` → `BumpProject` + `AgeProjects` → `SaveState`; write the §6.2 window shadow record via `state.SaveWindow` (E15c).
 - **Tests (teatest + FakeRunner):** ↵ on a running session issues `Launch` then the correct attach primitive for `$TMUX` set vs unset (assert the chosen argv / Cmd shape via injected `Getenv`); `n` issues `NewArgs`-derived launch; frecency `SaveState` called with bumped project; ExecProcess callback returns non-nil. Assert model state, not rendered output.
 - **DoD:** ↵ resume + `n` new wired with correct attach primitive both in/out of tmux; frecency persisted; shadow record written; `make fmt vet lint test` green.
 
@@ -106,11 +106,18 @@ carried from M4 evidence (`docs/superpowers/plans/2026-05-30-perch-m4-tmux.md`).
 - `@perch_status` window-vs-pane reconciliation + status pipeline → M8.
 
 ## Closeout checklist
-- [ ] M5-1 launch builder + tests (green, reviewed)
-- [ ] M5-2 scaffold + Charm deps vendored + teatest nav/filter (green, reviewed)
-- [ ] M5-3 live data + preview + ctx/Opencode.Dir closures (green, reviewed)
+- [x] M5-1 launch builder + tests (green, reviewed)
+- [x] M5-2 scaffold + Charm deps vendored + teatest nav/filter (green, reviewed)
+- [x] M5-3 live data + preview + ctx/Opencode.Dir closures (green, reviewed)
 - [x] M5-4 ↵/`n` launch + attach split + frecency bump (green, reviewed)
-- [ ] M5-5 cmd wiring + sentinel integration test + closeout docs (green, reviewed)
+- [x] M5-5 cmd wiring + sentinel integration test + closeout docs (green, reviewed)
 - [ ] Final whole-milestone review
-- [ ] `make fmt vet lint test` + `make test-integration` green; `go mod verify` clean
-- [ ] plan.md + master plan corrected; M5 marked DONE; deferred items recorded
+- [x] `make fmt vet lint test` + `make test-integration` green; `go mod verify` clean
+- [x] plan.md + master plan corrected; M5 marked DONE; deferred items recorded
+
+### M5 closeout — honesty gate (D4)
+- **Automated:** unit gates 12/12 green, integration 12/12 green (real tmux 3.6 / 7.0 kernel), `go mod verify` clean, `golangci-lint` 0 issues, `gofmt` clean. Sentinel launch (`sh -c 'echo PERCH_$((6*7))'` → CapturePane sees `PERCH_42` ≤2s) proves the launch path **executes**; `@perch_session` stamp → `ListPanesAll` → `buildLiveIndex`/`buildItemFromSession` proves the **D6 live/idle join** end-to-end against a real server.
+- **Binaries present:** `claude` 2.1.159, `opencode` 1.15.12, `tmux` 3.6.
+- **Resumable sessions:** claude = 124 transcripts under `~/.claude/projects` (ample); opencode = **none discoverable** (no session store at default loc).
+- **Remains MANUAL (deferred to user smoke-test):** interactive resume/attach **from the TUI** (real `claude --resume <id>` spawned in a tmux window + handover) — requires a TTY/alt-screen the headless harness can't drive. The §16-M5 DoD line ("resume a real claude **and** a real opencode session from the list") is therefore **not** auto-greened: claude resume is plausible (binary + sessions), opencode resume is unverifiable here (no sessions to resume).
+- Commit chain: `539569a` (M5-5 feat). Prior M5 chain: M5-1..M5-4 through `ddc8454`.
