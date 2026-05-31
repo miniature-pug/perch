@@ -10,12 +10,14 @@ import (
 	"runtime/debug"
 	"time"
 
+	"github.com/Miniature-Pug/perch/internal/agent"
 	"github.com/Miniature-Pug/perch/internal/discover"
 	"github.com/Miniature-Pug/perch/internal/doctor"
 	"github.com/Miniature-Pug/perch/internal/model"
 	"github.com/Miniature-Pug/perch/internal/proc"
 	"github.com/Miniature-Pug/perch/internal/state"
 	"github.com/Miniature-Pug/perch/internal/tmux"
+	"github.com/Miniature-Pug/perch/internal/tui"
 )
 
 // version is injected at build time via ldflags:
@@ -33,7 +35,7 @@ func main() {
 // never directly to os.Stdout/os.Stderr. Returns the exit code.
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		return handleTUI("", stdout)
+		return handleTUI("", stdout, stderr)
 	}
 
 	switch args[0] {
@@ -59,12 +61,36 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
-// handleTUI is the stub for the interactive TUI (implemented in M5).
-func handleTUI(root string, stdout io.Writer) int {
+// handleTUI launches the interactive TUI, blocking until the user quits.
+func handleTUI(root string, stdout, stderr io.Writer) int {
 	if root == "" {
-		_, _ = fmt.Fprintln(stdout, "perch: TUI not yet implemented (M5)")
-	} else {
-		_, _ = fmt.Fprintf(stdout, "perch: TUI not yet implemented (M5) [root=%s]\n", root)
+		cwd, err := os.Getwd()
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "perch: cannot determine working directory: %v\n", err)
+			return 1
+		}
+		root = cwd
+	}
+	baseDir, err := state.StateDir()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "perch: %v\n", err)
+		return 1
+	}
+	// Plain WithCancel: bubbletea installs its own SIGINT/SIGTERM handler;
+	// a second signal handler races it.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // cancels in-flight data loads after the program exits
+	cfg := tui.Config{
+		Tmux:    tmux.New(),
+		Runner:  proc.ExecRunner{},
+		Claude:  agent.NewClaude(),
+		Root:    root,
+		BaseDir: baseDir,
+		Now:     time.Now().Unix(),
+	}
+	if err := tui.Run(ctx, cfg); err != nil {
+		_, _ = fmt.Fprintf(stderr, "perch: %v\n", err)
+		return 1
 	}
 	return 0
 }
@@ -114,7 +140,7 @@ func handleVersion(stdout io.Writer) int {
 }
 
 // handlePathArg validates args[0] as an existing directory root and launches
-// the TUI stub, or prints usage to stderr and returns 2.
+// the TUI, or prints usage to stderr and returns 2.
 func handlePathArg(arg string, stdout, stderr io.Writer) int {
 	info, err := os.Stat(arg)
 	if err != nil || !info.IsDir() {
@@ -122,7 +148,7 @@ func handlePathArg(arg string, stdout, stderr io.Writer) int {
 		printUsage(stderr)
 		return 2
 	}
-	return handleTUI(arg, stdout)
+	return handleTUI(arg, stdout, stderr)
 }
 
 // printUsage writes the usage summary to w.

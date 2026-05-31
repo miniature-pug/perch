@@ -289,8 +289,12 @@ func (m *Model) previewCmd() tea.Cmd {
 		m.capturing = true
 		target := sel.captureTarget
 		ldr := m.loader
+		ctx := ldr.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
 		return func() tea.Msg {
-			content, err := ldr.Tmux.CapturePane(context.Background(), target, 0)
+			content, err := ldr.Tmux.CapturePane(ctx, target, 0)
 			if err != nil {
 				// Degrade to empty on error; don't abort or panic.
 				content = ""

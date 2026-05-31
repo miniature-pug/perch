@@ -29,6 +29,8 @@ go.work.sum
 
 # Build output
 /bin/
+# Root binary from an ad-hoc `go build ./cmd/perch` (canonical build goes to /bin via `make build`)
+/perch
 
 # Editor/IDE
 # .idea/

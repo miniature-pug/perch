@@ -17,34 +17,6 @@ func callRun(args []string) (stdout, stderr string, code int) {
 	return out.String(), errBuf.String(), code
 }
 
-// ── No-args: TUI stub ─────────────────────────────────────────────────────────
-
-func TestRun_NoArgs_TUIStub(t *testing.T) {
-	out, _, code := callRun([]string{})
-	if code != 0 {
-		t.Errorf("expected exit 0 for no-args, got %d", code)
-	}
-	if !strings.Contains(out, "TUI") {
-		t.Errorf("expected TUI stub message, got: %q", out)
-	}
-}
-
-// ── Valid directory path ───────────────────────────────────────────────────────
-
-func TestRun_ValidDirPath_TUIStub(t *testing.T) {
-	dir := t.TempDir()
-	out, _, code := callRun([]string{dir})
-	if code != 0 {
-		t.Errorf("expected exit 0 for valid dir, got %d", code)
-	}
-	if !strings.Contains(out, "TUI") {
-		t.Errorf("expected TUI stub message, got: %q", out)
-	}
-	if !strings.Contains(out, dir) {
-		t.Errorf("expected root path in output, got: %q", out)
-	}
-}
-
 // ── Non-existent path → exit 2 ────────────────────────────────────────────────
 
 func TestRun_NonExistentPath_Exit2(t *testing.T) {

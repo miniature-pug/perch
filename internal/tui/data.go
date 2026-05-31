@@ -31,6 +31,9 @@ type previewMsg struct {
 // loader holds injected dependencies for live data loading.
 // All fields are set by the caller; zero values are not used in production.
 type loader struct {
+	// ctx is the program-scoped context, cancelled when the TUI exits.
+	// nil in tests → treated as context.Background().
+	ctx     context.Context
 	Tmux    tmux.Tmux
 	Runner  proc.Runner  // used by discover + opencode adapters
 	Claude  agent.Claude // global session lister
@@ -43,7 +46,10 @@ type loader struct {
 // and delivers an itemsLoadedMsg.
 func (l loader) load() tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
+		ctx := l.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
 
 		// Load frecency state; cold-start returns empty maps (no error).
 		st, _ := state.LoadState(l.BaseDir)
