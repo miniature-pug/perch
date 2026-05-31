@@ -1,0 +1,7 @@
+worktree /repos/main
+HEAD c017e3b78823d434c410c7eb59080697738eb918
+branch refs/heads/main
+
+worktree /repos/wt-feature
+HEAD c017e3b78823d434c410c7eb59080697738eb918
+branch refs/heads/feature

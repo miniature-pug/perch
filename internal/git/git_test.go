@@ -15,7 +15,7 @@ import (
 
 func readFixture(t *testing.T, name string) []byte {
 	t.Helper()
-	data, err := os.ReadFile("testdata/git/" + name)
+	data, err := os.ReadFile("testdata/" + name)
 	if err != nil {
 		t.Fatalf("read fixture %s: %v", name, err)
 	}
@@ -78,26 +78,40 @@ func TestParsePorcelain_Single(t *testing.T) {
 }
 
 // TestParsePorcelain_Linked asserts the design linchpin: even when
-// `git worktree list --porcelain` is run from inside a linked worktree, the
+// `git worktree list --porcelain` is run from INSIDE a linked worktree, the
 // main checkout appears as entry[0]. This fixture was captured from within the
-// linked worktree directory.
+// linked worktree (/repos/wt-feature), yet git still lists the main checkout
+// (/repos/main) first. This 2-entry fixture is intentionally distinct from the
+// 3-entry multi fixture to avoid redundancy while proving the entry[0]=main invariant.
 func TestParsePorcelain_Linked(t *testing.T) {
 	raw := readFixture(t, "worktree-list-porcelain-linked.txt")
 	wts, err := ParsePorcelain(raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(wts) < 2 {
-		t.Fatalf("want at least 2 worktrees, got %d", len(wts))
+	// Fixture has exactly 2 entries: main checkout + one linked worktree.
+	if len(wts) != 2 {
+		t.Fatalf("want 2 worktrees, got %d", len(wts))
 	}
-	// Design linchpin: entry[0] must be the main repo, not the linked worktree
-	// from which the command was captured.
-	if wts[0].Path != "/repos/main-repo" {
-		t.Errorf("entry[0].Path = %q, want /repos/main-repo — linked fixture must have main as first entry", wts[0].Path)
+
+	// Design linchpin: entry[0] is the MAIN checkout, even though the command
+	// was captured from inside the linked worktree (/repos/wt-feature).
+	if wts[0].Path != "/repos/main" {
+		t.Errorf("entry[0].Path = %q, want /repos/main — main checkout must be entry[0] regardless of invocation directory", wts[0].Path)
 	}
-	// Verify it is not bare or detached.
+	if wts[0].Branch != "main" {
+		t.Errorf("entry[0].Branch = %q, want main", wts[0].Branch)
+	}
 	if wts[0].Bare || wts[0].Detached {
 		t.Errorf("entry[0] must be the main non-bare checkout, got bare=%v detached=%v", wts[0].Bare, wts[0].Detached)
+	}
+
+	// entry[1] is the linked worktree on branch "feature".
+	if wts[1].Path != "/repos/wt-feature" {
+		t.Errorf("entry[1].Path = %q, want /repos/wt-feature", wts[1].Path)
+	}
+	if wts[1].Branch != "feature" {
+		t.Errorf("entry[1].Branch = %q, want feature", wts[1].Branch)
 	}
 }
 
