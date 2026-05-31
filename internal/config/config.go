@@ -146,14 +146,19 @@ func (c *Config) AgentBinary(t model.Tool) string {
 	return string(t)
 }
 
-// Validate checks that all path-like project fields are safe: no absolute paths
-// and no path components that traverse above the repo root (no ".." components
-// after filepath.Clean). Call after Load when repoRoot is known.
+// Validate checks that path-like project fields are safe. Two distinct rules apply:
+//   - files.copy and files.symlink paths must stay inside the repo: no absolute
+//     paths and no ".." components after filepath.Clean.
+//   - worktree_dir may be a sibling, relative, or absolute path outside the repo
+//     (the default placement is a sibling directory); it is rejected only if the
+//     resolved path lands inside the repo's .git directory.
+//
+// Call after Load when repoRoot is known.
 func (c *Config) Validate(repoRoot string) error {
-	if c.WorktreeDir != "" {
-		if err := checkSafe("worktree_dir", c.WorktreeDir); err != nil {
-			return err
-		}
+	// worktree_dir is exempt from the in-repo guard; it may be a sibling or an
+	// absolute path outside the repo. Only .git containment is forbidden.
+	if err := validateWorktreeDir(repoRoot, c.WorktreeDir); err != nil {
+		return err
 	}
 	for _, p := range c.Files.Copy {
 		if err := checkSafe("files.copy", p); err != nil {
@@ -164,6 +169,44 @@ func (c *Config) Validate(repoRoot string) error {
 		if err := checkSafe("files.symlink", p); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// validateWorktreeDir rejects worktree_dir values that resolve into the repo's
+// .git directory. Everything else — siblings, absolute paths outside the repo,
+// or in-repo relative paths that don't touch .git — is permitted.
+//
+// Rationale: the default worktree placement is <project>__worktrees/<handle>,
+// a sibling directory outside the repo, so worktree_dir cannot be constrained
+// to inside the repo. The only hard prohibition is landing inside .git, which
+// would corrupt Git's internals.
+func validateWorktreeDir(repoRoot, worktreeDir string) error {
+	if worktreeDir == "" {
+		return nil
+	}
+
+	// Resolve to an absolute path: absolute inputs are used as-is; relative
+	// inputs are joined onto repoRoot.
+	var resolved string
+	if filepath.IsAbs(worktreeDir) {
+		resolved = filepath.Clean(worktreeDir)
+	} else {
+		resolved = filepath.Clean(filepath.Join(repoRoot, worktreeDir))
+	}
+
+	gitDir := filepath.Join(filepath.Clean(repoRoot), ".git")
+
+	rel, err := filepath.Rel(gitDir, resolved)
+	if err != nil {
+		// Cannot compute a relative path — resolved is on a different volume
+		// (Windows) or otherwise unrelatable. Treat as outside .git.
+		return nil
+	}
+	// rel == "." means resolved IS gitDir; rel not starting with ".." means it
+	// is inside gitDir. Use the same prefix idiom as checkSafe for consistency.
+	if rel == "." || (!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != "..") {
+		return fmt.Errorf("config: worktree_dir %q must not be inside the repo's .git directory", worktreeDir)
 	}
 	return nil
 }

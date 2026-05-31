@@ -536,7 +536,7 @@ agent           = "claude"
 override security-relevant globals (e.g. force a different binary path for the
 agent). Keep the agent *binary resolution* global-only; project config may pick
 *which* known agent and pass model/prompt, not point at an arbitrary executable.
-Validate all `files`/`worktree_dir` paths stay inside the repo.
+Validate path safety: `files.copy`/`files.symlink` entries must stay inside the repo (no absolute paths, no `..` traversal); `worktree_dir` may be a sibling, relative, or absolute path outside the repo (the default placement is a sibling directory) and is rejected only if it resolves into the repo's `.git` directory.
 
 ---
 

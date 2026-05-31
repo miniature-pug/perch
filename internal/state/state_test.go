@@ -671,6 +671,127 @@ func TestWindowJSON_WireTags(t *testing.T) {
 	}
 }
 
+// ── LookupMapping / SetMapping tests ─────────────────────────────────────────
+
+func TestLookupMapping_Hit(t *testing.T) {
+	s := state.State{
+		Mappings: map[string]state.Mapping{
+			"ses_abc": {Tool: model.ToolClaude, Tree: "/repo/wt1", Choice: state.ChoiceWorktree},
+		},
+	}
+	m, ok := state.LookupMapping(s, "ses_abc")
+	if !ok {
+		t.Fatal("LookupMapping: expected ok=true, got false")
+	}
+	if m.Tool != model.ToolClaude {
+		t.Errorf("Tool = %q; want claude", m.Tool)
+	}
+	if m.Tree != "/repo/wt1" {
+		t.Errorf("Tree = %q; want /repo/wt1", m.Tree)
+	}
+	if m.Choice != state.ChoiceWorktree {
+		t.Errorf("Choice = %q; want %q", m.Choice, state.ChoiceWorktree)
+	}
+}
+
+func TestLookupMapping_Miss(t *testing.T) {
+	s := state.State{
+		Mappings: map[string]state.Mapping{},
+	}
+	m, ok := state.LookupMapping(s, "ses_missing")
+	if ok {
+		t.Error("LookupMapping: expected ok=false for missing session, got true")
+	}
+	if m != (state.Mapping{}) {
+		t.Errorf("LookupMapping miss: got non-zero Mapping %+v", m)
+	}
+}
+
+func TestLookupMapping_NilMap(t *testing.T) {
+	s := state.State{} // Mappings is nil
+	m, ok := state.LookupMapping(s, "ses_any")
+	if ok {
+		t.Error("LookupMapping on nil map: expected ok=false, got true")
+	}
+	if m != (state.Mapping{}) {
+		t.Errorf("LookupMapping nil map: got non-zero Mapping %+v", m)
+	}
+}
+
+func TestSetMapping_RoundTrip_ChoiceWorktree(t *testing.T) {
+	tmp := t.TempDir()
+
+	// Start from empty state.
+	s, err := state.LoadState(tmp)
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+
+	want := state.Mapping{Tool: model.ToolClaude, Tree: "/repo/wt1", Choice: state.ChoiceWorktree}
+	state.SetMapping(&s, "ses_wt", want)
+
+	if err := state.SaveState(tmp, s); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	loaded, err := state.LoadState(tmp)
+	if err != nil {
+		t.Fatalf("LoadState after save: %v", err)
+	}
+
+	got, ok := state.LookupMapping(loaded, "ses_wt")
+	if !ok {
+		t.Fatal("LookupMapping: expected ok=true after round-trip")
+	}
+	if got != want {
+		t.Errorf("LookupMapping = %+v; want %+v", got, want)
+	}
+}
+
+func TestSetMapping_RoundTrip_ChoiceNone(t *testing.T) {
+	tmp := t.TempDir()
+
+	s, err := state.LoadState(tmp)
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+
+	want := state.Mapping{Tool: model.ToolOpencode, Tree: "/repo", Choice: state.ChoiceNone}
+	state.SetMapping(&s, "ses_none", want)
+
+	if err := state.SaveState(tmp, s); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	loaded, err := state.LoadState(tmp)
+	if err != nil {
+		t.Fatalf("LoadState after save: %v", err)
+	}
+
+	got, ok := state.LookupMapping(loaded, "ses_none")
+	if !ok {
+		t.Fatal("LookupMapping: expected ok=true after round-trip (ChoiceNone)")
+	}
+	if got != want {
+		t.Errorf("LookupMapping = %+v; want %+v", got, want)
+	}
+}
+
+func TestSetMapping_LazyInit(t *testing.T) {
+	// SetMapping on a State with nil Mappings must not panic.
+	s := &state.State{} // Mappings is nil
+	m := state.Mapping{Tool: model.ToolClaude, Tree: "/t", Choice: state.ChoiceWorktree}
+	state.SetMapping(s, "ses_lazy", m)
+
+	got, ok := state.LookupMapping(*s, "ses_lazy")
+	if !ok {
+		t.Fatal("LookupMapping after SetMapping on nil map: expected ok=true")
+	}
+	if got != m {
+		t.Errorf("got %+v; want %+v", got, m)
+	}
+}
+
 // ── SortedPaths determinism ───────────────────────────────────────────────────
 
 func TestSortedPaths_Deterministic(t *testing.T) {

@@ -140,7 +140,7 @@ Resolved by advisor before authoring; treat as constraints, do NOT re-litigate.
 
 - [x] M6-1 git worktree add/remove/prune + placement + slugify + lock/internal-name — `internal/git/worktree.go`; 91.1% cov; spec SHIP + quality 0 bug/0 risk; lint 0
 - [x] M6-2 seeding (copy/symlink, security gate L5) + hooks (env via `sh -c`) — `internal/worktree/{seed,hooks}.go`; 83.2% cov; TOCTOU closed (resolved-path reuse); spec SHIP + lint 0
-- [ ] M6-3 config validate split (FD2/L5) + worktree_dir validation + mapping enum + lookup/writer + plan.md §8 fix
+- [x] M6-3 config validate split (FD2/L5) + worktree_dir validation + mapping enum + lookup/writer + plan.md §8 fix — config 92.1%/state 84.9%; SHIP; `.gitfoo`/`foo/../.git` regression guards added; lint 0
 - [ ] M6-4 fork wiring (claude native, opencode fallback L4) + headless claude-fork demo (FD5)
 - [ ] M6-5 `Tmux.RunShell`(`-b`) + `KillWindow` + `CurrentClientWindow` + `Connect` reuse + `DeferredRemove` + shadow teardown
 - [ ] M6-6 TUI `w`/`d`/`x` + minimal modals (FD3) + main-checkout & focused-in-tree guards (FD4) + no-reprompt + footer

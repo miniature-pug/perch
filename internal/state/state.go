@@ -23,9 +23,19 @@ import (
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
+// Choice constants for Mapping.Choice.
+const (
+	// ChoiceWorktree indicates perch created (or reused) a dedicated worktree for
+	// the session.
+	ChoiceWorktree = "worktree"
+	// ChoiceNone indicates the user declined worktree creation; the session runs
+	// in the repo root.
+	ChoiceNone = "none"
+)
+
 // Mapping records which worktree decision perch made for a session, so the
 // interactive prompt is never shown twice for the same session.
-// choice values: "worktree" | "none" — full enum defined in M6.
+// Choice values: ChoiceWorktree ("worktree") | ChoiceNone ("none").
 type Mapping struct {
 	Tool   model.Tool `json:"tool"`
 	Tree   string     `json:"tree"`
@@ -114,6 +124,26 @@ func SaveState(baseDir string, s State) error {
 	}
 	target := filepath.Join(baseDir, "state.json")
 	return writeFileAtomic(target, data)
+}
+
+// LookupMapping returns the Mapping for sessionID and whether it was present.
+// A nil Mappings map is treated as empty and returns the zero Mapping and false.
+func LookupMapping(s State, sessionID string) (Mapping, bool) {
+	if s.Mappings == nil {
+		return Mapping{}, false
+	}
+	m, ok := s.Mappings[sessionID]
+	return m, ok
+}
+
+// SetMapping stores m under sessionID in s.Mappings, lazily initialising the
+// map if it is nil. The caller is responsible for calling SaveState afterward
+// to persist the change; this function only mutates the in-memory State.
+func SetMapping(s *State, sessionID string, m Mapping) {
+	if s.Mappings == nil {
+		s.Mappings = make(map[string]Mapping)
+	}
+	s.Mappings[sessionID] = m
 }
 
 // ── windows/<paneKey>.json ────────────────────────────────────────────────────

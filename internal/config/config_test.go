@@ -256,35 +256,48 @@ func TestMalformedProject(t *testing.T) {
 }
 
 // TestPathSafety exercises Validate's path guards.
+//
+// worktree_dir uses a distinct rule: it may be a sibling, absolute, or in-repo
+// relative path; only landing inside .git is forbidden. files.copy and
+// files.symlink must stay inside the repo (no absolute, no "..").
 func TestPathSafety(t *testing.T) {
-	tmp := t.TempDir()
-	initGitDir(t, tmp)
-
 	cases := []struct {
 		name        string
 		perchToml   string
 		expectError bool
 	}{
+		// ── worktree_dir: new rules (sibling/abs/in-repo-relative are OK; .git is not) ──
 		{
-			name:        "absolute worktree_dir rejected",
-			perchToml:   `worktree_dir = "/abs/path"`,
-			expectError: true,
+			name:        "worktree_dir sibling (dotdot) accepted",
+			perchToml:   `worktree_dir = "../wt"`,
+			expectError: false,
 		},
 		{
-			name:        "dotdot worktree_dir rejected",
-			perchToml:   `worktree_dir = "../escape"`,
-			expectError: true,
+			name:        "worktree_dir absolute outside repo accepted",
+			perchToml:   `worktree_dir = "/abs/elsewhere"`,
+			expectError: false,
 		},
 		{
-			name:        "deeply escaped worktree_dir rejected",
-			perchToml:   `worktree_dir = "a/../../escape"`,
-			expectError: true,
-		},
-		{
-			name:        "valid relative worktree_dir accepted",
+			name:        "worktree_dir in-repo relative (not .git) accepted",
 			perchToml:   `worktree_dir = "wt"`,
 			expectError: false,
 		},
+		{
+			name:        "worktree_dir pointing at .git/foo rejected",
+			perchToml:   `worktree_dir = ".git/foo"`,
+			expectError: true,
+		},
+		{
+			name:        "worktree_dir pointing at .git rejected",
+			perchToml:   `worktree_dir = ".git"`,
+			expectError: true,
+		},
+		{
+			name:        "worktree_dir empty accepted",
+			perchToml:   `base_branch = "main"`, // no worktree_dir key → empty
+			expectError: false,
+		},
+		// ── files.copy: must stay inside repo ──
 		{
 			name: "absolute file in files.copy rejected",
 			perchToml: `
@@ -302,13 +315,14 @@ copy = ["../../etc/passwd"]
 			expectError: true,
 		},
 		{
-			name: "valid files.copy accepted",
+			name: "valid files.copy .env accepted",
 			perchToml: `
 [files]
 copy = [".env", ".env.local"]
 `,
 			expectError: false,
 		},
+		// ── files.symlink: must stay inside repo ──
 		{
 			name: "absolute file in files.symlink rejected",
 			perchToml: `
@@ -318,7 +332,7 @@ symlink = ["/usr/bin/node"]
 			expectError: true,
 		},
 		{
-			name: "valid files.symlink accepted",
+			name: "valid files.symlink node_modules accepted",
 			perchToml: `
 [files]
 symlink = ["node_modules"]
@@ -347,6 +361,73 @@ symlink = ["node_modules"]
 			}
 		})
 	}
+}
+
+// TestValidateWorktreeDir exercises validateWorktreeDir through Validate directly,
+// covering cases that would require complex .perch.toml setup otherwise.
+func TestValidateWorktreeDir(t *testing.T) {
+	cases := []struct {
+		name        string
+		worktreeDir string
+		expectError bool
+	}{
+		{"sibling via dotdot", "../wt", false},
+		{"absolute outside repo", "/abs/elsewhere", false},
+		{"in-repo relative not .git", "wt", false},
+		{"dotdot into .git/foo", ".git/foo", true},
+		{"equals .git", ".git", true},
+		{"gitfoo not inside .git", ".gitfoo", false}, // prefix-bug guard: .gitfoo is a sibling of .git, not inside it
+		{"dotdot games resolving to .git", "foo/../.git", true}, // Clean must run before the .git check
+		{"empty", "", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			initGitDir(t, dir)
+
+			cfg := &config.Config{WorktreeDir: tc.worktreeDir}
+			err := cfg.Validate(dir)
+			if tc.expectError && err == nil {
+				t.Error("expected validation error, got nil")
+			}
+			if !tc.expectError && err != nil {
+				t.Errorf("unexpected validation error: %v", err)
+			}
+		})
+	}
+}
+
+// TestValidateFilePaths verifies Validate rejects unsafe files.copy/files.symlink
+// and accepts safe ones, independent of worktree_dir handling.
+func TestValidateFilePaths(t *testing.T) {
+	dir := t.TempDir()
+	initGitDir(t, dir)
+
+	t.Run("files.copy escape rejected", func(t *testing.T) {
+		cfg := &config.Config{Files: config.Files{Copy: []string{"../escape"}}}
+		if err := cfg.Validate(dir); err == nil {
+			t.Error("expected error for files.copy ../escape")
+		}
+	})
+	t.Run("files.copy absolute rejected", func(t *testing.T) {
+		cfg := &config.Config{Files: config.Files{Copy: []string{"/abs"}}}
+		if err := cfg.Validate(dir); err == nil {
+			t.Error("expected error for files.copy /abs")
+		}
+	})
+	t.Run("files.copy .env accepted", func(t *testing.T) {
+		cfg := &config.Config{Files: config.Files{Copy: []string{".env"}}}
+		if err := cfg.Validate(dir); err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+	t.Run("files.symlink node_modules accepted", func(t *testing.T) {
+		cfg := &config.Config{Files: config.Files{Symlink: []string{"node_modules"}}}
+		if err := cfg.Validate(dir); err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
 }
 
 // TestRootsHomeDirExpansion verifies that roots entries with leading ~/ are expanded.
