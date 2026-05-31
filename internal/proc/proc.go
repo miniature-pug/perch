@@ -40,6 +40,7 @@ type ExecRunner struct{}
 // error.
 func (e ExecRunner) RunInDir(ctx context.Context, dir, name string, args ...string) ([]byte, []byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
+	// os/exec treats Dir=="" as the parent cwd; the guard makes that intent explicit.
 	if dir != "" {
 		cmd.Dir = dir
 	}
@@ -50,6 +51,7 @@ func (e ExecRunner) RunInDir(ctx context.Context, dir, name string, args ...stri
 	return outBuf.Bytes(), errBuf.Bytes(), err
 }
 
+// Run executes name with args, inheriting the parent process working directory.
 func (e ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte, []byte, error) {
 	return e.RunInDir(ctx, "", name, args...)
 }
