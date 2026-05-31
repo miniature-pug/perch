@@ -30,7 +30,12 @@ func newTestServer(t *testing.T) Tmux {
 	t.Cleanup(func() {
 		_ = tmx.KillServer(context.Background())
 		// kill-server leaves the socket file behind; remove it best-effort.
-		socketPath := filepath.Join(fmt.Sprintf("/tmp/tmux-%d", os.Getuid()), socket)
+		// Respect $TMUX_TMPDIR when set, matching tmux's own socket-dir logic.
+		dir := os.Getenv("TMUX_TMPDIR")
+		if dir == "" {
+			dir = fmt.Sprintf("/tmp/tmux-%d", os.Getuid())
+		}
+		socketPath := filepath.Join(dir, socket)
 		_ = os.Remove(socketPath)
 	})
 	return tmx
