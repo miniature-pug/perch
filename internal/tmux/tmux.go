@@ -143,7 +143,7 @@ func parsePanes(raw []byte) []Pane {
 // cold server both return exit 1); exec-layer failure (binary missing etc.) →
 // (false, err).
 func (o Tmux) HasSession(ctx context.Context, name string) (bool, error) {
-	_, _, err := o.runner().Run(ctx, o.bin(), o.args("has-session", "-t="+SessionTarget(name))...)
+	_, _, err := o.runner().Run(ctx, o.bin(), o.args("has-session", "-t", SessionTarget(name))...)
 	if err == nil {
 		return true, nil
 	}

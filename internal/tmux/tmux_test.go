@@ -201,7 +201,7 @@ func TestParsePanes_NoPanic(t *testing.T) {
 
 func TestHasSession_Exists(t *testing.T) {
 	r := proc.NewFakeRunner()
-	r.Respond(proc.FakeResult{}, "tmux", "has-session", "-t==myproj")
+	r.Respond(proc.FakeResult{}, "tmux", "has-session", "-t", "=myproj")
 
 	o := Tmux{Runner: r, Bin: "tmux"}
 	got, err := o.HasSession(context.Background(), "myproj")
@@ -211,11 +211,17 @@ func TestHasSession_Exists(t *testing.T) {
 	if !got {
 		t.Error("HasSession = false, want true when exit 0")
 	}
+
+	// Guard against regression: target must be a separate arg, never "-t==name".
+	wantArgs := []string{"has-session", "-t", "=myproj"}
+	if !reflect.DeepEqual(r.Calls[0].Args, wantArgs) {
+		t.Errorf("Call.Args = %v, want %v (target must be separate arg, not concatenated)", r.Calls[0].Args, wantArgs)
+	}
 }
 
 func TestHasSession_Missing(t *testing.T) {
 	r := proc.NewFakeRunner()
-	r.Respond(proc.FakeResult{Err: proc.FakeExitError{Code: 1}}, "tmux", "has-session", "-t==miss")
+	r.Respond(proc.FakeResult{Err: proc.FakeExitError{Code: 1}}, "tmux", "has-session", "-t", "=miss")
 
 	o := Tmux{Runner: r, Bin: "tmux"}
 	got, err := o.HasSession(context.Background(), "miss")
@@ -230,7 +236,7 @@ func TestHasSession_Missing(t *testing.T) {
 func TestHasSession_ExecFailure(t *testing.T) {
 	execErr := errors.New("exec: no such file or directory")
 	r := proc.NewFakeRunner()
-	r.Respond(proc.FakeResult{Err: execErr}, "tmux", "has-session", "-t==myproj")
+	r.Respond(proc.FakeResult{Err: execErr}, "tmux", "has-session", "-t", "=myproj")
 
 	o := Tmux{Runner: r, Bin: "tmux"}
 	got, err := o.HasSession(context.Background(), "myproj")
