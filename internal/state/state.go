@@ -230,7 +230,7 @@ func FrecencyScore(rank float64, lastAccessed, now int64) float64 {
 // Callers should invoke AgeProjects after every bump to bound total weight.
 func BumpProject(projects map[string]ProjectStat, path string, now int64) {
 	cur := projects[path]
-	cur.Rank = max(cur.Rank+1.0, 0.0)
+	cur.Rank = max(cur.Rank+1.0, 0.0) // max(...,0) mirrors zoxide's bump (§6.3); floor is defensive against a corrupted negative rank read from disk.
 	cur.LastAccessed = now
 	projects[path] = cur
 }
@@ -287,7 +287,6 @@ func writeFileAtomic(target string, data []byte) error {
 	if err != nil {
 		return fmt.Errorf("state: create temp file in %s: %w", dir, err)
 	}
-	// Clean up the temp file on any error path.
 	tmpName := tmp.Name()
 	ok := false
 	defer func() {

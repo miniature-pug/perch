@@ -73,8 +73,9 @@ func TestAgeProjects_BelowThreshold(t *testing.T) {
 }
 
 func TestAgeProjects_AboveThreshold(t *testing.T) {
-	// total = 10001.0 → each rank *= 0.9*10000/10001; entries < 1.0 evicted.
-	// Values chosen so total == exactly 10001.0.
+	// total = 10001.0 → each rank *= 0.9*10000/10001 ≈ 0.8999.
+	// With factor ≈ 0.8999: /big survives (≈8998.6), /one and /half both drop
+	// below 1.0 and are evicted. All assertions are unconditional.
 	const maxAge = 10_000.0
 	projects := map[string]state.ProjectStat{
 		"/big":  {Rank: 9999.5, LastAccessed: 0},
@@ -84,36 +85,63 @@ func TestAgeProjects_AboveThreshold(t *testing.T) {
 	// total = 9999.5 + 1.0 + 0.5 = 10001.0
 	total := 9999.5 + 1.0 + 0.5
 	factor := 0.9 * maxAge / total
+	t.Logf("factor = %v (0.9*%.1f/%.1f); /one aged to %v, /half aged to %v — both evicted",
+		factor, maxAge, total, 1.0*factor, 0.5*factor)
 
 	state.AgeProjects(projects)
 
 	bigWant := 9999.5 * factor
-	oneWant := 1.0 * factor
-	halfWant := 0.5 * factor
-
 	if v, ok := projects["/big"]; !ok {
 		t.Error("/big was evicted; should survive")
 	} else if v.Rank != bigWant {
 		t.Errorf("/big rank = %v; want %v", v.Rank, bigWant)
 	}
 
-	if oneWant >= 1.0 {
-		if v, ok := projects["/one"]; !ok {
-			t.Error("/one was evicted; should survive")
-		} else if v.Rank != oneWant {
-			t.Errorf("/one rank = %v; want %v", v.Rank, oneWant)
-		}
-	} else {
-		if _, ok := projects["/one"]; ok {
-			t.Error("/one should have been evicted")
-		}
+	// /one aged rank ≈ 0.8999 < 1.0 → evicted.
+	if _, ok := projects["/one"]; ok {
+		t.Error("/one should have been evicted (rank after aging < 1.0)")
 	}
 
-	// /half after multiply is halfWant < 1.0; evict.
-	if halfWant < 1.0 {
-		if _, ok := projects["/half"]; ok {
-			t.Error("/half should have been evicted (rank after multiply < 1.0)")
-		}
+	// /half aged rank ≈ 0.4499 < 1.0 → evicted.
+	if _, ok := projects["/half"]; ok {
+		t.Error("/half should have been evicted (rank after aging < 1.0)")
+	}
+
+	if len(projects) != 1 {
+		t.Errorf("len = %d; want 1 (only /big survives)", len(projects))
+	}
+}
+
+func TestAgeProjects_LargeRankSurvives(t *testing.T) {
+	// Constants chosen so that after aging, /survivor's rank stays deterministically ≥ 1.0.
+	// total = 20001.0, factor = 0.9*10000/20001 ≈ 0.4499.
+	// /survivor rank=10000 * 0.4499 ≈ 4499.8 — well above 1.0.
+	// /small rank=1.0 * 0.4499 ≈ 0.4499 — evicted.
+	const maxAge = 10_000.0
+	projects := map[string]state.ProjectStat{
+		"/survivor": {Rank: 10000.0, LastAccessed: 0},
+		"/small":    {Rank: 10001.0, LastAccessed: 0},
+	}
+	// total = 10000 + 10001 = 20001
+	total := 10000.0 + 10001.0
+	factor := 0.9 * maxAge / total
+	survivorWant := 10000.0 * factor
+	t.Logf("factor = %v; /survivor aged to %v (survives)", factor, survivorWant)
+
+	state.AgeProjects(projects)
+
+	if v, ok := projects["/survivor"]; !ok {
+		t.Error("/survivor was evicted; should survive")
+	} else if v.Rank != survivorWant {
+		t.Errorf("/survivor rank = %v; want %v", v.Rank, survivorWant)
+	}
+
+	// /small: 10001 * factor ≈ 4500.3 — also survives (both large ranks stay above 1.0).
+	smallWant := 10001.0 * factor
+	if v, ok := projects["/small"]; !ok {
+		t.Error("/small was evicted; should survive")
+	} else if v.Rank != smallWant {
+		t.Errorf("/small rank = %v; want %v", v.Rank, smallWant)
 	}
 }
 
