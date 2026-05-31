@@ -1,0 +1,490 @@
+// Package doctor implements the `perch doctor` health check.
+//
+// It is read-only: it never installs, creates, or modifies anything.
+// All OS interactions are injected via the system interface so the package is
+// fully unit-testable without spawning processes or touching the real filesystem.
+package doctor
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"regexp"
+	"strconv"
+	"strings"
+	"text/tabwriter"
+
+	perch "github.com/Miniature-Pug/perch"
+)
+
+// ── OS boundary ───────────────────────────────────────────────────────────────
+
+// system is the injectable OS boundary. All real-system calls go through here
+// so tests can supply a fake without spawning processes or touching the real FS.
+type system interface {
+	lookPath(name string) (string, error)
+	output(name string, args ...string) ([]byte, error)
+	homeDir() (string, error)
+	stat(path string) error
+	readFile(path string) ([]byte, error)
+}
+
+// realSystem is the production implementation of system.
+type realSystem struct{}
+
+// RealSystem returns the production system implementation.
+func RealSystem() system {
+	return &realSystem{}
+}
+
+func (r *realSystem) lookPath(name string) (string, error) {
+	return exec.LookPath(name)
+}
+
+func (r *realSystem) output(name string, args ...string) ([]byte, error) {
+	return exec.Command(name, args...).Output()
+}
+
+func (r *realSystem) homeDir() (string, error) {
+	return os.UserHomeDir()
+}
+
+func (r *realSystem) stat(path string) error {
+	_, err := os.Stat(path)
+	return err
+}
+
+func (r *realSystem) readFile(path string) ([]byte, error) {
+	return os.ReadFile(path)
+}
+
+// ── Version utilities ─────────────────────────────────────────────────────────
+
+// versionRe matches the first dotted-numeric version token (e.g. "1.26.3",
+// "3.6", "2.1.158"). It requires at least one dot so bare integers like "2" or
+// a leading "go" word are never matched by themselves.
+var versionRe = regexp.MustCompile(`\d+(?:\.\d+)+`)
+
+// extractVersionToken extracts the first dotted version token from raw output
+// (e.g. "go version go1.26.3 linux/amd64" → "1.26.3"). It strips any leading
+// "v" prefix so "v1.2.3" yields "1.2.3". Returns "" when no token is found.
+func extractVersionToken(raw string) string {
+	raw = strings.TrimSpace(raw)
+	// Strip leading "v" from individual tokens so "v1.2.3" matches.
+	// The regex won't match "v1.2.3" directly because of the "v" prefix —
+	// normalise by replacing "v" immediately before a digit.
+	normalised := regexp.MustCompile(`\bv(\d)`).ReplaceAllString(raw, "$1")
+	match := versionRe.FindString(normalised)
+	return match
+}
+
+// splitVersion converts "1.26.3" into []int{1, 26, 3}. Non-numeric parts
+// within a component are stripped (e.g. "3.6a" → {3, 6}). If a component
+// cannot be parsed at all it is treated as 0.
+func splitVersion(v string) []int {
+	// Strip trailing non-numeric suffix from each component individually.
+	parts := strings.Split(v, ".")
+	nums := make([]int, len(parts))
+	for i, p := range parts {
+		// Take only leading digits in each component.
+		j := 0
+		for j < len(p) && p[j] >= '0' && p[j] <= '9' {
+			j++
+		}
+		if j > 0 {
+			n, err := strconv.Atoi(p[:j])
+			if err == nil {
+				nums[i] = n
+			}
+		}
+	}
+	return nums
+}
+
+// compareVersions returns -1 if a<b, 0 if a==b, +1 if a>b, comparing dotted
+// numeric components (1.26.3 vs 1.26.2). Non-numeric suffixes are stripped
+// defensively (e.g. "3.6a" → numeric parts only); missing components count as
+// 0 (1.26 == 1.26.0).
+func compareVersions(a, b string) int {
+	an := splitVersion(a)
+	bn := splitVersion(b)
+	// Pad shorter slice with zeros.
+	for len(an) < len(bn) {
+		an = append(an, 0)
+	}
+	for len(bn) < len(an) {
+		bn = append(bn, 0)
+	}
+	for i := range an {
+		if an[i] < bn[i] {
+			return -1
+		}
+		if an[i] > bn[i] {
+			return 1
+		}
+	}
+	return 0
+}
+
+// ── Tool versions parsing ─────────────────────────────────────────────────────
+
+// ParseToolVersions parses the raw content of a .tool-versions file into a
+// map[name]version. Lines that are blank, start with "#", or lack a space
+// separator are skipped defensively — this function never panics on bad input.
+func ParseToolVersions(raw string) map[string]string {
+	m := make(map[string]string)
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimRight(line, "\r") // handle CRLF
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.Fields(line)
+		if len(parts) < 2 {
+			continue
+		}
+		m[parts[0]] = parts[1]
+	}
+	return m
+}
+
+// ── Tool descriptor table ─────────────────────────────────────────────────────
+
+// toolDescriptor describes how to check a single external dependency.
+type toolDescriptor struct {
+	// name is the binary name (used for lookPath).
+	name string
+	// pinnedKey is the key in .tool-versions. Empty means no pin (e.g. git).
+	pinnedKey string
+	// versionArgs are the arguments passed to get the version string.
+	versionArgs []string
+	// hardRequirement means absence → exit 1.
+	hardRequirement bool
+	// buildOnly means absence is a warn, not a fail (perch runs fine without it).
+	buildOnly bool
+	// agentTool means absence produces the one-of-agents warning message.
+	agentTool bool
+}
+
+// tools is the ordered descriptor table. Order controls display order.
+// The agent tools (claude, opencode) are handled with special "one-of" logic
+// after iterating this table.
+var tools = []toolDescriptor{
+	{
+		name:            "go",
+		pinnedKey:       "golang",
+		versionArgs:     []string{"version"},
+		hardRequirement: false,
+		buildOnly:       true, // go is only needed at build time
+	},
+	{
+		// tmux is the runtime engine for perch. Without it, perch cannot function at all.
+		// Absence is intentionally a hard failure (§21.1).
+		name:            "tmux",
+		pinnedKey:       "tmux",
+		versionArgs:     []string{"-V"},
+		hardRequirement: true,
+		buildOnly:       false,
+	},
+	{
+		name:            "git",
+		pinnedKey:       "", // system-managed, not pinned
+		versionArgs:     []string{"--version"},
+		hardRequirement: true,
+		buildOnly:       false,
+	},
+	{
+		name:            "claude",
+		pinnedKey:       "claude",
+		versionArgs:     []string{"--version"},
+		hardRequirement: false, // governed by one-of-agents rule
+		buildOnly:       false,
+		agentTool:       true,
+	},
+	{
+		name:            "opencode",
+		pinnedKey:       "opencode",
+		versionArgs:     []string{"--version"},
+		hardRequirement: false, // governed by one-of-agents rule
+		buildOnly:       false,
+		agentTool:       true,
+	},
+}
+
+// ── Check result ──────────────────────────────────────────────────────────────
+
+// checkResult is the outcome of checking a single tool.
+type checkResult struct {
+	name    string
+	tag     string // "[ok]" or "[warn]" or "[fail]"
+	version string // installed version or status message
+	path    string // binary path (empty for hook/server checks)
+	isHard  bool   // if true and tag != "[ok]", hard failure
+}
+
+// ── Hooks checks ──────────────────────────────────────────────────────────────
+
+// claudeHooksOk inspects ~/.claude/settings.json and returns (ok, message).
+// Returns (false, reason) when the file is absent, malformed, or lacks a perch hook.
+// Degrades gracefully on all error conditions — never panics.
+func claudeHooksOk(sys system) (bool, string) {
+	home, err := sys.homeDir()
+	if err != nil {
+		return false, "claude hooks: could not determine home directory"
+	}
+	path := home + "/.claude/settings.json"
+	data, err := sys.readFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, "claude hooks not installed — run 'perch setup'"
+	}
+	if err != nil {
+		return false, fmt.Sprintf("claude hooks: could not read settings.json: %v", err)
+	}
+	// Parse the JSON loosely — we only need to check whether any string value
+	// contains "perch". Marshal-back and string-search is the simplest approach
+	// that avoids assuming the exact settings schema.
+	var raw interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return false, "claude hooks: settings.json malformed — run 'perch setup'"
+	}
+	// Walk the JSON tree looking for any string containing "perch".
+	if containsPerchHook(raw) {
+		return true, ""
+	}
+	return false, "claude hooks not installed — run 'perch setup'"
+}
+
+// containsPerchHook recursively walks a decoded JSON value looking for any
+// string that contains the word "perch".
+func containsPerchHook(v interface{}) bool {
+	switch val := v.(type) {
+	case string:
+		return strings.Contains(val, "perch")
+	case []interface{}:
+		for _, item := range val {
+			if containsPerchHook(item) {
+				return true
+			}
+		}
+	case map[string]interface{}:
+		for _, item := range val {
+			if containsPerchHook(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// opencodePluginOk checks whether the opencode perch-status.ts plugin exists.
+func opencodePluginOk(sys system) (bool, string) {
+	home, err := sys.homeDir()
+	if err != nil {
+		return false, "opencode plugin: could not determine home directory"
+	}
+	path := home + "/.config/opencode/plugins/perch-status.ts"
+	if err := sys.stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, "perch-status.ts not installed — run 'perch setup'"
+		}
+		return false, fmt.Sprintf("opencode plugin: stat error: %v", err)
+	}
+	return true, ""
+}
+
+// ── Main Run function ─────────────────────────────────────────────────────────
+
+// Run executes the doctor health check, writes a human-readable report to w,
+// and returns the exit code: 0 when all hard requirements are satisfied, 1
+// when any are missing.
+//
+// version is the perch version string injected from main (via ldflags).
+func Run(version string, w io.Writer, sys system) int {
+	pinnedVersions := ParseToolVersions(perch.ToolVersions)
+
+	// results collects all tool-check rows for tabwriter rendering.
+	var results []checkResult
+	hardFail := false
+	var warnings []string
+	hookWarnings := 0
+
+	// Track agent presence for the one-of-agents rule.
+	claudePresent := false
+	opencodePresent := false
+
+	for _, td := range tools {
+		r := checkTool(td, pinnedVersions, sys)
+		results = append(results, r)
+
+		if r.isHard && r.tag != "[ok]" {
+			hardFail = true
+		} else if r.tag == "[warn]" {
+			warnings = append(warnings, r.name+": "+r.version)
+		}
+
+		// Track agent presence (present if found, regardless of drift state).
+		switch td.name {
+		case "claude":
+			claudePresent = r.path != ""
+		case "opencode":
+			opencodePresent = r.path != ""
+		}
+	}
+
+	// ── One-of-agents rule ────────────────────────────────────────────────────
+	// Neither agent's checkTool sets hardFail; we resolve the combined state here.
+	// Both absent → hard fail with a synthetic row. The synthetic row is not
+	// added to warnings (it is a hard fail, not a warning count contributor).
+	if !claudePresent && !opencodePresent {
+		hardFail = true
+		results = append(results, checkResult{
+			name:    "agents",
+			tag:     "[fail]",
+			version: "at least one agent (claude or opencode) is required",
+			isHard:  true,
+		})
+	}
+
+	// ── Hooks checks (warnings only — never affect exit code) ─────────────────
+	if ok, msg := claudeHooksOk(sys); !ok {
+		results = append(results, checkResult{
+			name:    "hooks",
+			tag:     "[warn]",
+			version: msg,
+		})
+		warnings = append(warnings, "claude "+msg)
+		hookWarnings++
+	}
+	if ok, msg := opencodePluginOk(sys); !ok {
+		results = append(results, checkResult{
+			name:    "hooks",
+			tag:     "[warn]",
+			version: msg,
+		})
+		warnings = append(warnings, "opencode: "+msg)
+		hookWarnings++
+	}
+
+	// ── tmux server check (warning only; only if tmux binary is present) ──────
+	if _, err := sys.lookPath("tmux"); err == nil {
+		_, err := sys.output("tmux", "list-sessions")
+		if err != nil {
+			msg := "server not running (will start automatically on first session)"
+			results = append(results, checkResult{
+				name:    "tmux",
+				tag:     "[warn]",
+				version: msg,
+			})
+			warnings = append(warnings, "tmux: "+msg)
+		}
+	}
+
+	// ── Render ────────────────────────────────────────────────────────────────
+	_, _ = fmt.Fprintf(w, "\nperch %s\n\n", version)
+
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	for _, r := range results {
+		if r.path != "" {
+			_, _ = fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n", r.tag, r.name, r.version, r.path)
+		} else {
+			_, _ = fmt.Fprintf(tw, "  %s\t%s\t%s\n", r.tag, r.name, r.version)
+		}
+	}
+	_ = tw.Flush()
+
+	// ── Summary ───────────────────────────────────────────────────────────────
+	_, _ = fmt.Fprintln(w)
+	if len(warnings) == 0 {
+		_, _ = fmt.Fprintln(w, "All checks passed.")
+	} else {
+		noun := "warnings"
+		if len(warnings) == 1 {
+			noun = "warning"
+		}
+		// Only mention 'perch setup' when hook warnings are actually present,
+		// since setup won't help with missing agents or go/tmux drift.
+		if hookWarnings > 0 {
+			_, _ = fmt.Fprintf(w, "%d %s. Run 'perch setup' to fix hook issues.\n", len(warnings), noun)
+		} else {
+			_, _ = fmt.Fprintf(w, "%d %s.\n", len(warnings), noun)
+		}
+	}
+
+	if hardFail {
+		return 1
+	}
+	return 0
+}
+
+// checkTool evaluates a single toolDescriptor and returns a checkResult.
+//
+// Drift rule: warn only when installed < pinned. installed >= pinned → [ok].
+// This differs from install.sh's install-time "warn on any mismatch" check —
+// an ongoing health check should not flag newer-than-pin as a problem, since
+// go toolchains and agent CLIs self-update to newer versions routinely.
+func checkTool(td toolDescriptor, pinned map[string]string, sys system) checkResult {
+	path, err := sys.lookPath(td.name)
+	if err != nil {
+		// Binary not found.
+		msg := "not found"
+		tag := "[warn]"
+		hard := false
+		if td.hardRequirement {
+			tag = "[fail]"
+			hard = true
+			// §21.1: tmux absence is a hard failure because perch is a tmux orchestrator.
+		}
+		if td.buildOnly {
+			msg = "not found (build-only; not required to run perch)"
+		}
+		// One-of-agents: the absence message includes the "at least one required" rationale.
+		// Whether this is a hard fail is resolved at the Run level; here it is just a warn.
+		if td.agentTool {
+			msg = "not found (at least one agent is required — ok if claude present)"
+		}
+		return checkResult{
+			name:    td.name,
+			tag:     tag,
+			version: msg,
+			isHard:  hard,
+		}
+	}
+
+	// Binary found. Determine installed version.
+	raw, err := sys.output(td.name, td.versionArgs...)
+	var installedVer string
+	if err != nil {
+		installedVer = "unknown (version check failed)"
+	} else {
+		installedVer = extractVersionToken(string(raw))
+		if installedVer == "" {
+			installedVer = "unknown (unparseable output)"
+		}
+	}
+
+	// Drift check (only when we have a pin and could parse the installed version).
+	tag := "[ok]"
+	displayVer := installedVer
+	if td.pinnedKey != "" {
+		if pinnedVer, ok := pinned[td.pinnedKey]; ok {
+			if installedVer != "" && !strings.HasPrefix(installedVer, "unknown") {
+				// Warn only when installed < pinned; newer or equal is fine.
+				if compareVersions(installedVer, pinnedVer) < 0 {
+					tag = "[warn]"
+					displayVer = installedVer + " (below pin " + pinnedVer + ")"
+				}
+			}
+			// If installed == "unknown", we can't drift-check; leave as [ok] (no crash).
+		}
+	}
+
+	return checkResult{
+		name:    td.name,
+		tag:     tag,
+		version: displayVer,
+		path:    path,
+	}
+}
