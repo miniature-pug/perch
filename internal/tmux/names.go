@@ -29,7 +29,7 @@ func sanitize(s string) string {
 			}
 		}
 	}
-	result := strings.TrimRight(b.String(), "-")
+	result := strings.Trim(b.String(), "-")
 	if result == "" {
 		return "unnamed"
 	}

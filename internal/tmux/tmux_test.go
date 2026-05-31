@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/Miniature-Pug/perch/internal/proc"
@@ -281,7 +282,7 @@ func TestBootID_Error_WrapsSterr(t *testing.T) {
 	if !errors.Is(err, underlying) {
 		t.Errorf("error should wrap underlying: %v", err)
 	}
-	if !containsStr(err.Error(), "no server running") {
+	if !strings.Contains(err.Error(), "no server running") {
 		t.Errorf("error should include stderr text: %v", err)
 	}
 }
@@ -438,21 +439,7 @@ func TestGetPaneOption_Error_WrapsSterr(t *testing.T) {
 	if !errors.Is(err, underlying) {
 		t.Errorf("should wrap underlying: %v", err)
 	}
-	if !containsStr(err.Error(), "@bad") {
+	if !strings.Contains(err.Error(), "@bad") {
 		t.Errorf("error should contain stderr: %v", err)
 	}
-}
-
-// ── helpers ───────────────────────────────────────────────────────────────────
-
-func containsStr(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || len(sub) == 0 ||
-		func() bool {
-			for i := 0; i+len(sub) <= len(s); i++ {
-				if s[i:i+len(sub)] == sub {
-					return true
-				}
-			}
-			return false
-		}())
 }
