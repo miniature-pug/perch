@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/Miniature-Pug/perch/internal/agent"
 	"github.com/Miniature-Pug/perch/internal/discover"
@@ -82,8 +81,8 @@ func TestBuildItemFromSession_LivePaneMatches(t *testing.T) {
 	if it.captureTarget != "%17" {
 		t.Errorf("captureTarget = %q, want %%17", it.captureTarget)
 	}
-	if it.status != StatusWorking {
-		t.Errorf("status = %v, want StatusWorking", it.status)
+	if it.status != StatusLive {
+		t.Errorf("status = %v, want StatusLive", it.status)
 	}
 	if it.id != "sess-1" {
 		t.Errorf("id = %q, want sess-1", it.id)
@@ -389,9 +388,10 @@ func TestLoaderNoLivePanesAllIdle(t *testing.T) {
 	}
 }
 
-// TestLoaderFrecencyOrder verifies that the loader uses frecency state without
-// error and degrades gracefully when opencode returns no sessions.
-func TestLoaderFrecencyOrder(t *testing.T) {
+// TestLoaderDegradesToEmptyWhenNoSessions verifies that the loader uses frecency
+// state without error and degrades gracefully to zero items when opencode
+// returns no sessions and no claude sessions exist.
+func TestLoaderDegradesToEmptyWhenNoSessions(t *testing.T) {
 	repoA := makeRepoDir(t)
 
 	r := proc.NewFakeRunner()
@@ -420,7 +420,9 @@ func TestLoaderFrecencyOrder(t *testing.T) {
 		t.Fatalf("loader error: %v", msg.err)
 	}
 	// No sessions produced (empty opencode, no claude) — no panic, clean return.
-	_ = msg.items
+	if len(msg.items) != 0 {
+		t.Errorf("want 0 items when no sessions exist, got %d", len(msg.items))
+	}
 }
 
 // TestAssembleItems_FrecencyOrder is a pure-function test that verifies
@@ -544,34 +546,41 @@ func TestModel_SelectLiveItemDispatchesCapture(t *testing.T) {
 }
 
 // TestModel_CaptureGatePreventsDuplicates: if capturing is already true,
-// a second selection change does not fire another capture cmd.
+// previewCmd returns nil (gate blocks a duplicate capture). When capturing is
+// false and a live item is selected with a loader, previewCmd returns non-nil.
 func TestModel_CaptureGatePreventsDuplicates(t *testing.T) {
 	liveItem := item{
 		id:            "sess-live",
 		title:         "live session",
 		tool:          "claude",
-		status:        StatusWorking,
+		status:        StatusLive,
 		live:          true,
 		captureTarget: "%99",
 		isSession:     true,
 	}
-	m := New([]list.Item{liveItem})
+	// Provide a loader so previewCmd can fire a real capture cmd.
+	ldr := loader{Tmux: tmux.Tmux{Runner: proc.NewFakeRunner()}}
+	m := New([]list.Item{liveItem}).WithLoader(ldr)
 	updated0, _ := m.Update(windowMsg)
 	m = updated0.(Model)
 
-	// Manually set capturing=true.
+	// Gate test: with capturing=true, previewCmd must return nil.
 	m.capturing = true
-
-	// Navigate down then up (j then k) — should not fire another capture.
-	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-	m = m2.(Model)
-
-	// cmd may be nil or the list's own cmd; just assert capturing is still true
-	// (no reset without a previewMsg).
-	if !m.capturing {
-		t.Log("note: capturing was reset without a previewMsg (acceptable if list cmd ran)")
+	cmd := m.previewCmd()
+	if cmd != nil {
+		t.Error("capture gate: expected nil cmd when capturing=true, got non-nil")
 	}
-	_ = cmd
+
+	// Companion: with capturing=false, previewCmd must return a non-nil cmd.
+	m.capturing = false
+	cmd = m.previewCmd()
+	if cmd == nil {
+		t.Error("expected non-nil capture cmd when capturing=false and live item selected")
+	}
+	// previewCmd sets capturing=true when it fires — confirm the state update.
+	if !m.capturing {
+		t.Error("expected capturing=true after previewCmd fired a capture cmd")
+	}
 }
 
 // TestModel_StalePreviewMsgReFires verifies that after a stale previewMsg

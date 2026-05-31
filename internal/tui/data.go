@@ -124,11 +124,18 @@ func assembleItems(
 // snapshot. Panes where Dead == true are excluded. Panes with an empty
 // PerchSession are skipped so a spurious empty-string key never matches
 // sessions that have no live pane.
+//
+// First-write-wins: by convention one live pane exists per session; if that
+// invariant is violated (duplicate PerchSession tags), we keep the first pane
+// encountered and ignore subsequent ones.
 func buildLiveIndex(panes []tmux.Pane) map[string]string {
 	idx := make(map[string]string, len(panes))
 	for _, p := range panes {
 		if p.Dead || p.PerchSession == "" {
 			continue
+		}
+		if _, exists := idx[p.PerchSession]; exists {
+			continue // first-write-wins: skip duplicate PerchSession tags
 		}
 		idx[p.PerchSession] = p.ID
 	}
@@ -137,7 +144,8 @@ func buildLiveIndex(panes []tmux.Pane) map[string]string {
 
 // buildItemFromSession constructs one list.Item from a model.Session plus its
 // project/tree metadata and the live-pane index.
-// Status is binary: StatusWorking (live pane exists) or StatusIdle.
+// Status is binary: StatusLive (live pane attached) or StatusIdle.
+// Real Working/Waiting/Done detection requires @perch_status and is deferred.
 func buildItemFromSession(
 	s model.Session,
 	projectName, branch string,
@@ -147,7 +155,7 @@ func buildItemFromSession(
 	paneID, isLive := liveBySession[s.ID]
 	status := StatusIdle
 	if isLive {
-		status = StatusWorking
+		status = StatusLive
 	}
 	return item{
 		id:            s.ID,

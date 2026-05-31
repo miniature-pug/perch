@@ -31,6 +31,10 @@ type Model struct {
 	// loader is optional; when set, Init returns its load Cmd.
 	loader *loader
 
+	// loadErr holds the last whole-load failure message for display in the UI.
+	// Empty string means no error. Cleared on successful reload.
+	loadErr string
+
 	// previewContent holds the current text shown in the preview pane.
 	// Stored separately from the viewport so tests can assert without rendering.
 	previewContent string
@@ -79,7 +83,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case itemsLoadedMsg:
 		if msg.err == nil {
+			m.loadErr = ""
 			m.list.SetItems(msg.items)
+		} else {
+			m.loadErr = msg.err.Error()
 		}
 		// Refresh the preview for the newly-selected item.
 		return m, m.previewCmd()
@@ -177,6 +184,11 @@ func (m Model) View() string {
 	footer := styles.footer.Render(
 		"↵ switch · n new · / filter · q quit",
 	)
+
+	if m.loadErr != "" {
+		errBar := styles.errorBar.Render("Error loading sessions: " + m.loadErr)
+		return lipgloss.JoinVertical(lipgloss.Left, errBar, body, footer)
+	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, body, footer)
 }

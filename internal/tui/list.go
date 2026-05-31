@@ -16,6 +16,7 @@ const (
 	StatusWaiting               // agent is awaiting user input
 	StatusDone                  // session completed
 	StatusIdle                  // no session running (placeholder row)
+	StatusLive                  // tmux pane attached/live; real working/waiting/done needs @perch_status (later milestone)
 )
 
 // glyph returns the display glyph for the status.
@@ -27,6 +28,8 @@ func (s Status) glyph() string {
 		return glyphWaiting
 	case StatusDone:
 		return glyphDone
+	case StatusLive:
+		return glyphLive
 	default:
 		return glyphIdle
 	}
