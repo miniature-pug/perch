@@ -200,18 +200,36 @@ func TestEscClearsFilter(t *testing.T) {
 	}
 }
 
-// --- Test 4: q issues tea.Quit ---
+// --- Test 4: q and ctrl+c both issue tea.Quit ---
 
 func TestQuitIssuesTeatQuit(t *testing.T) {
-	tm := teatest.NewTestModel(
-		t,
-		New(fixtures()),
-		teatest.WithInitialTermSize(120, 40),
-	)
-	time.Sleep(30 * time.Millisecond)
+	tests := []struct {
+		name string
+		msg  tea.KeyMsg
+	}{
+		{
+			name: "q key",
+			msg:  tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")},
+		},
+		{
+			name: "ctrl+c",
+			msg:  tea.KeyMsg{Type: tea.KeyCtrlC},
+		},
+	}
 
-	sendAndSettle(tm, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tm := teatest.NewTestModel(
+				t,
+				New(fixtures()),
+				teatest.WithInitialTermSize(120, 40),
+			)
+			time.Sleep(30 * time.Millisecond)
 
-	tm.WaitFinished(t, teatest.WithFinalTimeout(3*time.Second))
-	// If WaitFinished returns, the program exited cleanly.
+			sendAndSettle(tm, tc.msg)
+
+			tm.WaitFinished(t, teatest.WithFinalTimeout(3*time.Second))
+			// If WaitFinished returns without error, the program exited cleanly.
+		})
+	}
 }

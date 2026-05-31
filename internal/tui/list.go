@@ -35,6 +35,12 @@ func (s Status) glyph() string {
 // item is a single row in the selector list.
 // It implements list.Item.
 type item struct {
+	// project is the repo/project name this session belongs to.
+	// Populated by live data (M5-3+); empty for scaffold fixtures.
+	project string
+	// tree is the worktree or branch identifier for this session.
+	// Populated by live data (M5-3+); empty for scaffold fixtures.
+	tree string
 	// title is the session/project title shown in the list.
 	title string
 	// tool identifies which agent (claude/opencode) runs this session.
@@ -48,10 +54,11 @@ type item struct {
 	isSession bool
 }
 
-// FilterValue returns the fuzzy-search key: title + tool tag.
-// Combined so the user can filter by tool ("claude foo") or just title.
+// FilterValue returns the fuzzy-search key: project + tree + title + tool.
+// Concatenating all four lets the user filter by any combination, e.g.
+// "myrepo main foo claude" or simply "foo".
 func (i item) FilterValue() string {
-	return i.title + " " + i.tool
+	return i.project + " " + i.tree + " " + i.title + " " + i.tool
 }
 
 // itemDelegate renders each list row with a cursor marker, status glyph, tool
