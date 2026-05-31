@@ -253,10 +253,13 @@ report status, prove the DoD green, wait for review.
 > M4 spec — supersedes the master plan where tagged `[DIVERGENCE]`).
 >
 > **Verification:** commit chain `dad0991 → eaf2f47 → 1172323 → 5d2ea4e → 4a0fdbc →
-> 691b634 → 9562429 → 752e70c`. Coverage: `internal/tmux` 97.7%, `internal/proc` 100%.
-> `make test` + `make test-integration` both green (real tmux 3.6). The debug `tmux`
-> command demonstrates the DoD: `Connect` → `@perch_session` round-trip → shadow-record
-> write + read-back.
+> 691b634 → 9562429 → 752e70c → d750ff4`. Coverage: `internal/tmux` 97.7%,
+> `internal/proc` 100%. `make test` + `make test-integration` both green (real tmux
+> 3.6). The debug `tmux` command demonstrates the DoD: `Connect` → `@perch_session`
+> round-trip → shadow-record write + read-back. A real-tmux integration test proves
+> the objective's "run a command" clause: `SendKeys` (`-l` + separate `Enter`) executes
+> `echo PERCH_$((6*7))` and `CapturePane` reads back `PERCH_42` (output, not just typed
+> keys — proves Enter fired and the shell ran it).
 >
 > **Plan↔reality corrections applied** (in the sub-plan + `plan.md §3/§7.2/§9/§20.4`):
 > cold-start classified by exit code not stderr text (E1/E2); name sanitization rule
@@ -270,7 +273,7 @@ report status, prove the DoD green, wait for review.
 > **New package:** `internal/tmux` — `tmux.go` (reads/targets/names+parse),
 > `connect.go` (mutations + `Connect` + `AttachArgs`/`ExecArgs`), `cleanup.go` (§7.2
 > builder built-not-wired), `integration_test.go` (reusable `newTestServer` harness +
-> 4 integration tests). `internal/proc` gained `ExitCode` + `FakeExitError`.
+> 5 integration tests). `internal/proc` gained `ExitCode` + `FakeExitError`.
 >
 > **Deferred:** attach execution + agent-argv shell-quoting → M5; cleanup execution +
 > worktree Remove → M6; resurrect reconcile → M7; live-agent `#{pane_current_command}`
