@@ -12,6 +12,10 @@ import (
 // is POSIX-single-quoted and the tokens are space-joined into one literal so
 // tmux send-keys -l cannot reinterpret spaces, ';', '$', quotes, etc. Returns
 // the pane ID from Connect.
+//
+// SendKeys-failure contract: if Connect succeeds but SendKeys fails, the pane
+// created by Connect already exists. Launch surfaces the error; window teardown
+// is handled by later cleanup milestones and is not attempted here.
 func (o Tmux) Launch(ctx context.Context, session, window, dir string, argv []string) (string, error) {
 	if len(argv) == 0 {
 		return "", fmt.Errorf("tmux Launch: argv must not be empty")

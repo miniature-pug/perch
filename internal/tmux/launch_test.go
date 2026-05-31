@@ -43,9 +43,10 @@ func TestLaunch_HappyPath(t *testing.T) {
 		t.Fatalf("got %d calls, want 4", len(r.Calls))
 	}
 
-	// Call[0]: has-session
-	if r.Calls[0].Args[0] != "has-session" {
-		t.Errorf("Calls[0] should be has-session, got %v", r.Calls[0].Args)
+	// Call[0]: has-session with exact-match target.
+	wantHasSession := []string{"has-session", "-t", "=proj"}
+	if !reflect.DeepEqual(r.Calls[0].Args, wantHasSession) {
+		t.Errorf("Calls[0].Args = %v, want %v", r.Calls[0].Args, wantHasSession)
 	}
 
 	// Call[1]: new-session
@@ -93,9 +94,9 @@ func TestLaunch_QuotingSafety(t *testing.T) {
 	if len(r.Calls) != 4 {
 		t.Fatalf("got %d calls, want 4", len(r.Calls))
 	}
-	gotLiteral := r.Calls[2].Args[len(r.Calls[2].Args)-1]
-	if gotLiteral != wantLiteral {
-		t.Errorf("send-keys literal = %q, want %q", gotLiteral, wantLiteral)
+	wantSendKeysQuoting := []string{"send-keys", "-t", "%2", "-l", wantLiteral}
+	if !reflect.DeepEqual(r.Calls[2].Args, wantSendKeysQuoting) {
+		t.Errorf("Calls[2].Args = %v, want %v", r.Calls[2].Args, wantSendKeysQuoting)
 	}
 }
 
