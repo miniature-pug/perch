@@ -128,29 +128,30 @@ report status, prove the DoD green, wait for review.
   - [x] `shellcheck install.sh` clean (it's part of `make lint` per §21.3).
 - DoD (`plan.md §16.0`): script exits 0 inside `podman run --rm -v "$PWD":/perch ubuntu:24.04 sh /perch/install.sh --skip-agents` **and** the fedora:41 equivalent (podman substitutes for docker). `perch version` and `perch doctor` are stubs until M1 — so for M0 the install-script DoD is the container exit-0 (build step `--skip-build` until the binary exists, or run after M1). **Sequencing note:** `install.sh` step 6 (build) and step 7 (`perch setup`) depend on M1's binary; in M0 verify steps 1–5 + idempotency with `--skip-build --skip-setup`, then close the loop at end of M1.
 
-### M1 — Skeleton: module, CLI, config, state, `doctor`  *(no tmux needed)*
+### M1 — Skeleton: module, CLI, config, state, `doctor`  ✅ DONE  *(no tmux needed)*
 
-- [ ] Objective: a building binary with the dependency tree, CLI dispatch, config +
+- [x] Objective: a building binary with the dependency tree, CLI dispatch, config +
       state packages, and a working `perch doctor` / `perch version`.
 - Spec refs: `plan.md §2` (deps/policy), `§6` (state), `§8` (config), `§14` (layout),
       `§15` (Makefile), `§21.4` (doctor), `§16.1`.
 - Deliverables:
-  - [ ] `go.mod` with exact-pinned deps + `toolchain go1.26.2`; `go.sum` committed;
+  - [x] `go.mod` with exact-pinned deps + `toolchain go1.26.2`; `go.sum` committed;
         `go mod vendor` → commit `/vendor`; `GOFLAGS=-mod=vendor`.
-  - [ ] `Makefile` per `plan.md §15` with the corrected `GOLANGCI := v2.11.4`.
-  - [ ] `cmd/perch/main.go`: stdlib `flag` + subcommand `switch` over the 7 verbs
+  - [x] `Makefile` per `plan.md §15` with the corrected `GOLANGCI := v2.11.4`.
+  - [x] `cmd/perch/main.go`: stdlib `flag` + subcommand `switch` over the 7 verbs
         (`plan.md §10`); unknown verb → usage + exit 2.
-  - [ ] `internal/config`: TOML load + global/project merge + defaults + security
+  - [x] `internal/config`: TOML load + global/project merge + defaults + security
         boundary (`plan.md §8.2`); table-driven tests (`§20.3 config` cases).
-  - [ ] `internal/state`: `state.json` + `windows/*.json` schemas (`§6.1/§6.2`),
+  - [x] `internal/state`: `state.json` + `windows/*.json` schemas (`§6.1/§6.2`),
         atomic write (temp+rename), frecency (`§6.3` exact formula); tests (`§20.3
         state` cases incl. bucket boundaries + aging + cold start).
-  - [ ] `internal/model`: `Project`, `Tree`, `Session`, `Window` types (no deps).
-  - [ ] `perch doctor` (`§21.4`): reads `.tool-versions`, checks deps, exit 0/1 per spec.
-  - [ ] `perch version`: version/build info via `-ldflags -X main.version`.
+  - [x] `internal/model`: `Project`, `Tree`, `Session`, `Window` types (no deps).
+  - [x] `perch doctor` (`§21.4`): reads `.tool-versions`, checks deps, exit 0/1 per spec.
+  - [x] `perch version`: version/build info via `-ldflags -X main.version`.
 - DoD (`plan.md §16.1`): `make build && ./bin/perch doctor` reports tool presence;
       `make test` green; coverage gate met for `config`+`state`; `make fmt vet lint
       vendor verify` clean. Then close M0's install.sh build/setup steps end-to-end.
+- [x] M1 verified complete 2026-05-30 — install.sh seam closed (ubuntu:24.04 + fedora:41 exit 0); coverage: config 92.1%, state 84.0%, doctor 91.5%, model 100%; all make gates green.
 
 ### M2 — Discovery + git  *(no tmux needed)*
 
