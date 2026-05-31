@@ -74,7 +74,12 @@ func (m Model) launchCmd(spec launchSpec) tea.Cmd {
 	}
 	l := m.loader
 	return func() tea.Msg {
-		ctx := context.Background() // program-ctx wiring is M5-5; match data.go's load()
+		// Program-scoped ctx so an in-flight launch cancels when the TUI exits;
+		// nil in tests → context.Background() (matches load() and previewCmd).
+		ctx := l.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
 
 		adapter, ok := adapterFor(spec.tool)
 		if !ok {
@@ -151,8 +156,12 @@ func (m Model) attachTo(target string) (tea.Model, tea.Cmd) {
 	argv := m.loader.Tmux.AttachTargetArgs(target)
 	if len(argv) > 0 && argv[0] == "switch-client" {
 		t := m.loader.Tmux
+		ctx := m.loader.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
 		return m, func() tea.Msg {
-			return switchedMsg{err: t.SwitchClient(context.Background(), target)}
+			return switchedMsg{err: t.SwitchClient(ctx, target)}
 		}
 	}
 	// attach-session: genuine terminal handover; use tea.ExecProcess.
