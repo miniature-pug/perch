@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Miniature-Pug/perch/internal/discover"
+	"github.com/Miniature-Pug/perch/internal/model"
 )
 
 // helper executes run and returns stdout, stderr, and the exit code.
@@ -258,5 +261,65 @@ func TestPrintUsage_NoDebug(t *testing.T) {
 	_, errOut, _ := callRun([]string{"doctr"})
 	if strings.Contains(errOut, "debug") {
 		t.Errorf("printUsage must not mention 'debug' (hidden command); stderr: %q", errOut)
+	}
+}
+
+// ── writeProjects formatting ──────────────────────────────────────────────────
+
+func TestWriteProjects(t *testing.T) {
+	proj := &model.Project{
+		Path:  "/repos/myrepo",
+		Name:  "myrepo",
+		IsGit: true,
+	}
+
+	tests := []struct {
+		name     string
+		projects []*discover.ProjectTrees
+		want     string
+	}{
+		{
+			// Header: "Name  Path\n"
+			// Main tree (IsMain=true):  "  * <branch>  <path>\n"
+			// Linked tree (IsMain=false): "    <branch>  <path>\n"  (marker=" " gives 3 spaces total)
+			name: "one project two trees main marked with star",
+			projects: []*discover.ProjectTrees{
+				{
+					Project: *proj,
+					Trees: []model.Tree{
+						{Path: "/repos/myrepo", Branch: "main", IsMain: true, Project: proj},
+						{Path: "/repos/myrepo-feat", Branch: "feat/foo", IsMain: false, Project: proj},
+					},
+				},
+			},
+			want: "myrepo  /repos/myrepo\n" +
+				"  * main  /repos/myrepo\n" +
+				"    feat/foo  /repos/myrepo-feat\n",
+		},
+		{
+			// Empty branch: "  * <empty>  <path>\n" → "  *   <path>\n" (branch="" → two spaces between * and path's two-space prefix)
+			name: "tree with empty branch degrades cleanly",
+			projects: []*discover.ProjectTrees{
+				{
+					Project: *proj,
+					Trees: []model.Tree{
+						{Path: "/repos/myrepo", Branch: "", IsMain: true, Project: proj},
+					},
+				},
+			},
+			want: "myrepo  /repos/myrepo\n" +
+				"  *   /repos/myrepo\n",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf strings.Builder
+			writeProjects(&buf, tc.projects)
+			got := buf.String()
+			if got != tc.want {
+				t.Errorf("writeProjects output mismatch\ngot:  %q\nwant: %q", got, tc.want)
+			}
+		})
 	}
 }

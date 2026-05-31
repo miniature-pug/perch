@@ -201,7 +201,7 @@ func TestProjects_TreesAttached(t *testing.T) {
 	pt := results[0]
 
 	if len(pt.Trees) != 2 {
-		t.Fatalf("want 2 trees (main + linked, bare skipped), got %d", len(pt.Trees))
+		t.Fatalf("want 2 trees (main + linked worktree), got %d", len(pt.Trees))
 	}
 
 	// Find main and linked trees by IsMain flag.
@@ -242,6 +242,70 @@ func TestProjects_TreesAttached(t *testing.T) {
 	if pt.Trees[0].Project != &pt.Project {
 		t.Errorf("Tree.Project must point at the element's own Project (shared identity)")
 	}
+}
+
+// ── Bare-only repository skipped ─────────────────────────────────────────────
+
+// TestProjects_BareOnlyRepoSkipped verifies that a candidate whose
+// `git worktree list --porcelain` output describes a bare-only repo (no working
+// checkout) is silently skipped. git.MainWorktree returns ok=false for bare-only
+// repos, so Projects must skip them. When the bare-only repo is the only
+// candidate, results is empty; when mixed with a normal repo, only the normal
+// repo appears.
+func TestProjects_BareOnlyRepoSkipped(t *testing.T) {
+	root := t.TempDir()
+	bareDir := filepath.Join(root, "barerepo")
+	normalDir := filepath.Join(root, "normalrepo")
+
+	makeFakeRepo(t, bareDir, true)
+	makeFakeRepo(t, normalDir, true)
+
+	// A bare-only porcelain record: worktree line + bare, no HEAD/branch.
+	bareBlob := []byte("worktree " + bareDir + "\nbare\n")
+	normalBlob := porcelainForPath(normalDir, "main")
+
+	t.Run("bare-only candidate alone produces empty results", func(t *testing.T) {
+		r := proc.NewFakeRunner()
+		r.Respond(proc.FakeResult{Stdout: bareBlob},
+			"git", "-C", bareDir, "worktree", "list", "--porcelain")
+
+		// Only the bare directory is a candidate in this sub-test: create a fresh
+		// temp root containing only the bare repo.
+		bareOnlyRoot := t.TempDir()
+		bareOnlyDir := filepath.Join(bareOnlyRoot, "barerepo")
+		makeFakeRepo(t, bareOnlyDir, true)
+
+		r2 := proc.NewFakeRunner()
+		r2.Respond(proc.FakeResult{Stdout: []byte("worktree " + bareOnlyDir + "\nbare\n")},
+			"git", "-C", bareOnlyDir, "worktree", "list", "--porcelain")
+
+		results, err := Projects(context.Background(), r2, bareOnlyRoot, Options{}, map[string]state.ProjectStat{}, 0)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(results) != 0 {
+			t.Errorf("want 0 results for bare-only repo, got %d", len(results))
+		}
+	})
+
+	t.Run("bare-only candidate mixed with normal repo skips bare only", func(t *testing.T) {
+		r := proc.NewFakeRunner()
+		r.Respond(proc.FakeResult{Stdout: bareBlob},
+			"git", "-C", bareDir, "worktree", "list", "--porcelain")
+		r.Respond(proc.FakeResult{Stdout: normalBlob},
+			"git", "-C", normalDir, "worktree", "list", "--porcelain")
+
+		results, err := Projects(context.Background(), r, root, Options{}, map[string]state.ProjectStat{}, 0)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(results) != 1 {
+			t.Fatalf("want 1 result (bare skipped), got %d", len(results))
+		}
+		if results[0].Project.Path != normalDir {
+			t.Errorf("Project.Path = %q, want %q", results[0].Project.Path, normalDir)
+		}
+	})
 }
 
 // ── Skip-and-continue on runner error ────────────────────────────────────────

@@ -183,15 +183,24 @@ func handleDebugDiscover(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
+	writeProjects(stdout, projects)
+	return 0
+}
+
+// writeProjects writes a formatted listing of projects and their trees to w.
+// Each project header line is "Name  Path". Each tree line is indented two
+// spaces, followed by "*" (main) or " " (linked), the branch name, two spaces,
+// and the tree path. This is a pure formatting function; it performs no I/O
+// beyond writing to w.
+func writeProjects(w io.Writer, projects []*discover.ProjectTrees) {
 	for _, pt := range projects {
-		_, _ = fmt.Fprintf(stdout, "%s  %s\n", pt.Project.Name, pt.Project.Path)
+		_, _ = fmt.Fprintf(w, "%s  %s\n", pt.Project.Name, pt.Project.Path)
 		for _, tr := range pt.Trees {
 			marker := " "
 			if tr.IsMain {
 				marker = "*"
 			}
-			_, _ = fmt.Fprintf(stdout, "  %s %s  %s\n", marker, tr.Branch, tr.Path)
+			_, _ = fmt.Fprintf(w, "  %s %s  %s\n", marker, tr.Branch, tr.Path)
 		}
 	}
-	return 0
 }
