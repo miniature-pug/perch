@@ -1,0 +1,366 @@
+package tmux
+
+import (
+	"context"
+	"errors"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/Miniature-Pug/perch/internal/proc"
+)
+
+// ── NewSession ────────────────────────────────────────────────────────────────
+
+func TestNewSession_CallArgsAndPaneID(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Stdout: []byte("%3\n")},
+		"tmux", "new-session", "-d", "-s", "myproj", "-n", "main", "-c", "/home/user/myproject", "-P", "-F", "#{pane_id}")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	paneID, err := o.NewSession(context.Background(), "myproj", "main", "/home/user/myproject")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if paneID != "%3" {
+		t.Errorf("paneID = %q, want %%3", paneID)
+	}
+
+	wantArgs := []string{"new-session", "-d", "-s", "myproj", "-n", "main", "-c", "/home/user/myproject", "-P", "-F", "#{pane_id}"}
+	if !reflect.DeepEqual(r.Calls[0].Args, wantArgs) {
+		t.Errorf("Call.Args = %v, want %v", r.Calls[0].Args, wantArgs)
+	}
+}
+
+func TestNewSession_StdoutTrimmed(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Stdout: []byte("  %0  \n")},
+		"tmux", "new-session", "-d", "-s", "s", "-n", "w", "-c", "/tmp", "-P", "-F", "#{pane_id}")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	paneID, err := o.NewSession(context.Background(), "s", "w", "/tmp")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if paneID != "%0" {
+		t.Errorf("paneID = %q, want %%0 (whitespace trimmed)", paneID)
+	}
+}
+
+func TestNewSession_ErrorWrapsSterr(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Err: proc.FakeExitError{Code: 1}, Stderr: []byte("boom")},
+		"tmux", "new-session", "-d", "-s", "s", "-n", "w", "-c", "/tmp", "-P", "-F", "#{pane_id}")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	_, err := o.NewSession(context.Background(), "s", "w", "/tmp")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Errorf("error should contain stderr text: %v", err)
+	}
+}
+
+// ── NewWindow ─────────────────────────────────────────────────────────────────
+
+func TestNewWindow_CallArgsAndPaneID(t *testing.T) {
+	r := proc.NewFakeRunner()
+	// target is SessionTarget("myproj") = "=myproj"
+	r.Respond(proc.FakeResult{Stdout: []byte("%5\n")},
+		"tmux", "new-window", "-t", "=myproj", "-n", "feat", "-c", "/src", "-P", "-F", "#{pane_id}")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	paneID, err := o.NewWindow(context.Background(), "myproj", "feat", "/src")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if paneID != "%5" {
+		t.Errorf("paneID = %q, want %%5", paneID)
+	}
+
+	wantArgs := []string{"new-window", "-t", "=myproj", "-n", "feat", "-c", "/src", "-P", "-F", "#{pane_id}"}
+	if !reflect.DeepEqual(r.Calls[0].Args, wantArgs) {
+		t.Errorf("Call.Args = %v, want %v", r.Calls[0].Args, wantArgs)
+	}
+}
+
+func TestNewWindow_StdoutTrimmed(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Stdout: []byte("  %7  \n")},
+		"tmux", "new-window", "-t", "=s", "-n", "w", "-c", "/d", "-P", "-F", "#{pane_id}")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	paneID, err := o.NewWindow(context.Background(), "s", "w", "/d")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if paneID != "%7" {
+		t.Errorf("paneID = %q, want %%7", paneID)
+	}
+}
+
+func TestNewWindow_ErrorWrapsSterr(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Err: proc.FakeExitError{Code: 1}, Stderr: []byte("no session")},
+		"tmux", "new-window", "-t", "=s", "-n", "w", "-c", "/d", "-P", "-F", "#{pane_id}")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	_, err := o.NewWindow(context.Background(), "s", "w", "/d")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "no session") {
+		t.Errorf("error should contain stderr text: %v", err)
+	}
+}
+
+// ── SendKeys ──────────────────────────────────────────────────────────────────
+
+func TestSendKeys_TwoCallsRecorded(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{}, "tmux", "send-keys", "-t", "%3", "-l", "echo hello")
+	r.Respond(proc.FakeResult{}, "tmux", "send-keys", "-t", "%3", "Enter")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	if err := o.SendKeys(context.Background(), "%3", "echo hello"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(r.Calls) != 2 {
+		t.Fatalf("got %d calls, want 2", len(r.Calls))
+	}
+
+	wantFirst := []string{"send-keys", "-t", "%3", "-l", "echo hello"}
+	if !reflect.DeepEqual(r.Calls[0].Args, wantFirst) {
+		t.Errorf("Call[0].Args = %v, want %v", r.Calls[0].Args, wantFirst)
+	}
+
+	wantSecond := []string{"send-keys", "-t", "%3", "Enter"}
+	if !reflect.DeepEqual(r.Calls[1].Args, wantSecond) {
+		t.Errorf("Call[1].Args = %v, want %v", r.Calls[1].Args, wantSecond)
+	}
+}
+
+func TestSendKeys_FirstCallError_NoEnter(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Err: proc.FakeExitError{Code: 1}, Stderr: []byte("bad pane")},
+		"tmux", "send-keys", "-t", "%99", "-l", "cmd")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	err := o.SendKeys(context.Background(), "%99", "cmd")
+	if err == nil {
+		t.Fatal("expected error from first send-keys call")
+	}
+	if !strings.Contains(err.Error(), "bad pane") {
+		t.Errorf("error should contain stderr: %v", err)
+	}
+
+	// Enter must NOT have been sent.
+	if len(r.Calls) != 1 {
+		t.Errorf("got %d calls, want exactly 1 (Enter must not be sent after error)", len(r.Calls))
+	}
+}
+
+// ── SetPaneOption ─────────────────────────────────────────────────────────────
+
+func TestSetPaneOption_CallArgs(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{},
+		"tmux", "set-option", "-p", "-t", "%5", "@perch_session", "proj-abc")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	if err := o.SetPaneOption(context.Background(), "%5", "@perch_session", "proj-abc"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	wantArgs := []string{"set-option", "-p", "-t", "%5", "@perch_session", "proj-abc"}
+	if !reflect.DeepEqual(r.Calls[0].Args, wantArgs) {
+		t.Errorf("Call.Args = %v, want %v", r.Calls[0].Args, wantArgs)
+	}
+}
+
+func TestSetPaneOption_ErrorWrapsSterr(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Err: proc.FakeExitError{Code: 1}, Stderr: []byte("unknown option")},
+		"tmux", "set-option", "-p", "-t", "%5", "@bad", "val")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	err := o.SetPaneOption(context.Background(), "%5", "@bad", "val")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "unknown option") {
+		t.Errorf("error should contain stderr: %v", err)
+	}
+}
+
+// ── KillSession ───────────────────────────────────────────────────────────────
+
+func TestKillSession_Success(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{}, "tmux", "kill-session", "-t", "=myproj")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	if err := o.KillSession(context.Background(), "myproj"); err != nil {
+		t.Errorf("expected nil, got: %v", err)
+	}
+}
+
+func TestKillSession_ExitOne_Tolerated(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Err: proc.FakeExitError{Code: 1}},
+		"tmux", "kill-session", "-t", "=myproj")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	if err := o.KillSession(context.Background(), "myproj"); err != nil {
+		t.Errorf("exit 1 should be tolerated, got: %v", err)
+	}
+}
+
+func TestKillSession_ExecFailure_Returned(t *testing.T) {
+	execErr := errors.New("exec: tmux not found")
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Err: execErr, Stderr: []byte("tmux not found")},
+		"tmux", "kill-session", "-t", "=myproj")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	err := o.KillSession(context.Background(), "myproj")
+	if err == nil {
+		t.Fatal("expected error for exec failure")
+	}
+	if !errors.Is(err, execErr) {
+		t.Errorf("error should wrap execErr: %v", err)
+	}
+}
+
+// ── KillServer ────────────────────────────────────────────────────────────────
+
+func TestKillServer_Success(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{}, "tmux", "kill-server")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	if err := o.KillServer(context.Background()); err != nil {
+		t.Errorf("expected nil, got: %v", err)
+	}
+}
+
+func TestKillServer_ExitOne_Tolerated(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Err: proc.FakeExitError{Code: 1}}, "tmux", "kill-server")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	if err := o.KillServer(context.Background()); err != nil {
+		t.Errorf("exit 1 should be tolerated, got: %v", err)
+	}
+}
+
+func TestKillServer_ExecFailure_Returned(t *testing.T) {
+	execErr := errors.New("exec: no such file")
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Err: execErr, Stderr: []byte("no such file")}, "tmux", "kill-server")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	err := o.KillServer(context.Background())
+	if err == nil {
+		t.Fatal("expected error for exec failure")
+	}
+	if !errors.Is(err, execErr) {
+		t.Errorf("error should wrap execErr: %v", err)
+	}
+}
+
+// ── AttachArgs ────────────────────────────────────────────────────────────────
+
+func TestAttachArgs_InsideTmux_SwitchClient(t *testing.T) {
+	o := Tmux{
+		Getenv: func(s string) string {
+			if s == "TMUX" {
+				return "/tmp/tmux-1000/default,1234,0"
+			}
+			return ""
+		},
+	}
+	got := o.AttachArgs("myproj")
+	want := []string{"switch-client", "-t", "=myproj"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("AttachArgs (inside tmux) = %v, want %v", got, want)
+	}
+}
+
+func TestAttachArgs_OutsideTmux_AttachSession(t *testing.T) {
+	o := Tmux{
+		Getenv: func(s string) string { return "" },
+	}
+	got := o.AttachArgs("myproj")
+	want := []string{"attach-session", "-t", "=myproj"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("AttachArgs (outside tmux) = %v, want %v", got, want)
+	}
+}
+
+// ── Connect ───────────────────────────────────────────────────────────────────
+
+func TestConnect_SessionAbsent_CreatesSession(t *testing.T) {
+	r := proc.NewFakeRunner()
+	// has-session exits 1 → session absent
+	r.Respond(proc.FakeResult{Err: proc.FakeExitError{Code: 1}},
+		"tmux", "has-session", "-t", "=myproj")
+	r.Respond(proc.FakeResult{Stdout: []byte("%0\n")},
+		"tmux", "new-session", "-d", "-s", "myproj", "-n", "main", "-c", "/work", "-P", "-F", "#{pane_id}")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	paneID, err := o.Connect(context.Background(), "myproj", "main", "/work")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if paneID != "%0" {
+		t.Errorf("paneID = %q, want %%0", paneID)
+	}
+
+	// Verify new-session was called (second call after has-session).
+	if len(r.Calls) != 2 {
+		t.Fatalf("want 2 calls, got %d", len(r.Calls))
+	}
+	if r.Calls[1].Args[0] != "new-session" {
+		t.Errorf("second call should be new-session, got: %v", r.Calls[1].Args)
+	}
+}
+
+func TestConnect_SessionPresent_CreatesWindow(t *testing.T) {
+	r := proc.NewFakeRunner()
+	// has-session exits 0 → session present
+	r.Respond(proc.FakeResult{}, "tmux", "has-session", "-t", "=myproj")
+	r.Respond(proc.FakeResult{Stdout: []byte("%4\n")},
+		"tmux", "new-window", "-t", "=myproj", "-n", "feat", "-c", "/work", "-P", "-F", "#{pane_id}")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	paneID, err := o.Connect(context.Background(), "myproj", "feat", "/work")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if paneID != "%4" {
+		t.Errorf("paneID = %q, want %%4", paneID)
+	}
+
+	if len(r.Calls) != 2 {
+		t.Fatalf("want 2 calls, got %d", len(r.Calls))
+	}
+	if r.Calls[1].Args[0] != "new-window" {
+		t.Errorf("second call should be new-window, got: %v", r.Calls[1].Args)
+	}
+}
+
+func TestConnect_HasSessionError_ReturnsError(t *testing.T) {
+	execErr := errors.New("exec: tmux not found")
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Err: execErr},
+		"tmux", "has-session", "-t", "=myproj")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	_, err := o.Connect(context.Background(), "myproj", "main", "/work")
+	if err == nil {
+		t.Fatal("expected error from HasSession exec failure")
+	}
+}
