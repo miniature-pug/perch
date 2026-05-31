@@ -153,9 +153,9 @@ report status, prove the DoD green, wait for review.
       vendor verify` clean. Then close M0's install.sh build/setup steps end-to-end.
 - [x] M1 verified complete 2026-05-30 — install.sh seam closed (ubuntu:24.04 + fedora:41 exit 0); coverage: config 92.1%, state 84.0%, doctor 91.5%, model 100%; all make gates green.
 
-### M2 — Discovery + git  *(no tmux needed)*
+### M2 — Discovery + git  *(no tmux needed)*  ✅ DONE
 
-- [ ] Objective: bounded repo scan + authoritative worktree enumeration + frecency order.
+- [x] Objective: bounded repo scan + authoritative worktree enumeration + frecency order.
 - Spec refs: `plan.md §5`, `§7.1` (worktree add later, but porcelain parse here),
       `§6.3`, `§16.2`.
 - Deliverables: `internal/discover` (bounded scan, prune `node_modules`/`vendor`/`.git`,
@@ -165,6 +165,34 @@ report status, prove the DoD green, wait for review.
       discover` cases.
 - DoD (`plan.md §16.2`): debug command lists projects+trees under a root — fast, pruned,
       frecency-ordered. §0 gate.
+
+- [x] **M2 verified complete 2026-05-30.** Sub-plan: `2026-05-30-perch-m2-discovery-git.md`.
+      Commit chain `b6d99bd`→`9ae9193` (proc → git → discover → catalog/cmd → review fixes).
+      Packages: `internal/proc` (shared `Runner`/`ExecRunner`/`FakeRunner`, §20.1),
+      `internal/git` (`ParsePorcelain`/`ListWorktrees`/`MainWorktree`/`ToTrees`),
+      `internal/discover` (`Scan` candidate finder + `Projects` catalog), `cmd/perch`
+      (hidden `perch debug discover [path]`). Coverage: proc 100%, git 91.8%, discover
+      90.8%, cmd/perch 79.5%. All gates green (`make test -race`, lint 0 issues, vet,
+      build, `go mod verify`). Smoke: `perch debug discover` lists the perch repo itself.
+- [x] **Architecture: entry[0]-keyed pipeline.** `discover.Scan` returns `.git` candidate
+      paths only; `git` parses porcelain and keys each project by `entry[0]` (the main
+      worktree, which git always lists first regardless of invocation cwd —
+      empirically verified). `discover.Projects` dedups by that canonical main path, so a
+      linked-worktree candidate (`.git`-as-file inside root) collapses onto its owning repo
+      with the correct name. Frecency order reuses `state.SortedPaths` over a zero-filled
+      copy of the stats map (cold start → alphabetical); no new ordering code.
+- [x] **Spec tension resolved (§5 vs §20.3).** §5 prose says "stop descending once a repo
+      root is found"; §20.3 enumerates a nested-repos test requiring the inner repo to be
+      found as a separate project. The enumerated test is authoritative → `Scan` continues
+      descending after a hit (pruning `node_modules`/`vendor`/`.git` + max-depth keep it
+      fast). Behavior verified by `TestNestedRepos`.
+- [x] **Convention set:** test fixtures live per-package at `internal/<pkg>/testdata/`
+      (Go idiom; §14 invokes "Go best practices"), not a repo-root `testdata/` tree.
+      M3+ follows suit. No new deps — `BurntSushi/toml` remains the only one.
+- Deferred (not M2 scope): wiring `state.LoadState` into `debug discover` — frecency is
+      cold-start until selection bumping lands with the TUI (M5); empty stats yields the
+      same output today. `attach` verb, persistence-on-select, worktree `add`/`remove`
+      (§7.1/§7.2) all later milestones.
 
 ### M3 — Adapters: claude + opencode  *(no tmux needed)*
 
