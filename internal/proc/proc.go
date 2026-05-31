@@ -7,6 +7,7 @@ package proc
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -143,3 +144,33 @@ func (f *FakeRunner) RunInDir(_ context.Context, dir, name string, args ...strin
 func (f *FakeRunner) Run(ctx context.Context, name string, args ...string) ([]byte, []byte, error) {
 	return f.RunInDir(ctx, "", name, args...)
 }
+
+// ── ExitCode ──────────────────────────────────────────────────────────────────
+
+// exitCoder is the interface satisfied by *exec.ExitError and FakeExitError.
+// Using an interface rather than a concrete type keeps the check version-stable
+// and lets tests inject non-zero exits without spawning real processes.
+type exitCoder interface {
+	ExitCode() int
+}
+
+// ExitCode returns the process exit code carried by err, or -1 when err is nil
+// or does not expose an exit code. Callers branch on exit status without
+// matching version-fragile stderr text.
+func ExitCode(err error) int {
+	if err == nil {
+		return -1
+	}
+	var ec exitCoder
+	if errors.As(err, &ec) {
+		return ec.ExitCode()
+	}
+	return -1
+}
+
+// FakeExitError is recognised by ExitCode so FakeRunner responses can simulate
+// a specific process exit status in unit tests without spawning real processes.
+type FakeExitError struct{ Code int }
+
+func (e FakeExitError) Error() string { return fmt.Sprintf("exit status %d", e.Code) }
+func (e FakeExitError) ExitCode() int { return e.Code }

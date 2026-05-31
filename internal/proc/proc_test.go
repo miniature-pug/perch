@@ -10,6 +10,53 @@ import (
 	"github.com/Miniature-Pug/perch/internal/proc"
 )
 
+// ── ExitCode ──────────────────────────────────────────────────────────────────
+
+func TestExitCode_NilIsMinusOne(t *testing.T) {
+	if got := proc.ExitCode(nil); got != -1 {
+		t.Errorf("ExitCode(nil) = %d, want -1", got)
+	}
+}
+
+func TestExitCode_PlainErrorIsMinusOne(t *testing.T) {
+	if got := proc.ExitCode(errors.New("x")); got != -1 {
+		t.Errorf("ExitCode(plain error) = %d, want -1", got)
+	}
+}
+
+func TestExitCode_FakeExitError(t *testing.T) {
+	tests := []struct {
+		code int
+	}{
+		{1}, {2}, {127},
+	}
+	for _, tc := range tests {
+		got := proc.ExitCode(proc.FakeExitError{Code: tc.code})
+		if got != tc.code {
+			t.Errorf("ExitCode(FakeExitError{%d}) = %d, want %d", tc.code, got, tc.code)
+		}
+	}
+}
+
+func TestExitCode_RealExecExitError(t *testing.T) {
+	// Verify the *exec.ExitError path: sh exits 3, ExitCode must return 3.
+	var r proc.ExecRunner
+	_, _, err := r.Run(context.Background(), "sh", "-c", "exit 3")
+	if err == nil {
+		t.Fatal("expected non-zero exit error, got nil")
+	}
+	if got := proc.ExitCode(err); got != 3 {
+		t.Errorf("ExitCode(sh -c 'exit 3') = %d, want 3", got)
+	}
+}
+
+func TestFakeExitError_ErrorString(t *testing.T) {
+	e := proc.FakeExitError{Code: 42}
+	if !strings.Contains(e.Error(), "42") {
+		t.Errorf("FakeExitError.Error() = %q, want to contain 42", e.Error())
+	}
+}
+
 // ── FakeRunner ────────────────────────────────────────────────────────────────
 
 func TestFakeRunner_RecordsCalls(t *testing.T) {
