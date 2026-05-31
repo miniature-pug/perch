@@ -3,6 +3,7 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -48,8 +49,10 @@ func TestDefaults(t *testing.T) {
 	if cfg.Theme.Accent != "#EE6FF8" {
 		t.Errorf("default Accent = %q; want #EE6FF8", cfg.Theme.Accent)
 	}
-	if len(cfg.SortOrder) != 3 {
-		t.Errorf("default SortOrder len = %d; want 3", len(cfg.SortOrder))
+	// Assert the full slice, not just its length — a reordered or wrong default would fail here.
+	want := []string{"running", "pinned", "frecency"}
+	if !reflect.DeepEqual(cfg.SortOrder, want) {
+		t.Errorf("default SortOrder = %v; want %v", cfg.SortOrder, want)
 	}
 }
 
@@ -474,5 +477,131 @@ func TestNoProjectToml(t *testing.T) {
 	// Defaults must be present.
 	if cfg.Agent != model.ToolClaude {
 		t.Errorf("Agent = %q; want claude", cfg.Agent)
+	}
+}
+
+// TestInvalidAgentInGlobal verifies that an explicitly-set but unrecognised agent
+// value in the global config surfaces as a clear error from Load.
+func TestInvalidAgentInGlobal(t *testing.T) {
+	tmp := t.TempDir()
+	initGitDir(t, tmp)
+
+	globalPath := filepath.Join(tmp, "config.toml")
+	writeFile(t, globalPath, `
+[default_session]
+agent = "claud"
+`)
+
+	_, err := config.Load(globalPath, tmp)
+	if err == nil {
+		t.Fatal("expected error for invalid global agent value, got nil")
+	}
+	if !strings.Contains(err.Error(), "claud") {
+		t.Errorf("error %q does not mention the bad value %q", err.Error(), "claud")
+	}
+}
+
+// TestInvalidAgentInProject verifies that an explicitly-set but unrecognised agent
+// value in a project .perch.toml surfaces as a clear error from Load.
+func TestInvalidAgentInProject(t *testing.T) {
+	tmp := t.TempDir()
+	initGitDir(t, tmp)
+
+	writeFile(t, filepath.Join(tmp, ".perch.toml"), `agent = "opencoode"`)
+
+	_, err := config.Load("", tmp)
+	if err == nil {
+		t.Fatal("expected error for invalid project agent value, got nil")
+	}
+	if !strings.Contains(err.Error(), "opencoode") {
+		t.Errorf("error %q does not mention the bad value %q", err.Error(), "opencoode")
+	}
+}
+
+// TestValidAgentStillWorks verifies that a correctly-spelled agent value in either
+// config still loads without error after the parseAgent helper was introduced.
+func TestValidAgentStillWorks(t *testing.T) {
+	tmp := t.TempDir()
+	initGitDir(t, tmp)
+
+	globalPath := filepath.Join(tmp, "config.toml")
+	writeFile(t, globalPath, `
+[default_session]
+agent = "opencode"
+`)
+	writeFile(t, filepath.Join(tmp, ".perch.toml"), `agent = "claude"`)
+
+	cfg, err := config.Load(globalPath, tmp)
+	if err != nil {
+		t.Fatalf("valid agents should not error: %v", err)
+	}
+	// Project overrides global — project agent wins.
+	if cfg.Agent != model.ToolClaude {
+		t.Errorf("Agent = %q; want claude (project overrides global)", cfg.Agent)
+	}
+}
+
+// TestAbsentAgentTakesDefault verifies that omitting agent entirely (absent, not empty
+// string) leaves the default in place and does not error.
+func TestAbsentAgentTakesDefault(t *testing.T) {
+	tmp := t.TempDir()
+	initGitDir(t, tmp)
+
+	// Global with no [default_session] at all, project with no agent key.
+	globalPath := filepath.Join(tmp, "config.toml")
+	writeFile(t, globalPath, `refresh_ms = 500`)
+	writeFile(t, filepath.Join(tmp, ".perch.toml"), `base_branch = "main"`)
+
+	cfg, err := config.Load(globalPath, tmp)
+	if err != nil {
+		t.Fatalf("absent agent should not error: %v", err)
+	}
+	if cfg.Agent != model.ToolClaude {
+		t.Errorf("Agent = %q; want claude (default)", cfg.Agent)
+	}
+}
+
+// TestExpandRootsNoTildeHomeMissing verifies that when no root contains a leading ~/,
+// a missing HOME directory is harmless and Load succeeds.
+func TestExpandRootsNoTildeHomeMissing(t *testing.T) {
+	tmp := t.TempDir()
+	initGitDir(t, tmp)
+
+	// Use an absolute root (no tilde) — HOME resolution must not be attempted.
+	globalPath := filepath.Join(tmp, "config.toml")
+	writeFile(t, globalPath, `roots = ["`+tmp+`"]`)
+
+	// Unset HOME so os.UserHomeDir would fail if called.
+	t.Setenv("HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", tmp) // prevent DefaultGlobalPath from needing HOME
+
+	cfg, err := config.Load(globalPath, tmp)
+	if err != nil {
+		t.Fatalf("non-tilde roots with missing HOME should not error: %v", err)
+	}
+	if len(cfg.Roots) == 0 || cfg.Roots[0] != tmp {
+		t.Errorf("Roots = %v; want [%s]", cfg.Roots, tmp)
+	}
+}
+
+// TestExpandRootsTildeHomeMissing verifies that when a root needs ~/ expansion but
+// HOME cannot be resolved, Load returns a clear error.
+func TestExpandRootsTildeHomeMissing(t *testing.T) {
+	tmp := t.TempDir()
+	initGitDir(t, tmp)
+
+	globalPath := filepath.Join(tmp, "config.toml")
+	writeFile(t, globalPath, `roots = ["~/projects"]`)
+
+	// Force HOME to be empty so os.UserHomeDir fails.
+	t.Setenv("HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+
+	_, err := config.Load(globalPath, tmp)
+	if err == nil {
+		t.Fatal("expected error when ~/ root cannot be expanded due to missing HOME, got nil")
+	}
+	if !strings.Contains(err.Error(), "home") && !strings.Contains(err.Error(), "HOME") {
+		t.Errorf("error %q does not mention home directory resolution", err.Error())
 	}
 }

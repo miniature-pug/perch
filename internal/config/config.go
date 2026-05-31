@@ -217,7 +217,7 @@ func Load(globalPath string, projectStartDir string) (*Config, error) {
 		return nil, err
 	}
 
-	return merge(gc, pc, projectStartDir), nil
+	return merge(gc, pc, projectStartDir)
 }
 
 // loadGlobal reads the global config file. A missing file returns a zero globalConfig.
@@ -249,7 +249,8 @@ func findAndLoadProject(startDir string) (*projectConfig, error) {
 	dir := filepath.Clean(startDir)
 	for {
 		candidate := filepath.Join(dir, ".perch.toml")
-		if _, err := os.Stat(candidate); err == nil {
+		_, err := os.Stat(candidate)
+		if err == nil {
 			// Found — decode it.
 			pc := &projectConfig{}
 			if _, err := toml.DecodeFile(candidate, pc); err != nil {
@@ -257,9 +258,18 @@ func findAndLoadProject(startDir string) (*projectConfig, error) {
 			}
 			return pc, nil
 		}
+		// Only treat "not found" as "keep walking"; any other error (e.g. permission
+		// denied) must surface so the user knows something is wrong.
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("config: stat project config %q: %w", candidate, err)
+		}
 
 		// Stop at a .git boundary (repo root) or filesystem root.
-		if hasGitDir(dir) || isRoot(dir) {
+		atBoundary, err := hasGitDir(dir)
+		if err != nil {
+			return nil, err
+		}
+		if atBoundary || isRoot(dir) {
 			break
 		}
 
@@ -273,10 +283,18 @@ func findAndLoadProject(startDir string) (*projectConfig, error) {
 	return nil, nil
 }
 
-// hasGitDir reports whether dir contains a .git entry (directory or file for worktrees).
-func hasGitDir(dir string) bool {
+// hasGitDir reports whether dir contains a .git entry (directory or file for
+// worktrees). Only os.ErrNotExist means "no boundary here"; any other error
+// (e.g. permission denied) is returned so the caller can surface it.
+func hasGitDir(dir string) (bool, error) {
 	_, err := os.Stat(filepath.Join(dir, ".git"))
-	return err == nil
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return false, fmt.Errorf("config: stat .git in %q: %w", dir, err)
 }
 
 // isRoot reports whether dir is the filesystem root.
@@ -284,9 +302,21 @@ func isRoot(dir string) bool {
 	return dir == filepath.Dir(dir)
 }
 
+// parseAgent converts a non-empty string value from config into a model.Tool.
+// An empty string is treated as absent and is not an error — the caller must
+// guard with a non-empty check before calling. A non-empty but unrecognised
+// value is always an error; the user made a typo and must fix it.
+func parseAgent(s string) (model.Tool, error) {
+	t := model.Tool(s)
+	if t.Valid() {
+		return t, nil
+	}
+	return "", fmt.Errorf("config: unknown agent %q (valid: claude, opencode)", s)
+}
+
 // merge applies globalConfig and projectConfig on top of defaults.
 // Pointer fields on projectConfig are only applied when non-nil (explicit in TOML).
-func merge(gc *globalConfig, pc *projectConfig, startDir string) *Config {
+func merge(gc *globalConfig, pc *projectConfig, startDir string) (*Config, error) {
 	cfg := &Config{
 		// Defaults.
 		RefreshMs: defaultRefreshMs,
@@ -297,7 +327,11 @@ func merge(gc *globalConfig, pc *projectConfig, startDir string) *Config {
 
 	// Apply global.
 	if len(gc.Roots) > 0 {
-		cfg.Roots = expandRoots(gc.Roots)
+		expanded, err := expandRoots(gc.Roots)
+		if err != nil {
+			return nil, err
+		}
+		cfg.Roots = expanded
 	} else {
 		// Default roots to the start directory so callers get something useful.
 		if startDir != "" {
@@ -314,9 +348,11 @@ func merge(gc *globalConfig, pc *projectConfig, startDir string) *Config {
 		cfg.RefreshMs = *gc.RefreshMs
 	}
 	if gc.DefaultSession.Agent != "" {
-		if t := model.Tool(gc.DefaultSession.Agent); t.Valid() {
-			cfg.Agent = t
+		t, err := parseAgent(gc.DefaultSession.Agent)
+		if err != nil {
+			return nil, fmt.Errorf("config: global default_session.agent: %w", err)
 		}
+		cfg.Agent = t
 	}
 	if gc.DefaultSession.StartupCommand != "" {
 		cfg.StartupCommand = gc.DefaultSession.StartupCommand
@@ -329,10 +365,12 @@ func merge(gc *globalConfig, pc *projectConfig, startDir string) *Config {
 
 	// Apply project (non-nil pointer fields override; slices replace when non-empty).
 	if pc != nil {
-		if pc.Agent != nil {
-			if t := model.Tool(*pc.Agent); t.Valid() {
-				cfg.Agent = t
+		if pc.Agent != nil && *pc.Agent != "" {
+			t, err := parseAgent(*pc.Agent)
+			if err != nil {
+				return nil, fmt.Errorf("config: project agent: %w", err)
 			}
+			cfg.Agent = t
 		}
 		if pc.BaseBranch != nil {
 			cfg.BaseBranch = *pc.BaseBranch
@@ -363,23 +401,29 @@ func merge(gc *globalConfig, pc *projectConfig, startDir string) *Config {
 		}
 	}
 
-	return cfg
+	return cfg, nil
 }
 
 // expandRoots replaces a leading ~/ with the user's home directory.
-func expandRoots(roots []string) []string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		// If we can't get the home dir, leave the paths as-is.
-		return roots
-	}
+// HOME resolution is lazy: os.UserHomeDir is only called when at least one root
+// actually needs expansion. If it fails in that case, an error is returned so
+// the caller knows the path cannot be made usable.
+func expandRoots(roots []string) ([]string, error) {
 	out := make([]string, len(roots))
+	var home string
 	for i, r := range roots {
 		if strings.HasPrefix(r, "~/") {
+			if home == "" {
+				var err error
+				home, err = os.UserHomeDir()
+				if err != nil {
+					return nil, fmt.Errorf("config: expand root %q: cannot resolve home directory: %w", r, err)
+				}
+			}
 			out[i] = filepath.Join(home, r[2:])
 		} else {
 			out[i] = r
 		}
 	}
-	return out
+	return out, nil
 }
