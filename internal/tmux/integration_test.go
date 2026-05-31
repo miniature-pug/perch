@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -223,4 +224,38 @@ func TestIntegration_ShadowRecord_RoundTrip(t *testing.T) {
 	if got.Updated != w.Updated {
 		t.Errorf("Updated = %d, want %d", got.Updated, w.Updated)
 	}
+}
+
+// TestIntegration_SendKeys_RunsCommand verifies that SendKeys fires both the
+// literal keystroke and the trailing Enter, and that CapturePane reflects the
+// resulting shell output. The arithmetic marker PERCH_$((6*7)) ensures the
+// shell actually executed the command (output is PERCH_42) rather than just
+// recording the keystrokes.
+func TestIntegration_SendKeys_RunsCommand(t *testing.T) {
+	tm := newTestServer(t)
+	ctx := context.Background()
+
+	if _, err := tm.Connect(ctx, "sktest", "skw1", t.TempDir()); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	tgt := WindowTarget("sktest", "skw1")
+
+	if err := tm.SendKeys(ctx, tgt, "echo PERCH_$((6*7))"); err != nil {
+		t.Fatalf("SendKeys: %v", err)
+	}
+
+	var lastOut string
+	for i := 0; i < 20; i++ {
+		time.Sleep(100 * time.Millisecond)
+		out, err := tm.CapturePane(ctx, tgt, 0)
+		if err != nil {
+			t.Fatalf("CapturePane: %v", err)
+		}
+		lastOut = out
+		if strings.Contains(out, "PERCH_42") {
+			return
+		}
+	}
+	t.Fatalf("CapturePane never showed PERCH_42 after 2s; last output:\n%s", lastOut)
 }
