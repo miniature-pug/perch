@@ -52,6 +52,12 @@ type item struct {
 	// isSession is true when the row represents a live or completed session.
 	// false indicates a "start new" placeholder row.
 	isSession bool
+	// id is the session identifier (agent-assigned).
+	id string
+	// live is true when a live tmux pane is attached to this session.
+	live bool
+	// captureTarget is the tmux pane ID to capture for preview (empty when idle).
+	captureTarget string
 }
 
 // FilterValue returns the fuzzy-search key: project + tree + title + tool.

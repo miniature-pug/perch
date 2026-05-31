@@ -310,8 +310,9 @@ func readPidTrackers(home string) map[string]string {
 
 // ListSessions enumerates every claude session under <Home>/projects. One bad
 // file or directory never aborts the listing; unparseable or empty transcripts
-// are skipped and a partial, ID-sorted slice is returned.
-func (c Claude) ListSessions(_ context.Context) ([]model.Session, error) {
+// are skipped and a partial, ID-sorted slice is returned. ctx cancellation is
+// honoured between slug directories so the caller can time out the walk.
+func (c Claude) ListSessions(ctx context.Context) ([]model.Session, error) {
 	exists := c.exists()
 	pidMap := readPidTrackers(c.Home)
 
@@ -327,6 +328,11 @@ func (c Claude) ListSessions(_ context.Context) ([]model.Session, error) {
 
 	var sessions []model.Session
 	for _, sd := range slugDirs {
+		// Honour cancellation between directories so the caller can time out.
+		if err := ctx.Err(); err != nil {
+			return sessions, err
+		}
+
 		if !sd.IsDir() {
 			continue
 		}

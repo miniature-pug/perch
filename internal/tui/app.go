@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -26,6 +27,17 @@ type Model struct {
 	width   int
 	height  int
 	ready   bool
+
+	// loader is optional; when set, Init returns its load Cmd.
+	loader *loader
+
+	// previewContent holds the current text shown in the preview pane.
+	// Stored separately from the viewport so tests can assert without rendering.
+	previewContent string
+
+	// capturing is true while a CapturePane call is in-flight.
+	// It prevents overlapping capture commands.
+	capturing bool
 }
 
 // New returns a Model with the given items pre-loaded.
@@ -45,14 +57,41 @@ func New(items []list.Item) Model {
 	}
 }
 
-// Init satisfies tea.Model. No initial command needed for scaffold.
+// WithLoader returns a copy of m with the given loader wired in.
+// Init will then return the load Cmd automatically.
+func (m Model) WithLoader(l loader) Model {
+	m.loader = &l
+	return m
+}
+
+// Init satisfies tea.Model. When a loader is configured it fires the initial
+// data load; otherwise it does nothing (scaffold / test mode).
 func (m Model) Init() tea.Cmd {
+	if m.loader != nil {
+		return m.loader.load()
+	}
 	return nil
 }
 
 // Update handles all incoming messages.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+
+	case itemsLoadedMsg:
+		if msg.err == nil {
+			m.list.SetItems(msg.items)
+		}
+		// Refresh the preview for the newly-selected item.
+		return m, m.previewCmd()
+
+	case previewMsg:
+		// Stale-guard: ignore captures for a target that is no longer selected.
+		if sel, ok := m.selectedItem(); ok && msg.target == sel.captureTarget {
+			m.previewContent = msg.content
+			m.preview.SetContent(msg.content)
+		}
+		m.capturing = false
+		return m, nil
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -71,8 +110,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.preview.Height = max(0, paneHeight)
 		m.ready = true
 
-		m.preview.SetContent(m.detailContent())
-		return m, nil
+		return m, m.previewCmd()
 
 	case tea.KeyMsg:
 		// When the list is in filter mode let it handle all keys first so the
@@ -80,7 +118,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.list.SettingFilter() {
 			var cmd tea.Cmd
 			m.list, cmd = m.list.Update(msg)
-			m.preview.SetContent(m.detailContent())
+			m.refreshStaticPreview()
 			return m, cmd
 		}
 
@@ -97,8 +135,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.ClearFilter):
 			// Esc resets the filter when not in active filtering mode.
 			m.list.ResetFilter()
-			m.preview.SetContent(m.detailContent())
-			return m, nil
+			return m, m.previewCmd()
 
 		case key.Matches(msg, m.keys.Enter):
 			// TODO(M5-4): launch or attach to the selected session.
@@ -111,10 +148,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// Delegate all other messages (j/k navigation, pagination, filter ticking…)
-	// to the list component.
+	// to the list component, then refresh the preview for the new selection.
 	var cmd tea.Cmd
+	prevIdx := m.list.Index()
 	m.list, cmd = m.list.Update(msg)
-	m.preview.SetContent(m.detailContent())
+
+	// If the selection changed, update the preview.
+	if m.list.Index() != prevIdx {
+		return m, tea.Batch(cmd, m.previewCmd())
+	}
 	return m, cmd
 }
 
@@ -135,8 +177,63 @@ func (m Model) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, body, footer)
 }
 
+// selectedItem returns the currently selected list item as an item, or false.
+func (m *Model) selectedItem() (item, bool) {
+	sel := m.list.SelectedItem()
+	if sel == nil {
+		return item{}, false
+	}
+	it, ok := sel.(item)
+	return it, ok
+}
+
+// previewCmd returns the appropriate tea.Cmd for the currently selected item:
+//   - live item with a capture target: fires a CapturePane call (gated by capturing).
+//   - idle item or no selection: refreshes the static detail view inline (no cmd).
+func (m *Model) previewCmd() tea.Cmd {
+	sel, ok := m.selectedItem()
+	if !ok {
+		m.refreshStaticPreview()
+		return nil
+	}
+
+	if sel.live && sel.captureTarget != "" {
+		if m.capturing {
+			// An in-flight capture is already running; don't stack another.
+			return nil
+		}
+		if m.loader == nil {
+			// No loader (test / scaffold mode): show static detail.
+			m.refreshStaticPreview()
+			return nil
+		}
+		m.capturing = true
+		target := sel.captureTarget
+		ldr := m.loader
+		return func() tea.Msg {
+			content, err := ldr.Tmux.CapturePane(context.Background(), target, 0)
+			if err != nil {
+				// Degrade to empty on error; don't abort or panic.
+				content = ""
+			}
+			return previewMsg{content: content, target: target}
+		}
+	}
+
+	// Idle item: static detail, no async call.
+	m.refreshStaticPreview()
+	return nil
+}
+
+// refreshStaticPreview updates the preview viewport with static detail content
+// for the current selection. Called for idle items and when no loader is set.
+func (m *Model) refreshStaticPreview() {
+	content := m.detailContent()
+	m.previewContent = content
+	m.preview.SetContent(content)
+}
+
 // detailContent builds the preview pane text for the currently selected item.
-// It only uses item fields — no tmux capture yet (that is M5-3).
 func (m *Model) detailContent() string {
 	sel := m.list.SelectedItem()
 	if sel == nil {
