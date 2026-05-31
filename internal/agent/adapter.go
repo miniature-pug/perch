@@ -19,7 +19,7 @@ import (
 //
 // The following methods from master-plan §4 are intentionally absent from this interface:
 // InstallStatusHook, ReadyHeuristic, and TrustPrompt are deliberately not
-// included here because neither has an honest implementation until the setup
+// included here because none of them has an honest implementation until the setup
 // and TUI milestones land: status hooks belong to "perch setup" and
 // readiness/trust heuristics require UI surfaces that do not exist yet. They
 // will be added to this interface at those milestones, not speculatively now.

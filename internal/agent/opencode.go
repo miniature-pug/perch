@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os/exec"
 	"strings"
 
@@ -117,6 +118,8 @@ type sessionJSON struct {
 	ID        string `json:"id"`
 	Title     string `json:"title"`
 	Directory string `json:"directory"`
+	// Created is decoded for wire fidelity only; model.Session carries no
+	// created timestamp, so it is not mapped.
 	Created   int64  `json:"created"`
 	Updated   int64  `json:"updated"`
 	ProjectID string `json:"projectId"`
@@ -126,9 +129,10 @@ type sessionJSON struct {
 // CLI failure is returned as an error (the tool degrades to "unavailable"); the
 // caller decides whether to surface or ignore it.
 func (o Opencode) ListSessions(ctx context.Context) ([]model.Session, error) {
-	stdout, _, err := o.runner().RunInDir(ctx, o.Dir, o.bin(), "session", "list", "--format", "json")
+	stdout, stderr, err := o.runner().RunInDir(ctx, o.Dir, o.bin(), "session", "list", "--format", "json")
 	if err != nil {
-		return nil, err
+		// Surface stderr: a bare "exit status N" is undebuggable in production.
+		return nil, fmt.Errorf("opencode session list: %w: %s", err, strings.TrimSpace(string(stderr)))
 	}
 	return parseSessionList(stdout)
 }

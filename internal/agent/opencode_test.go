@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/Miniature-Pug/perch/internal/model"
@@ -133,14 +134,25 @@ func TestListSessions_PassesDirAndCommand(t *testing.T) {
 }
 
 func TestListSessions_RunnerError(t *testing.T) {
+	underlying := errors.New("exit status 1")
 	r := proc.NewFakeRunner()
-	r.Respond(proc.FakeResult{Err: errors.New("exec failed")}, "opencode", "session", "list", "--format", "json")
+	r.Respond(
+		proc.FakeResult{Stderr: []byte("opencode: not authenticated\n"), Err: underlying},
+		"opencode", "session", "list", "--format", "json",
+	)
 
 	o := NewOpencode()
 	o.Runner = r
 
-	if _, err := o.ListSessions(context.Background()); err == nil {
-		t.Error("expected runner error to propagate, got nil")
+	_, err := o.ListSessions(context.Background())
+	if err == nil {
+		t.Fatal("expected runner error to propagate, got nil")
+	}
+	if !errors.Is(err, underlying) {
+		t.Errorf("error does not wrap the underlying runner error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "not authenticated") {
+		t.Errorf("error should surface stderr for diagnosis, got: %v", err)
 	}
 }
 

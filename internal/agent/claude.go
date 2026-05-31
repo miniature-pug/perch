@@ -366,6 +366,9 @@ func (c Claude) sessionFromTranscript(path, slug string, exists func(string) boo
 
 	title, firstCwd, hadRecords, err := parseTranscript(f)
 	if err != nil || !hadRecords {
+		// No parseable records (empty file, or every line malformed): the id is
+		// known from the filename but the content is unrecoverable, so skip it
+		// rather than surface a contentless session.
 		return model.Session{}, false
 	}
 
