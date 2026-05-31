@@ -13,8 +13,8 @@ import (
 
 func TestFakeRunner_RecordsCalls(t *testing.T) {
 	r := proc.NewFakeRunner()
-	r.Responses["echo hello"] = proc.FakeResult{Stdout: []byte("hello\n")}
-	r.Responses["git status"] = proc.FakeResult{Stdout: []byte("clean\n")}
+	r.Respond(proc.FakeResult{Stdout: []byte("hello\n")}, "echo", "hello")
+	r.Respond(proc.FakeResult{Stdout: []byte("clean\n")}, "git", "status")
 
 	ctx := context.Background()
 	_, _, _ = r.Run(ctx, "echo", "hello")
@@ -77,9 +77,9 @@ func TestFakeRunner_ReturnsCannedResult(t *testing.T) {
 	}
 
 	r := proc.NewFakeRunner()
-	r.Responses["git rev-parse HEAD"] = proc.FakeResult{Stdout: []byte("abc1234\n")}
-	r.Responses["git push"] = proc.FakeResult{Stderr: []byte("To github.com\n")}
-	r.Responses["false"] = proc.FakeResult{Err: errors.New("exit status 1")}
+	r.Respond(proc.FakeResult{Stdout: []byte("abc1234\n")}, "git", "rev-parse", "HEAD")
+	r.Respond(proc.FakeResult{Stderr: []byte("To github.com\n")}, "git", "push")
+	r.Respond(proc.FakeResult{Err: errors.New("exit status 1")}, "false")
 
 	ctx := context.Background()
 	for _, tc := range tests {

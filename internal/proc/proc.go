@@ -57,18 +57,24 @@ type FakeResult struct {
 }
 
 // FakeRunner is a test double for Runner. It records every call and returns
-// canned results keyed by the full command line ("name arg1 arg2 …"). An
-// optional Default is consulted when no keyed response matches. An unmatched
-// call with no Default returns a clear error rather than panicking.
+// canned results registered with Respond. An optional Default is consulted when
+// no registered response matches. An unmatched call with no Default returns a
+// clear error rather than panicking.
 //
 // Because Run records state into Calls, always use a *FakeRunner:
 //
 //	r := proc.NewFakeRunner()
+//	r.Respond(proc.FakeResult{Stdout: out}, "git", "status")
+//
+// FakeRunner is NOT safe for concurrent use; it records calls without
+// synchronization. Each test should use its own instance via NewFakeRunner().
 type FakeRunner struct {
 	// Calls holds every invocation in order, with the name and args as passed.
 	Calls []Call
 
-	// Responses maps the full command line ("name arg1 arg2 …") to a FakeResult.
+	// Responses maps an internal command-line key to a FakeResult. Register
+	// entries with Respond rather than writing this map directly — the key
+	// format is an implementation detail (see cmdline).
 	Responses map[string]FakeResult
 
 	// Default, when non-nil, is returned for any command that has no entry in
@@ -83,12 +89,20 @@ func NewFakeRunner() *FakeRunner {
 	}
 }
 
+// Respond registers the canned result returned when Run is called with the
+// given name and args. It hides the internal key format so callers never
+// construct command-line keys by hand.
+func (f *FakeRunner) Respond(res FakeResult, name string, args ...string) {
+	f.Responses[cmdline(name, args)] = res
+}
+
 // cmdline builds the map key from a command invocation.
+// NUL separators ensure distinct arg boundaries never collide (e.g. "a b","c" vs "a","b c").
 func cmdline(name string, args []string) string {
 	if len(args) == 0 {
 		return name
 	}
-	return name + " " + strings.Join(args, " ")
+	return name + "\x00" + strings.Join(args, "\x00")
 }
 
 // Run records the call, looks up a canned response, and returns it. If no
@@ -102,5 +116,9 @@ func (f *FakeRunner) Run(_ context.Context, name string, args ...string) ([]byte
 	if f.Default != nil {
 		return f.Default.Stdout, f.Default.Stderr, f.Default.Err
 	}
-	return nil, nil, fmt.Errorf("proc: FakeRunner: no canned response for %q", key)
+	human := name
+	if len(args) > 0 {
+		human = name + " " + strings.Join(args, " ")
+	}
+	return nil, nil, fmt.Errorf("proc: FakeRunner: no canned response for %q", human)
 }
