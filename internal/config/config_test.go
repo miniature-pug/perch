@@ -1,0 +1,478 @@
+package config_test
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/Miniature-Pug/perch/internal/config"
+	"github.com/Miniature-Pug/perch/internal/model"
+)
+
+// writeFile is a test helper that writes content to a file path, creating dirs as needed.
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+// initGitDir creates a bare .git directory so Load treats the dir as a repo root.
+func initGitDir(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+}
+
+// TestDefaults verifies that missing global and project configs produce well-defined defaults.
+func TestDefaults(t *testing.T) {
+	tmp := t.TempDir()
+	initGitDir(t, tmp)
+
+	cfg, err := config.Load("", tmp)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.Agent != model.ToolClaude {
+		t.Errorf("default Agent = %q; want %q", cfg.Agent, model.ToolClaude)
+	}
+	if cfg.RefreshMs != 1000 {
+		t.Errorf("default RefreshMs = %d; want 1000", cfg.RefreshMs)
+	}
+	if cfg.Theme.Accent != "#EE6FF8" {
+		t.Errorf("default Accent = %q; want #EE6FF8", cfg.Theme.Accent)
+	}
+	if len(cfg.SortOrder) != 3 {
+		t.Errorf("default SortOrder len = %d; want 3", len(cfg.SortOrder))
+	}
+}
+
+// TestMissingGlobal verifies that an absent global config.toml is not an error.
+func TestMissingGlobal(t *testing.T) {
+	tmp := t.TempDir()
+	initGitDir(t, tmp)
+
+	cfg, err := config.Load(filepath.Join(tmp, "nonexistent", "config.toml"), tmp)
+	if err != nil {
+		t.Fatalf("missing global should not error: %v", err)
+	}
+	// Must still produce defaults.
+	if cfg.RefreshMs != 1000 {
+		t.Errorf("RefreshMs = %d; want 1000 (defaults)", cfg.RefreshMs)
+	}
+}
+
+// TestGlobalOnly verifies that a global config.toml is applied with no project override.
+func TestGlobalOnly(t *testing.T) {
+	tmp := t.TempDir()
+	initGitDir(t, tmp)
+
+	globalPath := filepath.Join(tmp, "config.toml")
+	writeFile(t, globalPath, `
+roots        = ["~/projects"]
+sort_order   = ["running","pinned"]
+refresh_ms   = 2000
+
+[default_session]
+agent = "opencode"
+
+[theme]
+accent = "#FF0000"
+`)
+
+	cfg, err := config.Load(globalPath, tmp)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.RefreshMs != 2000 {
+		t.Errorf("RefreshMs = %d; want 2000", cfg.RefreshMs)
+	}
+	if cfg.Agent != model.ToolOpencode {
+		t.Errorf("Agent = %q; want opencode", cfg.Agent)
+	}
+	if cfg.Theme.Accent != "#FF0000" {
+		t.Errorf("Accent = %q; want #FF0000", cfg.Theme.Accent)
+	}
+	if len(cfg.SortOrder) != 2 {
+		t.Errorf("SortOrder len = %d; want 2", len(cfg.SortOrder))
+	}
+}
+
+// TestProjectOverride verifies that a project config overrides the global agent.
+func TestProjectOverride(t *testing.T) {
+	tmp := t.TempDir()
+	// Set up: repo root with .git, project .perch.toml inside.
+	initGitDir(t, tmp)
+
+	globalPath := filepath.Join(tmp, "config.toml")
+	writeFile(t, globalPath, `
+[default_session]
+agent = "claude"
+`)
+
+	writeFile(t, filepath.Join(tmp, ".perch.toml"), `
+agent = "opencode"
+`)
+
+	cfg, err := config.Load(globalPath, tmp)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.Agent != model.ToolOpencode {
+		t.Errorf("Agent = %q; want opencode (project override)", cfg.Agent)
+	}
+}
+
+// TestNonOverriddenField verifies that a global field absent from project config is kept.
+func TestNonOverriddenField(t *testing.T) {
+	tmp := t.TempDir()
+	initGitDir(t, tmp)
+
+	globalPath := filepath.Join(tmp, "config.toml")
+	writeFile(t, globalPath, `refresh_ms = 1000`)
+	// Project does NOT set refresh_ms.
+	writeFile(t, filepath.Join(tmp, ".perch.toml"), `agent = "opencode"`)
+
+	cfg, err := config.Load(globalPath, tmp)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.RefreshMs != 1000 {
+		t.Errorf("RefreshMs = %d; want 1000 (global, not overridden)", cfg.RefreshMs)
+	}
+}
+
+// TestSecurityBinaryPath verifies the type-level guarantee: a project .perch.toml
+// that attempts to set an agent binary path is structurally ignored — projectConfig
+// has no binary field, so BurntSushi/toml silently drops the unknown key.
+// The global path must remain in effect.
+func TestSecurityBinaryPath(t *testing.T) {
+	tmp := t.TempDir()
+	initGitDir(t, tmp)
+
+	globalPath := filepath.Join(tmp, "config.toml")
+	// Global explicitly maps the claude binary to a known trusted path.
+	writeFile(t, globalPath, `
+[agents]
+claude   = "/usr/local/bin/claude"
+opencode = "/usr/local/bin/opencode"
+`)
+
+	// Malicious project config tries to override the binary path.
+	// projectConfig has no agents/agent_bin field — this key is silently dropped.
+	writeFile(t, filepath.Join(tmp, ".perch.toml"), `
+agent = "claude"
+
+[agents]
+claude = "/tmp/evil-binary"
+`)
+
+	cfg, err := config.Load(globalPath, tmp)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Must return the GLOBAL path, not the project's attempted override.
+	got := cfg.AgentBinary(model.ToolClaude)
+	if got != "/usr/local/bin/claude" {
+		t.Errorf("AgentBinary(claude) = %q; want /usr/local/bin/claude (project override must be structurally impossible)", got)
+	}
+}
+
+// TestAgentBinaryFallback verifies that AgentBinary falls back to the bare name
+// when no global mapping is configured.
+func TestAgentBinaryFallback(t *testing.T) {
+	tmp := t.TempDir()
+	initGitDir(t, tmp)
+
+	cfg, err := config.Load("", tmp)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.AgentBinary(model.ToolClaude) != "claude" {
+		t.Errorf("AgentBinary fallback should be bare name %q", "claude")
+	}
+	if cfg.AgentBinary(model.ToolOpencode) != "opencode" {
+		t.Errorf("AgentBinary fallback should be bare name %q", "opencode")
+	}
+}
+
+// TestProjectWalkUp verifies that Load walks up from a subdirectory to find .perch.toml.
+func TestProjectWalkUp(t *testing.T) {
+	tmp := t.TempDir()
+	initGitDir(t, tmp)
+	writeFile(t, filepath.Join(tmp, ".perch.toml"), `agent = "opencode"`)
+
+	// Start from a nested subdirectory.
+	sub := filepath.Join(tmp, "a", "b", "c")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.Load("", sub)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Agent != model.ToolOpencode {
+		t.Errorf("Agent = %q; want opencode (found by walking up)", cfg.Agent)
+	}
+}
+
+// TestMalformedGlobal verifies that a syntactically invalid global config returns an error.
+func TestMalformedGlobal(t *testing.T) {
+	tmp := t.TempDir()
+	initGitDir(t, tmp)
+
+	globalPath := filepath.Join(tmp, "config.toml")
+	writeFile(t, globalPath, `refresh_ms = [[[broken toml`)
+
+	_, err := config.Load(globalPath, tmp)
+	if err == nil {
+		t.Error("expected error for malformed global config.toml")
+	}
+}
+
+// TestMalformedProject verifies that a syntactically invalid project config returns an error.
+func TestMalformedProject(t *testing.T) {
+	tmp := t.TempDir()
+	initGitDir(t, tmp)
+	writeFile(t, filepath.Join(tmp, ".perch.toml"), `agent = [[[broken`)
+
+	_, err := config.Load("", tmp)
+	if err == nil {
+		t.Error("expected error for malformed .perch.toml")
+	}
+}
+
+// TestPathSafety exercises Validate's path guards.
+func TestPathSafety(t *testing.T) {
+	tmp := t.TempDir()
+	initGitDir(t, tmp)
+
+	cases := []struct {
+		name        string
+		perchToml   string
+		expectError bool
+	}{
+		{
+			name:        "absolute worktree_dir rejected",
+			perchToml:   `worktree_dir = "/abs/path"`,
+			expectError: true,
+		},
+		{
+			name:        "dotdot worktree_dir rejected",
+			perchToml:   `worktree_dir = "../escape"`,
+			expectError: true,
+		},
+		{
+			name:        "deeply escaped worktree_dir rejected",
+			perchToml:   `worktree_dir = "a/../../escape"`,
+			expectError: true,
+		},
+		{
+			name:        "valid relative worktree_dir accepted",
+			perchToml:   `worktree_dir = "wt"`,
+			expectError: false,
+		},
+		{
+			name: "absolute file in files.copy rejected",
+			perchToml: `
+[files]
+copy = ["/etc/passwd"]
+`,
+			expectError: true,
+		},
+		{
+			name: "dotdot in files.copy rejected",
+			perchToml: `
+[files]
+copy = ["../../etc/passwd"]
+`,
+			expectError: true,
+		},
+		{
+			name: "valid files.copy accepted",
+			perchToml: `
+[files]
+copy = [".env", ".env.local"]
+`,
+			expectError: false,
+		},
+		{
+			name: "absolute file in files.symlink rejected",
+			perchToml: `
+[files]
+symlink = ["/usr/bin/node"]
+`,
+			expectError: true,
+		},
+		{
+			name: "valid files.symlink accepted",
+			perchToml: `
+[files]
+symlink = ["node_modules"]
+`,
+			expectError: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			initGitDir(t, dir)
+			writeFile(t, filepath.Join(dir, ".perch.toml"), tc.perchToml)
+
+			cfg, err := config.Load("", dir)
+			if err != nil {
+				t.Fatalf("Load failed unexpectedly: %v", err)
+			}
+
+			err = cfg.Validate(dir)
+			if tc.expectError && err == nil {
+				t.Error("expected validation error, got nil")
+			}
+			if !tc.expectError && err != nil {
+				t.Errorf("unexpected validation error: %v", err)
+			}
+		})
+	}
+}
+
+// TestRootsHomeDirExpansion verifies that roots entries with leading ~/ are expanded.
+func TestRootsHomeDirExpansion(t *testing.T) {
+	tmp := t.TempDir()
+	initGitDir(t, tmp)
+
+	globalPath := filepath.Join(tmp, "config.toml")
+	writeFile(t, globalPath, `roots = ["~/projects"]`)
+
+	cfg, err := config.Load(globalPath, tmp)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if len(cfg.Roots) == 0 {
+		t.Fatal("Roots is empty")
+	}
+	if strings.HasPrefix(cfg.Roots[0], "~") {
+		t.Errorf("Roots[0] = %q; ~ was not expanded", cfg.Roots[0])
+	}
+}
+
+// TestProjectFilesAndHooks verifies that project file/hook lists merge correctly.
+func TestProjectFilesAndHooks(t *testing.T) {
+	tmp := t.TempDir()
+	initGitDir(t, tmp)
+
+	// post_create must come before [files] in TOML; once a table header is
+	// opened, subsequent bare keys belong to that table, not the document root.
+	writeFile(t, filepath.Join(tmp, ".perch.toml"), `
+base_branch  = "develop"
+worktree_dir = "wt"
+post_create  = ["direnv allow"]
+
+[files]
+copy    = [".env"]
+symlink = ["node_modules"]
+`)
+
+	cfg, err := config.Load("", tmp)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.BaseBranch != "develop" {
+		t.Errorf("BaseBranch = %q; want develop", cfg.BaseBranch)
+	}
+	if cfg.WorktreeDir != "wt" {
+		t.Errorf("WorktreeDir = %q; want wt", cfg.WorktreeDir)
+	}
+	if len(cfg.Files.Copy) != 1 || cfg.Files.Copy[0] != ".env" {
+		t.Errorf("Files.Copy = %v; want [.env]", cfg.Files.Copy)
+	}
+	if len(cfg.Files.Symlink) != 1 || cfg.Files.Symlink[0] != "node_modules" {
+		t.Errorf("Files.Symlink = %v; want [node_modules]", cfg.Files.Symlink)
+	}
+	if len(cfg.PostCreate) != 1 || cfg.PostCreate[0] != "direnv allow" {
+		t.Errorf("PostCreate = %v; want [direnv allow]", cfg.PostCreate)
+	}
+}
+
+// TestWildcardRules verifies that per-project wildcard entries decode correctly.
+func TestWildcardRules(t *testing.T) {
+	tmp := t.TempDir()
+	initGitDir(t, tmp)
+
+	writeFile(t, filepath.Join(tmp, ".perch.toml"), `
+[[wildcard]]
+pattern = "**/experiments/*"
+agent   = "claude"
+`)
+
+	cfg, err := config.Load("", tmp)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if len(cfg.Wildcards) != 1 {
+		t.Fatalf("Wildcards len = %d; want 1", len(cfg.Wildcards))
+	}
+	if cfg.Wildcards[0].Pattern != "**/experiments/*" {
+		t.Errorf("Pattern = %q; want **/experiments/*", cfg.Wildcards[0].Pattern)
+	}
+	if cfg.Wildcards[0].Agent != model.ToolClaude {
+		t.Errorf("Wildcard Agent = %q; want claude", cfg.Wildcards[0].Agent)
+	}
+}
+
+// TestDefaultGlobalPath verifies §8.1 XDG discovery: XDG_CONFIG_HOME when set,
+// falling back to ~/.config/perch/config.toml when unset.
+func TestDefaultGlobalPath(t *testing.T) {
+	t.Run("XDG_CONFIG_HOME set", func(t *testing.T) {
+		tmp := t.TempDir()
+		t.Setenv("XDG_CONFIG_HOME", tmp)
+		got, err := config.DefaultGlobalPath()
+		if err != nil {
+			t.Fatalf("DefaultGlobalPath: %v", err)
+		}
+		want := filepath.Join(tmp, "perch", "config.toml")
+		if got != want {
+			t.Errorf("got %q; want %q", got, want)
+		}
+	})
+
+	t.Run("XDG_CONFIG_HOME unset falls back to ~/.config", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", "")
+		got, err := config.DefaultGlobalPath()
+		if err != nil {
+			t.Fatalf("DefaultGlobalPath: %v", err)
+		}
+		home, _ := os.UserHomeDir()
+		want := filepath.Join(home, ".config", "perch", "config.toml")
+		if got != want {
+			t.Errorf("got %q; want %q", got, want)
+		}
+	})
+}
+
+// TestNoProjectToml verifies that no .perch.toml found is not an error.
+func TestNoProjectToml(t *testing.T) {
+	tmp := t.TempDir()
+	// No .git, no .perch.toml — walk will hit root.
+	cfg, err := config.Load("", tmp)
+	if err != nil {
+		t.Fatalf("no project toml should not error: %v", err)
+	}
+	// Defaults must be present.
+	if cfg.Agent != model.ToolClaude {
+		t.Errorf("Agent = %q; want claude", cfg.Agent)
+	}
+}
