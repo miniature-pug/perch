@@ -144,6 +144,10 @@ func (m Model) launchCmd(spec launchSpec) tea.Cmd {
 // Inside tmux ($TMUX set) it dispatches SwitchClient as a plain tea.Cmd;
 // outside tmux it falls back to tea.ExecProcess for a full terminal handover.
 func (m Model) attachTo(target string) (tea.Model, tea.Cmd) {
+	if m.loader == nil {
+		// No loader (test / scaffold mode): nothing to attach to.
+		return m, func() tea.Msg { return switchedMsg{err: fmt.Errorf("tui: attach: no loader configured")} }
+	}
 	argv := m.loader.Tmux.AttachTargetArgs(target)
 	if len(argv) > 0 && argv[0] == "switch-client" {
 		t := m.loader.Tmux
