@@ -94,11 +94,20 @@ func (o Tmux) KillServer(ctx context.Context) error {
 	return fmt.Errorf("tmux kill-server: %w: %s", err, strings.TrimSpace(string(stderr)))
 }
 
-// AttachArgs builds the tmux argv needed to attach to or switch to session.
-// It returns switch-client args when TMUX is set in the environment (perch is
-// running inside tmux), and attach-session args otherwise. The returned slice
-// is executed via tea.ExecProcess in M5; this method only builds the args and
-// never calls Run.
+// AttachArgs returns the tmux SUBCOMMAND args (switch-client or attach-session)
+// needed to reach session. It returns switch-client args when TMUX is set in
+// the environment (perch is running inside tmux), and attach-session args
+// otherwise.
+//
+// The returned slice contains only the subcommand and its flags — it does NOT
+// include the binary name or the -L socket flag. To obtain the full argv
+// suitable for tea.ExecProcess in M5, combine with ExecArgs:
+//
+//	argv := t.ExecArgs(t.AttachArgs(session)...)
+//	// exec.Command(argv[0], argv[1:]...)
+//
+// Do NOT exec the slice returned by AttachArgs directly; that would run
+// "switch-client" as a binary and silently drop socket isolation.
 func (o Tmux) AttachArgs(session string) []string {
 	if o.getenv()("TMUX") != "" {
 		return []string{"switch-client", "-t", SessionTarget(session)}

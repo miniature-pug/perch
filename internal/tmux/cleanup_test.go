@@ -71,7 +71,7 @@ func TestCleanupScript_FullOpts_ExactString(t *testing.T) {
 		" && tmux switch-client -t '=proj' || true" +
 		" && tmux kill-window -t '=proj:=feat' || true" +
 		" && mv '/home/user/proj__worktrees/feat' '/home/user/proj__worktrees/.perch_trash_abc123_1700000000'" +
-		" && git -C '/home/user/proj' worktree prune" +
+		" && git -C '/home/user/proj' worktree prune || true" +
 		" && git -C '/home/user/proj' branch -d 'feat' || true" +
 		" && rm -rf '/home/user/proj__worktrees/.perch_trash_abc123_1700000000'"
 
@@ -93,7 +93,7 @@ func TestCleanupScript_NoBranch_NoBranchDeleteSegment(t *testing.T) {
 		" && tmux switch-client -t '=proj' || true" +
 		" && tmux kill-window -t '=proj:=feat' || true" +
 		" && mv '/home/user/proj__worktrees/feat' '/home/user/proj__worktrees/.perch_trash_abc123_1700000000'" +
-		" && git -C '/home/user/proj' worktree prune" +
+		" && git -C '/home/user/proj' worktree prune || true" +
 		" && rm -rf '/home/user/proj__worktrees/.perch_trash_abc123_1700000000'"
 	if got != want {
 		t.Errorf("CleanupScript (no branch) mismatch\ngot:  %s\nwant: %s", got, want)
@@ -112,7 +112,7 @@ func TestCleanupScript_NoSwitchTarget_NoSwitchClientSegment(t *testing.T) {
 	want := "sleep 0.3" +
 		" && tmux kill-window -t '=proj:=feat' || true" +
 		" && mv '/home/user/proj__worktrees/feat' '/home/user/proj__worktrees/.perch_trash_abc123_1700000000'" +
-		" && git -C '/home/user/proj' worktree prune" +
+		" && git -C '/home/user/proj' worktree prune || true" +
 		" && git -C '/home/user/proj' branch -d 'feat' || true" +
 		" && rm -rf '/home/user/proj__worktrees/.perch_trash_abc123_1700000000'"
 	if got != want {

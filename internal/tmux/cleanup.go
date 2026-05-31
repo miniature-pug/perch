@@ -12,9 +12,12 @@ type CleanupOpts struct {
 	SwitchToTarget     string // session/window to switch the client to before killing; empty → skip
 	Tree               string // absolute worktree path to remove
 	Branch             string // git branch to delete; "" → skip `git branch -d`
-	// RepoDir is the main repo root. git commands run via `git -C <RepoDir>` because
-	// the tree path is renamed before prune/branch-delete, so git cannot infer the
-	// repo from a cwd that points inside the (now-moved) tree.
+	// RepoDir is the main repo/worktree root — REQUIRED. git commands run via
+	// `git -C <RepoDir>` because the tree path is renamed before prune/branch-delete,
+	// so git cannot infer the repo from a cwd that points inside the (now-moved)
+	// tree. An empty RepoDir makes the git bookkeeping steps no-ops or failures;
+	// thanks to the best-effort guards (|| true) on those steps, the trash
+	// directory is still removed.
 	RepoDir string
 }
 
@@ -32,11 +35,13 @@ func shellQuote(s string) string {
 // steps: it frees the tree path immediately so a shell still cd'd into it cannot
 // block removal.
 //
-// Best-effort steps (switch-client, kill-window, git branch -d) are chained as
-// `<cmd> || true` so that failure of one step does not abort the mandatory
-// downstream teardown. In particular:
+// Best-effort steps (switch-client, kill-window, git worktree prune,
+// git branch -d) are chained as `<cmd> || true` so that failure of one step
+// does not abort the mandatory downstream teardown. In particular:
 //   - switch-client: a failed switch must not abort the kill.
 //   - kill-window: if already gone, teardown continues.
+//   - git worktree prune: bookkeeping only; an empty/wrong RepoDir or an odd
+//     repo state must not strand the already-moved trash directory.
 //   - git branch -d: an unmerged or already-deleted branch must not leave trash
 //     behind.
 //
@@ -67,9 +72,10 @@ func CleanupScript(o CleanupOpts, now int64, trashSuffix string) string {
 	// on same-filesystem mounts, so no intermediate state is observable.
 	steps = append(steps, "mv "+shellQuote(o.Tree)+" "+shellQuote(trashDir))
 
-	// 5. Prune the now-dangling worktree reference from the repo. Runs via -C so
-	// the working directory of run-shell does not matter.
-	steps = append(steps, "git -C "+shellQuote(o.RepoDir)+" worktree prune")
+	// 5. Prune the now-dangling worktree reference from the repo. Best-effort
+	// (|| true): bookkeeping only — an empty/wrong RepoDir or odd repo state
+	// must not strand the already-moved trash directory.
+	steps = append(steps, "git -C "+shellQuote(o.RepoDir)+" worktree prune || true")
 
 	// 6. Delete the branch if requested. Best-effort (|| true): an unmerged branch
 	// should not leave trash on disk.

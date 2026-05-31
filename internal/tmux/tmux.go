@@ -77,6 +77,14 @@ func (o Tmux) args(sub ...string) []string {
 	return out
 }
 
+// ExecArgs returns the complete argv — binary, the -L socket flag (when set),
+// then sub — suitable for exec.Command(argv[0], argv[1:]...). M5 builds an
+// attach command as ExecArgs(AttachArgs(session)...) so the socket flag and
+// binary are never dropped.
+func (o Tmux) ExecArgs(sub ...string) []string {
+	return append([]string{o.bin()}, o.args(sub...)...)
+}
+
 // ── target builders ───────────────────────────────────────────────────────────
 
 // SessionTarget returns the exact-match target token for a session. The leading

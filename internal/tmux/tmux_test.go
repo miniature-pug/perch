@@ -70,6 +70,47 @@ func TestArgs_SocketAppearsInCallArgs(t *testing.T) {
 	}
 }
 
+// ── ExecArgs ──────────────────────────────────────────────────────────────────
+
+// TestExecArgs_NoSocket verifies that ExecArgs prepends only the binary when
+// Socket is unset — no -L flag — matching the expected argv for tea.ExecProcess.
+func TestExecArgs_NoSocket_AttachArgs(t *testing.T) {
+	o := Tmux{
+		Bin: "tmux",
+		Getenv: func(s string) string {
+			if s == "TMUX" {
+				return "/tmp/tmux-1000/default,1234,0"
+			}
+			return ""
+		},
+	}
+	got := o.ExecArgs(o.AttachArgs("s")...)
+	want := []string{"tmux", "switch-client", "-t", "=s"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("ExecArgs (no socket, inside tmux) = %v, want %v", got, want)
+	}
+}
+
+// TestExecArgs_WithSocket_AttachArgs verifies that ExecArgs inserts -L <socket>
+// between the binary and subcommand so the private server is always addressed.
+func TestExecArgs_WithSocket_AttachArgs(t *testing.T) {
+	o := Tmux{
+		Bin:    "tmux",
+		Socket: "sock",
+		Getenv: func(s string) string {
+			if s == "TMUX" {
+				return "/tmp/tmux-1000/default,1234,0"
+			}
+			return ""
+		},
+	}
+	got := o.ExecArgs(o.AttachArgs("s")...)
+	want := []string{"tmux", "-L", "sock", "switch-client", "-t", "=s"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("ExecArgs (with socket, inside tmux) = %v, want %v", got, want)
+	}
+}
+
 // ── target builders ───────────────────────────────────────────────────────────
 
 func TestSessionTarget(t *testing.T) {
@@ -361,6 +402,24 @@ func TestListPanesAll_EmptyOutput_ReturnsNil(t *testing.T) {
 	}
 	if panes != nil {
 		t.Errorf("ListPanesAll(empty) = %v, want nil", panes)
+	}
+}
+
+func TestListPanesAll_Error_ColdServer(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Err: proc.FakeExitError{Code: 1}, Stderr: []byte("no server running")},
+		"tmux", "list-panes", "-a", "-F", paneFormat)
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	panes, err := o.ListPanesAll(context.Background())
+	if err == nil {
+		t.Fatal("expected error from cold server, got nil")
+	}
+	if !strings.Contains(err.Error(), "no server running") {
+		t.Errorf("error should contain stderr text: %v", err)
+	}
+	if panes != nil {
+		t.Errorf("ListPanesAll error path returned non-nil slice: %v", panes)
 	}
 }
 
