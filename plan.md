@@ -179,13 +179,36 @@ Three nouns. Keep this vocabulary exact in code and UI — do **not** conflate
 
 **tmux conventions adopted from workmux / sesh / tmux-sessionizer:**
 - Target windows/sessions with the exact-match prefix `=` (`tmux select-window -t
-  '=<name>'`) so a name is never matched as a prefix of another.
+  '=<name>'`) so a name is never matched as a prefix of another. Window targeting
+  requires anchoring `=` on **both** parts: `=session:=window` — a session-only
+  `=name` is not sufficient to address a window deterministically (E4, M4 evidence).
 - The canonical "connect" sequence (sesh `connector/tmux.go`, tmux-sessionizer):
-  `has-session -t=<name>` → if absent `new-session -d -s <name> -c <dir>` → launch
-  the agent via `send-keys` (or pass it as the session's command) → then
-  `switch-client -t <name>` when `$TMUX` is set, else `attach-session -t <name>`.
+  `has-session -t=<name>` → if absent `new-session -d -s <name> -n <window> -c <dir>
+  -P -F '#{pane_id}'` (captures the new pane id from stdout) → else `new-window -t
+  '=<session>' -n <window> -c <dir> -P -F '#{pane_id}'` → launch the agent via
+  `send-keys -t <tgt> -l <literal>` then a **separate** `send-keys -t <tgt> Enter`
+  keystroke (a bare or trailing `;` without `-l` makes tmux parse the rest as a tmux
+  command chain — E6) → then `switch-client -t <name>` when `$TMUX` is set, else
+  `attach-session -t <name>`.
+- Cold-start (`has-session` / `list-sessions` against an absent server) exits 1 —
+  classify by **exit code**, not stderr text. Two distinct stderr strings exist:
+  `"error connecting to <socket>…"` when the socket file is absent, and `"no server
+  running on <socket>"` after `kill-server`. perch treats exit ≥ 1 from `has-session`
+  as "absent/cold" (E1/E2, M4 evidence).
 - Derive a session/window display name as `<repoBasename>/<worktreeName>`
   (sesh `namer/git.go`) — slashes are valid in tmux names and read naturally.
+  Name derivation **must sanitize**: tmux silently rewrites `.` and `:` to `_` in
+  session names (invisible collisions — `a.b` and `a:b` both become `a_b`), and `.`/`:`
+  in window names make them untargetable (`.` is the pane-index separator, `:` is the
+  `session:window` separator). Safe character set = `[A-Za-z0-9_/-]`; map all other
+  characters (including `.` and `:`) to `-` (E5, M4 evidence).
+- Live-agent detection keys on `#{pane_current_command}` (changes `bash` → `claude` /
+  `node` / `bun` when an agent starts), **not** `#{pane_pid}` (always the shell pid).
+  `#{pane_dead}` is only meaningful with `remain-on-exit on` (E7, M4 evidence).
+- Read pane paths from `list-panes` (`#{pane_current_path}`), not `list-sessions`.
+  `#{pane_current_path}` in a `list-sessions` format string returns the querying
+  process's cwd, not the session's start directory; use `#{session_path}` in
+  `list-sessions` and `#{pane_current_path}` in `list-panes` (E11, M4 evidence).
 
 ---
 
@@ -424,7 +447,11 @@ remove(tree):
   `sleep 0.3 → switch away → kill source window → mv tree to a .perch_trash_<h>_<ts>
   sibling → git worktree prune → (optional) git branch -d → rm -rf trash`.
   The rename-to-trash frees the path immediately even if a shell still has it as cwd.
-  Order is mandatory (mv → prune → branch → rm).
+  Order is mandatory (mv → prune → branch → rm). `git worktree prune` is best-effort
+  (`|| true`) so a prune failure never strands the moved-to-trash tree before `rm`.
+  The builder (`tmux.CleanupScript`) takes the main `RepoDir`; git steps run via
+  `git -C <RepoDir>` because the tree is moved out from under any cwd. **Built in M4
+  (`internal/tmux/cleanup.go`, pure builder); dispatched via `tmux run-shell` in M6.**
 - Delete the window's shadow record (§6.2) as part of teardown.
 
 ### 7.3 Merge (optional convenience, v1-lean)
@@ -561,6 +588,15 @@ agent hook/plugin ──► `perch status set <state>` ──► tmux set -p @pe
   panes — **no status-state file**. Adopt workmux's **auto-clear-on-focus**: a
   `pane-focus-in` hook unsets a `waiting`/`done` badge when you focus that pane.
   Idle = no option / stale.
+
+> **NOTE (M8 to resolve):** the ASCII diagram above and the first bullet both describe
+> `perch status set` as doing `tmux set -p @perch_status` (pane-scoped), but this
+> Storage bullet says `@perch_status` is a **window** option while `@perch_pane_status`
+> is the **pane** option the admin reads. These two descriptions are internally
+> inconsistent — the scope and name of the option written by `perch status set` need
+> to be reconciled. M4 does not touch this (M4 round-trips `@perch_session`, pane-
+> scoped, unambiguous). **M8 (status pipeline) must resolve the `@perch_status`
+> scope/name contradiction before implementing `perch status set`.**
 
 ---
 
@@ -1058,7 +1094,13 @@ Setup:
 
 Teardown (deferred):
 1. `tmux -L perch-test-<pid> kill-server`
-2. Remove temp dirs.
+2. Remove the leftover socket file — `kill-server` exits 0 but leaves the socket on
+   disk; the harness computes the socket path respecting `$TMUX_TMPDIR` (fallback
+   `/tmp/tmux-<uid>`) and calls `os.Remove` after `kill-server` (E9, M4 evidence).
+3. Remove temp dirs.
+
+The reusable `newTestServer(t) *tmux.Tmux` harness lives in
+`internal/tmux/integration_test.go` and is shared by M5–M7.
 
 Test cases:
 - Create worktree → verify `git worktree list --porcelain` reflects it.

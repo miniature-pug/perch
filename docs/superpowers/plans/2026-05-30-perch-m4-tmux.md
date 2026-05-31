@@ -1,6 +1,6 @@
 # perch M4 — tmux control (sub-plan)
 
-**Status:** IN PROGRESS
+**Status:** DONE
 **Milestone:** M4 (master plan `docs/superpowers/plans/2026-05-30-perch-v1-implementation.md` §M4).
 **Branch:** `feat/perch-v1`.
 **Execution:** subagent-driven-development — fresh implementer per task, two-stage review (spec then quality), fix loops, final whole-milestone review.

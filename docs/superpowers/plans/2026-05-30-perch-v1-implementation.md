@@ -237,9 +237,9 @@ report status, prove the DoD green, wait for review.
 > `ListSessions` ctx-threading through the claude FS walk (M5, currently `_ ctx`);
 > claude fork-session-into-worktree end-to-end verification (M6).
 
-### M4 — tmux control  *(tmux REQUIRED — now available)*
+### M4 — tmux control  *(tmux REQUIRED — now available)* ✅ DONE
 
-- [ ] Objective: create session/window in a dir, run a command, switch/attach, set/read
+- [x] Objective: create session/window in a dir, run a command, switch/attach, set/read
       `@perch_*`, write the window shadow record.
 - Spec refs: `plan.md §3` (tmux layout/conventions), `§6.2`, `§9` (option storage),
       `§16.4`, `§20.4` (integration harness on a dedicated `-L perch-test-<pid>` socket).
@@ -248,6 +248,33 @@ report status, prove the DoD green, wait for review.
       tests gated `//go:build integration` on a private socket (`§20.4`).
 - DoD (`plan.md §16.4`): debug command opens a shell window in a chosen tree and
       round-trips a pane option + shadow record; `make test-integration` green. §0 gate.
+
+> **Sub-plan:** `docs/superpowers/plans/2026-05-30-perch-m4-tmux.md` (the authoritative
+> M4 spec — supersedes the master plan where tagged `[DIVERGENCE]`).
+>
+> **Verification:** commit chain `dad0991 → eaf2f47 → 1172323 → 5d2ea4e → 4a0fdbc →
+> 691b634 → 9562429 → 752e70c`. Coverage: `internal/tmux` 97.7%, `internal/proc` 100%.
+> `make test` + `make test-integration` both green (real tmux 3.6). The debug `tmux`
+> command demonstrates the DoD: `Connect` → `@perch_session` round-trip → shadow-record
+> write + read-back.
+>
+> **Plan↔reality corrections applied** (in the sub-plan + `plan.md §3/§7.2/§9/§20.4`):
+> cold-start classified by exit code not stderr text (E1/E2); name sanitization rule
+> for `.`/`:` and the `[A-Za-z0-9_/-]` safe set (E5); window target form
+> `=session:=window` anchored on both parts (E4); `-n <window>` + `-P -F '#{pane_id}'`
+> on create (E3); `send-keys -l` + separate `Enter` (E6); liveness key is
+> `#{pane_current_command}` not `pane_pid` (E7); read paths from `list-panes` not
+> `list-sessions` (E11); cleanup is built-not-wired (M4) / dispatched (M6); §9
+> `@perch_status` scope/name contradiction flagged for M8.
+>
+> **New package:** `internal/tmux` — `tmux.go` (reads/targets/names+parse),
+> `connect.go` (mutations + `Connect` + `AttachArgs`/`ExecArgs`), `cleanup.go` (§7.2
+> builder built-not-wired), `integration_test.go` (reusable `newTestServer` harness +
+> 4 integration tests). `internal/proc` gained `ExitCode` + `FakeExitError`.
+>
+> **Deferred:** attach execution + agent-argv shell-quoting → M5; cleanup execution +
+> worktree Remove → M6; resurrect reconcile → M7; live-agent `#{pane_current_command}`
+> semantic → M7; `@perch_status` scope reconciliation → M8.
 
 ### M5 — TUI open flow  *(tmux REQUIRED)*
 
