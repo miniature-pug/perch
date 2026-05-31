@@ -88,9 +88,19 @@ elif command -v pacman >/dev/null 2>&1; then
   PKG_MGR="pacman"
 fi
 
+APT_UPDATED=0
+
 pkg_install() {
   case "$PKG_MGR" in
-    apt)    $SUDO apt-get install -y "$1" ;;
+    apt)
+      # Fresh Debian/Ubuntu images ship an empty package cache; refresh once
+      # before the first install so package names resolve.
+      if [ "$APT_UPDATED" -eq 0 ]; then
+        $SUDO apt-get update -qq
+        APT_UPDATED=1
+      fi
+      $SUDO apt-get install -y "$1"
+      ;;
     dnf)    $SUDO dnf install -y "$1" ;;
     brew)   brew install "$1" ;;
     pacman) $SUDO pacman -S --noconfirm "$1" ;;
