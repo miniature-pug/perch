@@ -379,7 +379,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.Remove):
 			it, ok := m.selectedItem()
 			if !ok || !it.isSession {
-				return m, nil
+				return m.withToast("not a session — nothing to remove")
 			}
 			if it.isMain {
 				return m.withToast("cannot remove the main checkout")
@@ -467,7 +467,8 @@ func (m Model) View() string {
 
 	if m.showHelp {
 		overlay := styles.helpOverlay.Render(m.help.FullHelpView(m.FullHelp()))
-		centered := lipgloss.Place(m.width, lipgloss.Height(body), lipgloss.Center, lipgloss.Center, overlay)
+		canvasH := max(0, m.height-lipgloss.Height(footer))
+		centered := lipgloss.Place(m.width, canvasH, lipgloss.Center, lipgloss.Center, overlay)
 		return lipgloss.JoinVertical(lipgloss.Left, centered, footer)
 	}
 

@@ -3,21 +3,24 @@ package tui
 import "github.com/charmbracelet/bubbles/key"
 
 // ShortHelp returns the contextual footer bindings for the current selection,
-// satisfying the bubbles/help KeyMap interface. Always-available keys come
-// first; selection-dependent keys (worktree/remove/kill) are included only when
-// the action is valid for the highlighted row.
+// satisfying the bubbles/help KeyMap interface. Selection-dependent keys
+// (open/worktree/remove/kill) are included only when the action is valid for the
+// highlighted row, so the footer never advertises a key its handler rejects.
 func (m Model) ShortHelp() []key.Binding {
-	b := []key.Binding{m.keys.Enter, m.keys.New}
-	if it, ok := m.selectedItem(); ok {
-		if it.isSession {
-			b = append(b, m.keys.Worktree)
-			if !it.isMain {
-				b = append(b, m.keys.Remove)
-			}
+	var b []key.Binding
+	it, ok := m.selectedItem()
+	if ok && it.isSession {
+		b = append(b, m.keys.Enter)
+	}
+	b = append(b, m.keys.New)
+	if ok && it.isSession {
+		b = append(b, m.keys.Worktree)
+		if !it.isMain {
+			b = append(b, m.keys.Remove)
 		}
-		if it.live && it.liveTarget != "" {
-			b = append(b, m.keys.Kill)
-		}
+	}
+	if ok && it.live && it.liveTarget != "" {
+		b = append(b, m.keys.Kill)
 	}
 	b = append(b, m.keys.Filter, m.keys.ScreenFwd, m.keys.Help, m.keys.Quit)
 	return b

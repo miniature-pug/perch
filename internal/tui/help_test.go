@@ -8,7 +8,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// hasBinding reports whether bindings contains one whose help key matches keyHelp.
+// hasBinding reports whether bindings contains one whose help-display key matches
+// keyHelp (the WithHelp label, e.g. "↵"/"x"), assuming WithHelp labels stay in
+// sync with WithKeys — which they do in defaultKeys.
 func hasBinding(bindings []key.Binding, keyHelp string) bool {
 	for _, b := range bindings {
 		if b.Help().Key == keyHelp {
@@ -49,7 +51,7 @@ func TestFullHelp_IncludesAllCoreBindings(t *testing.T) {
 	for _, grp := range m.FullHelp() {
 		all = append(all, grp...)
 	}
-	for _, k := range []string{"↵", "n", "w", "d", "x", "/", "z", "?", "q"} {
+	for _, k := range []string{"↵", "n", "w", "d", "x", "/", "z", "Z", "?", "q"} {
 		if !hasBinding(all, k) {
 			t.Fatalf("full help missing binding %q", k)
 		}
@@ -58,6 +60,7 @@ func TestFullHelp_IncludesAllCoreBindings(t *testing.T) {
 
 func TestHelpKey_TogglesOverlay(t *testing.T) {
 	m := New(nil)
+	m.ready = true
 	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
 	m = model.(Model)
 	if !m.showHelp {
