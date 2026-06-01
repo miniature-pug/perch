@@ -296,6 +296,32 @@ func TestInFrame_TrueWhenPlaceholderSet(t *testing.T) {
 // TestSwapIn_NothingDisplayed verifies that when nothing is displayed and we
 // request %A, we get: PaneSize(%PL), ResizeWindow(%A), SwapPane -s %A -t %PL,
 // RefreshClient. swappedMsg.target == %A.
+func TestSwapIn_ClearsStatusBadgeOnFocus(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Stdout: []byte("80\x1f24\n")},
+		"tmux", "display-message", "-p", "-t", "%PL", "#{pane_width}\x1f#{pane_height}")
+	ok := proc.FakeResult{}
+	r.Default = &ok
+
+	m := frameModel(r, "") // nothing displayed
+	if msg := m.swapInCmd("%A")(); msg.(swappedMsg).err != nil {
+		t.Fatalf("swap error: %v", msg.(swappedMsg).err)
+	}
+
+	// The focused agent's @perch_pane_status must be cleared (M11-3).
+	cleared := false
+	for _, c := range r.Calls {
+		a := c.Args
+		if len(a) == 6 && a[0] == "set-option" && a[3] == "%A" &&
+			a[4] == "@perch_pane_status" && a[5] == "" {
+			cleared = true
+		}
+	}
+	if !cleared {
+		t.Error("swapInCmd must clear @perch_pane_status on the focused agent pane")
+	}
+}
+
 func TestSwapIn_NothingDisplayed(t *testing.T) {
 	r := proc.NewFakeRunner()
 	// Register PaneSize response for the placeholder.

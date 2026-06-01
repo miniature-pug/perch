@@ -217,6 +217,10 @@ func (m *Model) swapInCmd(targetHome string) tea.Cmd {
 				return swappedMsg{err: err}
 			}
 		}
+		// Auto-clear the status badge on focus (M11-3): an agent the user is now
+		// looking at is no longer "waiting"/"done". The status hook re-sets it on
+		// the next agent state change.
+		_ = t.SetPaneOption(ctx, targetHome, "@perch_pane_status", "")
 		// Nudge all clients to repaint so the newly-displayed agent reflows.
 		_ = t.RefreshClient(ctx)
 		return swappedMsg{target: targetHome}
