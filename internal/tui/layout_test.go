@@ -26,35 +26,35 @@ func TestView_PlainFillsHeightExactly(t *testing.T) {
 	}
 }
 
-func TestView_ToastDoesNotOverflow(t *testing.T) {
+func TestView_ToastFitsHeightExactly(t *testing.T) {
 	m := New(liveSession())
 	m, _ = sizeModel(m, testViewW, testViewH)
 	m, _ = m.withToast("something failed")
-	if h := lipgloss.Height(m.View()); h > testViewH {
-		t.Fatalf("View height with toast = %d, want <= %d (no overflow)", h, testViewH)
+	if h := lipgloss.Height(m.View()); h != testViewH {
+		t.Fatalf("View height with toast = %d, want exactly %d", h, testViewH)
 	}
 }
 
-func TestView_ModalDoesNotOverflow(t *testing.T) {
+func TestView_ModalFitsHeightExactly(t *testing.T) {
 	m := New(liveSession())
 	m, _ = sizeModel(m, testViewW, testViewH)
 	m = sendKey(m, 'x') // opens kill-confirm modal on a live session
 	if m.modal.kind == modalNone {
 		t.Fatal("expected a modal to open on x")
 	}
-	if h := lipgloss.Height(m.View()); h > testViewH {
-		t.Fatalf("View height with modal = %d, want <= %d (no overflow)", h, testViewH)
+	if h := lipgloss.Height(m.View()); h != testViewH {
+		t.Fatalf("View height with modal = %d, want exactly %d", h, testViewH)
 	}
 }
 
-func TestView_HelpDoesNotOverflow(t *testing.T) {
+func TestView_HelpFitsHeightExactly(t *testing.T) {
 	m := New(liveSession())
 	m, _ = sizeModel(m, testViewW, testViewH)
 	m = sendKey(m, '?')
 	if !m.showHelp {
 		t.Fatal("expected help overlay open on ?")
 	}
-	if h := lipgloss.Height(m.View()); h > testViewH {
-		t.Fatalf("View height with help = %d, want <= %d (no overflow)", h, testViewH)
+	if h := lipgloss.Height(m.View()); h != testViewH {
+		t.Fatalf("View height with help = %d, want exactly %d", h, testViewH)
 	}
 }

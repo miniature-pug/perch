@@ -215,6 +215,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case removeResultMsg:
 		if msg.dirty {
 			// Promote to force-confirm modal, keeping spec.
+			m.showHelp = false // an async-opened modal must not hide behind the help overlay
 			m.modal = msg.spec
 			m.modal.kind = modalForceConfirm
 			return m, nil
