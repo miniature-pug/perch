@@ -34,6 +34,10 @@ type Model struct {
 	// loader is optional; when set, Init returns its load Cmd.
 	loader *loader
 
+	// root is the discovery scan root, captured from the loader for the
+	// empty-state message. Empty in test/scaffold mode.
+	root string
+
 	// loadErr holds the last whole-load failure message for display in the UI.
 	// Empty string means no error. Cleared on successful reload.
 	loadErr string
@@ -97,6 +101,7 @@ func (m Model) WithRefresh(d time.Duration) Model {
 // Init will then return the load Cmd automatically.
 func (m Model) WithLoader(l loader) Model {
 	m.loader = &l
+	m.root = l.Root
 	return m
 }
 
@@ -426,6 +431,10 @@ func (m Model) View() string {
 	rightPane := styles.rightPane.Render(m.preview.View())
 	body := lipgloss.JoinHorizontal(lipgloss.Top, leftPane, rightPane)
 
+	if txt := m.emptyStateText(); txt != "" {
+		body = styles.emptyState.Render(txt)
+	}
+
 	// Footer hint changes when a modal is open.
 	var footerText string
 	if m.modal.kind != modalNone {
@@ -533,6 +542,19 @@ func (m Model) updateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	// Swallow all other keys while modal is open.
 	return m, nil
+}
+
+// emptyStateText returns the empty-state message to display when discovery
+// found no sessions, or "" when there are items or a load error is showing
+// (the load-error bar takes precedence).
+func (m Model) emptyStateText() string {
+	if m.loadErr != "" || len(m.list.Items()) > 0 {
+		return ""
+	}
+	if m.root != "" {
+		return "No git repositories found under " + m.root
+	}
+	return "No git repositories found"
 }
 
 // reloadCmd returns a tea.Cmd that reloads the item list. Used after a

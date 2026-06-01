@@ -27,6 +27,8 @@ var styles = struct {
 	errorBar lipgloss.Style
 	// toast renders a transient, non-blocking message bar above the body.
 	toast lipgloss.Style
+	// emptyState renders the "no repositories" hint in place of the body.
+	emptyState lipgloss.Style
 }{
 	leftPane: lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -48,6 +50,9 @@ var styles = struct {
 	toast: lipgloss.NewStyle().
 		Foreground(colorError).
 		Bold(true),
+	emptyState: lipgloss.NewStyle().
+		Foreground(colorSubtle).
+		Padding(1, 2),
 }
 
 // Status glyphs — kept here so delegate and item are in the same file space.
