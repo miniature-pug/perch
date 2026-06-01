@@ -376,7 +376,7 @@ func TestValidateWorktreeDir(t *testing.T) {
 		{"in-repo relative not .git", "wt", false},
 		{"dotdot into .git/foo", ".git/foo", true},
 		{"equals .git", ".git", true},
-		{"gitfoo not inside .git", ".gitfoo", false}, // prefix-bug guard: .gitfoo is a sibling of .git, not inside it
+		{"gitfoo not inside .git", ".gitfoo", false},            // prefix-bug guard: .gitfoo is a sibling of .git, not inside it
 		{"dotdot games resolving to .git", "foo/../.git", true}, // Clean must run before the .git check
 		{"empty", "", false},
 	}
