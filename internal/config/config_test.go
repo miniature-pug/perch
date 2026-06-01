@@ -255,27 +255,30 @@ func TestMalformedProject(t *testing.T) {
 	}
 }
 
-// TestPathSafety exercises Validate's path guards.
+// TestPathSafety exercises Validate's path guards and Load-time validation.
 //
-// worktree_dir uses a distinct rule: it may be a sibling, absolute, or in-repo
-// relative path; only landing inside .git is forbidden. files.copy and
-// files.symlink must stay inside the repo (no absolute, no "..").
+// worktree_dir uses a distinct rule: project config may only set a relative
+// worktree_dir (V2'); an absolute path in the project config is rejected at
+// Load time. files.copy and files.symlink must stay inside the repo (no
+// absolute, no "..").
 func TestPathSafety(t *testing.T) {
 	cases := []struct {
-		name        string
-		perchToml   string
-		expectError bool
+		name            string
+		perchToml       string
+		expectLoadError bool // true when Load itself must error (e.g. project absolute worktree_dir)
+		expectError     bool // true when Validate must error (only checked when Load succeeds)
 	}{
-		// ── worktree_dir: new rules (sibling/abs/in-repo-relative are OK; .git is not) ──
+		// ── worktree_dir: project may only use relative paths ──
 		{
 			name:        "worktree_dir sibling (dotdot) accepted",
 			perchToml:   `worktree_dir = "../wt"`,
 			expectError: false,
 		},
 		{
-			name:        "worktree_dir absolute outside repo accepted",
-			perchToml:   `worktree_dir = "/abs/elsewhere"`,
-			expectError: false,
+			// V2': project config may not set an absolute worktree_dir — Load must error.
+			name:            "worktree_dir absolute in project config rejected at Load",
+			perchToml:       `worktree_dir = "/abs/elsewhere"`,
+			expectLoadError: true,
 		},
 		{
 			name:        "worktree_dir in-repo relative (not .git) accepted",
@@ -348,6 +351,12 @@ symlink = ["node_modules"]
 			writeFile(t, filepath.Join(dir, ".perch.toml"), tc.perchToml)
 
 			cfg, err := config.Load("", dir)
+			if tc.expectLoadError {
+				if err == nil {
+					t.Error("expected Load to error, got nil")
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("Load failed unexpectedly: %v", err)
 			}
@@ -694,6 +703,75 @@ func TestAbsentAgentTakesDefault(t *testing.T) {
 	if cfg.Agent != model.ToolClaude {
 		t.Errorf("Agent = %q; want claude (default)", cfg.Agent)
 	}
+}
+
+// TestWorktreeDirProvenance is the exploit test for V2'.
+// A project .perch.toml must NOT be allowed to set an absolute worktree_dir
+// (which would let a malicious repo place worktrees anywhere writable on the system).
+// Only the global config may set an absolute worktree_dir.
+// This test MUST FAIL on un-fixed code (which accepts project absolute).
+func TestWorktreeDirProvenance(t *testing.T) {
+	t.Run("project absolute worktree_dir rejected at Load", func(t *testing.T) {
+		tmp := t.TempDir()
+		initGitDir(t, tmp)
+		// Exploit: malicious .perch.toml tries to place worktree at /etc/perch.
+		writeFile(t, filepath.Join(tmp, ".perch.toml"), `worktree_dir = "/etc/perch"`)
+
+		_, err := config.Load("", tmp)
+		if err == nil {
+			t.Error("V2' exploit: Load must error when project sets absolute worktree_dir, got nil")
+		}
+		if err != nil && !strings.Contains(err.Error(), "must be relative") {
+			t.Errorf("V2' exploit: error message %q must contain 'must be relative'", err.Error())
+		}
+	})
+
+	t.Run("global absolute worktree_dir accepted", func(t *testing.T) {
+		tmp := t.TempDir()
+		initGitDir(t, tmp)
+		globalPath := filepath.Join(tmp, "config.toml")
+		writeFile(t, globalPath, `worktree_dir = "/abs/worktrees"`)
+		// No project .perch.toml — global absolute should be accepted.
+
+		cfg, err := config.Load(globalPath, tmp)
+		if err != nil {
+			t.Fatalf("global absolute worktree_dir should be accepted: %v", err)
+		}
+		if cfg.WorktreeDir != "/abs/worktrees" {
+			t.Errorf("WorktreeDir = %q; want /abs/worktrees", cfg.WorktreeDir)
+		}
+	})
+
+	t.Run("project relative worktree_dir accepted", func(t *testing.T) {
+		tmp := t.TempDir()
+		initGitDir(t, tmp)
+		writeFile(t, filepath.Join(tmp, ".perch.toml"), `worktree_dir = "wt"`)
+
+		cfg, err := config.Load("", tmp)
+		if err != nil {
+			t.Fatalf("project relative worktree_dir should be accepted: %v", err)
+		}
+		if cfg.WorktreeDir != "wt" {
+			t.Errorf("WorktreeDir = %q; want wt", cfg.WorktreeDir)
+		}
+		// The .git containment guard must still apply.
+		if err := cfg.Validate(tmp); err != nil {
+			t.Errorf("Validate unexpectedly errored for relative wt: %v", err)
+		}
+	})
+
+	t.Run("project absolute rejected even if not .git", func(t *testing.T) {
+		// Defense-in-depth: even a benign-looking absolute path like /tmp/wt
+		// must be rejected if it comes from the project config.
+		tmp := t.TempDir()
+		initGitDir(t, tmp)
+		writeFile(t, filepath.Join(tmp, ".perch.toml"), `worktree_dir = "/tmp/wt"`)
+
+		_, err := config.Load("", tmp)
+		if err == nil {
+			t.Error("project absolute worktree_dir /tmp/wt must be rejected")
+		}
+	})
 }
 
 // TestExpandRootsNoTildeHomeMissing verifies that when no root contains a leading ~/,

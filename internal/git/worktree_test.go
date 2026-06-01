@@ -11,6 +11,136 @@ import (
 	"github.com/Miniature-Pug/perch/internal/proc"
 )
 
+// ── ValidRef ──────────────────────────────────────────────────────────────────
+
+// TestValidRef_Rejects verifies that ValidRef rejects all inputs that git
+// check-ref-format would consider invalid or that would be parsed as flags.
+// These tests MUST FAIL on code that lacks ValidRef (compile error / missing func).
+func TestValidRef_Rejects(t *testing.T) {
+	bad := []struct {
+		name  string
+		input string
+	}{
+		{"empty", ""},
+		{"leading dash flag injection", "--upload-pack=x"},
+		{"leading dash no-checkout", "--no-checkout"},
+		{"leading dash single", "-n"},
+		{"double dot", "feat..main"},
+		{"double dot at start", "..main"},
+		{"double dot at end", "main.."},
+		{"space", "feat x"},
+		{"tilde", "feat~1"},
+		{"caret", "feat^"},
+		{"colon", "feat:main"},
+		{"question mark", "feat?"},
+		{"asterisk", "feat*"},
+		{"open bracket", "feat[x"},
+		{"backslash", `feat\x`},
+		{"trailing slash", "feat/"},
+		{"leading slash", "/feat"},
+		{"dot lock suffix", "feat.lock"},
+		{"at-brace sequence", "feat@{0}"},
+		{"control char tab", "feat\tx"},
+		{"trailing dot", "feat."},
+	}
+	for _, tc := range bad {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := ValidRef(tc.input); err == nil {
+				t.Errorf("ValidRef(%q) = nil, want error", tc.input)
+			}
+		})
+	}
+}
+
+// TestValidRef_Accepts verifies that ValidRef permits well-formed ref names.
+func TestValidRef_Accepts(t *testing.T) {
+	good := []struct {
+		name  string
+		input string
+	}{
+		{"simple", "main"},
+		{"HEAD", "HEAD"},
+		{"feature slash", "feature/x"},
+		{"perch slug", "perch/foo-abcd1234"},
+		{"version tag", "v1.2.3"},
+		{"dotfile-like (leading dot in component)", ".hidden"},
+		{"underscore", "feat_x"},
+		{"digits", "feat123"},
+	}
+	for _, tc := range good {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := ValidRef(tc.input); err != nil {
+				t.Errorf("ValidRef(%q) = %v, want nil", tc.input, err)
+			}
+		})
+	}
+}
+
+// ── AddWorktree flag-injection exploit tests ──────────────────────────────────
+
+// TestAddWorktree_FlagInjection_BaseBranch is the exploit test for V3-A.
+// A base_branch value of "--upload-pack=x" or "--no-checkout" must be rejected
+// BEFORE any git argv is issued. FakeRunner.Calls must be empty on rejection.
+// This test MUST FAIL on un-fixed code (AddWorktree would call git with the bad value).
+func TestAddWorktree_FlagInjection_BaseBranch(t *testing.T) {
+	exploits := []string{
+		"--upload-pack=x",
+		"--no-checkout",
+	}
+	for _, exploit := range exploits {
+		t.Run(exploit, func(t *testing.T) {
+			r := proc.NewFakeRunner()
+			// No canned response registered — if git is called, it returns an error
+			// from the FakeRunner. But the guard must fire BEFORE any call.
+			err := AddWorktree(context.Background(), r,
+				"/repos/proj", "perch/feat-x", "/repos/proj__worktrees/feat-x", exploit)
+			if err == nil {
+				t.Fatalf("AddWorktree with base=%q must return an error, got nil", exploit)
+			}
+			if len(r.Calls) != 0 {
+				t.Errorf("AddWorktree with base=%q must not issue any git call; got %d call(s): %+v",
+					exploit, len(r.Calls), r.Calls)
+			}
+		})
+	}
+}
+
+// TestAddWorktree_ValidBase_StillWorks verifies that valid base values ("main",
+// "HEAD") are accepted and git worktree add IS called normally.
+func TestAddWorktree_ValidBase_StillWorks(t *testing.T) {
+	validBases := []string{"main", "HEAD"}
+	for _, base := range validBases {
+		t.Run(base, func(t *testing.T) {
+			r := proc.NewFakeRunner()
+			wantArgs := []string{"-C", "/repos/proj", "worktree", "add", "-b", "perch/feat-x", "/repos/proj__worktrees/feat-x", base}
+			r.Respond(proc.FakeResult{}, "git", wantArgs...)
+
+			err := AddWorktree(context.Background(), r,
+				"/repos/proj", "perch/feat-x", "/repos/proj__worktrees/feat-x", base)
+			if err != nil {
+				t.Fatalf("AddWorktree with valid base=%q returned unexpected error: %v", base, err)
+			}
+			if len(r.Calls) != 1 {
+				t.Fatalf("want exactly 1 git call for valid base=%q, got %d", base, len(r.Calls))
+			}
+		})
+	}
+}
+
+// TestAddWorktree_FlagInjection_Branch verifies that a branch value beginning
+// with "-" is also rejected before any git call.
+func TestAddWorktree_FlagInjection_Branch(t *testing.T) {
+	r := proc.NewFakeRunner()
+	err := AddWorktree(context.Background(), r,
+		"/repos/proj", "--evil-branch", "/repos/proj__worktrees/x", "HEAD")
+	if err == nil {
+		t.Fatal("AddWorktree with leading-dash branch must error")
+	}
+	if len(r.Calls) != 0 {
+		t.Errorf("AddWorktree with invalid branch must not call git; got %d call(s)", len(r.Calls))
+	}
+}
+
 // ── SlugifyBranch ─────────────────────────────────────────────────────────────
 
 func TestSlugifyBranch(t *testing.T) {

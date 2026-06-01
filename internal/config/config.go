@@ -36,10 +36,11 @@ const defaultRefreshMs = 1000
 // It is the ONLY struct that carries agent binary resolution (Agents map).
 // projectConfig deliberately has no equivalent field — this is the security boundary.
 type globalConfig struct {
-	Roots     []string `toml:"roots"`
-	SortOrder []string `toml:"sort_order"`
-	Blacklist []string `toml:"blacklist"`
-	RefreshMs *int     `toml:"refresh_ms"`
+	Roots       []string `toml:"roots"`
+	SortOrder   []string `toml:"sort_order"`
+	Blacklist   []string `toml:"blacklist"`
+	RefreshMs   *int     `toml:"refresh_ms"`
+	WorktreeDir *string  `toml:"worktree_dir"`
 
 	DefaultSession globalDefaultSession `toml:"default_session"`
 	Theme          globalTheme          `toml:"theme"`
@@ -433,6 +434,11 @@ func merge(gc *globalConfig, pc *projectConfig, startDir string, configPath stri
 	// agentBins is global-only — never touched by project config.
 	cfg.agentBins = gc.Agents
 
+	// Apply global worktree_dir (may be absolute — global config is trusted).
+	if gc.WorktreeDir != nil {
+		cfg.WorktreeDir = *gc.WorktreeDir
+	}
+
 	// Apply project (non-nil pointer fields override; slices replace when non-empty).
 	if pc != nil {
 		if pc.Agent != nil && *pc.Agent != "" {
@@ -446,6 +452,13 @@ func merge(gc *globalConfig, pc *projectConfig, startDir string, configPath stri
 			cfg.BaseBranch = *pc.BaseBranch
 		}
 		if pc.WorktreeDir != nil {
+			// Security (V2'): project config may only set a relative worktree_dir.
+			// An absolute path in .perch.toml would allow a malicious repo to place
+			// the worktree (and any seeded files) anywhere writable on the system.
+			// Absolute paths are accepted only from the global/user config above.
+			if filepath.IsAbs(*pc.WorktreeDir) {
+				return nil, fmt.Errorf("config: project worktree_dir %q must be relative", *pc.WorktreeDir)
+			}
 			cfg.WorktreeDir = *pc.WorktreeDir
 		}
 		if len(pc.Files.Copy) > 0 {

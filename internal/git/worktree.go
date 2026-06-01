@@ -88,10 +88,25 @@ func WorktreePath(projectRoot, handle, worktreeDir string) (string, error) {
 // The caller supplies base already resolved (e.g. "HEAD" or a branch name) —
 // this function does not default it.
 //
+// Security (V3-A): branch and base are validated with ValidRef before any argv
+// is built. git worktree add does not support a trailing "--" before the
+// committish positional (unlike "git checkout -- <path>"), so strict validation
+// is the correct mitigation: both values are rejected if they begin with '-',
+// contain "..", or contain other git check-ref-format-forbidden characters that
+// could cause flag injection. path is always absolute (callers use WorktreePath).
+//
 // If the command fails and stderr indicates the branch already exists, the
 // returned error wraps ErrBranchExists so callers can use errors.Is. Other
 // failures wrap stderr verbatim.
 func AddWorktree(ctx context.Context, r proc.Runner, repoRoot, branch, path, base string) error {
+	// Validate branch and base before constructing any git argv.
+	if err := ValidRef(branch); err != nil {
+		return fmt.Errorf("git: AddWorktree: invalid branch: %w: %w", ErrInvalidRef, err)
+	}
+	if err := ValidRef(base); err != nil {
+		return fmt.Errorf("git: AddWorktree: invalid base: %w: %w", ErrInvalidRef, err)
+	}
+
 	_, stderr, err := r.Run(ctx, "git", "-C", repoRoot, "worktree", "add", "-b", branch, path, base)
 	if err != nil {
 		msg := string(bytes.TrimSpace(stderr))

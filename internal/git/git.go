@@ -12,6 +12,74 @@ import (
 	"github.com/Miniature-Pug/perch/internal/proc"
 )
 
+// ValidRef validates a git ref name using the essentials of git check-ref-format
+// rules. It rejects values that git would interpret as flags or that git itself
+// considers malformed.
+//
+// Rejected: empty string, leading '-' (parsed as a flag by git), any ".."
+// sequence, control characters or space, any of the special chars ~ ^ : ? * [ \,
+// trailing '/', ".lock" suffix, "@{" sequence, leading '/'.
+//
+// This is the security chokepoint for user-supplied branch and base-branch values
+// before they are passed as positional arguments to git worktree add.
+func ValidRef(name string) error {
+	if name == "" {
+		return fmt.Errorf("git: ref name must not be empty")
+	}
+	// Leading '-' would be parsed as a flag by git.
+	if name[0] == '-' {
+		return fmt.Errorf("git: ref name %q must not begin with '-'", name)
+	}
+	// Leading '/' is not allowed by git check-ref-format.
+	if name[0] == '/' {
+		return fmt.Errorf("git: ref name %q must not begin with '/'", name)
+	}
+	// Trailing '/' is not allowed.
+	if name[len(name)-1] == '/' {
+		return fmt.Errorf("git: ref name %q must not end with '/'", name)
+	}
+	// ".lock" suffix is reserved by git for lock files.
+	if strings.HasSuffix(name, ".lock") {
+		return fmt.Errorf("git: ref name %q must not end with '.lock'", name)
+	}
+	// Scan rune by rune for forbidden sequences and chars.
+	prev := rune(0)
+	for i, r := range name {
+		// Control characters (including NUL) and space.
+		if r < 0x20 || r == 0x7f || r == ' ' {
+			return fmt.Errorf("git: ref name %q contains forbidden character %q", name, r)
+		}
+		// Special chars forbidden by git check-ref-format.
+		switch r {
+		case '~', '^', ':', '?', '*', '[', '\\':
+			return fmt.Errorf("git: ref name %q contains forbidden character %q", name, r)
+		}
+		// ".." sequence.
+		if prev == '.' && r == '.' {
+			return fmt.Errorf("git: ref name %q contains forbidden sequence '..'", name)
+		}
+		// "@{" sequence.
+		if prev == '@' && r == '{' {
+			return fmt.Errorf("git: ref name %q contains forbidden sequence '@{'", name)
+		}
+		// A dot at position 0 is allowed (e.g. ".git" is not a ref but "." alone
+		// would fail the empty check). A component starting with '.' is allowed by
+		// git (e.g. ".perch"); git check-ref-format only bans ".." and leading ".".
+		// Trailing '.' check: if the next char would end the string.
+		_ = i
+		prev = r
+	}
+	// Trailing '.' is forbidden by git check-ref-format.
+	if prev == '.' {
+		return fmt.Errorf("git: ref name %q must not end with '.'", name)
+	}
+	return nil
+}
+
+// ErrInvalidRef is a sentinel for flag-injection and ref-format errors caught by
+// ValidRef. AddWorktree wraps this so callers can use errors.Is.
+var ErrInvalidRef = fmt.Errorf("git: invalid ref name")
+
 // Worktree is one parsed record from `git worktree list --porcelain`. It
 // captures every attribute git emits so that later milestones (e.g. locked
 // worktree removal) need not re-parse the raw output.

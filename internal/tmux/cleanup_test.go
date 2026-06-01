@@ -72,7 +72,7 @@ func TestCleanupScript_FullOpts_ExactString(t *testing.T) {
 		" && tmux kill-window -t '=proj:=feat' || true" +
 		" && mv '/home/user/proj__worktrees/feat' '/home/user/proj__worktrees/.perch_trash_abc123_1700000000'" +
 		" && git -C '/home/user/proj' worktree prune || true" +
-		" && git -C '/home/user/proj' branch -d 'feat' || true" +
+		" && git -C '/home/user/proj' branch -d -- 'feat' || true" +
 		" && rm -rf '/home/user/proj__worktrees/.perch_trash_abc123_1700000000'"
 
 	if got != want {
@@ -113,7 +113,7 @@ func TestCleanupScript_NoSwitchTarget_NoSwitchClientSegment(t *testing.T) {
 		" && tmux kill-window -t '=proj:=feat' || true" +
 		" && mv '/home/user/proj__worktrees/feat' '/home/user/proj__worktrees/.perch_trash_abc123_1700000000'" +
 		" && git -C '/home/user/proj' worktree prune || true" +
-		" && git -C '/home/user/proj' branch -d 'feat' || true" +
+		" && git -C '/home/user/proj' branch -d -- 'feat' || true" +
 		" && rm -rf '/home/user/proj__worktrees/.perch_trash_abc123_1700000000'"
 	if got != want {
 		t.Errorf("CleanupScript (no switch) mismatch\ngot:  %s\nwant: %s", got, want)
@@ -225,5 +225,17 @@ func TestCleanupScript_SleepIsFirst(t *testing.T) {
 	got := CleanupScript(o, 1, "s")
 	if !strings.HasPrefix(got, "sleep 0.3") {
 		t.Errorf("script does not start with 'sleep 0.3': %s", got)
+	}
+}
+
+// TestCleanupScript_BranchDeleteHasDDash is the exploit test for V3-B.
+// The generated script must contain "branch -d --" so that a branch name
+// beginning with "-" cannot be parsed as a flag by git.
+// This test MUST FAIL on un-fixed code (which emits "branch -d" without "--").
+func TestCleanupScript_BranchDeleteHasDDash(t *testing.T) {
+	o := fullOpts()
+	got := CleanupScript(o, 1700000000, "v3b")
+	if !strings.Contains(got, "branch -d --") {
+		t.Errorf("V3-B exploit: script must contain 'branch -d --'; got: %s", got)
 	}
 }

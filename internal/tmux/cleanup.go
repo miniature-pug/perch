@@ -78,9 +78,10 @@ func CleanupScript(o CleanupOpts, now int64, trashSuffix string) string {
 	steps = append(steps, "git -C "+shellQuote(o.RepoDir)+" worktree prune || true")
 
 	// 6. Delete the branch if requested. Best-effort (|| true): an unmerged branch
-	// should not leave trash on disk.
+	// should not leave trash on disk. The "--" separator (defense-in-depth) prevents
+	// a branch name beginning with "-" from being parsed as a flag by git.
 	if o.Branch != "" {
-		steps = append(steps, "git -C "+shellQuote(o.RepoDir)+" branch -d "+shellQuote(o.Branch)+" || true")
+		steps = append(steps, "git -C "+shellQuote(o.RepoDir)+" branch -d -- "+shellQuote(o.Branch)+" || true")
 	}
 
 	// 7. Remove the trash directory.
