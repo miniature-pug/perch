@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -40,6 +41,11 @@ type Model struct {
 
 	// mode is the current screen layout (normal / full-list / full-preview).
 	mode screenMode
+
+	// help renders the footer short-help and the ? full-help overlay.
+	help help.Model
+	// showHelp toggles the ? full-help overlay.
+	showHelp bool
 
 	// loadErr holds the last whole-load failure message for display in the UI.
 	// Empty string means no error. Cleared on successful reload.
@@ -86,6 +92,7 @@ func New(items []list.Item) Model {
 		list:    l,
 		preview: viewport.New(0, 0),
 		keys:    defaultKeys(),
+		help:    help.New(),
 		refresh: time.Second, // default; overridable via WithRefresh
 	}
 }
@@ -301,12 +308,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
+		if m.showHelp {
+			switch {
+			case key.Matches(msg, m.keys.Help),
+				key.Matches(msg, m.keys.ClearFilter),
+				key.Matches(msg, m.keys.Quit):
+				m.showHelp = false
+			}
+			return m, nil
+		}
+
 		// While a modal is open it owns all keys.
 		if m.modal.kind != modalNone {
 			return m.updateModal(msg)
 		}
 
 		switch {
+		case key.Matches(msg, m.keys.Help):
+			m.showHelp = !m.showHelp
+			return m, nil
+
 		case key.Matches(msg, m.keys.Quit):
 			return m, tea.Quit
 
@@ -324,7 +345,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.Enter):
 			it, ok := m.selectedItem()
 			if !ok || !it.isSession {
-				return m, nil
+				return m.withToast("not a session — nothing to open")
 			}
 			if it.live && it.liveTarget != "" {
 				// Switch to the existing window — NEVER relaunch a live session:
@@ -381,7 +402,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.Kill):
 			it, ok := m.selectedItem()
 			if !ok || !it.live || it.liveTarget == "" {
-				return m, nil
+				return m.withToast("no live session to kill")
 			}
 			m.modal = modalState{
 				kind:    modalKillConfirm,
@@ -393,7 +414,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.Worktree):
 			it, ok := m.selectedItem()
 			if !ok || !it.isSession {
-				return m, nil
+				return m.withToast("worktree actions need a session row")
 			}
 			return m, m.worktreePreflightCmd(it)
 
@@ -439,9 +460,16 @@ func (m Model) View() string {
 	if m.modal.kind != modalNone {
 		footerText = modalFooterHint(m.modal.kind)
 	} else {
-		footerText = "↵ switch · n new · w worktree · d remove · x kill · / filter · q quit"
+		m.help.Width = m.width
+		footerText = m.help.ShortHelpView(m.ShortHelp())
 	}
 	footer := styles.footer.Render(footerText)
+
+	if m.showHelp {
+		overlay := styles.helpOverlay.Render(m.help.FullHelpView(m.FullHelp()))
+		centered := lipgloss.Place(m.width, lipgloss.Height(body), lipgloss.Center, lipgloss.Center, overlay)
+		return lipgloss.JoinVertical(lipgloss.Left, centered, footer)
+	}
 
 	// Modal overlay: insert between body and footer when active.
 	if m.modal.kind != modalNone {

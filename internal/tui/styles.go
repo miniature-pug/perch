@@ -29,6 +29,8 @@ var styles = struct {
 	toast lipgloss.Style
 	// emptyState renders the "no repositories" hint in place of the body.
 	emptyState lipgloss.Style
+	// helpOverlay renders the ? full-help popup box.
+	helpOverlay lipgloss.Style
 }{
 	leftPane: lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -52,6 +54,10 @@ var styles = struct {
 		Bold(true),
 	emptyState: lipgloss.NewStyle().
 		Foreground(colorSubtle).
+		Padding(1, 2),
+	helpOverlay: lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorAccent).
 		Padding(1, 2),
 }
 
