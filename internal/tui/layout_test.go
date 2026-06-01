@@ -146,3 +146,25 @@ func TestView_LongEmptyStateStaysWithinWidth(t *testing.T) {
 		t.Fatalf("empty-state View height = %d, want <= %d", h, testViewH)
 	}
 }
+
+// Degenerate terminal sizes must render (empty) via the max(0,…) clamps in
+// relayout rather than panic — exercises every overlay/message path at sizes
+// smaller than the chrome can occupy.
+func TestView_DegenerateSizesDoNotPanic(t *testing.T) {
+	for _, s := range []struct{ w, h int }{{0, 0}, {1, 1}, {2, 2}, {3, 5}, {5, 3}} {
+		m := New(liveSession())
+		m, _ = sizeModel(m, s.w, s.h)
+		_ = m.View()
+
+		mt, _ := m.withToast("x")
+		_ = mt.View()
+
+		mm := m
+		mm.modal = modalState{kind: modalKillConfirm}
+		_ = mm.View()
+
+		mh := m
+		mh.showHelp = true
+		_ = mh.View()
+	}
+}
