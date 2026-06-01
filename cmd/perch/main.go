@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -134,10 +135,57 @@ type bootstrapDeps struct {
 	// switch-client. This is the one path NOT unit-tested (tty-dependent).
 	// In tests it is a no-op that records the call.
 	attach func(ctx context.Context, t tmux.Tmux, frameSession string) int
+	// strandedCount reports how many agent sessions a restart stranded (read-only).
+	// nil in tests that don't exercise the offer → the offer is skipped.
+	strandedCount func(ctx context.Context) (int, error)
+	// confirm prompts the user to restore n stranded sessions. Production gates on
+	// a tty and returns false on a non-tty (never blocks). nil → offer skipped.
+	confirm func(n int) bool
+	// reconcile runs resurrect.Reconcile. nil → offer skipped.
+	reconcile func(ctx context.Context) (resurrect.Report, error)
+}
+
+// resurrectDeps builds resurrect.Deps from the real state dir + global config
+// roots. ok is false when the state dir is unavailable (the caller then skips
+// the offer rather than erroring out the launch).
+func resurrectDeps(t tmux.Tmux) (resurrect.Deps, bool) {
+	baseDir, err := state.StateDir()
+	if err != nil {
+		return resurrect.Deps{}, false
+	}
+	var roots []string
+	if globalPath, gerr := config.DefaultGlobalPath(); gerr == nil {
+		if cfg, cerr := config.Load(globalPath, ""); cerr == nil {
+			roots = cfg.Roots
+		}
+	}
+	return resurrect.Deps{
+		Tmux:    t,
+		Runner:  proc.ExecRunner{},
+		BaseDir: baseDir,
+		Now:     time.Now().Unix(),
+		Roots:   roots,
+	}, true
+}
+
+// confirmRestore is the production confirm seam: it gates on a tty so a
+// non-interactive launch (piped/CI stdin) never blocks on a prompt — it returns
+// false and the offer is skipped. Only an explicit y/yes restores.
+func confirmRestore(n int) bool {
+	stat, err := os.Stdin.Stat()
+	if err != nil || (stat.Mode()&os.ModeCharDevice) == 0 {
+		return false // non-tty: never block on a prompt
+	}
+	_, _ = fmt.Fprintf(os.Stderr,
+		"perch: %d session(s) were stranded by a restart. Restore them? [y/N] ", n)
+	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	line = strings.ToLower(strings.TrimSpace(line))
+	return line == "y" || line == "yes"
 }
 
 func bootstrapProduction() bootstrapDeps {
 	t := tmux.New()
+	rdeps, rok := resurrectDeps(t)
 	return bootstrapDeps{
 		tmuxClient: t,
 		executable: os.Executable,
@@ -152,6 +200,19 @@ func bootstrapProduction() bootstrapDeps {
 			c.Stderr = os.Stderr
 			_ = c.Run()
 			return 0
+		},
+		strandedCount: func(ctx context.Context) (int, error) {
+			if !rok {
+				return 0, nil
+			}
+			return resurrect.StrandedCount(ctx, rdeps)
+		},
+		confirm: confirmRestore,
+		reconcile: func(ctx context.Context) (resurrect.Report, error) {
+			if !rok {
+				return resurrect.Report{}, nil
+			}
+			return resurrect.Reconcile(ctx, rdeps)
 		},
 	}
 }
@@ -191,6 +252,22 @@ func bootstrap(deps bootstrapDeps, root string, stdout, stderr io.Writer) int {
 	}
 
 	ctx := context.Background()
+
+	// Auto-offer resurrect when a server restart stranded agent sessions. This
+	// runs BEFORE frame.Ensure so reconcile sees normal (non-frame) topology — at
+	// restart time no perch frame exists yet, so restoring is safe here. Seams are
+	// nil in tests that don't exercise the offer.
+	if deps.strandedCount != nil && deps.confirm != nil && deps.reconcile != nil {
+		if n, derr := deps.strandedCount(ctx); derr == nil && n > 0 && deps.confirm(n) {
+			if rep, rerr := deps.reconcile(ctx); rerr != nil {
+				_, _ = fmt.Fprintf(stderr, "perch: resurrect: %v\n", rerr)
+			} else {
+				_, _ = fmt.Fprintf(stdout, "perch: resurrect — %d restored, %d pruned, %d kept\n",
+					len(rep.Restored), len(rep.Pruned), len(rep.Kept))
+			}
+		}
+	}
+
 	info, err := frame.Ensure(ctx, deps.tmuxClient, frame.DefaultFrameSession, root, sidebarArgv)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "perch: frame setup: %v — falling back to direct TUI\n", err)

@@ -13,6 +13,7 @@ import (
 	"github.com/Miniature-Pug/perch/internal/discover"
 	"github.com/Miniature-Pug/perch/internal/model"
 	"github.com/Miniature-Pug/perch/internal/proc"
+	"github.com/Miniature-Pug/perch/internal/resurrect"
 	"github.com/Miniature-Pug/perch/internal/tmux"
 	"github.com/Miniature-Pug/perch/internal/tui"
 )
@@ -867,6 +868,88 @@ func TestPrintUsage_ContainsAttach(t *testing.T) {
 	_, errOut, _ := callRun([]string{"doctr"}) // trigger bad verb → printUsage
 	if !strings.Contains(errOut, "attach") {
 		t.Errorf("printUsage must mention 'attach'; stderr: %q", errOut)
+	}
+}
+
+// ── bootstrap auto-offer resurrect ───────────────────────────────────────────
+
+// bootstrapSuccessRunner returns a FakeRunner that makes frame.Ensure succeed.
+func bootstrapSuccessRunner() *proc.FakeRunner {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Err: proc.FakeExitError{Code: 1}},
+		"tmux", "has-session", "-t", "=perch")
+	r.Default = &proc.FakeResult{Stdout: []byte("%1\n")}
+	return r
+}
+
+func TestBootstrap_OfferAcceptRunsReconcile(t *testing.T) {
+	dir := t.TempDir()
+	reconcileCalled := false
+	confirmArg := -1
+
+	deps := bootstrapDeps{
+		tmuxClient:    tmux.Tmux{Runner: bootstrapSuccessRunner(), Bin: "tmux"},
+		executable:    func() (string, error) { return "/usr/local/bin/perch", nil },
+		fallback:      func(string, io.Writer, io.Writer) int { return 0 },
+		attach:        func(context.Context, tmux.Tmux, string) int { return 0 },
+		strandedCount: func(context.Context) (int, error) { return 3, nil },
+		confirm:       func(n int) bool { confirmArg = n; return true },
+		reconcile: func(context.Context) (resurrect.Report, error) {
+			reconcileCalled = true
+			return resurrect.Report{Restored: []string{"a", "b"}}, nil
+		},
+	}
+	var out, errBuf strings.Builder
+	bootstrap(deps, dir, &out, &errBuf)
+	if confirmArg != 3 {
+		t.Errorf("confirm called with n=%d, want 3", confirmArg)
+	}
+	if !reconcileCalled {
+		t.Error("reconcile must run when the user accepts")
+	}
+	if !strings.Contains(out.String(), "restored") {
+		t.Errorf("expected a restore summary on stdout; got %q", out.String())
+	}
+}
+
+func TestBootstrap_OfferDeclineSkipsReconcile(t *testing.T) {
+	dir := t.TempDir()
+	reconcileCalled := false
+	deps := bootstrapDeps{
+		tmuxClient:    tmux.Tmux{Runner: bootstrapSuccessRunner(), Bin: "tmux"},
+		executable:    func() (string, error) { return "/usr/local/bin/perch", nil },
+		fallback:      func(string, io.Writer, io.Writer) int { return 0 },
+		attach:        func(context.Context, tmux.Tmux, string) int { return 0 },
+		strandedCount: func(context.Context) (int, error) { return 2, nil },
+		confirm:       func(int) bool { return false },
+		reconcile: func(context.Context) (resurrect.Report, error) {
+			reconcileCalled = true
+			return resurrect.Report{}, nil
+		},
+	}
+	var out, errBuf strings.Builder
+	bootstrap(deps, dir, &out, &errBuf)
+	if reconcileCalled {
+		t.Error("reconcile must NOT run when the user declines")
+	}
+}
+
+func TestBootstrap_NoStrandedNoConfirm(t *testing.T) {
+	dir := t.TempDir()
+	confirmCalled := false
+	deps := bootstrapDeps{
+		tmuxClient:    tmux.Tmux{Runner: bootstrapSuccessRunner(), Bin: "tmux"},
+		executable:    func() (string, error) { return "/usr/local/bin/perch", nil },
+		fallback:      func(string, io.Writer, io.Writer) int { return 0 },
+		attach:        func(context.Context, tmux.Tmux, string) int { return 0 },
+		strandedCount: func(context.Context) (int, error) { return 0, nil },
+		confirm:       func(int) bool { confirmCalled = true; return true },
+		reconcile:     func(context.Context) (resurrect.Report, error) { return resurrect.Report{}, nil },
+	}
+	var out, errBuf strings.Builder
+	bootstrap(deps, dir, &out, &errBuf)
+	if confirmCalled {
+		t.Error("confirm must NOT be called when nothing is stranded")
 	}
 }
 
