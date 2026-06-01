@@ -46,7 +46,7 @@ var styles = struct {
 		Foreground(colorError).
 		Bold(true),
 	toast: lipgloss.NewStyle().
-		Foreground(colorAccent).
+		Foreground(colorError).
 		Bold(true),
 }
 
