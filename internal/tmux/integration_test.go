@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -317,4 +318,252 @@ func TestIntegration_SendKeys_RunsCommand(t *testing.T) {
 		}
 	}
 	t.Fatalf("CapturePane never showed PERCH_42 after 2s; last output:\n%s", lastOut)
+}
+
+// ── frame/swap integration tests ──────────────────────────────────────────────
+
+// lookupPath returns the absolute path of a binary on PATH, or "" if missing.
+func lookupPath(name string) string {
+	path, err := exec.LookPath(name)
+	if err != nil {
+		return ""
+	}
+	return path
+}
+
+// waitForContent polls CapturePane up to maxTries*delay for any of the wanted
+// substrings to appear in the output. Returns the last captured output.
+func waitForContent(t *testing.T, tm Tmux, target string, wanted []string, maxTries int, delay time.Duration) string {
+	t.Helper()
+	var last string
+	for i := 0; i < maxTries; i++ {
+		time.Sleep(delay)
+		out, err := tm.CapturePane(context.Background(), target, 0)
+		if err != nil {
+			// May fail transiently while pane is being set up; keep trying.
+			continue
+		}
+		last = out
+		for _, w := range wanted {
+			if strings.Contains(out, w) {
+				return out
+			}
+		}
+	}
+	return last
+}
+
+// TestIntegration_SwapPane_BothSessionsAlive verifies that SwapPane across two
+// sessions keeps both sessions alive and both original pids still alive after
+// the swap. Mirrors spike Q3.
+func TestIntegration_SwapPane_BothSessionsAlive(t *testing.T) {
+	tm := newTestServer(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	// Create two detached sessions, each running sleep.
+	paneA, err := tm.NewSession(ctx, "swapA", "main", dir)
+	if err != nil {
+		t.Fatalf("NewSession swapA: %v", err)
+	}
+	paneB, err := tm.NewSession(ctx, "swapB", "main", dir)
+	if err != nil {
+		t.Fatalf("NewSession swapB: %v", err)
+	}
+
+	if err := tm.SendKeys(ctx, paneA, "sleep 100000"); err != nil {
+		t.Fatalf("SendKeys paneA: %v", err)
+	}
+	if err := tm.SendKeys(ctx, paneB, "sleep 100000"); err != nil {
+		t.Fatalf("SendKeys paneB: %v", err)
+	}
+
+	// Allow the sleeps to start.
+	time.Sleep(200 * time.Millisecond)
+
+	// Record the pane_pid for each pane before the swap.
+	panesAll, err := tm.ListPanesAll(ctx)
+	if err != nil {
+		t.Fatalf("ListPanesAll (pre-swap): %v", err)
+	}
+	pidFor := make(map[string]string) // pane ID → pid
+	for _, p := range panesAll {
+		pidFor[p.ID] = p.PID
+	}
+	pidA, okA := pidFor[paneA]
+	pidB, okB := pidFor[paneB]
+	if !okA || !okB {
+		t.Fatalf("pre-swap pids not found: paneA=%q pid=%q, paneB=%q pid=%q; all: %+v",
+			paneA, pidA, paneB, pidB, panesAll)
+	}
+
+	// Perform the swap.
+	if err := tm.SwapPane(ctx, paneA, paneB); err != nil {
+		t.Fatalf("SwapPane: %v", err)
+	}
+
+	// Both sessions must still exist.
+	hasA, err := tm.HasSession(ctx, "swapA")
+	if err != nil {
+		t.Fatalf("HasSession swapA: %v", err)
+	}
+	hasB, err := tm.HasSession(ctx, "swapB")
+	if err != nil {
+		t.Fatalf("HasSession swapB: %v", err)
+	}
+	if !hasA {
+		t.Error("session swapA is gone after swap, want alive")
+	}
+	if !hasB {
+		t.Error("session swapB is gone after swap, want alive")
+	}
+
+	// Re-list all panes. After swap, pane IDs are stable but they live in the
+	// other session. Assert both original pids are still alive anywhere.
+	panesPost, err := tm.ListPanesAll(ctx)
+	if err != nil {
+		t.Fatalf("ListPanesAll (post-swap): %v", err)
+	}
+	postPids := make(map[string]bool)
+	for _, p := range panesPost {
+		postPids[p.PID] = true
+	}
+	if !postPids[pidA] {
+		t.Errorf("pid of paneA (%s) no longer alive post-swap; post panes: %+v", pidA, panesPost)
+	}
+	if !postPids[pidB] {
+		t.Errorf("pid of paneB (%s) no longer alive post-swap; post panes: %+v", pidB, panesPost)
+	}
+}
+
+// TestIntegration_ReflowGate verifies that pre-resizing a parked agent session
+// to frame dimensions and then swapping it into a wide frame pane causes the
+// app to reflow: at least one captured line after the swap is wider than the
+// original 80-col session width.
+//
+// It requires vim or vi to be on PATH; if neither is available the test is
+// skipped (t.Skip). The test uses a deterministic wide content file so that
+// at ≥120 cols the file renders as one long line (>80 cols) rather than
+// relying on the app's own UI chrome which varies.
+func TestIntegration_ReflowGate(t *testing.T) {
+	// Prefer vim for display stability; fall back to vi.
+	editorPath := lookupPath("vim")
+	if editorPath == "" {
+		editorPath = lookupPath("vi")
+	}
+	if editorPath == "" {
+		t.Skip("neither vim nor vi found on PATH; skipping reflow gate")
+	}
+
+	tm := newTestServer(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	// Write a file with one line that is ~100 chars wide. At 80 cols vim wraps
+	// it to ≤80-char screen rows; at ≥120 cols it renders as one ~100-char row.
+	// The content is deterministic: 100 '-' characters plus a unique marker.
+	wideLine := strings.Repeat("-", 98) + "END\n"
+	contentFile := filepath.Join(dir, "wide.txt")
+	if err := os.WriteFile(contentFile, []byte(wideLine), 0o600); err != nil {
+		t.Fatalf("write content file: %v", err)
+	}
+
+	// Create the "agent" session at 80×24 (tmux default) and open the editor.
+	agentPane, err := tm.NewSession(ctx, "reflowagent", "main", dir)
+	if err != nil {
+		t.Fatalf("NewSession reflowagent: %v", err)
+	}
+	if err := tm.ResizeWindow(ctx, SessionTarget("reflowagent"), 80, 24); err != nil {
+		// resize-window may need window-size manual on clientless server (tmux 3.6).
+		// Set the option and retry.
+		_ = tm.SetPaneOption(ctx, agentPane, "window-size", "manual")
+		if err2 := tm.ResizeWindow(ctx, SessionTarget("reflowagent"), 80, 24); err2 != nil {
+			t.Fatalf("ResizeWindow 80x24: %v (original: %v)", err2, err)
+		}
+	}
+
+	// Launch editor in the agent pane. Use -u NONE to suppress vi's startup
+	// message ("Press ENTER or type command to continue") which would otherwise
+	// block rendering the file content.
+	editorCmd := editorPath + " -u NONE " + contentFile
+	if err := tm.SendKeys(ctx, agentPane, editorCmd); err != nil {
+		t.Fatalf("SendKeys editor: %v", err)
+	}
+	// Wait for the file content to appear. Accept either the wide content line
+	// or the "ENTER" startup prompt so we can dismiss it.
+	paintOut := waitForContent(t, tm, agentPane, []string{"END", "ENTER", strings.Repeat("-", 10)}, 40, 100*time.Millisecond)
+	// If vi still shows its startup prompt, dismiss it by sending Enter.
+	if strings.Contains(paintOut, "ENTER") || strings.Contains(paintOut, "Press") {
+		_, _, _ = tm.runner().Run(ctx, tm.bin(), tm.args("send-keys", "-t", agentPane, "Enter")...)
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	// Create the "frame" session/pane at 200×50 — wide enough to confirm reflow.
+	framePane, err := tm.NewSession(ctx, "reflowframe", "frame", dir)
+	if err != nil {
+		t.Fatalf("NewSession reflowframe: %v", err)
+	}
+	if err := tm.ResizeWindow(ctx, SessionTarget("reflowframe"), 200, 50); err != nil {
+		_ = tm.SetPaneOption(ctx, framePane, "window-size", "manual")
+		if err2 := tm.ResizeWindow(ctx, SessionTarget("reflowframe"), 200, 50); err2 != nil {
+			t.Fatalf("ResizeWindow 200x50: %v (original: %v)", err2, err)
+		}
+	}
+
+	// Read back the actual frame width (may differ from what we requested on a
+	// headless server) and use it as the reflow target.
+	frameW, frameH, err := tm.PaneSize(ctx, framePane)
+	if err != nil {
+		t.Fatalf("PaneSize (frame): %v", err)
+	}
+	if frameW < 120 {
+		t.Skipf("frame pane width %d < 120 after resize (headless server constraint); skipping reflow gate", frameW)
+	}
+	t.Logf("frame pane: %d×%d", frameW, frameH)
+
+	// Pre-size the agent session to the frame dimensions before swapping.
+	if err := tm.ResizeWindow(ctx, SessionTarget("reflowagent"), frameW, frameH); err != nil {
+		_ = tm.SetPaneOption(ctx, agentPane, "window-size", "manual")
+		if err2 := tm.ResizeWindow(ctx, SessionTarget("reflowagent"), frameW, frameH); err2 != nil {
+			t.Fatalf("ResizeWindow agent to frame dims: %v", err2)
+		}
+	}
+
+	// Swap the agent pane into the frame pane slot.
+	if err := tm.SwapPane(ctx, agentPane, framePane); err != nil {
+		t.Fatalf("SwapPane: %v", err)
+	}
+
+	// Nudge clients to repaint (best-effort on a headless server).
+	_ = tm.RefreshClient(ctx)
+
+	// Wait for the editor to repaint at the new width.
+	time.Sleep(400 * time.Millisecond)
+
+	// Capture the frame pane — agent pane is now in the frame slot; after the
+	// swap the original framePane ID lives in the agent session but agentPane ID
+	// is now in the frame. Capture agentPane (it is the content pane wherever it
+	// is).
+	var captured string
+	for i := 0; i < 20; i++ {
+		time.Sleep(100 * time.Millisecond)
+		out, err := tm.CapturePane(ctx, agentPane, 0)
+		if err != nil {
+			continue
+		}
+		captured = out
+		// Check if any line is wider than 80 chars.
+		for _, line := range strings.Split(out, "\n") {
+			if len(line) > 80 {
+				t.Logf("reflow confirmed: found line of len %d (>80) after swap to %d-wide frame", len(line), frameW)
+				return
+			}
+		}
+	}
+
+	// Show details for diagnosis if the test fails.
+	t.Logf("frame width: %d", frameW)
+	t.Logf("editor: %s", editorPath)
+	t.Logf("captured pane output:\n%s", captured)
+	t.Errorf("reflow gate: no captured line wider than 80 cols after swap to %d-wide frame", frameW)
 }
