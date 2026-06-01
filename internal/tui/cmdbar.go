@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"os/exec"
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/sahilm/fuzzy"
 )
 
@@ -121,4 +123,102 @@ func (m Model) resolveItem(query string) int {
 		return -1
 	}
 	return idxs[matches[0].Index]
+}
+
+// execFinishedMsg is delivered after a tea.ExecProcess command (:setup/:doctor/
+// :resurrect) returns and the TUI resumes.
+type execFinishedMsg struct{ err error }
+
+// updateCmdline handles keys while the ':' command bar is active. Esc cancels;
+// Enter parses and dispatches; everything else feeds the text input.
+func (m Model) updateCmdline(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.cmdActive = false
+		m.cmdline.Blur()
+		m.cmdline.SetValue("")
+		return m, nil
+	case tea.KeyEnter:
+		input := m.cmdline.Value()
+		m.cmdActive = false
+		m.cmdline.Blur()
+		m.cmdline.SetValue("")
+		return m.dispatchCommand(parseCommand(input))
+	}
+	var cmd tea.Cmd
+	m.cmdline, cmd = m.cmdline.Update(msg)
+	return m, cmd
+}
+
+// dispatchCommand performs the side effect for a parsed command. Parse errors
+// and unknown commands surface as a toast; an empty line is a silent cancel.
+func (m Model) dispatchCommand(spec cmdSpec) (tea.Model, tea.Cmd) {
+	if spec.parseErr != "" {
+		return m.withToast(spec.parseErr)
+	}
+	switch spec.kind {
+	case cmdUnknown:
+		return m, nil // empty input → silent cancel
+	case cmdQuit:
+		if m.inFrame() {
+			return m, m.quitFrameCmd()
+		}
+		return m, tea.Quit
+	case cmdHelp:
+		m.showHelp = !m.showHelp
+		return m, nil
+	case cmdNew:
+		it, ok := m.selectedItem()
+		if !ok {
+			return m.withToast("no selection — nothing to start")
+		}
+		return m, m.launchCmd(launchSpec{
+			tool:        it.tool,
+			branch:      it.tree,
+			treePath:    it.treePath,
+			projectPath: it.projectPath,
+			resume:      false,
+		})
+	case cmdProj:
+		idx := m.resolveItem(spec.arg)
+		if idx < 0 {
+			return m.withToast("no match for " + spec.arg)
+		}
+		m.list.Select(idx)
+		return m, m.previewCmd()
+	case cmdAttach:
+		idx := m.resolveItem(spec.arg)
+		if idx < 0 {
+			return m.withToast("no match for " + spec.arg)
+		}
+		m.list.Select(idx)
+		return m.activateSelected()
+	case cmdDoctor:
+		return m.execPerch("doctor")
+	case cmdSetup:
+		args := []string{"setup"}
+		if spec.replace {
+			args = append(args, "--replace")
+		}
+		return m.execPerch(args...)
+	case cmdResurrect:
+		if m.inFrame() {
+			return m.withToast("resurrect runs at startup or from a shell (perch resurrect) — not inside the frame")
+		}
+		return m.execPerch("resurrect")
+	}
+	return m, nil
+}
+
+// execPerch suspends the TUI and runs `perch <args...>` attached to the terminal
+// via tea.ExecProcess, reloading the list on resume. Shared by :doctor, :setup,
+// and (outside the frame only) :resurrect.
+func (m Model) execPerch(args ...string) (tea.Model, tea.Cmd) {
+	if m.execPath == "" {
+		return m.withToast("perch binary path unavailable")
+	}
+	c := exec.Command(m.execPath, args...) //nolint:gosec // execPath is os.Executable, args are fixed verbs
+	return m, tea.ExecProcess(c, func(err error) tea.Msg {
+		return execFinishedMsg{err: err}
+	})
 }

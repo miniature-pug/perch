@@ -22,7 +22,7 @@ func (m Model) ShortHelp() []key.Binding {
 	if ok && it.live && it.liveTarget != "" {
 		b = append(b, m.keys.Kill)
 	}
-	b = append(b, m.keys.Filter, m.keys.ScreenFwd, m.keys.Help, m.keys.Quit)
+	b = append(b, m.keys.Filter, m.keys.CmdBar, m.keys.ScreenFwd, m.keys.Help, m.keys.Quit)
 	return b
 }
 
@@ -32,7 +32,7 @@ func (m Model) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{m.keys.Enter, m.keys.New, m.keys.Worktree},
 		{m.keys.Remove, m.keys.Kill},
-		{m.keys.Filter, m.keys.ClearFilter},
+		{m.keys.Filter, m.keys.ClearFilter, m.keys.CmdBar},
 		{m.keys.ScreenFwd, m.keys.ScreenBack, m.keys.Help, m.keys.Quit},
 	}
 }

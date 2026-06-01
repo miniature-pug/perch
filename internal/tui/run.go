@@ -28,6 +28,10 @@ type Config struct {
 	// the fallback path in handleBootstrap rely on this.
 	FrameSession    string
 	PlaceholderPane string
+
+	// ExecPath is the absolute path to the running perch binary (os.Executable),
+	// used by the ':' command bar to run setup/doctor/resurrect via ExecProcess.
+	ExecPath string
 }
 
 // Run starts the TUI program wired to the given dependencies and blocks until
@@ -35,7 +39,7 @@ type Config struct {
 // when the program exits.
 func Run(ctx context.Context, cfg Config) error {
 	ldr := loader{ctx: ctx, Tmux: cfg.Tmux, Runner: cfg.Runner, Claude: cfg.Claude, Root: cfg.Root, BaseDir: cfg.BaseDir, Now: cfg.Now}
-	m := New(nil).WithLoader(ldr).WithRefresh(time.Duration(cfg.RefreshMs) * time.Millisecond)
+	m := New(nil).WithLoader(ldr).WithRefresh(time.Duration(cfg.RefreshMs) * time.Millisecond).WithExecPath(cfg.ExecPath)
 	// Seed the frame context when running inside a persistent frame.
 	if cfg.FrameSession != "" && cfg.PlaceholderPane != "" {
 		m.frameSession = cfg.FrameSession

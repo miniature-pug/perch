@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/bubbles/list"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestParseCommand(t *testing.T) {
@@ -62,5 +63,72 @@ func TestResolveItem(t *testing.T) {
 	}
 	if got := m.resolveItem("zzzzz"); got != -1 {
 		t.Fatalf("resolveItem(zzzzz) = %d, want -1", got)
+	}
+}
+
+// typeCmd feeds ':' then the given runes then Enter, returning the resulting Model.
+func typeCmd(t *testing.T, m Model, line string) Model {
+	t.Helper()
+	mdl, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	m = mdl.(Model)
+	if !m.cmdActive {
+		t.Fatalf("':' did not activate the command bar")
+	}
+	for _, r := range line {
+		mdl, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = mdl.(Model)
+	}
+	mdl, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	return mdl.(Model)
+}
+
+func readyModel(items []list.Item) Model {
+	m := New(items)
+	m.ready = true
+	m.width, m.height = 100, 40
+	return m
+}
+
+func TestCmdBarActivateAndCancel(t *testing.T) {
+	m := readyModel(nil)
+	mdl, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	m = mdl.(Model)
+	if !m.cmdActive {
+		t.Fatal("expected cmdActive after ':'")
+	}
+	mdl, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = mdl.(Model)
+	if m.cmdActive {
+		t.Fatal("esc must cancel the command bar")
+	}
+}
+
+func TestCmdBarUnknownToasts(t *testing.T) {
+	m := typeCmd(t, readyModel(nil), "frobnicate")
+	if m.cmdActive {
+		t.Fatal("bar should close after Enter")
+	}
+	if m.toast == "" {
+		t.Fatal("unknown command should set a toast")
+	}
+}
+
+func TestCmdBarProjJumps(t *testing.T) {
+	items := []list.Item{
+		item{project: "alpha", title: "alpha", isSession: true},
+		item{project: "bravo", title: "bravo", isSession: true},
+	}
+	m := typeCmd(t, readyModel(items), "proj bravo")
+	if m.list.Index() != 1 {
+		t.Fatalf("proj bravo: list index = %d, want 1", m.list.Index())
+	}
+}
+
+func TestCmdBarResurrectGatedInFrame(t *testing.T) {
+	m := readyModel(nil)
+	m.placeholderPaneID = "%9" // inFrame() == true
+	m = typeCmd(t, m, "resurrect")
+	if m.toast == "" {
+		t.Fatal("resurrect inside the frame must refuse with a toast")
 	}
 }

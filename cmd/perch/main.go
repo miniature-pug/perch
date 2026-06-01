@@ -107,6 +107,9 @@ func handleTUI(root string, stdout, stderr io.Writer) int {
 		Now:       time.Now().Unix(),
 		RefreshMs: refreshMs,
 	}
+	if exe, exeErr := os.Executable(); exeErr == nil {
+		cfg.ExecPath = exe
+	}
 	if err := tui.Run(ctx, cfg); err != nil {
 		_, _ = fmt.Fprintf(stderr, "perch: %v\n", err)
 		return 1
@@ -270,6 +273,9 @@ func sidebar(deps sidebarDeps, args []string, stdout, stderr io.Writer) int {
 		RefreshMs:       refreshMs,
 		FrameSession:    frameSession,
 		PlaceholderPane: placeholderPane,
+	}
+	if exe, exeErr := os.Executable(); exeErr == nil {
+		cfg.ExecPath = exe
 	}
 	if runErr := deps.runTUI(ctx, cfg); runErr != nil {
 		_, _ = fmt.Fprintf(stderr, "perch: %v\n", runErr)

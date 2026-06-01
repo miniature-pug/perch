@@ -18,6 +18,7 @@ type keyMap struct {
 	ScreenFwd   key.Binding
 	ScreenBack  key.Binding
 	Help        key.Binding
+	CmdBar      key.Binding
 }
 
 // defaultKeys returns the standard key map for perch.
@@ -66,6 +67,10 @@ func defaultKeys() keyMap {
 		Help: key.NewBinding(
 			key.WithKeys("?"),
 			key.WithHelp("?", "help"),
+		),
+		CmdBar: key.NewBinding(
+			key.WithKeys(":"),
+			key.WithHelp(":", "command"),
 		),
 	}
 }

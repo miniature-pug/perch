@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -101,6 +102,15 @@ type Model struct {
 	// swapping is true while a swapInCmd or quitFrameCmd is in-flight, serialising
 	// concurrent selection changes in the Update loop.
 	swapping bool
+
+	// cmdline is the ':' command-bar text input; receives keys only while cmdActive.
+	cmdline textinput.Model
+	// cmdActive is true while the ':' command bar owns keyboard input.
+	cmdActive bool
+	// execPath is the absolute path to the running perch binary, used to run
+	// `perch setup|doctor|resurrect` via tea.ExecProcess. Empty in test mode →
+	// those commands toast instead of exec'ing.
+	execPath string
 }
 
 // New returns a Model with the given items pre-loaded.
@@ -113,11 +123,16 @@ func New(items []list.Item) Model {
 	// Use a plain title so the height calculation stays simple.
 	l.Title = "Sessions"
 
+	ti := textinput.New()
+	ti.Prompt = ":"
+	ti.CharLimit = 256
+
 	return Model{
 		list:    l,
 		preview: viewport.New(0, 0),
 		keys:    defaultKeys(),
 		help:    help.New(),
+		cmdline: ti,
 		refresh: time.Second, // default; overridable via WithRefresh
 	}
 }
@@ -129,6 +144,13 @@ func (m Model) WithRefresh(d time.Duration) Model {
 		d = time.Second
 	}
 	m.refresh = d
+	return m
+}
+
+// WithExecPath returns a copy of m with the perch binary path set, enabling the
+// command bar's :setup/:doctor/:resurrect commands.
+func (m Model) WithExecPath(p string) Model {
+	m.execPath = p
 	return m
 }
 
@@ -333,6 +355,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 
+	case execFinishedMsg:
+		if msg.err != nil {
+			return m.withToast("command failed: " + msg.err.Error())
+		}
+		if m.loader != nil {
+			return m, m.reloadCmd()
+		}
+		return m, nil
+
 	case clearToastMsg:
 		if msg.seq == m.toastSeq {
 			m.toast = ""
@@ -403,10 +434,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateModal(msg)
 		}
 
+		// While the ':' command bar is active it owns all keys.
+		if m.cmdActive {
+			return m.updateCmdline(msg)
+		}
+
 		switch {
 		case key.Matches(msg, m.keys.Help):
 			m.showHelp = !m.showHelp
 			return m, nil
+
+		case key.Matches(msg, m.keys.CmdBar):
+			m.cmdActive = true
+			m.cmdline.SetValue("")
+			return m, m.cmdline.Focus()
 
 		case key.Matches(msg, m.keys.Quit):
 			if m.inFrame() {
@@ -523,11 +564,14 @@ func (m Model) View() string {
 		body = styles.emptyState.Render(txt)
 	}
 
-	// Footer hint changes when a modal is open.
+	// Footer hint changes based on the current mode.
 	var footerText string
-	if m.modal.kind != modalNone {
+	switch {
+	case m.cmdActive:
+		footerText = m.cmdline.View()
+	case m.modal.kind != modalNone:
 		footerText = modalFooterHint(m.modal.kind)
-	} else {
+	default:
 		m.help.Width = m.width
 		footerText = m.help.ShortHelpView(m.ShortHelp())
 	}
