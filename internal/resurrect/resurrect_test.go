@@ -1248,3 +1248,121 @@ func TestReconcile_SkipUnknownTool(t *testing.T) {
 		t.Errorf("record count = %d, want 1 (transient skip keeps record)", len(wins))
 	}
 }
+
+// ── intra-run duplicate window guard ─────────────────────────────────────────
+
+// TestReconcile_SkipIntraRunDuplicateWindow is a regression test for the
+// intra-run duplicate-window bug: two shadow records share the same
+// TmuxSession+TmuxWindow but have distinct PaneKeys. The FD4 live-window guard
+// reads the frozen livePanes snapshot and cannot see a pane created by an
+// earlier restore in the same run. Without the fix, the second record would
+// pass the guard and Launch a duplicate, causing a spurious send-keys into the
+// first record's newly-created pane and overwriting its shadow record.
+//
+// With the fix, restoredWindows[key] is set after the first restore, so the
+// second record hits the dup-window guard (definitive skip, record deleted).
+func TestReconcile_SkipIntraRunDuplicateWindow(t *testing.T) {
+	baseDir := t.TempDir()
+	fake := proc.NewFakeRunner()
+
+	// Use a real dir so os.Stat passes for both records.
+	tree := t.TempDir()
+	mainTree := t.TempDir()
+
+	const (
+		// Both records are stale (BootID differs from server) and share the same
+		// session+window. Distinct PaneKeys so both can be seeded.
+		paneKey1 = "%1"
+		paneKey2 = "%2"
+		sess     = "proj"
+		win      = "feat"
+		sid1     = "claude-dup-1"
+		sid2     = "claude-dup-2"
+		newPane  = "%99"
+	)
+
+	// Seed record %1 (will be processed first — ReadDir sorts ascending).
+	seedWindow(t, baseDir, model.Window{
+		PaneKey:     paneKey1,
+		Tool:        model.ToolClaude,
+		SessionID:   sid1,
+		Tree:        tree,
+		TmuxSession: sess,
+		TmuxWindow:  win,
+		BootID:      "stale-boot",
+	})
+	// Seed record %2 (same session+window, different pane key and session id).
+	seedWindow(t, baseDir, model.Window{
+		PaneKey:     paneKey2,
+		Tool:        model.ToolClaude,
+		SessionID:   sid2,
+		Tree:        tree,
+		TmuxSession: sess,
+		TmuxWindow:  win,
+		BootID:      "stale-boot",
+	})
+
+	// Cold server: BootID errors → currentBoot="" so both records hit RESTORE.
+	fake.Respond(proc.FakeResult{Err: proc.FakeExitError{Code: 1}},
+		"tmux", "display-message", "-p", "#{start_time}")
+	// ListPanesAll errors (server not up) → livePanes=nil, snapshot shows no
+	// live panes so the snapshot-based FD4 guard does not fire for either record.
+	fake.Respond(proc.FakeResult{Err: proc.FakeExitError{Code: 1}},
+		"tmux", "list-panes", "-a", "-F", paneFormat)
+
+	// git worktree list — only needed for %1 (which passes all guards and
+	// Launches); %2 hits the dup-window guard before reaching Guard 4.
+	fake.Respond(proc.FakeResult{Stdout: worktreePorcelain(mainTree, tree)},
+		"git", "-C", tree, "worktree", "list", "--porcelain")
+
+	// Launch for %1: no session yet → new-session → newPane.
+	fake.Respond(proc.FakeResult{Err: proc.FakeExitError{Code: 1}},
+		"tmux", "has-session", "-t", "="+sess)
+	fake.Respond(proc.FakeResult{Stdout: []byte(newPane + "\n")},
+		"tmux", "new-session", "-d", "-s", sess, "-n", win, "-c", tree, "-P", "-F", "#{pane_id}")
+	// send-keys for sid1 (record %1 is processed first).
+	fake.Respond(proc.FakeResult{},
+		"tmux", "send-keys", "-t", newPane, "-l", "'claude' '--resume' '"+sid1+"'")
+	fake.Respond(proc.FakeResult{},
+		"tmux", "send-keys", "-t", newPane, "Enter")
+	// Canned for sid2 as well — harmless if unused, avoids ordering sensitivity.
+	fake.Respond(proc.FakeResult{},
+		"tmux", "send-keys", "-t", newPane, "-l", "'claude' '--resume' '"+sid2+"'")
+	// SetPaneOption @perch_session for sid1.
+	fake.Respond(proc.FakeResult{},
+		"tmux", "set-option", "-p", "-t", newPane, "@perch_session", sid1)
+	// SetPaneOption for sid2 — harmless if unused.
+	fake.Respond(proc.FakeResult{},
+		"tmux", "set-option", "-p", "-t", newPane, "@perch_session", sid2)
+
+	deps := newDeps(t, baseDir, fake)
+	report, err := Reconcile(context.Background(), deps)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Exactly one restore (record %1).
+	if len(report.Restored) != 1 {
+		t.Errorf("Restored = %v, want 1 entry", report.Restored)
+	}
+
+	// Exactly one dup-window skip (record %2).
+	if len(report.Skipped) != 1 || report.Skipped[0].Reason != "dup-window" {
+		t.Errorf("Skipped = %v, want [{dup-window}]", report.Skipped)
+	}
+
+	// Exactly one window-creating call (new-session or new-window) fired.
+	if n := countLaunches(fake); n != 1 {
+		t.Errorf("window-creating calls = %d, want 1 (second record must not Launch)", n)
+	}
+
+	// Exactly one record survives (the restored one, keyed by newPane).
+	// The dup-window record (%2) must have been deleted (definitive skip).
+	allWins, _ := state.LoadWindows(baseDir)
+	if len(allWins) != 1 {
+		t.Fatalf("record count = %d, want 1 after dup-window skip", len(allWins))
+	}
+	if allWins[0].PaneKey != newPane {
+		t.Errorf("surviving record PaneKey = %q, want %s", allWins[0].PaneKey, newPane)
+	}
+}

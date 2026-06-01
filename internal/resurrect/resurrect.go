@@ -37,9 +37,9 @@ type Deps struct {
 }
 
 // SkipNote records why a window record was skipped during reconciliation.
-// Reason values are one of: empty-sid, window-live, tree-gone, main,
-// git-error, no-worktree-match, unknown-tool, launch-failed, save-failed,
-// prune-failed.
+// Reason values are one of: empty-sid, window-live, dup-window, tree-gone,
+// main, git-error, no-worktree-match, unknown-tool, launch-failed,
+// save-failed, prune-failed.
 type SkipNote struct {
 	// PaneKey is the shadow record's pane id (the filename key).
 	PaneKey string
@@ -81,6 +81,13 @@ func Reconcile(ctx context.Context, deps Deps) (Report, error) {
 	livePanes, _ := deps.Tmux.ListPanesAll(ctx) // nil when server is down
 
 	var report Report
+
+	// restoredWindows tracks session\x1fwindow keys for windows that were
+	// (re)created earlier in this run. The FD4 live-window guard reads the
+	// frozen livePanes snapshot and cannot see panes created after the snapshot
+	// was taken, so a second record sharing the same session+window would pass
+	// the guard and Launch a duplicate. This in-run set closes that gap.
+	restoredWindows := map[string]bool{}
 
 	// restoredBoot caches the boot id read after the first successful Launch
 	// (L3: server is guaranteed up by then). A zero value means not yet resolved.
@@ -129,12 +136,23 @@ func Reconcile(ctx context.Context, deps Deps) (Report, error) {
 			// Guard 2 (FD4): live-window guard — reuse the snapshot, no extra call.
 			// If a live non-dead pane already exists in the target session/window,
 			// Launch would send-keys into it instead of creating a new agent pane.
+			// Also skip when an earlier restore in this same run already (re)created
+			// a pane in that session+window (the snapshot cannot reflect that pane).
+			windowKey := w.TmuxSession + "\x1f" + w.TmuxWindow
 			if hasLiveWindowPane(livePanes, w.TmuxSession, w.TmuxWindow) {
 				_ = state.RemoveWindow(deps.BaseDir, w.PaneKey) // definitive skip
 				report.Skipped = append(report.Skipped, SkipNote{
 					PaneKey: w.PaneKey,
 					Tree:    w.Tree,
 					Reason:  "window-live",
+				})
+				continue
+			} else if restoredWindows[windowKey] {
+				_ = state.RemoveWindow(deps.BaseDir, w.PaneKey) // definitive skip
+				report.Skipped = append(report.Skipped, SkipNote{
+					PaneKey: w.PaneKey,
+					Tree:    w.Tree,
+					Reason:  "dup-window",
 				})
 				continue
 			}
@@ -251,6 +269,7 @@ func Reconcile(ctx context.Context, deps Deps) (Report, error) {
 			}
 
 			report.Restored = append(report.Restored, w.PaneKey)
+			restoredWindows[windowKey] = true
 		}
 	}
 

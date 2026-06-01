@@ -52,6 +52,12 @@ Resolved by advisor before authoring; treat as constraints, do NOT re-litigate.
   w.TmuxWindow`; if found, **skip** (do not Launch) — otherwise the resume command would be
   `send-keys`-typed into a running pane. No extra tmux call (reuses the snapshot). This is what
   `§7.4` step-4 "skip restore if the handle already exists" protects.
+  **Augmentation (intra-run dedup):** the snapshot is taken once (FD1) and cannot reflect panes
+  created by earlier restores in the same run. An in-run `restoredWindows map[string]bool{}` keyed
+  by `TmuxSession + "\x1f" + TmuxWindow` is set after each successful restore; the guard is
+  extended to also skip when `restoredWindows[key]` is true (reason `dup-window`, definitive skip,
+  record deleted via `state.RemoveWindow`). Snapshot-based hits keep reason `window-live`;
+  in-run hits use `dup-window`. Pinned by `TestReconcile_SkipIntraRunDuplicateWindow`.
 - **FD5 — RESTORE-branch guards, in order (cheap → expensive):**
   1. `w.SessionID == ""` (opencode-new; never `@perch_session`-stamped) → **skip:empty-sid**. Cannot
      deterministically resume; the opencode session persists in opencode's own store and is reachable

@@ -955,8 +955,11 @@ Build in this order; each milestone is independently runnable/testable.
    live-window guard (FD4), five RESTORE-branch guards incl. main-checkout skip (FD5),
    idempotency via save-then-remove ordering (FD6), adapter-owned resume argv (FD7);
    CLI wiring (`cmd/perch` `handleResurrect`); integration tests on real git + tmux 3.6
-   (private socket). Engine bugfix: same-pane-key collision on server restart guarded
-   (`paneID != w.PaneKey` before RemoveWindow), pinned by unit regression test.
+   (private socket). Engine bugfixes: (1) same-pane-key collision on server restart guarded
+   (`paneID != w.PaneKey` before RemoveWindow), pinned by unit regression test;
+   (2) intra-run duplicate-window guard (`restoredWindows` set, `dup-window` definitive skip)
+   prevents a second record sharing the same session+window from Launching into the pane
+   created by an earlier restore in the same run, pinned by `TestReconcile_SkipIntraRunDuplicateWindow`.
    **Honesty note:** *demonstrated* — server-restart restore, intentional-close prune,
    double-run idempotency, main-checkout skip (real git + private-socket tmux);
    *manual/deferred* — TUI auto-offer → M9; opencode resume integration uses placeholder
