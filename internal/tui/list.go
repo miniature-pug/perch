@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // Status describes the agent activity state of a session row.
@@ -92,6 +93,10 @@ func (d itemDelegate) Spacing() int { return 0 }
 func (d itemDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
 
 // Render writes the item row to w.
+//
+// The status glyph is rendered in its own colour segment so that
+// selectedRow/dimRow (which set Foreground) do not override the glyph colour.
+// Column widths are preserved: %-9s tool, %-40s title, %s relTime.
 func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
 	it, ok := listItem.(item)
 	if !ok {
@@ -103,17 +108,34 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 		cursor = glyphCursor + " "
 	}
 
-	row := fmt.Sprintf("%s%s %-9s %-40s %s",
-		cursor,
-		it.status.glyph(),
-		it.tool,
-		it.title,
-		it.relTime,
-	)
+	glyph := statusStyle(it.status).Render(it.status.glyph())
+	rest := fmt.Sprintf("%-9s %-40s %s", it.tool, it.title, it.relTime)
 
+	var rowStyle lipgloss.Style
 	if index == m.Index() {
-		_, _ = fmt.Fprint(w, styles.selectedRow.Render(row))
+		rowStyle = styles.selectedRow
 	} else {
-		_, _ = fmt.Fprint(w, styles.dimRow.Render(row))
+		rowStyle = styles.dimRow
 	}
+
+	_, _ = fmt.Fprint(w, cursor+glyph+" "+rowStyle.Render(rest))
+}
+
+// statusFromOption maps the raw @perch_pane_status option value to a Status.
+// live controls what is returned for unset/unknown values: when true the pane is
+// known-live but hasn't reported yet (StatusLive); when false there is no live
+// pane (StatusIdle).
+func statusFromOption(opt string, live bool) Status {
+	switch opt {
+	case "working":
+		return StatusWorking
+	case "waiting":
+		return StatusWaiting
+	case "done":
+		return StatusDone
+	}
+	if live {
+		return StatusLive
+	}
+	return StatusIdle
 }

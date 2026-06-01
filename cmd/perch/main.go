@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Miniature-Pug/perch/internal/agent"
+	"github.com/Miniature-Pug/perch/internal/config"
 	"github.com/Miniature-Pug/perch/internal/discover"
 	"github.com/Miniature-Pug/perch/internal/doctor"
 	"github.com/Miniature-Pug/perch/internal/model"
@@ -81,13 +82,23 @@ func handleTUI(root string, stdout, stderr io.Writer) int {
 	// a second signal handler races it.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel() // cancels in-flight data loads after the program exits
+
+	// Load global config for RefreshMs (and future settings); degrade on error.
+	var refreshMs int
+	if globalPath, err := config.DefaultGlobalPath(); err == nil {
+		if cfg, err := config.Load(globalPath, root); err == nil {
+			refreshMs = cfg.RefreshMs
+		}
+	}
+
 	cfg := tui.Config{
-		Tmux:    tmux.New(),
-		Runner:  proc.ExecRunner{},
-		Claude:  agent.NewClaude(),
-		Root:    root,
-		BaseDir: baseDir,
-		Now:     time.Now().Unix(),
+		Tmux:      tmux.New(),
+		Runner:    proc.ExecRunner{},
+		Claude:    agent.NewClaude(),
+		Root:      root,
+		BaseDir:   baseDir,
+		Now:       time.Now().Unix(),
+		RefreshMs: refreshMs,
 	}
 	if err := tui.Run(ctx, cfg); err != nil {
 		_, _ = fmt.Fprintf(stderr, "perch: %v\n", err)

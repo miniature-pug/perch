@@ -29,6 +29,14 @@ type previewMsg struct {
 	target  string // pane ID that was captured
 }
 
+// statusTickMsg is the self-re-arming tick that drives the status poll cycle.
+type statusTickMsg struct{}
+
+// statusPollMsg carries the latest @perch_pane_status values keyed by session ID.
+type statusPollMsg struct {
+	statuses map[string]string // sessionID → @perch_pane_status value
+}
+
 // loader holds injected dependencies for live data loading.
 // All fields are set by the caller; zero values are not used in production.
 type loader struct {
@@ -93,6 +101,32 @@ func (l loader) load() tea.Cmd {
 
 		items := assembleItems(pts, claudeByDir, ocByTree, liveBySession, l.Now)
 		return itemsLoadedMsg{items: items}
+	}
+}
+
+// statusPoll returns a tea.Cmd that snapshots all pane statuses in one
+// ListPanesAll call and delivers a statusPollMsg. The map is keyed by
+// PerchSession (session ID) with the pane's PerchStatus as the value.
+// Dead panes and panes with empty PerchSession are excluded; first-write-wins
+// for any duplicate PerchSession tags (mirrors buildLiveIndex).
+func (l loader) statusPoll() tea.Cmd {
+	return func() tea.Msg {
+		ctx := l.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		panes, _ := l.Tmux.ListPanesAll(ctx) // degrade on error: empty map
+		statuses := make(map[string]string, len(panes))
+		for _, p := range panes {
+			if p.Dead || p.PerchSession == "" {
+				continue
+			}
+			if _, exists := statuses[p.PerchSession]; exists {
+				continue // first-write-wins: skip duplicate PerchSession tags
+			}
+			statuses[p.PerchSession] = p.PerchStatus
+		}
+		return statusPollMsg{statuses: statuses}
 	}
 }
 

@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
@@ -49,6 +50,14 @@ type Model struct {
 	// It prevents overlapping capture commands.
 	capturing bool
 
+	// polling is true while a statusPoll call is in-flight.
+	// It prevents overlapping status polls (mirrors the capturing guard).
+	polling bool
+
+	// refresh is the status-tick interval. Seeded to 1 s by New; overridable
+	// via WithRefresh. Never zero in production — zero would hot-loop tea.Tick.
+	refresh time.Duration
+
 	// modal holds the currently-active modal prompt. Zero value (kind==modalNone)
 	// means no modal is visible.
 	modal modalState
@@ -68,7 +77,18 @@ func New(items []list.Item) Model {
 		list:    l,
 		preview: viewport.New(0, 0),
 		keys:    defaultKeys(),
+		refresh: time.Second, // default; overridable via WithRefresh
 	}
+}
+
+// WithRefresh returns a copy of m with the status-tick interval set to d.
+// When d ≤ 0 the interval defaults to 1 s so tea.Tick never hot-loops.
+func (m Model) WithRefresh(d time.Duration) Model {
+	if d <= 0 {
+		d = time.Second
+	}
+	m.refresh = d
+	return m
 }
 
 // WithLoader returns a copy of m with the given loader wired in.
@@ -79,10 +99,11 @@ func (m Model) WithLoader(l loader) Model {
 }
 
 // Init satisfies tea.Model. When a loader is configured it fires the initial
-// data load; otherwise it does nothing (scaffold / test mode).
+// data load and arms the status-tick; otherwise it does nothing (scaffold /
+// test mode).
 func (m Model) Init() tea.Cmd {
 	if m.loader != nil {
-		return m.loader.load()
+		return tea.Batch(m.loader.load(), m.tickCmd())
 	}
 	return nil
 }
@@ -215,6 +236,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.launchCmd(msg.spec)
+
+	case statusTickMsg:
+		// Always re-arm the tick; fire a poll only when not already in-flight
+		// and the list is not in filter mode.
+		cmds := []tea.Cmd{m.tickCmd()}
+		if c := m.statusPollCmd(); c != nil {
+			cmds = append(cmds, c)
+		}
+		return m, tea.Batch(cmds...)
+
+	case statusPollMsg:
+		m.polling = false
+		// Apply statuses to live items while preserving the current selection.
+		idx := m.list.Index()
+		current := m.list.Items()
+		updated := make([]list.Item, len(current))
+		for i, li := range current {
+			it, ok := li.(item)
+			if ok && it.live {
+				it.status = statusFromOption(msg.statuses[it.id], true)
+			}
+			updated[i] = it
+		}
+		// SetItems returns a re-filter cmd when a filter is applied; capture it so
+		// the filtered view refreshes immediately rather than waiting for a keystroke.
+		cmd := m.list.SetItems(updated)
+		m.list.Select(idx)
+		return m, cmd
 
 	case previewMsg:
 		m.capturing = false
@@ -496,6 +545,22 @@ func (m Model) reloadCmd() tea.Cmd {
 		return nil
 	}
 	return m.loader.load()
+}
+
+// tickCmd returns a tea.Cmd that fires statusTickMsg after m.refresh elapses.
+func (m Model) tickCmd() tea.Cmd {
+	return tea.Tick(m.refresh, func(time.Time) tea.Msg { return statusTickMsg{} })
+}
+
+// statusPollCmd fires a status poll if no poll is already in-flight and the
+// loader is set and the list is not in filter mode. Sets m.polling = true when
+// it fires. Returns nil (drop) otherwise — mirrors the capturing guard pattern.
+func (m *Model) statusPollCmd() tea.Cmd {
+	if m.polling || m.loader == nil || m.list.SettingFilter() {
+		return nil
+	}
+	m.polling = true
+	return m.loader.statusPoll()
 }
 
 // selectedItem returns the currently selected list item as an item, or false.

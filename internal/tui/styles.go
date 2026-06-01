@@ -55,3 +55,22 @@ const (
 	glyphCursor  = "▸"
 	glyphBlank   = " "
 )
+
+// statusStyle returns a lipgloss.Style whose foreground reflects the given
+// Status. working=cyan/blue, waiting=amber/yellow, done=green, live=neutral
+// grey, idle=subtle. Applied only to the glyph segment — never to the rest of
+// the row — so selectedRow/dimRow can colour text independently.
+func statusStyle(s Status) lipgloss.Style {
+	switch s {
+	case StatusWorking:
+		return lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#0077CC", Dark: "#5FD7FF"})
+	case StatusWaiting:
+		return lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#CC8800", Dark: "#FFD75F"})
+	case StatusDone:
+		return lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#007700", Dark: "#5FFF5F"})
+	case StatusLive:
+		return lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#888888", Dark: "#AAAAAA"})
+	default: // StatusIdle
+		return lipgloss.NewStyle().Foreground(colorSubtle)
+	}
+}

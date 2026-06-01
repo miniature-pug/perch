@@ -277,12 +277,14 @@ func TestModel_ItemsLoadedMsg(t *testing.T) {
 // ── loader end-to-end: FakeRunner live/idle join ───────────────────────────────
 
 // tmuxPaneLine builds one list-panes output line matching paneFormat.
+// The trailing empty field emits an empty @perch_pane_status (9th field),
+// matching the 9-field paneFormat that real tmux always emits.
 func tmuxPaneLine(paneID, pid, cmd, dead, path, session, window, perchSession string) string {
-	return strings.Join([]string{paneID, pid, cmd, dead, path, session, window, perchSession}, "\x1f")
+	return strings.Join([]string{paneID, pid, cmd, dead, path, session, window, perchSession, ""}, "\x1f")
 }
 
 // paneFormatFlag is the -F argument used by ListPanesAll (must match tmux.go).
-const paneFormatFlag = "#{pane_id}\x1f#{pane_pid}\x1f#{pane_current_command}\x1f#{pane_dead}\x1f#{pane_current_path}\x1f#{session_name}\x1f#{window_name}\x1f#{@perch_session}"
+const paneFormatFlag = "#{pane_id}\x1f#{pane_pid}\x1f#{pane_current_command}\x1f#{pane_dead}\x1f#{pane_current_path}\x1f#{session_name}\x1f#{window_name}\x1f#{@perch_session}\x1f#{@perch_pane_status}"
 
 // opencodeSessions builds minimal opencode JSON for the given sessions.
 func opencodeSessions(sessions ...model.Session) []byte {

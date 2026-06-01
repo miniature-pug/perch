@@ -15,15 +15,17 @@ import (
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 // paneFormat is the -F format string used by ListPanesAll (must match tmux.go).
-const paneFormat = "#{pane_id}\x1f#{pane_pid}\x1f#{pane_current_command}\x1f#{pane_dead}\x1f#{pane_current_path}\x1f#{session_name}\x1f#{window_name}\x1f#{@perch_session}"
+const paneFormat = "#{pane_id}\x1f#{pane_pid}\x1f#{pane_current_command}\x1f#{pane_dead}\x1f#{pane_current_path}\x1f#{session_name}\x1f#{window_name}\x1f#{@perch_session}\x1f#{@perch_pane_status}"
 
 // paneLine builds a single list-panes output line in paneFormat.
+// Two trailing \x1f delimiters emit an empty @perch_session field and an empty
+// @perch_pane_status field, matching the 9-field paneFormat real tmux emits.
 func paneLine(id, sess, win string, dead bool) string {
 	deadField := "0"
 	if dead {
 		deadField = "1"
 	}
-	return id + "\x1f1234\x1fbash\x1f" + deadField + "\x1f/work\x1f" + sess + "\x1f" + win + "\x1f\n"
+	return id + "\x1f1234\x1fbash\x1f" + deadField + "\x1f/work\x1f" + sess + "\x1f" + win + "\x1f\x1f\n"
 }
 
 // worktreePorcelain builds a minimal `git worktree list --porcelain` output

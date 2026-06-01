@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -12,12 +13,13 @@ import (
 
 // Config holds the production dependencies for the perch TUI.
 type Config struct {
-	Tmux    tmux.Tmux
-	Runner  proc.Runner
-	Claude  agent.Claude
-	Root    string
-	BaseDir string
-	Now     int64
+	Tmux      tmux.Tmux
+	Runner    proc.Runner
+	Claude    agent.Claude
+	Root      string
+	BaseDir   string
+	Now       int64
+	RefreshMs int // status-tick interval; 0 → default 1 s
 }
 
 // Run starts the TUI program wired to the given dependencies and blocks until
@@ -25,7 +27,7 @@ type Config struct {
 // when the program exits.
 func Run(ctx context.Context, cfg Config) error {
 	ldr := loader{ctx: ctx, Tmux: cfg.Tmux, Runner: cfg.Runner, Claude: cfg.Claude, Root: cfg.Root, BaseDir: cfg.BaseDir, Now: cfg.Now}
-	m := New(nil).WithLoader(ldr)
+	m := New(nil).WithLoader(ldr).WithRefresh(time.Duration(cfg.RefreshMs) * time.Millisecond)
 	p := tea.NewProgram(m, tea.WithContext(ctx), tea.WithAltScreen())
 	_, err := p.Run()
 	return err

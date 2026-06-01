@@ -15,7 +15,7 @@ import (
 // paneFormat is the -F format string for list-panes. Fields are delimited by
 // 0x1f (ASCII unit separator) so spaces in paths cannot split a field. One
 // pane per line. Field order must match parsePanes.
-const paneFormat = "#{pane_id}\x1f#{pane_pid}\x1f#{pane_current_command}\x1f#{pane_dead}\x1f#{pane_current_path}\x1f#{session_name}\x1f#{window_name}\x1f#{@perch_session}"
+const paneFormat = "#{pane_id}\x1f#{pane_pid}\x1f#{pane_current_command}\x1f#{pane_dead}\x1f#{pane_current_path}\x1f#{session_name}\x1f#{window_name}\x1f#{@perch_session}\x1f#{@perch_pane_status}"
 
 // Tmux drives a tmux server. The zero value is ready to use (production
 // defaults are filled in by the seam helpers).
@@ -112,11 +112,18 @@ type Pane struct {
 	Session      string
 	Window       string
 	PerchSession string // @perch_session pane option
+	PerchStatus  string // @perch_pane_status pane option; empty when unset
 }
 
 // parsePanes decodes raw list-panes output (one line per pane, fields separated
 // by 0x1f). Lines with fewer than the expected number of fields are silently
 // skipped so a malformed line never stops the parse or panics.
+//
+// The minimum field count stays at 8 so fixtures and hand-built test lines with
+// 8 fields remain valid; PerchStatus is populated only when a 9th field exists.
+// Real list-panes output always emits 9 fields because paneFormat includes the
+// @perch_pane_status token; the 9th field is an empty string when the option is
+// unset, not absent.
 func parsePanes(raw []byte) []Pane {
 	const fieldCount = 8
 	lines := strings.Split(string(raw), "\n")
@@ -130,7 +137,7 @@ func parsePanes(raw []byte) []Pane {
 			// Defensive: skip malformed lines rather than panic or return garbage.
 			continue
 		}
-		panes = append(panes, Pane{
+		p := Pane{
 			ID:           fields[0],
 			PID:          fields[1],
 			Command:      fields[2],
@@ -139,7 +146,11 @@ func parsePanes(raw []byte) []Pane {
 			Session:      fields[5],
 			Window:       fields[6],
 			PerchSession: fields[7],
-		})
+		}
+		if len(fields) > 8 {
+			p.PerchStatus = fields[8]
+		}
+		panes = append(panes, p)
 	}
 	return panes
 }
