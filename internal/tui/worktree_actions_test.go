@@ -416,6 +416,10 @@ func TestKill_LiveItem_Flow(t *testing.T) {
 	if m.modal.kind != modalKillConfirm {
 		t.Errorf("want modal=modalKillConfirm after x, got %v", m.modal.kind)
 	}
+	// The kill confirm must name its target (M12), not say a generic "window".
+	if m.modal.branch != "feat" {
+		t.Errorf("kill modal must name the target branch; got branch=%q", m.modal.branch)
+	}
 
 	// Press y.
 	_, cmd := mustUpdate(t, m, pressKey('y'))

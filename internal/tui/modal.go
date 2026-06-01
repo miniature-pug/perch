@@ -72,7 +72,11 @@ func renderModal(ms modalState) string {
 	case modalForceConfirm:
 		content = ms.branch + " has modified/untracked files. Force remove? (y) force  (n/esc) cancel"
 	case modalKillConfirm:
-		content = "Kill window? (y) confirm  (n/esc) cancel"
+		what := "this session"
+		if ms.branch != "" {
+			what = ms.branch
+		}
+		content = "Kill " + what + "? (y) confirm  (n/esc) cancel"
 	case modalNewSession:
 		labels := [3]string{"new worktree", "run here", "run in main"}
 		content = fmt.Sprintf(

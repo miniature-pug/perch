@@ -499,6 +499,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				kind:    modalKillConfirm,
 				target:  it.liveTarget,
 				paneKey: it.captureTarget,
+				branch:  it.tree,
 			}
 			return m, nil
 
