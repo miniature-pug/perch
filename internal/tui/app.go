@@ -20,6 +20,9 @@ const (
 	borderSize = 1
 	// footerHeight is the number of terminal rows reserved for the footer hint bar.
 	footerHeight = 1
+	// messageBarHeight is the row reserved above the panes for the transient
+	// toast / load-error message line, so adding a message never overflows height.
+	messageBarHeight = 1
 )
 
 // Model is the root Bubble Tea model for the perch TUI.
@@ -204,6 +207,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.withToast("cannot remove the worktree you're focused in — switch away first")
 		}
 		// err means no attached client — treat as not focused; proceed to confirm.
+		m.showHelp = false // an async-opened modal must not hide behind the help overlay
 		m.modal = msg.spec
 		m.modal.kind = modalRemoveConfirm
 		return m, nil
@@ -233,6 +237,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.prompt {
+			m.showHelp = false // an async-opened modal must not hide behind the help overlay
 			m.modal = msg.openModal
 			return m, nil
 		}
@@ -465,30 +470,34 @@ func (m Model) View() string {
 	}
 	footer := styles.footer.Render(footerText)
 
+	// messageLine occupies the reserved top row (relayout always budgets one row
+	// for it). toast takes priority over the load-error bar; when neither is set it
+	// renders blank so the layout never reflows as messages come and go.
+	var messageLine string
+	switch {
+	case m.toast != "":
+		messageLine = styles.toast.Render(m.toast)
+	case m.loadErr != "":
+		messageLine = styles.errorBar.Render("Error loading sessions: " + m.loadErr)
+	}
+
+	// bodyRegionHeight is the space between the reserved message row and the footer.
+	// Modal and help overlays are centred within it so the total never exceeds height.
+	bodyRegionHeight := max(0, m.height-lipgloss.Height(footer)-messageBarHeight)
+
 	if m.showHelp {
 		overlay := styles.helpOverlay.Render(m.help.FullHelpView(m.FullHelp()))
-		canvasH := max(0, m.height-lipgloss.Height(footer))
-		centered := lipgloss.Place(m.width, canvasH, lipgloss.Center, lipgloss.Center, overlay)
-		return lipgloss.JoinVertical(lipgloss.Left, centered, footer)
+		centered := lipgloss.Place(m.width, bodyRegionHeight, lipgloss.Center, lipgloss.Center, overlay)
+		return lipgloss.JoinVertical(lipgloss.Left, messageLine, centered, footer)
 	}
 
-	// Modal overlay: insert between body and footer when active.
 	if m.modal.kind != modalNone {
-		modalBox := renderModal(m.modal, m.width)
-		return lipgloss.JoinVertical(lipgloss.Left, body, modalBox, footer)
+		modalBox := renderModal(m.modal)
+		centered := lipgloss.Place(m.width, bodyRegionHeight, lipgloss.Center, lipgloss.Center, modalBox)
+		return lipgloss.JoinVertical(lipgloss.Left, messageLine, centered, footer)
 	}
 
-	if m.toast != "" {
-		toastBar := styles.toast.Render(m.toast)
-		return lipgloss.JoinVertical(lipgloss.Left, toastBar, body, footer)
-	}
-
-	if m.loadErr != "" {
-		errBar := styles.errorBar.Render("Error loading sessions: " + m.loadErr)
-		return lipgloss.JoinVertical(lipgloss.Left, errBar, body, footer)
-	}
-
-	return lipgloss.JoinVertical(lipgloss.Left, body, footer)
+	return lipgloss.JoinVertical(lipgloss.Left, messageLine, body, footer)
 }
 
 // updateModal handles all key events when a modal is open. It is called
@@ -589,7 +598,7 @@ func (m Model) emptyStateText() string {
 // height and screen mode. Called from the WindowSizeMsg handler and whenever the
 // screen mode changes (z/Z). All dimensions are clamped to ≥ 0.
 func (m *Model) relayout() {
-	paneHeight := max(0, m.height-footerHeight-2*borderSize)
+	paneHeight := max(0, m.height-footerHeight-messageBarHeight-2*borderSize)
 	switch {
 	case m.mode == modeFullList || m.mode == modeFullPreview:
 		// Full modes show one pane; size both so the hidden pane is valid the

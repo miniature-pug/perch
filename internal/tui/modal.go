@@ -38,7 +38,7 @@ var modalStyle = lipgloss.NewStyle().
 
 // renderModal returns a lipgloss-rendered modal box appropriate for ms.kind.
 // width is the terminal width; the box is rendered at a fixed inner width.
-func renderModal(ms modalState, _ int) string {
+func renderModal(ms modalState) string {
 	var content string
 	switch ms.kind {
 	case modalRemoveConfirm:
