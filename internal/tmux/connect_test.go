@@ -392,10 +392,16 @@ func TestConnect_SessionAbsent_CreatesSession(t *testing.T) {
 	}
 }
 
-func TestConnect_SessionPresent_CreatesWindow(t *testing.T) {
+// TestConnect_SessionPresent_WindowAbsent_CreatesWindow verifies that when the
+// session exists but the target window is absent (list-panes exits ≥1),
+// Connect falls through to NewWindow.
+func TestConnect_SessionPresent_WindowAbsent_CreatesWindow(t *testing.T) {
 	r := proc.NewFakeRunner()
 	// has-session exits 0 → session present
 	r.Respond(proc.FakeResult{}, "tmux", "has-session", "-t", "=myproj")
+	// list-panes for the window exits 1 → window absent
+	r.Respond(proc.FakeResult{Err: proc.FakeExitError{Code: 1}},
+		"tmux", "list-panes", "-t", "=myproj:=feat", "-F", paneFormat)
 	r.Respond(proc.FakeResult{Stdout: []byte("%4\n")},
 		"tmux", "new-window", "-t", "=myproj", "-n", "feat", "-c", "/work", "-P", "-F", "#{pane_id}")
 
@@ -408,11 +414,18 @@ func TestConnect_SessionPresent_CreatesWindow(t *testing.T) {
 		t.Errorf("paneID = %q, want %%4", paneID)
 	}
 
-	if len(r.Calls) != 2 {
-		t.Fatalf("want 2 calls, got %d", len(r.Calls))
+	if len(r.Calls) != 3 {
+		t.Fatalf("want 3 tmux calls (has-session, list-panes, new-window), got %d: %v", len(r.Calls), r.Calls)
 	}
-	if r.Calls[1].Args[0] != "new-window" {
-		t.Errorf("second call should be new-window, got: %v", r.Calls[1].Args)
+	// Verify new-window was called (scan, not index, since call count changed).
+	found := false
+	for _, c := range r.Calls {
+		if c.Args[0] == "new-window" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a new-window call; calls: %v", r.Calls)
 	}
 }
 
@@ -426,5 +439,172 @@ func TestConnect_HasSessionError_ReturnsError(t *testing.T) {
 	_, err := o.Connect(context.Background(), "myproj", "main", "/work")
 	if err == nil {
 		t.Fatal("expected error from HasSession exec failure")
+	}
+}
+
+// livePaneLine builds a valid 8-field list-panes output line for one pane.
+// dead=false → field[3]="0"; dead=true → field[3]="1".
+func livePaneLine(id string, dead bool) []byte {
+	deadField := "0"
+	if dead {
+		deadField = "1"
+	}
+	line := id + "\x1f1234\x1fbash\x1f" + deadField + "\x1f/work\x1fmyproj\x1ffeat\x1f\n"
+	return []byte(line)
+}
+
+// TestConnect_SessionPresent_LivePane_Reuses verifies that when the session
+// and window both exist with a live pane, Connect returns that pane's ID
+// without issuing a new-window call.
+func TestConnect_SessionPresent_LivePane_Reuses(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{}, "tmux", "has-session", "-t", "=myproj")
+	r.Respond(proc.FakeResult{Stdout: livePaneLine("%7", false)},
+		"tmux", "list-panes", "-t", "=myproj:=feat", "-F", paneFormat)
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	paneID, err := o.Connect(context.Background(), "myproj", "feat", "/work")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if paneID != "%7" {
+		t.Errorf("paneID = %q, want %%7 (reused)", paneID)
+	}
+
+	// No new-window call must have been made.
+	for _, c := range r.Calls {
+		if c.Args[0] == "new-window" {
+			t.Errorf("unexpected new-window call; calls: %v", r.Calls)
+		}
+	}
+}
+
+// TestConnect_SessionPresent_AllDeadPanes_CreatesWindow verifies that when the
+// window exists but all its panes are dead, Connect falls through to NewWindow.
+func TestConnect_SessionPresent_AllDeadPanes_CreatesWindow(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{}, "tmux", "has-session", "-t", "=myproj")
+	r.Respond(proc.FakeResult{Stdout: livePaneLine("%8", true)},
+		"tmux", "list-panes", "-t", "=myproj:=feat", "-F", paneFormat)
+	r.Respond(proc.FakeResult{Stdout: []byte("%9\n")},
+		"tmux", "new-window", "-t", "=myproj", "-n", "feat", "-c", "/work", "-P", "-F", "#{pane_id}")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	paneID, err := o.Connect(context.Background(), "myproj", "feat", "/work")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if paneID != "%9" {
+		t.Errorf("paneID = %q, want %%9 (new window)", paneID)
+	}
+
+	found := false
+	for _, c := range r.Calls {
+		if c.Args[0] == "new-window" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a new-window call; calls: %v", r.Calls)
+	}
+}
+
+// ── KillWindow ────────────────────────────────────────────────────────────────
+
+func TestKillWindow_Success(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{}, "tmux", "kill-window", "-t", "=s:=w")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	if err := o.KillWindow(context.Background(), "=s:=w"); err != nil {
+		t.Errorf("expected nil, got: %v", err)
+	}
+	want := []string{"kill-window", "-t", "=s:=w"}
+	if !reflect.DeepEqual(r.Calls[0].Args, want) {
+		t.Errorf("Args = %v, want %v", r.Calls[0].Args, want)
+	}
+}
+
+func TestKillWindow_ExitOne_Tolerated(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Err: proc.FakeExitError{Code: 1}},
+		"tmux", "kill-window", "-t", "=s:=w")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	if err := o.KillWindow(context.Background(), "=s:=w"); err != nil {
+		t.Errorf("exit 1 should be tolerated, got: %v", err)
+	}
+}
+
+func TestKillWindow_ExecFailure_Returned(t *testing.T) {
+	execErr := errors.New("exec: tmux not found")
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Err: execErr, Stderr: []byte("tmux not found")},
+		"tmux", "kill-window", "-t", "=s:=w")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	err := o.KillWindow(context.Background(), "=s:=w")
+	if err == nil {
+		t.Fatal("expected error for exec failure")
+	}
+	if !errors.Is(err, execErr) {
+		t.Errorf("error should wrap execErr: %v", err)
+	}
+}
+
+// ── CurrentClientWindow ───────────────────────────────────────────────────────
+
+func TestCurrentClientWindow_HappyPath(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Stdout: []byte("sess\x1fwin\n")},
+		"tmux", "display-message", "-p", "-F", "#{session_name}\x1f#{window_name}")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	sess, win, err := o.CurrentClientWindow(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sess != "sess" {
+		t.Errorf("session = %q, want sess", sess)
+	}
+	if win != "win" {
+		t.Errorf("window = %q, want win", win)
+	}
+
+	want := []string{"display-message", "-p", "-F", "#{session_name}\x1f#{window_name}"}
+	if !reflect.DeepEqual(r.Calls[0].Args, want) {
+		t.Errorf("Args = %v, want %v", r.Calls[0].Args, want)
+	}
+}
+
+func TestCurrentClientWindow_MalformedOutput_ReturnsError(t *testing.T) {
+	r := proc.NewFakeRunner()
+	// No \x1f separator in output.
+	r.Respond(proc.FakeResult{Stdout: []byte("noseparator\n")},
+		"tmux", "display-message", "-p", "-F", "#{session_name}\x1f#{window_name}")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	_, _, err := o.CurrentClientWindow(context.Background())
+	if err == nil {
+		t.Fatal("expected error for malformed output")
+	}
+	if !strings.Contains(err.Error(), "unexpected output") {
+		t.Errorf("error should mention 'unexpected output': %v", err)
+	}
+}
+
+func TestCurrentClientWindow_ExecError_Wrapped(t *testing.T) {
+	execErr := errors.New("exec: tmux not found")
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Err: execErr, Stderr: []byte("not found")},
+		"tmux", "display-message", "-p", "-F", "#{session_name}\x1f#{window_name}")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	_, _, err := o.CurrentClientWindow(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, execErr) {
+		t.Errorf("error should wrap execErr: %v", err)
 	}
 }

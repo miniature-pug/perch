@@ -80,6 +80,21 @@ func (o Tmux) KillSession(ctx context.Context, session string) error {
 	return fmt.Errorf("tmux kill-session: %w: %s", err, strings.TrimSpace(string(stderr)))
 }
 
+// KillWindow kills the window addressed by target (e.g. WindowTarget(s,w)). A
+// missing window exits ≥1; like KillSession that is treated as already-gone.
+// Only exec-layer failures (ExitCode == -1) are returned as errors.
+func (o Tmux) KillWindow(ctx context.Context, target string) error {
+	_, stderr, err := o.runner().Run(ctx, o.bin(), o.args("kill-window", "-t", target)...)
+	if err == nil {
+		return nil
+	}
+	if proc.ExitCode(err) >= 1 {
+		// Window absent or server already exited — not an error.
+		return nil
+	}
+	return fmt.Errorf("tmux kill-window: %w: %s", err, strings.TrimSpace(string(stderr)))
+}
+
 // KillServer terminates the tmux server. If the server is already down the
 // command exits with code ≥1; that is treated as success. Only exec-layer
 // failures are returned as errors.
@@ -92,6 +107,22 @@ func (o Tmux) KillServer(ctx context.Context) error {
 		return nil
 	}
 	return fmt.Errorf("tmux kill-server: %w: %s", err, strings.TrimSpace(string(stderr)))
+}
+
+// CurrentClientWindow returns the session and window the attached client is
+// currently focused on. It is used as a focused-in-tree guard.
+func (o Tmux) CurrentClientWindow(ctx context.Context) (session, window string, err error) {
+	stdout, stderr, err := o.runner().Run(ctx, o.bin(),
+		o.args("display-message", "-p", "-F", "#{session_name}\x1f#{window_name}")...)
+	if err != nil {
+		return "", "", fmt.Errorf("tmux display-message: %w: %s", err, strings.TrimSpace(string(stderr)))
+	}
+	out := strings.TrimSpace(string(stdout))
+	parts := strings.SplitN(out, "\x1f", 2)
+	if len(parts) < 2 {
+		return "", "", fmt.Errorf("tmux display-message: unexpected output %q", out)
+	}
+	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), nil
 }
 
 // AttachTargetArgs returns the tmux SUBCOMMAND args (switch-client or
@@ -141,10 +172,12 @@ func (o Tmux) SwitchClient(ctx context.Context, target string) error {
 }
 
 // Connect ensures a window exists for the given session/window/dir and returns
-// its pane ID. The first agent for a project bootstraps the whole session via
-// NewSession; subsequent agents each get a new window inside it via NewWindow.
-// Window-reuse (attaching to an existing window) is deferred to M5/M6 — M4
-// always creates a fresh window.
+// the pane ID to use. The first agent for a project bootstraps the whole
+// session via NewSession. When the session already exists, Connect tries to
+// reuse an existing live pane in the named window: if list-panes succeeds and
+// finds at least one non-dead pane, its ID is returned without creating a new
+// window. A missing window (list-panes exits ≥1) or a window whose every pane
+// is dead falls through to NewWindow so the caller always gets a usable pane.
 func (o Tmux) Connect(ctx context.Context, session, window, dir string) (string, error) {
 	exists, err := o.HasSession(ctx, session)
 	if err != nil {
@@ -153,5 +186,15 @@ func (o Tmux) Connect(ctx context.Context, session, window, dir string) (string,
 	if !exists {
 		return o.NewSession(ctx, session, window, dir)
 	}
+	// Session exists — try to reuse a live pane in the target window.
+	panes, perr := o.ListPanes(ctx, WindowTarget(session, window))
+	if perr == nil {
+		for _, p := range panes {
+			if !p.Dead {
+				return p.ID, nil
+			}
+		}
+	}
+	// Window absent (list-panes error) or all panes dead — create a new window.
 	return o.NewWindow(ctx, session, window, dir)
 }
