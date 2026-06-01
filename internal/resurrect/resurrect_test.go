@@ -1715,6 +1715,108 @@ func TestReconcile_CrashStranded_TreeGone_NotRestored(t *testing.T) {
 	}
 }
 
+func TestClassify(t *testing.T) {
+	const (
+		boot    = "111"
+		paneKey = "%5"
+		sess    = "proj"
+		win     = "feat"
+	)
+	w := model.Window{PaneKey: paneKey, TmuxSession: sess, TmuxWindow: win, BootID: boot}
+
+	// Build panes directly (avoid parsing): KEEP needs the record's own pane live.
+	keepPanes := []tmux.Pane{{ID: paneKey, Session: sess, Window: win}}
+	// PRUNE: record's pane gone, but a sibling pane keeps the session alive.
+	prunePanes := []tmux.Pane{{ID: "%99", Session: sess, Window: "tui"}}
+
+	tests := []struct {
+		name        string
+		panes       []tmux.Pane
+		currentBoot string
+		want        reconcileAction
+	}{
+		{"keep: pane live + boot match", keepPanes, boot, actionKeep},
+		{"prune: pane gone, boot match, session alive", prunePanes, boot, actionPrune},
+		{"restore: boot mismatch", keepPanes, "999", actionRestore},
+		{"restore: cold server (no panes, empty boot)", nil, "", actionRestore},
+		{"restore: pane gone and session gone", nil, boot, actionRestore},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := classify(w, tt.panes, tt.currentBoot); got != tt.want {
+				t.Fatalf("classify = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStrandedCount_CleanRelaunchIsZero(t *testing.T) {
+	// ACCEPTANCE: pane cleanly closed (boot match, session alive) → PRUNE, not
+	// RESTORE → count 0 → no offer on a normal relaunch.
+	baseDir := t.TempDir()
+	fake := proc.NewFakeRunner()
+	const (
+		boot         = "12345"
+		paneKey      = "%30"
+		sess         = "proj"
+		survivorPane = "%31"
+	)
+	seedWindow(t, baseDir, model.Window{
+		PaneKey: paneKey, Tool: model.ToolClaude, SessionID: "sid", Tree: baseDir,
+		TmuxSession: sess, TmuxWindow: "feat", BootID: boot,
+	})
+	fake.Respond(proc.FakeResult{Stdout: []byte(boot + "\n")},
+		"tmux", "display-message", "-p", "#{start_time}")
+	fake.Respond(proc.FakeResult{Stdout: []byte(paneLine(survivorPane, sess, "tui", false))},
+		"tmux", "list-panes", "-a", "-F", paneFormat)
+
+	n, err := StrandedCount(context.Background(), newDeps(t, baseDir, fake))
+	if err != nil {
+		t.Fatalf("StrandedCount: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("clean relaunch StrandedCount = %d, want 0 (PRUNE, not RESTORE)", n)
+	}
+	// Read-only: the record must NOT be pruned by the detector.
+	wins, _ := state.LoadWindows(baseDir)
+	if len(wins) != 1 {
+		t.Fatalf("StrandedCount must be read-only; record count = %d, want 1", len(wins))
+	}
+}
+
+func TestStrandedCount_BootMismatchCounts(t *testing.T) {
+	baseDir := t.TempDir()
+	fake := proc.NewFakeRunner()
+	const paneKey = "%40"
+	seedWindow(t, baseDir, model.Window{
+		PaneKey: paneKey, Tool: model.ToolClaude, SessionID: "sid", Tree: baseDir,
+		TmuxSession: "proj", TmuxWindow: "feat", BootID: "old-boot",
+	})
+	fake.Respond(proc.FakeResult{Stdout: []byte("new-boot\n")},
+		"tmux", "display-message", "-p", "#{start_time}")
+	fake.Respond(proc.FakeResult{Stdout: []byte("")},
+		"tmux", "list-panes", "-a", "-F", paneFormat)
+
+	n, err := StrandedCount(context.Background(), newDeps(t, baseDir, fake))
+	if err != nil {
+		t.Fatalf("StrandedCount: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("boot-mismatch StrandedCount = %d, want 1", n)
+	}
+}
+
+func TestStrandedCount_NoRecordsIsZero(t *testing.T) {
+	baseDir := t.TempDir()
+	n, err := StrandedCount(context.Background(), newDeps(t, baseDir, proc.NewFakeRunner()))
+	if err != nil {
+		t.Fatalf("StrandedCount: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("no records StrandedCount = %d, want 0", n)
+	}
+}
+
 // TestHasLiveSession exercises the session-liveness helper directly.
 func TestHasLiveSession(t *testing.T) {
 	panes := []tmux.Pane{

@@ -71,6 +71,38 @@ type Report struct {
 	Skipped []SkipNote
 }
 
+// reconcileAction is the top-level keep/prune/restore decision for one window.
+type reconcileAction int
+
+const (
+	// actionRestore: the pane is not live under the current boot and this is not a
+	// clean intentional close — the agent was stranded by a restart or crash.
+	actionRestore reconcileAction = iota
+	// actionKeep: the pane is live and the boot ids match — leave it alone.
+	actionKeep
+	// actionPrune: the pane is gone but the boot matches and the home session is
+	// still alive — the user intentionally closed this agent window.
+	actionPrune
+)
+
+// classify is the top-level discriminator shared by Reconcile and StrandedCount,
+// so the read-only detector can never drift from the reconciler's own decision.
+// It evaluates only the cheap pane/session/boot signals; the restore-time guards
+// (tree-gone, out-of-root, …) live in Reconcile's RESTORE branch and may still
+// downgrade an actionRestore to a skip — so StrandedCount is an upper bound.
+func classify(w model.Window, livePanes []tmux.Pane, currentBoot string) reconcileAction {
+	paneByID := hasLivePaneByID(livePanes, w.PaneKey)
+	bootMatch := currentBoot != "" && w.BootID == currentBoot
+	switch {
+	case paneByID && bootMatch:
+		return actionKeep
+	case !paneByID && bootMatch && hasLiveSession(livePanes, w.TmuxSession):
+		return actionPrune
+	default:
+		return actionRestore
+	}
+}
+
 // Reconcile reads all shadow records, snapshots the live server state once, then
 // classifies each record as KEEP, PRUNE, or RESTORE and executes the
 // appropriate action. The only hard-error return is an unreadable state
@@ -105,18 +137,12 @@ func Reconcile(ctx context.Context, deps Deps) (Report, error) {
 	bootResolved := false
 
 	for _, w := range records {
-		// FD2: match the live pane by pane_id, not @perch_session.
-		paneByID := hasLivePaneByID(livePanes, w.PaneKey)
-		// FD3: bootMatch requires a non-empty currentBoot (server is up) and
-		// an exact match with the record's stored boot id.
-		bootMatch := currentBoot != "" && w.BootID == currentBoot
-
-		switch {
-		case paneByID && bootMatch:
+		switch classify(w, livePanes, currentBoot) {
+		case actionKeep:
 			// KEEP: the pane is alive and boot ids match — no I/O needed.
 			report.Kept = append(report.Kept, w.PaneKey)
 
-		case !paneByID && bootMatch && hasLiveSession(livePanes, w.TmuxSession):
+		case actionPrune:
 			// PRUNE: same server, home session alive, pane intentionally closed.
 			// If the home session is also gone (!hasLiveSession), the record falls
 			// through to the default (RESTORE) branch: the agent was stranded by a
@@ -131,7 +157,7 @@ func Reconcile(ctx context.Context, deps Deps) (Report, error) {
 				report.Pruned = append(report.Pruned, w.PaneKey)
 			}
 
-		default:
+		default: // actionRestore
 			// RESTORE branch: boot mismatch or server is cold.
 			// FD5 guards in order — cheap to expensive.
 
@@ -303,6 +329,31 @@ func Reconcile(ctx context.Context, deps Deps) (Report, error) {
 	}
 
 	return report, nil
+}
+
+// StrandedCount reports how many recorded windows would enter Reconcile's RESTORE
+// branch — agent sessions stranded by a tmux server restart or crash. It is
+// strictly read-only: no Launch, no state writes. It shares classify with
+// Reconcile, so a cleanly-closed window (a PRUNE) is never counted. The
+// restore-time guards are not evaluated, so the result is an upper bound, which
+// is the right granularity for an "offer to restore" prompt.
+func StrandedCount(ctx context.Context, deps Deps) (int, error) {
+	records, err := state.LoadWindows(deps.BaseDir)
+	if err != nil {
+		return 0, fmt.Errorf("resurrect: load windows: %w", err)
+	}
+	if len(records) == 0 {
+		return 0, nil
+	}
+	currentBoot, _ := deps.Tmux.BootID(ctx)
+	livePanes, _ := deps.Tmux.ListPanesAll(ctx)
+	n := 0
+	for _, w := range records {
+		if classify(w, livePanes, currentBoot) == actionRestore {
+			n++
+		}
+	}
+	return n, nil
 }
 
 // adapterFor resolves the agent adapter for a known tool. Returns false for
