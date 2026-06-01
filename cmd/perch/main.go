@@ -9,9 +9,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/Miniature-Pug/perch/internal/agent"
+	"github.com/Miniature-Pug/perch/internal/attach"
 	"github.com/Miniature-Pug/perch/internal/config"
 	"github.com/Miniature-Pug/perch/internal/discover"
 	"github.com/Miniature-Pug/perch/internal/doctor"
@@ -48,6 +50,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return handleSidebar(args[1:], stdout, stderr)
 	case "setup":
 		return handleSetup(args[1:], stdout, stderr)
+	case "attach":
+		return handleAttach(args[1:], stdout, stderr)
 	case "resurrect":
 		return handleResurrect(stdout, stderr)
 	case "status":
@@ -274,6 +278,140 @@ func sidebar(deps sidebarDeps, args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// attachDeps is the injectable dependency bundle for handleAttach. Production
+// callers use attachProduction(); tests inject fakes so no real tmux or
+// filesystem calls are made.
+type attachDeps struct {
+	// gather discovers live candidate sessions. Tests replace with a stub.
+	gather func(ctx context.Context) ([]attach.Candidate, error)
+	// tmuxClient is used for the inside-tmux switch-client call. Using a
+	// FakeRunner-backed Tmux lets tests assert r.Calls contains switch-client.
+	tmuxClient tmux.Tmux
+	// getenv resolves environment variables (e.g. TMUX).
+	getenv func(string) string
+	// execProcess runs the outside-tmux attach-session exec seam. The argv is
+	// pre-built from validated Candidate fields (never the raw query). This is
+	// the one production path NOT unit-tested (tty-dependent exec seam). Tests
+	// inject a stub that captures the argv for assertion.
+	execProcess func(argv []string) int
+}
+
+// attachProduction returns attachDeps wired to real tmux and filesystem.
+func attachProduction(root, baseDir string, now int64) attachDeps {
+	t := tmux.New()
+	gatherDeps := attach.Deps{
+		Tmux:    t,
+		Runner:  proc.ExecRunner{},
+		Claude:  agent.NewClaude(),
+		Root:    root,
+		BaseDir: baseDir,
+		Now:     now,
+	}
+	return attachDeps{
+		gather: func(ctx context.Context) ([]attach.Candidate, error) {
+			return attach.Gather(ctx, gatherDeps)
+		},
+		tmuxClient: t,
+		getenv:     os.Getenv,
+		execProcess: func(argv []string) int {
+			c := exec.Command(argv[0], argv[1:]...) //nolint:gosec // controlled input
+			c.Stdin = os.Stdin
+			c.Stdout = os.Stdout
+			c.Stderr = os.Stderr
+			_ = c.Run()
+			return 0
+		},
+	}
+}
+
+// handleAttach implements `perch attach <query>`:
+//
+//  1. Validates that a query was supplied (exit 2 otherwise).
+//  2. Discovers live agent sessions via attach.Gather.
+//  3. Fuzzy-matches the query with attach.Resolve:
+//     - 0 matches → stderr "no session matches <query>", exit 1.
+//     - 1 match   → attach the terminal to the matched session, exit 0.
+//     - 2+ matches → print candidates to stderr, exit 2 ("ambiguous query").
+//
+// The tmux target is always derived from the validated Candidate fields
+// (TmuxSession/TmuxWindow) — the raw query string is never passed to tmux.
+func handleAttach(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		_, _ = fmt.Fprintln(stderr, "Usage: perch attach <query>")
+		return 2
+	}
+	query := strings.Join(args, " ")
+	if strings.TrimSpace(query) == "" {
+		_, _ = fmt.Fprintln(stderr, "Usage: perch attach <query>")
+		return 2
+	}
+
+	root, err := os.Getwd()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "perch attach: cannot determine working directory: %v\n", err)
+		return 1
+	}
+	baseDir, err := state.StateDir()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "perch attach: %v\n", err)
+		return 1
+	}
+
+	return attachCore(attachProduction(root, baseDir, time.Now().Unix()), query, stdout, stderr)
+}
+
+// attachCore is the testable core of handleAttach. deps replaces real tmux and
+// filesystem calls so tests can exercise every branch without a live server.
+//
+// argv-safety: the tmux target is always derived from the validated Candidate
+// fields (TmuxSession/TmuxWindow/LiveTarget), never from the raw query string.
+//
+// Known limitation (spike Risk 6): if the matched agent session is currently
+// displayed in the perch frame, its pane is physically inside the frame's
+// placeholder layout. Attaching to it (whether via switch-client or
+// attach-session) shows the placeholder, not the agent. Swapping the pane
+// layout from the CLI is not attempted in v1 — use perch's sidebar switcher
+// instead. A cheap detection hint: if future work wants to detect this, check
+// whether the agent's home session contains only a "sleep" command pane.
+func attachCore(deps attachDeps, query string, stdout, stderr io.Writer) int {
+	ctx := context.Background()
+	candidates, err := deps.gather(ctx)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "perch attach: discover: %v\n", err)
+		return 1
+	}
+
+	res := attach.Resolve(query, candidates)
+	switch res.Count {
+	case 0:
+		_, _ = fmt.Fprintf(stderr, "no session matches %q\n", query)
+		return 1
+	case 1:
+		cand := *res.Matched
+		if deps.getenv("TMUX") != "" {
+			// Inside tmux: switch the current client to the agent's window.
+			// Use the live window target when available; fall back to session-only.
+			// SwitchClient routes through the runner so FakeRunner captures the call.
+			target := cand.LiveTarget
+			if target == "" {
+				target = tmux.SessionTarget(cand.TmuxSession)
+			}
+			if err := deps.tmuxClient.SwitchClient(ctx, target); err != nil {
+				_, _ = fmt.Fprintf(stderr, "perch attach: switch-client: %v\n", err)
+				return 1
+			}
+			return 0
+		}
+		// Outside tmux: build the attach-session argv from validated Candidate
+		// fields and pass it to the exec seam. The raw query never enters argv.
+		argv := deps.tmuxClient.ExecArgs(deps.tmuxClient.AttachArgs(cand.TmuxSession)...)
+		return deps.execProcess(argv)
+	default:
+		_, _ = fmt.Fprintf(stderr, "ambiguous query %q; matches:\n%s", query, attach.FormatAmbiguous(res.Ambiguous))
+		return 2
+	}
+}
+
 // handleResurrect implements `perch resurrect`. It resolves the state directory,
 // runs the boot-id reconcile engine, and prints a human-readable summary to
 // stdout. The only hard exit-1 condition is an unreadable state directory or a
@@ -468,6 +606,7 @@ func handlePathArg(arg string, stdout, stderr io.Writer) int {
 // Note: "debug" is intentionally absent — it is a hidden diagnostic surface.
 func printUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "Usage: perch [path]")
+	_, _ = fmt.Fprintln(w, "       perch attach <query>")
 	_, _ = fmt.Fprintln(w, "       perch setup")
 	_, _ = fmt.Fprintln(w, "       perch resurrect")
 	_, _ = fmt.Fprintln(w, "       perch status set <working|waiting|done>")
