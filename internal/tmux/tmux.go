@@ -115,9 +115,64 @@ type Pane struct {
 	PerchStatus  string // @perch_pane_status pane option; empty when unset
 }
 
+// validPerchSessionID reports whether s is an acceptable perch session ID.
+//
+// Acceptable characters are [A-Za-z0-9_-]; length must be between 1 and 128.
+// This accepts both claude session IDs (UUID format, e.g.
+// "2b96f5bc-43ef-454d-a12d-791ad68da8dd") and opencode session IDs (prefixed
+// alphanumeric, e.g. "ses_18593fc84ffeg4oyInzAG2eLOL"), while rejecting any
+// value that contains a delimiter (\x1f, \n, \r), a path separator (/), a
+// space, or other characters that could enable injection or path traversal.
+//
+// A simple byte scan is used rather than regexp to avoid allocating a compiled
+// pattern on every call.
+func validPerchSessionID(s string) bool {
+	if s == "" || len(s) > 128 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		ok := (c >= 'A' && c <= 'Z') ||
+			(c >= 'a' && c <= 'z') ||
+			(c >= '0' && c <= '9') ||
+			c == '_' || c == '-'
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// containsControlChars reports whether s contains \x1f, \n, or \r. Used to
+// validate that user-option fields read from list-panes output are free of
+// delimiter or newline injection.
+func containsControlChars(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '\x1f' || c == '\n' || c == '\r' {
+			return true
+		}
+	}
+	return false
+}
+
 // parsePanes decodes raw list-panes output (one line per pane, fields separated
 // by 0x1f). Lines with fewer than the expected number of fields are silently
 // skipped so a malformed line never stops the parse or panics.
+//
+// Security hardening (V6a/V6b):
+//   - V6a: The split is bounded to at most maxFields=9 parts via SplitN so that
+//     an injected \x1f inside @perch_session cannot shift column offsets beyond
+//     the 9-field boundary. Any line that still yields more than 9 parts (i.e.,
+//     the last absorbed field contains an extra \x1f) is rejected by validating
+//     that the user-option fields (@perch_session, @perch_pane_status) are free
+//     of control characters (\x1f, \n, \r). An embedded newline in a field value
+//     cannot survive list-panes line framing, so the per-line split on "\n"
+//     already prevents injected phantom pane records.
+//   - V6b: @perch_session is only populated when it passes validPerchSessionID
+//     (charset [A-Za-z0-9_-], length 1–128). Invalid values are silently cleared
+//     so that buildLiveIndex's empty-string skip naturally excludes them from the
+//     live-session index without any change to the caller.
 //
 // The minimum field count stays at 8 so fixtures and hand-built test lines with
 // 8 fields remain valid; PerchStatus is populated only when a 9th field exists.
@@ -125,18 +180,49 @@ type Pane struct {
 // @perch_pane_status token; the 9th field is an empty string when the option is
 // unset, not absent.
 func parsePanes(raw []byte) []Pane {
-	const fieldCount = 8
+	const (
+		minFields = 8 // minimum acceptable field count (PerchStatus optional)
+		maxFields = 9 // maximum expected field count from paneFormat
+	)
 	lines := strings.Split(string(raw), "\n")
 	var panes []Pane
 	for _, line := range lines {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		fields := strings.Split(line, "\x1f")
-		if len(fields) < fieldCount {
+		// Bound the split to maxFields parts. If the actual line contains more
+		// than maxFields-1 delimiters, the surplus is absorbed into the last
+		// field rather than shifting subsequent column offsets.
+		fields := strings.SplitN(line, "\x1f", maxFields+1)
+		if len(fields) < minFields {
 			// Defensive: skip malformed lines rather than panic or return garbage.
 			continue
 		}
+		// V6a: reject lines with more than maxFields parts — an extra field means
+		// an injected \x1f was absorbed into the last slot, which indicates
+		// attempted delimiter injection. Drop the whole record.
+		if len(fields) > maxFields {
+			continue
+		}
+
+		// V6a: validate user-option fields for control-character injection.
+		// fields[7] = @perch_session, fields[8] = @perch_pane_status (when present).
+		perchSession := fields[7]
+		var perchStatus string
+		if len(fields) > 8 {
+			perchStatus = fields[8]
+		}
+		if containsControlChars(perchSession) || containsControlChars(perchStatus) {
+			continue
+		}
+
+		// V6b: only admit @perch_session values that look like a real session ID.
+		// Invalid values are cleared so buildLiveIndex skips them via its
+		// existing empty-PerchSession guard (no caller change needed).
+		if !validPerchSessionID(perchSession) {
+			perchSession = ""
+		}
+
 		p := Pane{
 			ID:           fields[0],
 			PID:          fields[1],
@@ -145,10 +231,8 @@ func parsePanes(raw []byte) []Pane {
 			Path:         fields[4],
 			Session:      fields[5],
 			Window:       fields[6],
-			PerchSession: fields[7],
-		}
-		if len(fields) > 8 {
-			p.PerchStatus = fields[8]
+			PerchSession: perchSession,
+			PerchStatus:  perchStatus,
 		}
 		panes = append(panes, p)
 	}

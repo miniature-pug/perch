@@ -593,7 +593,8 @@ func (m Model) updateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					return m.withToast("trust: save failed: " + serr.Error())
 				}
 			} else {
-				// Best-effort: proceed even if we can't load the store; hooks still run.
+				// Fail closed: if the trust store can't be loaded, abort the action
+				// (modal cleared, no re-dispatch) so hooks never run unapproved.
 				m.modal = modalState{}
 				return m.withToast("trust: load failed: " + err.Error())
 			}
