@@ -31,6 +31,7 @@ type launchSpec struct {
 type launchedMsg struct {
 	session string
 	window  string
+	pane    string // pane id of the newly created pane (non-empty on success)
 	err     error
 }
 
@@ -164,7 +165,94 @@ func (m Model) launchCmd(spec launchSpec) tea.Cmd {
 			Updated:     l.Now,
 		})
 
-		return launchedMsg{session: session, window: window}
+		return launchedMsg{session: session, window: window, pane: paneID}
+	}
+}
+
+// swapInCmd returns a tea.Cmd that displays the agent whose home pane id is
+// targetHome in the frame main slot. It uses planSwapIn to compute the minimal
+// op sequence, pre-sizes the agent session to the frame main dimensions (via
+// PaneSize + ResizeWindow) to avoid reflow shock, then calls SwapPane for each
+// op and nudges all clients to repaint with RefreshClient.
+//
+// Guard conditions that produce a no-op nil result (so the Update loop stays clean):
+//   - loader == nil (test/scaffold mode without a loader)
+//   - targetHome == "" (no target)
+//   - m.swapping is already true (a swap is in-flight)
+//
+// When the guard passes, swapInCmd sets m.swapping = true before returning the
+// Cmd, mirroring the capturing/polling guard pattern used by previewCmd and
+// statusPollCmd.
+func (m *Model) swapInCmd(targetHome string) tea.Cmd {
+	if m.loader == nil || targetHome == "" || m.swapping {
+		return func() tea.Msg { return swappedMsg{noop: true} }
+	}
+	ops := planSwapIn(m.displayedPaneID, m.placeholderPaneID, targetHome)
+	if len(ops) == 0 {
+		// targetHome == displayedPaneID → already showing.
+		return func() tea.Msg { return swappedMsg{target: targetHome, noop: true} }
+	}
+
+	m.swapping = true
+
+	t := m.loader.Tmux
+	ctx := m.loader.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	return func() tea.Msg {
+		for _, op := range ops {
+			if op.src == targetHome {
+				// Bring-in op: pre-size the agent session to the frame main slot
+				// dimensions to avoid reflow shock on the app running inside it.
+				// op.dst is the placeholder, which is currently in the frame main slot.
+				if w, h, err := t.PaneSize(ctx, op.dst); err == nil {
+					// Best-effort: ignore resize errors (headless server may not
+					// support resize; the swap still proceeds).
+					_ = t.ResizeWindow(ctx, targetHome, w, h)
+				}
+			}
+			if err := t.SwapPane(ctx, op.src, op.dst); err != nil {
+				return swappedMsg{err: err}
+			}
+		}
+		// Nudge all clients to repaint so the newly-displayed agent reflows.
+		_ = t.RefreshClient(ctx)
+		return swappedMsg{target: targetHome}
+	}
+}
+
+// quitFrameCmd returns a tea.Cmd that safely tears down the frame:
+//  1. Swaps the displayed agent back to its home session (planSwapHome) so the
+//     agent process is not killed with the frame.
+//  2. Kills the frame session (KillSession).
+//  3. Returns tea.QuitMsg to stop the Bubble Tea runtime.
+//
+// ORDER IS CRITICAL: swap-home must complete before kill-session, or the agent
+// pane that currently occupies the frame main slot is destroyed with the session.
+func (m Model) quitFrameCmd() tea.Cmd {
+	if m.loader == nil {
+		return tea.Quit
+	}
+	ops := planSwapHome(m.displayedPaneID, m.placeholderPaneID)
+	frameSession := m.frameSession
+	t := m.loader.Tmux
+	ctx := m.loader.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	return func() tea.Msg {
+		// Step 1: swap displayed agent home (best-effort — if it fails the user
+		// is losing data regardless; still proceed to kill the frame).
+		for _, op := range ops {
+			_ = t.SwapPane(ctx, op.src, op.dst)
+		}
+		// Step 2: kill the frame session.
+		_ = t.KillSession(ctx, frameSession)
+		// Step 3: stop the TUI.
+		return tea.QuitMsg{}
 	}
 }
 

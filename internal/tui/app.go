@@ -81,6 +81,26 @@ type Model struct {
 	// modal holds the currently-active modal prompt. Zero value (kind==modalNone)
 	// means no modal is visible.
 	modal modalState
+
+	// ── persistent-frame fields (M11-0 T3) ──────────────────────────────────
+	// These are empty in the old direct-TUI mode; inFrame() checks placeholderPaneID.
+
+	// frameSession is the name of the perch tmux session that owns this sidebar.
+	frameSession string
+
+	// placeholderPaneID is the disposable placeholder pane that lives in the frame
+	// main slot when no agent is displayed, or in the displayed agent's home session
+	// when an agent occupies the main slot. Non-empty iff the TUI is running inside
+	// a persistent frame.
+	placeholderPaneID string
+
+	// displayedPaneID is the agent pane currently occupying the frame main slot,
+	// or "" when the placeholder is there (nothing displayed yet).
+	displayedPaneID string
+
+	// swapping is true while a swapInCmd or quitFrameCmd is in-flight, serialising
+	// concurrent selection changes in the Update loop.
+	swapping bool
 }
 
 // New returns a Model with the given items pre-loaded.
@@ -120,6 +140,13 @@ func (m Model) WithLoader(l loader) Model {
 	return m
 }
 
+// inFrame reports whether the TUI is running inside a persistent perch frame.
+// When true, Enter on a live session swaps the agent into the frame main slot
+// instead of handing off the terminal with switch-client/attach-session.
+func (m Model) inFrame() bool {
+	return m.placeholderPaneID != ""
+}
+
 // Init satisfies tea.Model. When a loader is configured it fires the initial
 // data load and arms the status-tick; otherwise it does nothing (scaffold /
 // test mode).
@@ -147,6 +174,13 @@ type removeResultMsg struct {
 
 // killResultMsg is delivered after killCmd completes.
 type killResultMsg struct{}
+
+// swappedMsg is delivered after swapInCmd or quitFrameCmd completes.
+type swappedMsg struct {
+	target string // agent pane id that is now displayed (empty for no-op)
+	noop   bool   // true when the target was already displayed — no tmux calls made
+	err    error
+}
 
 // worktreePreflightMsg is delivered by worktreePreflightCmd after checking
 // the existing session→worktree mapping.
@@ -190,6 +224,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			return m.withToast("launch failed: " + msg.err.Error())
 		}
+		if m.inFrame() {
+			// Frame mode: swap the newly-launched pane into the main slot instead
+			// of handing off the terminal. swapInCmd sets m.swapping = true via
+			// pointer receiver. Hoisted out of return tuple to guarantee mutation
+			// order (Go spec leaves multi-expr return order unspecified).
+			cmd := m.swapInCmd(msg.pane)
+			return m, cmd
+		}
 		target := tmux.WindowTarget(msg.session, msg.window)
 		return m.attachTo(target)
 
@@ -204,6 +246,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.withToast("attach failed: " + msg.err.Error())
 		}
 		// Reloading the list after detach is deferred.
+		return m, nil
+
+	case swappedMsg:
+		m.swapping = false
+		if msg.err != nil {
+			return m.withToast("swap failed: " + msg.err.Error())
+		}
+		if !msg.noop {
+			m.displayedPaneID = msg.target
+		}
 		return m, nil
 
 	case preflightRemoveMsg:
@@ -357,6 +409,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case key.Matches(msg, m.keys.Quit):
+			if m.inFrame() {
+				return m, m.quitFrameCmd()
+			}
 			return m, tea.Quit
 
 		case key.Matches(msg, m.keys.Filter):
@@ -376,8 +431,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.withToast("not a session — nothing to open")
 			}
 			if it.live && it.liveTarget != "" {
-				// Switch to the existing window — NEVER relaunch a live session:
-				// concurrent --resume can corrupt the shared transcript.
+				if m.inFrame() {
+					// Frame mode: swap the agent into the main slot.
+					// swapInCmd sets m.swapping = true via pointer receiver; hoisted
+					// out of the return tuple to guarantee mutation order.
+					cmd := m.swapInCmd(it.captureTarget)
+					return m, cmd
+				}
+				// Legacy mode: switch-client / attach-session terminal handover.
+				// NEVER relaunch a live session: concurrent --resume can corrupt
+				// the shared transcript.
 				return m.attachTo(it.liveTarget)
 			}
 			return m, m.launchCmd(launchSpec{
