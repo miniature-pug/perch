@@ -118,7 +118,14 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 		rowStyle = styles.dimRow
 	}
 
-	_, _ = fmt.Fprint(w, cursor+glyph+" "+rowStyle.Render(rest))
+	row := cursor + glyph + " " + rowStyle.Render(rest)
+	// Truncate to the list's allocated width so a long title can't overflow the
+	// pane (the %-40s padding would otherwise make every row ~50 cols regardless
+	// of layout). Guard width==0 (unsized list in tests) to avoid blanking rows.
+	if width := m.Width(); width > 0 {
+		row = lipgloss.NewStyle().MaxWidth(width).Render(row)
+	}
+	_, _ = fmt.Fprint(w, row)
 }
 
 // statusFromOption maps the raw @perch_pane_status option value to a Status.

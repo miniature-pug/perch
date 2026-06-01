@@ -114,3 +114,22 @@ func TestView_HelpOverlayStaysWithinWidth(t *testing.T) {
 		t.Fatalf("View height with help overlay = %d, want %d", h, testViewH)
 	}
 }
+
+// At a wide terminal the list pane must respect its ~30% allocation so the
+// preview pane is not squeezed — i.e. the joined body fills exactly the width.
+func TestView_TwoPaneBodyFillsWidth(t *testing.T) {
+	// Several items with long titles that would each render ~50 cols if untruncated.
+	items := []list.Item{
+		item{title: strings.Repeat("t", 60), tool: "claude", isSession: true, live: true, liveTarget: "s:1"},
+		item{title: strings.Repeat("u", 60), tool: "opencode", isSession: true},
+	}
+	m := New(items)
+	m, _ = sizeModel(m, testViewW, testViewH)
+	if w := lipgloss.Width(m.View()); w != testViewW {
+		t.Fatalf("two-pane View width = %d, want exactly %d (list pane must respect its allocation)", w, testViewW)
+	}
+	// The list pane itself must be bounded to its allocated width, not ~50 cols.
+	if lw := m.list.Width(); lw <= 0 || lw >= testViewW/2 {
+		t.Fatalf("list width = %d, want a narrow left-pane allocation (< half of %d)", lw, testViewW)
+	}
+}
