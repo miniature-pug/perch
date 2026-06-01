@@ -46,15 +46,45 @@ func TestRun_FilePath_Exit2(t *testing.T) {
 	}
 }
 
-// ── setup stub ────────────────────────────────────────────────────────────────
+// ── setup ─────────────────────────────────────────────────────────────────────
 
 func TestRun_Setup_Exit0(t *testing.T) {
+	// Redirect HOME so InstallStatusHook writes to a temp dir, not the real home.
+	// Detection succeeds/fails based on PATH; either way the handler exits 0.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	out, _, code := callRun([]string{"setup"})
 	if code != 0 {
 		t.Errorf("expected exit 0 for setup, got %d", code)
 	}
 	if !strings.Contains(out, "setup") {
-		t.Errorf("expected setup message; got: %q", out)
+		t.Errorf("expected output mentioning 'setup'; got: %q", out)
+	}
+}
+
+func TestRun_Setup_ContainsSetupPrefix(t *testing.T) {
+	// PATH-independent: regardless of whether claude/opencode are installed,
+	// the handler always exits 0 and always emits at least one "setup:" line.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	out, _, code := callRun([]string{"setup"})
+	if code != 0 {
+		t.Errorf("expected exit 0 for setup, got %d", code)
+	}
+	if !strings.Contains(out, "setup:") {
+		t.Errorf("expected 'setup:' prefix in output; got: %q", out)
+	}
+}
+
+func TestRun_Setup_Replace_NotSupportedNote(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	out, _, code := callRun([]string{"setup", "--replace"})
+	if code != 0 {
+		t.Errorf("expected exit 0 for setup --replace (additive), got %d", code)
+	}
+	if !strings.Contains(out, "--replace not supported") {
+		t.Errorf("expected --replace note in output; got: %q", out)
 	}
 }
 

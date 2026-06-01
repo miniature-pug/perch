@@ -970,6 +970,26 @@ Build in this order; each milestone is independently runnable/testable.
    attach/jump; `perch setup` installs claude hooks and writes `perch-status.ts`;
    verify opencode status end-to-end. *Done when:* icons reflect a live agent's
    working/waiting/done.
+   — ✅ **DONE** (M8-1..M8-3). `internal/status` (`perch status set` → pane-scoped
+   `@perch_pane_status`; canonical `Machine` state machine, §20.3 table); admin
+   `tea.Tick` status poll with in-flight drop-guard, D6 `@perch_session` join,
+   coloured glyphs, selection-preserving apply (FD5/FD7); `@perch_pane_status`
+   appended last to `paneFormat` with parser min-guard 8 — no resurrect regression
+   (FD6). `perch setup` (`Adapter.InstallStatusHook`, FD9): claude `settings.json`
+   additive + idempotent + atomic merge that **refuses to clobber** malformed hooks
+   and preserves file mode + numeric fidelity; opencode `perch-status.ts` (embedded,
+   hand-port of `Machine`) written atomically. The §9 `@perch_status` scope
+   contradiction resolved → pane-scoped only (FD1); window-option/status-bar dropped
+   from v1. claude hooks schema (incl. `Notification` `permission_prompt|elicitation_dialog`
+   matcher) + opencode plugin API/events primary-source verified; §9's `question.*`
+   removed (not in the v1.15.x union). Gates green (unit + `-race` integration on real
+   git + tmux 3.6, lint 0, `go mod verify`). **Honesty:** *demonstrated* — status set,
+   Machine §20.3, live tick read/render/colour, additive/idempotent/atomic/refuse-clobber
+   merge, doctor agreement — all hermetic (`t.Setenv HOME`, real config never touched);
+   *manual/deferred* — live opencode e2e (needs live LLM; Go `Machine` is the tested
+   logic, TS is a reviewed port), claude live-hook-firing, `CLAUDE_CONFIG_DIR`/XDG
+   overrides, `--replace`/standalone `perch attach`/auto-clear-on-focus → M9. See
+   `docs/superpowers/plans/2026-05-31-perch-m8-status.md`.
 9. **UX layer** — command/filter bar, contextual keybindings + generated help,
    confirmation modals, screen modes, theme pass, empty/error/small-screen states,
    README with install + usage.

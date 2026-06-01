@@ -1,6 +1,6 @@
 # M8 — Admin / status pipeline (sub-plan)
 
-Status: **IN PROGRESS**
+Status: **DONE** (M8-1 `ef50adf`, M8-2 `89e29f6`, M8-3 + data-loss fixes — see closeout)
 
 Master plan item 8 (§9, §10, §11, §20.3, §21.5). DoD: *icons reflect a live agent's
 working / waiting / done.* Built milestone-by-milestone on `feat/perch-v1` via
@@ -138,8 +138,21 @@ setup` detects installed tools (reuse `Detect()`) and calls `InstallStatusHook()
 
 ---
 
-## Honesty (to fill at closeout)
-- *demonstrated:* …
-- *manual / deferred:* live opencode e2e (L4); claude live-hook-firing (manual note —
-  hermetic test proves merge + admin read/render/colour, not the hook actually firing
-  inside a live claude session).
+## Primary-source verification (done before M8-3; corrects §9)
+- **claude** (code.claude.com/docs hooks): structure `{hooks:{<Event>:[{matcher,hooks:[{type:"command",command}]}]}}` confirmed; `Notification` matcher DOES support subtypes — `permission_prompt`, `elicitation_dialog` (regex alternation used); command hooks inherit the claude env (so `$TMUX_PANE` is present); write `~/.claude/settings.json`.
+- **opencode** (opencode.ai/docs + packages/sdk types, v1.15.x): plugins auto-load from `~/.config/opencode/plugins/*.ts`; verified events `session.status` (`properties.status.type` ∈ busy/retry/idle, `properties.sessionID`), `session.idle`, `message.updated` (`properties.info.role`), `permission.updated`→waiting, `permission.replied`→working. **`question.*` does NOT exist** in the v1.15.x union (§9 listed it — removed). `permission.asked` is not in the typed union either (may fire untyped, lags the union) — the plugin handles it defensively.
+
+## Honesty (closeout)
+*demonstrated (hermetic / unit / integration):*
+- `perch status set` writes pane-scoped `@perch_pane_status` (FakeRunner argv-exact); no-op exit-0 outside tmux.
+- `status.Machine` passes the §20.3 table (dedup, stale-busy gate, re-arm on user message, waiting↔working, independent sessions); 95.3% pkg coverage.
+- admin live tick reads `@perch_pane_status` and renders coloured working/waiting/done glyphs; selection preserved across the 1 s poll; in-flight drop-guard; applied-filter view does not blank (SetItems re-filter cmd captured). **FD6: no resurrect/tmux regression** — unit + `-race` integration green (field appended last, parser min-guard 8).
+- `perch setup`: claude `settings.json` merge is **additive** (preserves foreign hooks + unrelated keys), **idempotent** (`perch status set` substring dedup), **atomic** (temp+rename), **refuses to clobber** a malformed-but-present `hooks`/event key (returns error), **preserves file mode** + numeric fidelity (`UseNumber`); opencode plugin written atomically, other plugins untouched. `TestDoctorSetupAgreement` proves doctor recognizes both, all in a `t.Setenv("HOME", tmp)` sandbox — the real `~/.claude` was never touched.
+
+*manual / deferred:*
+- **L4** live opencode end-to-end status — needs a live LLM + auth + network; not hermetically drivable, and a JS test runner would violate the zero-npm ethos. The Go `Machine` is the tested logic; `resources/perch-status.ts` is a reviewed hand-port of it.
+- claude live-hook-firing — hermetic test proves the merge + doctor recognition + admin read/render/colour; the hook actually firing inside a live claude session is a manual note.
+- opencode event uncertainties (§18.1): `permission.asked` and the `session.status`-idle branch are defensive (may be dead if those don't fire); `message.updated` sessionID resolved robustly as `info.sessionID ?? props.sessionID` — unverified at runtime.
+- `CLAUDE_CONFIG_DIR` / `XDG_CONFIG_HOME` overrides not handled — setup writes `~/.claude/settings.json` + `~/.config/opencode/plugins/` (matches doctor exactly). Documented v1 limitation.
+- `handleStatus` tmux-error (exit 1) branch not unit-covered (`tmux.New()` not injectable without a DI refactor; `Set` logic covered at the package level).
+- **L1** `perch setup --replace`, **L2** standalone `perch attach <query>`, **L3** auto-clear-on-focus → **M9**.

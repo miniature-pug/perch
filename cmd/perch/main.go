@@ -43,8 +43,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	switch args[0] {
 	case "setup":
-		_, _ = fmt.Fprintln(stdout, "setup: not yet implemented (M8)")
-		return 0
+		return handleSetup(args[1:], stdout, stderr)
 	case "resurrect":
 		return handleResurrect(stdout, stderr)
 	case "status":
@@ -188,6 +187,55 @@ func handleStatus(args []string, stdout, stderr io.Writer) int {
 	deps := status.Deps{Tmux: tmux.New()}
 	if err := status.Set(context.Background(), deps, pane, st); err != nil {
 		_, _ = fmt.Fprintf(stderr, "perch status set: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// handleSetup implements `perch setup`. It detects installed AI coding tools and
+// calls InstallStatusHook on each, reporting the result to stdout. The operation
+// is additive and idempotent — re-running is safe. --replace is out of scope in
+// v1 (L1); if supplied, a note is printed and the command proceeds additively.
+func handleSetup(args []string, stdout, stderr io.Writer) int {
+	// L1: --replace is deferred to M9; acknowledge and proceed additively.
+	for _, a := range args {
+		if a == "--replace" {
+			_, _ = fmt.Fprintln(stdout, "note: --replace not supported in v1 (additive only)")
+		}
+	}
+
+	adapters := []agent.Adapter{
+		agent.NewClaude(),
+		agent.NewOpencode(),
+	}
+
+	anyError := false
+	anyInstalled := false
+
+	for _, a := range adapters {
+		if !a.Detect() {
+			_, _ = fmt.Fprintf(stdout, "setup: %s not found — skipped\n", a.Name())
+			continue
+		}
+		if err := a.InstallStatusHook(); err != nil {
+			_, _ = fmt.Fprintf(stderr, "setup: %s: %v\n", a.Name(), err)
+			anyError = true
+			continue
+		}
+		anyInstalled = true
+		switch a.Name() {
+		case "claude":
+			_, _ = fmt.Fprintf(stdout, "setup: claude hooks installed (~/.claude/settings.json)\n")
+		case "opencode":
+			_, _ = fmt.Fprintf(stdout, "setup: opencode plugin installed (~/.config/opencode/plugins/perch-status.ts)\n")
+		}
+	}
+
+	if !anyInstalled && !anyError {
+		_, _ = fmt.Fprintln(stdout, "setup: no supported tools found — nothing installed")
+	}
+
+	if anyError {
 		return 1
 	}
 	return 0

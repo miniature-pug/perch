@@ -18,11 +18,9 @@ import (
 // coding tool. Each tool (claude, opencode) provides one Adapter implementation.
 //
 // The following methods from master-plan §4 are intentionally absent from this interface:
-// InstallStatusHook, ReadyHeuristic, and TrustPrompt are deliberately not
-// included here because none of them has an honest implementation until the setup
-// and TUI milestones land: status hooks belong to "perch setup" and
-// readiness/trust heuristics require UI surfaces that do not exist yet. They
-// will be added to this interface at those milestones, not speculatively now.
+// ReadyHeuristic and TrustPrompt are deliberately not included here because
+// neither has an honest implementation until the TUI milestones that require
+// those UI surfaces. They will be added to this interface at those milestones.
 type Adapter interface {
 	// Name returns the canonical tool identifier — "claude" or "opencode" —
 	// matching the model.Tool constants. Used in log messages, session records,
@@ -57,6 +55,14 @@ type Adapter interface {
 	// session, configured by opts. Fields in opts that do not apply to this
 	// tool are silently ignored.
 	NewArgs(opts NewOpts) []string
+
+	// InstallStatusHook merges perch's status hooks into the tool's
+	// configuration on disk. The operation is additive and idempotent: existing
+	// third-party hooks are never modified, and re-running never produces
+	// duplicate perch entries. Paths are derived from os.UserHomeDir() so that
+	// t.Setenv("HOME", t.TempDir()) fully sandboxes tests. Returns an error if
+	// the configuration file cannot be read, merged, or written.
+	InstallStatusHook() error
 }
 
 // NewOpts carries the per-session configuration for a fresh launch.

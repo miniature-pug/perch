@@ -2,8 +2,10 @@ package agent
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -119,6 +121,184 @@ func (c Claude) NewArgs(opts NewOpts) []string {
 		args = append(args, opts.Prompt)
 	}
 	return args
+}
+
+// ── InstallStatusHook ─────────────────────────────────────────────────────────
+
+// InstallStatusHook merges perch's four status hooks into ~/.claude/settings.json.
+// It reads the existing file (treating absence as {}), merges additively and
+// idempotently, then writes atomically via a temp-file rename. Paths flow through
+// os.UserHomeDir() — not c.Home — so t.Setenv("HOME", tmp) fully sandboxes tests
+// and setup/doctor always agree on the same path regardless of CLAUDE_CONFIG_DIR.
+func (c Claude) InstallStatusHook() error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("claude InstallStatusHook: home dir: %w", err)
+	}
+	dir := filepath.Join(home, ".claude")
+	path := filepath.Join(dir, "settings.json")
+
+	existing, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("claude InstallStatusHook: read settings.json: %w", err)
+	}
+	// missing file → treat as empty object (IsNotExist leaves existing == nil)
+
+	merged, err := mergeClaudeHooks(existing)
+	if err != nil {
+		return fmt.Errorf("claude InstallStatusHook: merge: %w", err)
+	}
+
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("claude InstallStatusHook: mkdir: %w", err)
+	}
+
+	// Atomic write: create temp in the same directory so rename is one syscall.
+	tmp, err := os.CreateTemp(dir, ".settings-*.json")
+	if err != nil {
+		return fmt.Errorf("claude InstallStatusHook: create temp: %w", err)
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(merged); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("claude InstallStatusHook: write temp: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("claude InstallStatusHook: close temp: %w", err)
+	}
+	mode := os.FileMode(0o644)
+	if fi, err := os.Stat(path); err == nil {
+		mode = fi.Mode().Perm()
+	}
+	if err := os.Chmod(tmpName, mode); err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("claude InstallStatusHook: chmod temp: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("claude InstallStatusHook: rename: %w", err)
+	}
+	return nil
+}
+
+// perchHooks lists the four hook entries perch installs into claude's settings.
+// Each entry is an (event, matcher, command) triple.
+var perchHooks = []struct {
+	event, matcher, command string
+}{
+	{"PostToolUse", "", "perch status set working"},
+	{"UserPromptSubmit", "", "perch status set working"},
+	{"Stop", "", "perch status set done"},
+	{"Notification", "permission_prompt|elicitation_dialog", "perch status set waiting"},
+}
+
+// mergeClaudeHooks merges perch's status hooks into existing settings.json
+// bytes. existing may be nil or empty (treated as {}). The function:
+//  1. Unmarshals into map[string]any, preserving all existing keys.
+//  2. Ensures m["hooks"] is a map[string]any.
+//  3. For each of the four events, appends the perch matcher-group only if no
+//     existing group already has a hooks[].command containing "perch status set".
+//     This substring check makes idempotency safe across reformatting/ordering.
+//  4. Marshals back with 2-space indentation + trailing newline.
+//
+// The function is pure (no I/O) so table tests cover it exhaustively.
+func mergeClaudeHooks(existing []byte) ([]byte, error) {
+	var m map[string]any
+
+	trimmed := strings.TrimSpace(string(existing))
+	if trimmed != "" {
+		dec := json.NewDecoder(bytes.NewReader(existing))
+		dec.UseNumber()
+		if err := dec.Decode(&m); err != nil {
+			return nil, fmt.Errorf("mergeClaudeHooks: malformed JSON: %w", err)
+		}
+	}
+	if m == nil {
+		m = make(map[string]any)
+	}
+
+	// Ensure hooks is a map[string]any. A missing key → create empty map.
+	// An existing key with the wrong type is refused to avoid data loss.
+	var hooksMap map[string]any
+	if raw, exists := m["hooks"]; exists {
+		hm, ok := raw.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf(`mergeClaudeHooks: settings.json "hooks" is %T, not an object; refusing to overwrite — resolve manually`, raw)
+		}
+		hooksMap = hm
+	} else {
+		hooksMap = make(map[string]any)
+	}
+	m["hooks"] = hooksMap
+
+	for _, h := range perchHooks {
+		// Ensure the event key holds a []any. A missing key → create empty slice.
+		// An existing key with the wrong type is refused to avoid data loss.
+		var evSlice []any
+		if raw, exists := hooksMap[h.event]; exists {
+			es, ok := raw.([]any)
+			if !ok {
+				return nil, fmt.Errorf(`mergeClaudeHooks: hooks.%s is %T, not an array; refusing to overwrite`, h.event, raw)
+			}
+			evSlice = es
+		} else {
+			evSlice = []any{}
+		}
+
+		// Idempotency: skip append if any existing group already references us.
+		if perchGroupPresent(evSlice) {
+			hooksMap[h.event] = evSlice
+			continue
+		}
+
+		// Append the new matcher-group.
+		group := map[string]any{
+			"matcher": h.matcher,
+			"hooks": []any{
+				map[string]any{
+					"type":    "command",
+					"command": h.command,
+				},
+			},
+		}
+		evSlice = append(evSlice, group)
+		hooksMap[h.event] = evSlice
+	}
+
+	out, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("mergeClaudeHooks: marshal: %w", err)
+	}
+	return append(out, '\n'), nil
+}
+
+// perchGroupPresent reports whether any element of the slice is a
+// matcher-group whose nested hooks[].command contains "perch status set".
+// Uses a substring check so it matches regardless of argument or whitespace.
+func perchGroupPresent(slice []any) bool {
+	for _, item := range slice {
+		group, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		hookList, ok := group["hooks"].([]any)
+		if !ok {
+			continue
+		}
+		for _, hookRaw := range hookList {
+			hook, ok := hookRaw.(map[string]any)
+			if !ok {
+				continue
+			}
+			cmd, _ := hook["command"].(string)
+			if strings.Contains(cmd, "perch status set") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ── slug decode ───────────────────────────────────────────────────────────────

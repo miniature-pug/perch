@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/Miniature-Pug/perch/internal/agent"
 )
 
 // ── fakeSystem ────────────────────────────────────────────────────────────────
@@ -568,5 +570,34 @@ func TestRunOutput_ContainsPaths(t *testing.T) {
 	output := out.String()
 	if !strings.Contains(output, "/usr/bin/tmux") {
 		t.Errorf("expected tmux path in output; got:\n%s", output)
+	}
+}
+
+// ── Doctor-setup agreement ────────────────────────────────────────────────────
+
+// TestDoctorSetupAgreement proves that after agent.InstallStatusHook writes to
+// a sandboxed home, the doctor's real claudeHooksOk and opencodePluginOk
+// functions (which use os.UserHomeDir()) recognise the installed artefacts.
+// Both setup and doctor must flow through $HOME so the HOME redirect fully
+// sandboxes and ties them together.
+func TestDoctorSetupAgreement(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CLAUDE_CONFIG_DIR", "") // prevent CLAUDE_CONFIG_DIR from escaping sandbox
+
+	// Install hooks via real adapters — writes to the sandboxed HOME.
+	if err := agent.NewClaude().InstallStatusHook(); err != nil {
+		t.Fatalf("claude InstallStatusHook: %v", err)
+	}
+	if err := agent.NewOpencode().InstallStatusHook(); err != nil {
+		t.Fatalf("opencode InstallStatusHook: %v", err)
+	}
+
+	// Doctor checks via RealSystem — also reads from $HOME.
+	sys := RealSystem()
+	if ok, msg := claudeHooksOk(sys); !ok {
+		t.Errorf("claudeHooksOk after install: false (%s)", msg)
+	}
+	if ok, msg := opencodePluginOk(sys); !ok {
+		t.Errorf("opencodePluginOk after install: false (%s)", msg)
 	}
 }

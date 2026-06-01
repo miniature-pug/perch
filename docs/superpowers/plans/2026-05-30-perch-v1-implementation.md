@@ -315,9 +315,10 @@ report status, prove the DoD green, wait for review.
 
 ### M8 — Admin/status  *(tmux REQUIRED)*
 
-- [ ] Objective: live status tick + drop-guard, status colours, `x` kill, attach/jump;
+- [x] Objective: live status tick + drop-guard, status colours, `x` kill, attach/jump;
       `perch setup` installs claude hooks + writes `perch-status.ts`; verify opencode
-      status end-to-end.
+      status end-to-end. ✅ DONE (M8-1..M8-3) — see
+      `docs/superpowers/plans/2026-05-31-perch-m8-status.md`.
 - Spec refs: `plan.md §9` (whole pipeline + state machine), `§21.5` (additive setup),
       `§16.8`, `§18.1`. `resources/perch-status.ts` + claude settings snippet.
 - Deliverables: `internal/status` (`perch status set`, option read helpers, state

@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/Miniature-Pug/perch/internal/model"
 	"github.com/Miniature-Pug/perch/internal/proc"
+	"github.com/Miniature-Pug/perch/resources"
 )
 
 // Opencode is the Adapter for the opencode CLI. Unlike claude, opencode exposes
@@ -107,6 +110,58 @@ func (o Opencode) NewArgs(opts NewOpts) []string {
 		args = append(args, "--prompt", opts.Prompt)
 	}
 	return args
+}
+
+// ── InstallStatusHook ─────────────────────────────────────────────────────────
+
+// InstallStatusHook writes the embedded perch-status.ts plugin to
+// ~/.config/opencode/plugins/perch-status.ts. opencode auto-discovers any *.ts
+// file under that directory. Existing plugins are left untouched; only
+// perch-status.ts is written (overwrite-safe — it is our file).
+//
+// The path uses $HOME/.config, not $XDG_CONFIG_HOME, so it matches the path
+// that doctor's opencodePluginOk checks — both must agree or setup and doctor
+// silently disagree. Keep in sync with doctor.go:opencodePluginOk.
+func (o Opencode) InstallStatusHook() error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("opencode InstallStatusHook: home dir: %w", err)
+	}
+	dir := filepath.Join(home, ".config", "opencode", "plugins")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("opencode InstallStatusHook: mkdir: %w", err)
+	}
+
+	path := filepath.Join(dir, "perch-status.ts")
+
+	// Atomic write: temp file in the same directory so rename is one syscall.
+	tmp, err := os.CreateTemp(dir, ".perch-status-*.ts")
+	if err != nil {
+		return fmt.Errorf("opencode InstallStatusHook: create temp: %w", err)
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.WriteString(resources.PerchStatusTS); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("opencode InstallStatusHook: write temp: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("opencode InstallStatusHook: close temp: %w", err)
+	}
+	mode := os.FileMode(0o644)
+	if fi, err := os.Stat(path); err == nil {
+		mode = fi.Mode().Perm()
+	}
+	if err := os.Chmod(tmpName, mode); err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("opencode InstallStatusHook: chmod temp: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("opencode InstallStatusHook: rename: %w", err)
+	}
+	return nil
 }
 
 // ── session enumeration ──────────────────────────────────────────────────────────
