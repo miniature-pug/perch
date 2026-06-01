@@ -15,6 +15,7 @@ import (
 	"github.com/Miniature-Pug/perch/internal/doctor"
 	"github.com/Miniature-Pug/perch/internal/model"
 	"github.com/Miniature-Pug/perch/internal/proc"
+	"github.com/Miniature-Pug/perch/internal/resurrect"
 	"github.com/Miniature-Pug/perch/internal/state"
 	"github.com/Miniature-Pug/perch/internal/tmux"
 	"github.com/Miniature-Pug/perch/internal/tui"
@@ -43,8 +44,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stdout, "setup: not yet implemented (M8)")
 		return 0
 	case "resurrect":
-		_, _ = fmt.Fprintln(stdout, "resurrect: not yet implemented")
-		return 0
+		return handleResurrect(stdout, stderr)
 	case "status":
 		return handleStatus(args[1:], stdout, stderr)
 	case "doctor":
@@ -92,6 +92,60 @@ func handleTUI(root string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stderr, "perch: %v\n", err)
 		return 1
 	}
+	return 0
+}
+
+// handleResurrect implements `perch resurrect`. It resolves the state directory,
+// runs the boot-id reconcile engine, and prints a human-readable summary to
+// stdout. The only hard exit-1 condition is an unreadable state directory or a
+// reconcile error; an empty reconcile (no shadow records) exits 0 with a
+// "nothing to reconcile" message.
+func handleResurrect(stdout, stderr io.Writer) int {
+	baseDir, err := state.StateDir()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "perch: %v\n", err)
+		return 1
+	}
+
+	deps := resurrect.Deps{
+		Tmux:    tmux.New(),
+		Runner:  proc.ExecRunner{},
+		BaseDir: baseDir,
+		Now:     time.Now().Unix(),
+	}
+
+	report, err := resurrect.Reconcile(context.Background(), deps)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "perch: %v\n", err)
+		return 1
+	}
+
+	nRestored := len(report.Restored)
+	nPruned := len(report.Pruned)
+	nKept := len(report.Kept)
+	nSkipped := len(report.Skipped)
+
+	if nRestored == 0 && nPruned == 0 && nKept == 0 && nSkipped == 0 {
+		_, _ = fmt.Fprintln(stdout, "resurrect: nothing to reconcile")
+		return 0
+	}
+
+	_, _ = fmt.Fprintf(stdout, "resurrect: %d restored, %d pruned, %d kept, %d skipped\n",
+		nRestored, nPruned, nKept, nSkipped)
+
+	for _, key := range report.Restored {
+		_, _ = fmt.Fprintf(stdout, "  restored %s\n", key)
+	}
+	for _, key := range report.Pruned {
+		_, _ = fmt.Fprintf(stdout, "  pruned   %s\n", key)
+	}
+	for _, key := range report.Kept {
+		_, _ = fmt.Fprintf(stdout, "  kept     %s\n", key)
+	}
+	for _, s := range report.Skipped {
+		_, _ = fmt.Fprintf(stdout, "  skipped  %s (%s): %s\n", s.PaneKey, s.Tree, s.Reason)
+	}
+
 	return 0
 }
 

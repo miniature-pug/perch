@@ -58,15 +58,20 @@ func TestRun_Setup_Exit0(t *testing.T) {
 	}
 }
 
-// ── resurrect stub ────────────────────────────────────────────────────────────
+// ── resurrect (empty state dir → nothing to reconcile) ───────────────────────
 
 func TestRun_Resurrect_Exit0(t *testing.T) {
+	// Point state.StateDir() at a temp dir with no windows/ records so
+	// Reconcile early-returns without touching tmux. The test is fully hermetic.
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", dir)
+
 	out, _, code := callRun([]string{"resurrect"})
 	if code != 0 {
-		t.Errorf("expected exit 0 for resurrect, got %d", code)
+		t.Errorf("expected exit 0 for resurrect with empty state dir, got %d", code)
 	}
-	if !strings.Contains(out, "resurrect") {
-		t.Errorf("expected resurrect message; got: %q", out)
+	if !strings.Contains(out, "nothing to reconcile") {
+		t.Errorf("expected 'nothing to reconcile' message; got: %q", out)
 	}
 }
 
