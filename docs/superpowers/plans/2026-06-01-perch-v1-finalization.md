@@ -14,6 +14,25 @@ State of play at handoff: M0–M9 DONE on `feat/perch-v1` (16 M9 commits, last `
 
 ---
 
+## CORE MODEL CHANGE (2026-06-01) — persistent-frame switcher ("website in a terminal")
+
+The user clarified the product after testing `./bin/perch`: pressing `↵` resumed a session but "everything else is gone." That is the current model (perch = one-shot picker; `↵` does `switch-client`/`attach` and hands the whole terminal to the session). **That model is replaced.** The intended product:
+
+- **Persistent sidebar.** The session list stays on screen at all times (does not vanish on select).
+- **Live main area.** Selecting a session shows it **live and interactive** in a main content area, with the sidebar still visible. Terminal is divided into sections (sidebar + main; later possibly more).
+- **Resume once, stay alive.** Switching between sessions only **changes what the main area displays** — it does NOT re-run resume. A session is resumed once and stays alive until perch is closed with `q`. The agent harness (claude/opencode) on the other end keeps full interactive functionality throughout.
+- **Seamless switching** between sidebar and the live session, and between sessions.
+
+**Design (load-bearing — being verified by a design spike):** Bubbletea cannot host a live interactive child PTY inside its own render area, and §17 forbids reimplementing a multiplexer ("tmux is the engine"). So the implementation is a **tmux pane layout**: perch runs as the **sidebar pane**; the **main pane hosts the selected live session**; perch orchestrates tmux (`join-pane`/`break-pane`/`swap-pane`, plus session/window lifecycle) to swap which session occupies the main pane without restarting it. Focus moves between sidebar and main via tmux pane navigation (likely a perch-installed binding for no-prefix movement). `q` closes perch; sessions persist (detached tmux sessions).
+
+**Spec impact:** This REVERSES the §11 "↵ = single switch-client, instant handoff" interaction and the implicit "perch is a transient picker" stance. It is consistent with §2 (tmux engine) and §17's no-daemon rule (perch IS the running sidebar; no background process). §17's "no reimplementing a multiplexer" still holds — we drive tmux, not replace it. §11 must be rewritten around the persistent two-section layout; the capture-pane preview (static snapshot) is replaced by a LIVE main pane for the focused session (capture-pane may remain for *non-focused* row previews in the sidebar, TBD by the spike).
+
+**Spike deliverable (write to `docs/superpowers/plans/2026-06-01-perch-core-model-spike.md`):** verify `join-pane`/`break-pane`/`swap-pane` across detached sessions on real tmux 3.6; define the session lifecycle (each session = its own detached tmux session/window; how it's pulled into / pushed out of the main pane on switch without dying); sidebar↔main focus model; resize/redraw; what shows in the main pane before any selection; how `perch resurrect`/status/discovery interact; and how prior milestones (M5 launch, M6 worktree, M8 status, M9 UX overlays) port onto the new layout. THEN replan M11 around it. Until the spike confirms mechanics, do not rewrite the TUI.
+
+This becomes the centerpiece of M11; M11-0/M11-1 below are reframed by it (the popup idea is dropped — a popup does not keep the sidebar visible).
+
+---
+
 ## M10 — Security deep-dive (DO FIRST; a hole here outweighs any feature)
 
 **Method:** one read-only investigator subagent per vector → returns file:line + verdict (exploitable / mitigated / N-A) with primary-source evidence (read the actual code, the vendored libs, the §20.1 Runner usage). Then fix each confirmed hole TDD, asserting the fix via `FakeRunner.Calls` (no real spawns) and hermetic FS tests (`t.Setenv HOME`, temp dirs). Re-verify. Write a `docs/.../security-audit.md` findings ledger (durable). Threat model = (a) malicious/untrusted **repo** opened in perch, (b) malicious **agent output**, (c) malicious **tmux/env** state, (d) supply chain.
@@ -57,11 +76,8 @@ Generate `:`-command help into the `?` overlay. 100 ms debounce only if a comman
 ### M11-2 — `perch attach <query>` (reverses FD-M9-2)
 CLI subcommand (`cmd/perch/main.go` dispatch): fuzzy-match a session by title/branch/project across discovery, then `tmux switch-client` (inside tmux) or `attach` (outside), no TUI. Reuse discovery + the existing attach path (`internal/tui` attachTo logic → likely extract a shared helper into a non-TUI package). Handle: 0 matches (error, exit non-zero), 1 match (attach), N matches (list candidates, exit non-zero with guidance — or pick best by frecency? decide: deterministic best-match by frecency + a `--print`/list affordance). Query is untrusted input → argv-safe (M10 #3). Tests via FakeRunner asserting the switch/attach argv; integration test on real tmux.
 
-### M11-0 — Switcher round-trip / return-to-perch (CORE — user hit this 2026-06-01)
-After `↵` the user is dropped into the session with **no perch affordance to get back or switch to another** — inside tmux `↵`=`switch-client` (perch left running in its own window, no hint to return), outside tmux `↵`=`attach-session` via `ExecProcess` (detach returns, but undiscoverable). For a switcher this is the whole point and must be seamless. Ship:
-1. **tmux popup workflow** (recommended default, sesh/sessionx pattern): `perch setup` installs a tmux binding `bind-key o display-popup -E -w 90% -h 90% perch` (key configurable). `prefix o` → perch popup → pick → popup closes into the session; `prefix o` again to flip. Document prominently in README. Confirm with user whether to make this the default (asked 2026-06-01).
-2. **Discoverability** regardless of popup: document the return path (detach `prefix d` outside tmux; `prefix l`/`w` inside) in README + `perch doctor`/first-run hint; consider a brief on-launch hint line.
-3. Make `↵` behavior coherent with whichever model is chosen (popup-aware: when run via display-popup, switching the client auto-dismisses the popup — verify `display-popup -E` closes on the wrapped process exit / on switch-client).
+### M11-0 — Persistent-frame switcher = THE core build
+This replaces the old picker/handoff `↵` behavior. See **CORE MODEL CHANGE (2026-06-01)** above and the spike doc. Build the tmux pane layout (sidebar pane + live main pane), the swap-on-select that keeps sessions alive (no re-resume), sidebar↔main focus, and `q`-closes-frame-sessions-persist. The popup/`switch-client`/`attach` ideas are dropped (a popup/handoff does not keep the sidebar visible). Do the spike FIRST, then replan this milestone's bite-sized tasks.
 
 ### M11-3 — pull-in deferred L-items
 - **L1 `perch setup --replace`** — re-install hooks/plugin overwriting an existing perch block (still additive to *foreign* config; only replaces the perch-owned section). Idempotent, atomic, refuse-malformed (same guarantees as M8 setup).
