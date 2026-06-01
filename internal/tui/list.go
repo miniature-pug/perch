@@ -79,6 +79,10 @@ func (i item) FilterValue() string {
 	return i.project + " " + i.tree + " " + i.title + " " + i.tool
 }
 
+// rowTruncStyle truncates a rendered list row to the pane width. MaxWidth returns
+// a copy, so this shared base style is never mutated.
+var rowTruncStyle = lipgloss.NewStyle()
+
 // itemDelegate renders each list row with a cursor marker, status glyph, tool
 // label, title, and relative time.
 type itemDelegate struct{}
@@ -123,7 +127,7 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 	// pane (the %-40s padding would otherwise make every row ~50 cols regardless
 	// of layout). Guard width==0 (unsized list in tests) to avoid blanking rows.
 	if width := m.Width(); width > 0 {
-		row = lipgloss.NewStyle().MaxWidth(width).Render(row)
+		row = rowTruncStyle.MaxWidth(width).Render(row)
 	}
 	_, _ = fmt.Fprint(w, row)
 }

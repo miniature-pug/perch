@@ -469,7 +469,7 @@ func (m Model) View() string {
 		m.help.Width = m.width
 		footerText = m.help.ShortHelpView(m.ShortHelp())
 	}
-	footer := styles.footer.Render(footerText)
+	footer := styles.footer.MaxWidth(m.width).Render(footerText)
 
 	// messageLine occupies the reserved top row (relayout always budgets one row
 	// for it). toast takes priority over the load-error bar; when neither is set it

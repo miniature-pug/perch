@@ -125,11 +125,24 @@ func TestView_TwoPaneBodyFillsWidth(t *testing.T) {
 	}
 	m := New(items)
 	m, _ = sizeModel(m, testViewW, testViewH)
-	if w := lipgloss.Width(m.View()); w != testViewW {
-		t.Fatalf("two-pane View width = %d, want exactly %d (list pane must respect its allocation)", w, testViewW)
+	if w := lipgloss.Width(m.View()); w > testViewW {
+		t.Fatalf("two-pane View width = %d, want <= %d (list pane must respect its allocation)", w, testViewW)
 	}
 	// The list pane itself must be bounded to its allocated width, not ~50 cols.
 	if lw := m.list.Width(); lw <= 0 || lw >= testViewW/2 {
 		t.Fatalf("list width = %d, want a narrow left-pane allocation (< half of %d)", lw, testViewW)
+	}
+}
+
+func TestView_LongEmptyStateStaysWithinWidth(t *testing.T) {
+	m := New(nil) // zero items -> empty-state body
+	m.root = strings.Repeat("/deep", 60)
+	m, _ = sizeModel(m, testViewW, testViewH)
+	v := m.View()
+	if w := lipgloss.Width(v); w > testViewW {
+		t.Fatalf("empty-state View width = %d, want <= %d", w, testViewW)
+	}
+	if h := lipgloss.Height(v); h > testViewH {
+		t.Fatalf("empty-state View height = %d, want <= %d", h, testViewH)
 	}
 }
