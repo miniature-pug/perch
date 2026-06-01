@@ -462,6 +462,28 @@ func TestCapturePane_WithScrollback(t *testing.T) {
 	}
 }
 
+// TestCapturePane_NeverUsesEscapeFlag locks the V5 control: the preview must
+// capture rendered text only (`-p`), never `-e`. With `-e`, tmux re-emits raw
+// terminal control sequences from untrusted agent output (OSC 52 clipboard, title
+// spoof, etc.) straight into the user's terminal. If `-e` is ever needed, a
+// CSI-SGR-only sanitizer must be added before this guard is relaxed.
+func TestCapturePane_NeverUsesEscapeFlag(t *testing.T) {
+	for _, scrollback := range []int{0, 100} {
+		r := proc.NewFakeRunner()
+		r.Default = &proc.FakeResult{Stdout: []byte("screen\n")}
+		o := Tmux{Runner: r, Bin: "tmux"}
+		if _, err := o.CapturePane(context.Background(), "%3", scrollback); err != nil {
+			t.Fatalf("scrollback=%d: unexpected error: %v", scrollback, err)
+		}
+		for _, arg := range r.Calls[0].Args {
+			if arg == "-e" {
+				t.Errorf("scrollback=%d: capture-pane must never pass -e (raw escape passthrough): %v",
+					scrollback, r.Calls[0].Args)
+			}
+		}
+	}
+}
+
 // ── GetPaneOption ─────────────────────────────────────────────────────────────
 
 func TestGetPaneOption_TrimsAndReturnsValue(t *testing.T) {

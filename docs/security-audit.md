@@ -112,6 +112,24 @@ needed, a CSI-SGR-only sanitizer becomes mandatory before render.
 - **V13:** clean — `-trimpath` on every build path, ldflags inject only `main.version`, no secrets in
   tracked files, `.gitignore`/`.tool-versions` well-formed, cross target Linux/macOS only.
 
+## Resolution (M10 — all confirmed holes fixed on `feat/perch-v1`)
+
+| Finding | Fix commit (subject) |
+|---------|----------------------|
+| V1 hook RCE | `feat(security): trust-on-first-use gate for .perch.toml hooks` |
+| V6a/V6b tmux parse | `fix(security): harden tmux pane parsing against option-value injection` |
+| V3-A/V3-B/V2′ git argv & path | `fix(security): validate git refs + relative-only project worktree_dir` |
+| V7b/V7c state store | `fix(security): cap state-file reads + validate resurrect tree under roots` |
+| V11 x/sys + V5 guard | `fix(security): bump golang.org/x/sys to v0.44.0; lock capture-pane -p (no -e)` |
+
+Each fix ships an exploit-encoding regression test (asserted via `FakeRunner.Calls` /
+hermetic FS). The trust gate was additionally adversarially reviewed (no untrusted-hook
+execution path found). `make vulncheck` → "No vulnerabilities found"; `go mod verify` →
+"all modules verified"; full `-race` + integration suite green on real git/tmux 3.6.
+
+> **Note (go directive):** bumping `golang.org/x/sys` to v0.44.0 raised the module's `go`
+> directive 1.24.2 → 1.25.0 (the dependency requires it); the toolchain stays `go1.26.2`.
+
 ## Follow-up (M11 surface — audit before tag)
 Bootstrap self-re-exec argv; `join/break/swap-pane` target construction (argv-safe, session names
 validated); any perch-installed tmux key binding (must NOT mutate the user's `~/.tmux.conf`/global
