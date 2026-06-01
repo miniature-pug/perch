@@ -116,13 +116,16 @@ func (o Opencode) NewArgs(opts NewOpts) []string {
 
 // InstallStatusHook writes the embedded perch-status.ts plugin to
 // ~/.config/opencode/plugins/perch-status.ts. opencode auto-discovers any *.ts
-// file under that directory. Existing plugins are left untouched; only
-// perch-status.ts is written (overwrite-safe — it is our file).
+// file under that directory. Only perch-status.ts is written (overwrite-safe —
+// it is our file); sibling plugins are never touched. The replace parameter is
+// accepted for interface conformance — perch-status.ts is entirely perch-owned
+// so both additive and replace mode unconditionally overwrite the file with the
+// current embedded content (the file is always up-to-date after either call).
 //
 // The path uses $HOME/.config, not $XDG_CONFIG_HOME, so it matches the path
 // that doctor's opencodePluginOk checks — both must agree or setup and doctor
 // silently disagree. Keep in sync with doctor.go:opencodePluginOk.
-func (o Opencode) InstallStatusHook() error {
+func (o Opencode) InstallStatusHook(replace bool) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("opencode InstallStatusHook: home dir: %w", err)

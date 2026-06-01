@@ -83,15 +83,53 @@ func TestRun_Setup_ContainsSetupPrefix(t *testing.T) {
 	}
 }
 
-func TestRun_Setup_Replace_NotSupportedNote(t *testing.T) {
+func TestRun_Setup_Replace_Exit0(t *testing.T) {
+	// setup --replace must exit 0 and report "replaced" (or "not found") for each
+	// tool — the old "not supported" stub must be gone.
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	out, _, code := callRun([]string{"setup", "--replace"})
 	if code != 0 {
-		t.Errorf("expected exit 0 for setup --replace (additive), got %d", code)
+		t.Errorf("expected exit 0 for setup --replace, got %d", code)
 	}
-	if !strings.Contains(out, "--replace not supported") {
-		t.Errorf("expected --replace note in output; got: %q", out)
+	// The stub message must never appear.
+	if strings.Contains(out, "--replace not supported") {
+		t.Errorf("stub '--replace not supported' message still present; got: %q", out)
+	}
+	// Output must still mention "setup:" (at least one tool line or "no tools").
+	if !strings.Contains(out, "setup:") {
+		t.Errorf("expected 'setup:' prefix in output; got: %q", out)
+	}
+}
+
+// TestSetupMessage tests the pure setupMessage helper that generates
+// human-readable setup output. This directly verifies the "replaced" vs
+// "installed" message divergence without PATH-dependent detection.
+func TestSetupMessage_Claude(t *testing.T) {
+	got := setupMessage("claude", false)
+	if !strings.Contains(got, "installed") || strings.Contains(got, "replaced") {
+		t.Errorf("additive claude message: want 'installed', got: %q", got)
+	}
+	got = setupMessage("claude", true)
+	if !strings.Contains(got, "replaced") || strings.Contains(got, "installed") {
+		t.Errorf("replace claude message: want 'replaced', got: %q", got)
+	}
+	if !strings.Contains(got, "~/.claude/settings.json") {
+		t.Errorf("replace claude message missing path: %q", got)
+	}
+}
+
+func TestSetupMessage_Opencode(t *testing.T) {
+	got := setupMessage("opencode", false)
+	if !strings.Contains(got, "installed") {
+		t.Errorf("additive opencode message: want 'installed', got: %q", got)
+	}
+	got = setupMessage("opencode", true)
+	if !strings.Contains(got, "replaced") {
+		t.Errorf("replace opencode message: want 'replaced', got: %q", got)
+	}
+	if !strings.Contains(got, "perch-status.ts") {
+		t.Errorf("replace opencode message missing plugin path: %q", got)
 	}
 }
 

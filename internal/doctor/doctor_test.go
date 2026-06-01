@@ -585,10 +585,10 @@ func TestDoctorSetupAgreement(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "") // prevent CLAUDE_CONFIG_DIR from escaping sandbox
 
 	// Install hooks via real adapters — writes to the sandboxed HOME.
-	if err := agent.NewClaude().InstallStatusHook(); err != nil {
+	if err := agent.NewClaude().InstallStatusHook(false); err != nil {
 		t.Fatalf("claude InstallStatusHook: %v", err)
 	}
-	if err := agent.NewOpencode().InstallStatusHook(); err != nil {
+	if err := agent.NewOpencode().InstallStatusHook(false); err != nil {
 		t.Fatalf("opencode InstallStatusHook: %v", err)
 	}
 

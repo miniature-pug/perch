@@ -509,15 +509,34 @@ func handleStatus(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// handleSetup implements `perch setup`. It detects installed AI coding tools and
-// calls InstallStatusHook on each, reporting the result to stdout. The operation
-// is additive and idempotent — re-running is safe. --replace is out of scope in
-// v1 (L1); if supplied, a note is printed and the command proceeds additively.
+// setupMessage returns the human-readable success line for a tool install. It
+// is a pure function so it can be tested without I/O seams.
+func setupMessage(name string, replace bool) string {
+	verb := "installed"
+	if replace {
+		verb = "replaced"
+	}
+	switch name {
+	case "claude":
+		return fmt.Sprintf("setup: claude hooks %s (~/.claude/settings.json)", verb)
+	case "opencode":
+		return fmt.Sprintf("setup: opencode plugin %s (~/.config/opencode/plugins/perch-status.ts)", verb)
+	default:
+		return fmt.Sprintf("setup: %s hooks %s", name, verb)
+	}
+}
+
+// handleSetup implements `perch setup [--replace]`. It detects installed AI
+// coding tools and calls InstallStatusHook on each, reporting the result to
+// stdout. Without --replace the operation is additive and idempotent — existing
+// third-party hooks are never touched and re-running is safe. With --replace,
+// any stale perch-owned hook entries are overwritten with the current block
+// while all foreign configuration is preserved unchanged.
 func handleSetup(args []string, stdout, stderr io.Writer) int {
-	// L1: --replace is deferred to M9; acknowledge and proceed additively.
+	replace := false
 	for _, a := range args {
 		if a == "--replace" {
-			_, _ = fmt.Fprintln(stdout, "note: --replace not supported in v1 (additive only)")
+			replace = true
 		}
 	}
 
@@ -534,18 +553,13 @@ func handleSetup(args []string, stdout, stderr io.Writer) int {
 			_, _ = fmt.Fprintf(stdout, "setup: %s not found — skipped\n", a.Name())
 			continue
 		}
-		if err := a.InstallStatusHook(); err != nil {
+		if err := a.InstallStatusHook(replace); err != nil {
 			_, _ = fmt.Fprintf(stderr, "setup: %s: %v\n", a.Name(), err)
 			anyError = true
 			continue
 		}
 		anyInstalled = true
-		switch a.Name() {
-		case "claude":
-			_, _ = fmt.Fprintf(stdout, "setup: claude hooks installed (~/.claude/settings.json)\n")
-		case "opencode":
-			_, _ = fmt.Fprintf(stdout, "setup: opencode plugin installed (~/.config/opencode/plugins/perch-status.ts)\n")
-		}
+		_, _ = fmt.Fprintln(stdout, setupMessage(a.Name(), replace))
 	}
 
 	if !anyInstalled && !anyError {

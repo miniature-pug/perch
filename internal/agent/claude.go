@@ -127,10 +127,12 @@ func (c Claude) NewArgs(opts NewOpts) []string {
 
 // InstallStatusHook merges perch's four status hooks into ~/.claude/settings.json.
 // It reads the existing file (treating absence as {}), merges additively and
-// idempotently, then writes atomically via a temp-file rename. Paths flow through
-// os.UserHomeDir() — not c.Home — so t.Setenv("HOME", tmp) fully sandboxes tests
-// and setup/doctor always agree on the same path regardless of CLAUDE_CONFIG_DIR.
-func (c Claude) InstallStatusHook() error {
+// idempotently (replace=false) or replaces any stale perch entries with the
+// current block while leaving foreign config untouched (replace=true), then
+// writes atomically via a temp-file rename. Paths flow through os.UserHomeDir()
+// — not c.Home — so t.Setenv("HOME", tmp) fully sandboxes tests and
+// setup/doctor always agree on the same path regardless of CLAUDE_CONFIG_DIR.
+func (c Claude) InstallStatusHook(replace bool) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("claude InstallStatusHook: home dir: %w", err)
@@ -144,7 +146,7 @@ func (c Claude) InstallStatusHook() error {
 	}
 	// missing file → treat as empty object (IsNotExist leaves existing == nil)
 
-	merged, err := mergeClaudeHooks(existing)
+	merged, err := mergeClaudeHooks(existing, replace)
 	if err != nil {
 		return fmt.Errorf("claude InstallStatusHook: merge: %w", err)
 	}
@@ -198,13 +200,17 @@ var perchHooks = []struct {
 // bytes. existing may be nil or empty (treated as {}). The function:
 //  1. Unmarshals into map[string]any, preserving all existing keys.
 //  2. Ensures m["hooks"] is a map[string]any.
-//  3. For each of the four events, appends the perch matcher-group only if no
+//  3. For each of the four events:
+//     - replace=false (additive): appends the perch matcher-group only if no
 //     existing group already has a hooks[].command containing "perch status set".
 //     This substring check makes idempotency safe across reformatting/ordering.
+//     - replace=true: drops any existing perch-owned groups (those whose nested
+//     hooks[].command contains "perch status set") using dropPerchGroups, then
+//     appends the current perchHooks entry. Foreign groups are never touched.
 //  4. Marshals back with 2-space indentation + trailing newline.
 //
 // The function is pure (no I/O) so table tests cover it exhaustively.
-func mergeClaudeHooks(existing []byte) ([]byte, error) {
+func mergeClaudeHooks(existing []byte, replace bool) ([]byte, error) {
 	var m map[string]any
 
 	trimmed := strings.TrimSpace(string(existing))
@@ -247,13 +253,19 @@ func mergeClaudeHooks(existing []byte) ([]byte, error) {
 			evSlice = []any{}
 		}
 
-		// Idempotency: skip append if any existing group already references us.
-		if perchGroupPresent(evSlice) {
-			hooksMap[h.event] = evSlice
-			continue
+		if replace {
+			// Replace mode: drop all perch-owned groups, then append the current
+			// entry. Foreign groups are left in place with their relative order.
+			evSlice = dropPerchGroups(evSlice)
+		} else {
+			// Additive mode: idempotent — skip append if perch entry already present.
+			if perchGroupPresent(evSlice) {
+				hooksMap[h.event] = evSlice
+				continue
+			}
 		}
 
-		// Append the new matcher-group.
+		// Append the new matcher-group (used by both additive and replace paths).
 		group := map[string]any{
 			"matcher": h.matcher,
 			"hooks": []any{
@@ -274,6 +286,27 @@ func mergeClaudeHooks(existing []byte) ([]byte, error) {
 	return append(out, '\n'), nil
 }
 
+// isPerchGroup reports whether a single matcher-group map is perch-owned,
+// i.e. at least one of its nested hooks[].command contains "perch status set".
+// This is the single source of truth for both presence detection and removal.
+func isPerchGroup(group map[string]any) bool {
+	hookList, ok := group["hooks"].([]any)
+	if !ok {
+		return false
+	}
+	for _, hookRaw := range hookList {
+		hook, ok := hookRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		cmd, _ := hook["command"].(string)
+		if strings.Contains(cmd, "perch status set") {
+			return true
+		}
+	}
+	return false
+}
+
 // perchGroupPresent reports whether any element of the slice is a
 // matcher-group whose nested hooks[].command contains "perch status set".
 // Uses a substring check so it matches regardless of argument or whitespace.
@@ -283,22 +316,27 @@ func perchGroupPresent(slice []any) bool {
 		if !ok {
 			continue
 		}
-		hookList, ok := group["hooks"].([]any)
-		if !ok {
-			continue
-		}
-		for _, hookRaw := range hookList {
-			hook, ok := hookRaw.(map[string]any)
-			if !ok {
-				continue
-			}
-			cmd, _ := hook["command"].(string)
-			if strings.Contains(cmd, "perch status set") {
-				return true
-			}
+		if isPerchGroup(group) {
+			return true
 		}
 	}
 	return false
+}
+
+// dropPerchGroups returns a new slice with all perch-owned matcher-groups
+// removed. Non-perch (foreign) entries are preserved in their original order.
+// Used by replace mode to scalpel-remove stale perch entries before re-adding
+// the current ones. The input slice is never modified.
+func dropPerchGroups(slice []any) []any {
+	out := make([]any, 0, len(slice))
+	for _, item := range slice {
+		group, ok := item.(map[string]any)
+		if ok && isPerchGroup(group) {
+			continue // drop perch-owned group
+		}
+		out = append(out, item)
+	}
+	return out
 }
 
 // ── slug decode ───────────────────────────────────────────────────────────────

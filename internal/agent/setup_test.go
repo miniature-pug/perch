@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -13,7 +14,7 @@ import (
 // ── mergeClaudeHooks (pure, no I/O) ──────────────────────────────────────────
 
 func TestMergeClaudeHooks_EmptyInput(t *testing.T) {
-	out, err := mergeClaudeHooks(nil)
+	out, err := mergeClaudeHooks(nil, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -44,7 +45,7 @@ func TestMergeClaudeHooks_EmptyInput(t *testing.T) {
 }
 
 func TestMergeClaudeHooks_EmptyObject(t *testing.T) {
-	out, err := mergeClaudeHooks([]byte(`{}`))
+	out, err := mergeClaudeHooks([]byte(`{}`), false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -65,7 +66,7 @@ func TestMergeClaudeHooks_EmptyObject(t *testing.T) {
 }
 
 func TestMergeClaudeHooks_CorrectMatchersAndCommands(t *testing.T) {
-	out, err := mergeClaudeHooks(nil)
+	out, err := mergeClaudeHooks(nil, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -132,7 +133,7 @@ func TestMergeClaudeHooks_PreservesExistingForeignEntry(t *testing.T) {
     ]
   }
 }`)
-	out, err := mergeClaudeHooks(existing)
+	out, err := mergeClaudeHooks(existing, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -178,11 +179,11 @@ func TestMergeClaudeHooks_PreservesExistingForeignEntry(t *testing.T) {
 
 func TestMergeClaudeHooks_Idempotent(t *testing.T) {
 	// Running merge twice must yield exactly one perch entry per event.
-	first, err := mergeClaudeHooks(nil)
+	first, err := mergeClaudeHooks(nil, false)
 	if err != nil {
 		t.Fatalf("first merge: %v", err)
 	}
-	second, err := mergeClaudeHooks(first)
+	second, err := mergeClaudeHooks(first, false)
 	if err != nil {
 		t.Fatalf("second merge: %v", err)
 	}
@@ -225,7 +226,7 @@ func TestMergeClaudeHooks_Idempotent(t *testing.T) {
 }
 
 func TestMergeClaudeHooks_MalformedJSON(t *testing.T) {
-	_, err := mergeClaudeHooks([]byte(`{not valid json`))
+	_, err := mergeClaudeHooks([]byte(`{not valid json`), false)
 	if err == nil {
 		t.Error("expected error for malformed JSON, got nil")
 	}
@@ -233,7 +234,7 @@ func TestMergeClaudeHooks_MalformedJSON(t *testing.T) {
 
 func TestMergeClaudeHooks_PreservesUnrelatedTopLevelKeys(t *testing.T) {
 	existing := []byte(`{"model": "claude-opus-4-5", "theme": "dark"}`)
-	out, err := mergeClaudeHooks(existing)
+	out, err := mergeClaudeHooks(existing, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -250,7 +251,7 @@ func TestMergeClaudeHooks_PreservesUnrelatedTopLevelKeys(t *testing.T) {
 }
 
 func TestMergeClaudeHooks_TrailingNewline(t *testing.T) {
-	out, err := mergeClaudeHooks(nil)
+	out, err := mergeClaudeHooks(nil, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -266,7 +267,7 @@ func TestClaude_InstallStatusHook_WritesFile(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "") // don't let a real env var escape the sandbox
 
 	c := NewClaude()
-	if err := c.InstallStatusHook(); err != nil {
+	if err := c.InstallStatusHook(false); err != nil {
 		t.Fatalf("InstallStatusHook: %v", err)
 	}
 
@@ -296,7 +297,7 @@ func TestClaude_InstallStatusHook_CreatesClaudeDir(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 
 	c := NewClaude()
-	if err := c.InstallStatusHook(); err != nil {
+	if err := c.InstallStatusHook(false); err != nil {
 		t.Fatalf("InstallStatusHook: %v", err)
 	}
 
@@ -313,10 +314,10 @@ func TestClaude_InstallStatusHook_Idempotent(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 
 	c := NewClaude()
-	if err := c.InstallStatusHook(); err != nil {
+	if err := c.InstallStatusHook(false); err != nil {
 		t.Fatalf("first call: %v", err)
 	}
-	if err := c.InstallStatusHook(); err != nil {
+	if err := c.InstallStatusHook(false); err != nil {
 		t.Fatalf("second call: %v", err)
 	}
 
@@ -365,7 +366,7 @@ func TestOpencode_InstallStatusHook_WritesPlugin(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	o := NewOpencode()
-	if err := o.InstallStatusHook(); err != nil {
+	if err := o.InstallStatusHook(false); err != nil {
 		t.Fatalf("InstallStatusHook: %v", err)
 	}
 
@@ -395,7 +396,7 @@ func TestOpencode_InstallStatusHook_PreservesSiblingPlugin(t *testing.T) {
 	}
 
 	o := NewOpencode()
-	if err := o.InstallStatusHook(); err != nil {
+	if err := o.InstallStatusHook(false); err != nil {
 		t.Fatalf("InstallStatusHook: %v", err)
 	}
 
@@ -413,7 +414,7 @@ func TestOpencode_InstallStatusHook_PreservesSiblingPlugin(t *testing.T) {
 func TestMergeClaudeHooks_HooksIsArray_ReturnsError(t *testing.T) {
 	// "hooks" exists but is an array, not an object — must refuse with an error.
 	input := []byte(`{"hooks": []}`)
-	_, err := mergeClaudeHooks(input)
+	_, err := mergeClaudeHooks(input, false)
 	if err == nil {
 		t.Error("expected error when hooks is an array, got nil")
 	}
@@ -422,7 +423,7 @@ func TestMergeClaudeHooks_HooksIsArray_ReturnsError(t *testing.T) {
 func TestMergeClaudeHooks_EventKeyIsObject_ReturnsError(t *testing.T) {
 	// hooks.PostToolUse exists but is an object, not an array — must refuse.
 	input := []byte(`{"hooks": {"PostToolUse": {"x": 1}}}`)
-	_, err := mergeClaudeHooks(input)
+	_, err := mergeClaudeHooks(input, false)
 	if err == nil {
 		t.Error("expected error when hooks.PostToolUse is an object, got nil")
 	}
@@ -434,13 +435,355 @@ func TestMergeClaudeHooks_PreservesLargeInteger(t *testing.T) {
 	// A JSON integer > 2^53 must round-trip exactly (not be corrupted to float64).
 	const large = "9007199254740993"
 	input := []byte(`{"foo": ` + large + `}`)
-	out, err := mergeClaudeHooks(input)
+	out, err := mergeClaudeHooks(input, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	outStr := string(out)
 	if !strings.Contains(outStr, large) {
 		t.Errorf("large integer %s was lost in output:\n%s", large, outStr)
+	}
+}
+
+// ── mergeClaudeHooks: replace mode ───────────────────────────────────────────
+
+// TestMergeClaudeHooks_Replace_RemovesStaleKeepsForeign is the key
+// discriminating test: a settings.json containing a stale perch hook (old
+// command string that still contains "perch status set") plus a foreign hook
+// must, after replace=true, have exactly the current perchHooks entries and no
+// stale perch entry, while the foreign entry is fully preserved.
+func TestMergeClaudeHooks_Replace_RemovesStaleKeepsForeign(t *testing.T) {
+	// Stale perch entry uses an old (non-current) command suffix, but it still
+	// contains "perch status set" so isPerchGroup detects it.
+	existing := []byte(`{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "old-matcher",
+        "hooks": [{"type": "command", "command": "perch status set obsolete-arg"}]
+      },
+      {
+        "matcher": "",
+        "hooks": [{"type": "command", "command": "workmux status push"}]
+      }
+    ]
+  }
+}`)
+	out, err := mergeClaudeHooks(existing, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("output not valid JSON: %v", err)
+	}
+	hooks := m["hooks"].(map[string]any)
+	arr, ok := hooks["PostToolUse"].([]any)
+	if !ok {
+		t.Fatal("PostToolUse missing")
+	}
+
+	foundForeign := false
+	perchCount := 0
+	foundStale := false
+	for _, item := range arr {
+		group, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		hookList, _ := group["hooks"].([]any)
+		for _, hRaw := range hookList {
+			h, ok := hRaw.(map[string]any)
+			if !ok {
+				continue
+			}
+			cmd, _ := h["command"].(string)
+			if cmd == "workmux status push" {
+				foundForeign = true
+			}
+			if strings.Contains(cmd, "perch status set") {
+				perchCount++
+				if cmd == "perch status set obsolete-arg" {
+					foundStale = true
+				}
+			}
+		}
+	}
+
+	if !foundForeign {
+		t.Error("foreign entry was removed — must be preserved in replace mode")
+	}
+	if foundStale {
+		t.Error("stale perch entry still present after replace — must be removed")
+	}
+	if perchCount != 1 {
+		t.Errorf("expected exactly 1 current perch entry in PostToolUse after replace, got %d", perchCount)
+	}
+
+	// Verify the retained perch entry uses the current command.
+	wantCmd := "perch status set working" // perchHooks[0].command for PostToolUse
+	found := false
+	for _, item := range arr {
+		group, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		hookList, _ := group["hooks"].([]any)
+		for _, hRaw := range hookList {
+			h, ok := hRaw.(map[string]any)
+			if !ok {
+				continue
+			}
+			if h["command"] == wantCmd {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Errorf("current perch command %q not found after replace", wantCmd)
+	}
+}
+
+// TestMergeClaudeHooks_Replace_Idempotent ensures two successive replace=true
+// calls yield byte-identical output — no duplicate perch entries and fully
+// stable output.
+func TestMergeClaudeHooks_Replace_Idempotent(t *testing.T) {
+	first, err := mergeClaudeHooks(nil, true)
+	if err != nil {
+		t.Fatalf("first replace: %v", err)
+	}
+	second, err := mergeClaudeHooks(first, true)
+	if err != nil {
+		t.Fatalf("second replace: %v", err)
+	}
+
+	// Byte-identical: MarshalIndent sorts map keys and dropPerchGroups preserves
+	// order, so two successive replace calls must produce exactly the same bytes.
+	if !bytes.Equal(first, second) {
+		t.Errorf("replace is not byte-idempotent:\nfirst:  %s\nsecond: %s", first, second)
+	}
+
+	var m map[string]any
+	if err := json.Unmarshal(second, &m); err != nil {
+		t.Fatalf("second output not valid JSON: %v", err)
+	}
+	hooks := m["hooks"].(map[string]any)
+
+	for _, event := range []string{"PostToolUse", "UserPromptSubmit", "Stop", "Notification"} {
+		arr, ok := hooks[event].([]any)
+		if !ok {
+			t.Errorf("event %q missing after two replace calls", event)
+			continue
+		}
+		perchCount := 0
+		for _, item := range arr {
+			group, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			hookList, _ := group["hooks"].([]any)
+			for _, hRaw := range hookList {
+				h, ok := hRaw.(map[string]any)
+				if !ok {
+					continue
+				}
+				cmd, _ := h["command"].(string)
+				if strings.Contains(cmd, "perch status set") {
+					perchCount++
+				}
+			}
+		}
+		if perchCount != 1 {
+			t.Errorf("event %q: expected 1 perch entry after 2 replace calls, got %d", event, perchCount)
+		}
+	}
+}
+
+// TestMergeClaudeHooks_Replace_RefuseMalformed ensures replace mode still
+// refuses a malformed settings.json without writing anything (the refusal
+// happens before any I/O, so no temp file is created).
+func TestMergeClaudeHooks_Replace_RefuseMalformed(t *testing.T) {
+	_, err := mergeClaudeHooks([]byte(`{not valid json`), true)
+	if err == nil {
+		t.Error("expected error for malformed JSON in replace mode, got nil")
+	}
+}
+
+// TestMergeClaudeHooks_Replace_PreservesLargeInteger verifies UseNumber
+// fidelity is preserved in replace mode (large integers must not be corrupted).
+func TestMergeClaudeHooks_Replace_PreservesLargeInteger(t *testing.T) {
+	const large = "9007199254740993"
+	input := []byte(`{"foo": ` + large + `}`)
+	out, err := mergeClaudeHooks(input, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(string(out), large) {
+		t.Errorf("large integer %s was lost in replace mode output:\n%s", large, string(out))
+	}
+}
+
+// ── Claude.InstallStatusHook: replace mode (filesystem) ──────────────────────
+
+// TestClaude_InstallStatusHook_Replace_RemovesStaleKeepsForeign is the
+// end-to-end filesystem variant of the replace test: a real settings.json with
+// a stale perch entry + a foreign entry → replace re-installs only current
+// perch hooks; foreign entry survives; file mode preserved.
+func TestClaude_InstallStatusHook_Replace_RemovesStaleKeepsForeign(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+
+	home, _ := os.UserHomeDir()
+	dir := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "settings.json")
+
+	staleSettings := []byte(`{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "stale-matcher",
+        "hooks": [{"type": "command", "command": "perch status set old-status"}]
+      },
+      {
+        "matcher": "",
+        "hooks": [{"type": "command", "command": "foreign-tool run"}]
+      }
+    ]
+  }
+}`)
+	if err := os.WriteFile(path, staleSettings, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	c := NewClaude()
+	if err := c.InstallStatusHook(true); err != nil {
+		t.Fatalf("InstallStatusHook(replace=true): %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read settings.json after replace: %v", err)
+	}
+
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("settings.json not valid JSON after replace: %v", err)
+	}
+
+	hooks := m["hooks"].(map[string]any)
+	arr, ok := hooks["PostToolUse"].([]any)
+	if !ok {
+		t.Fatal("PostToolUse missing after replace")
+	}
+
+	foundForeign := false
+	foundStale := false
+	perchCount := 0
+	for _, item := range arr {
+		group, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		hookList, _ := group["hooks"].([]any)
+		for _, hRaw := range hookList {
+			h, ok := hRaw.(map[string]any)
+			if !ok {
+				continue
+			}
+			cmd, _ := h["command"].(string)
+			if cmd == "foreign-tool run" {
+				foundForeign = true
+			}
+			if strings.Contains(cmd, "perch status set") {
+				perchCount++
+				if cmd == "perch status set old-status" {
+					foundStale = true
+				}
+			}
+		}
+	}
+
+	if !foundForeign {
+		t.Error("foreign entry was removed — must be preserved in replace mode")
+	}
+	if foundStale {
+		t.Error("stale perch entry still present after replace")
+	}
+	if perchCount != 1 {
+		t.Errorf("PostToolUse: expected 1 current perch entry after replace, got %d", perchCount)
+	}
+
+	// All four events must have exactly one current perch entry.
+	for _, event := range []string{"PostToolUse", "UserPromptSubmit", "Stop", "Notification"} {
+		arr, ok := hooks[event].([]any)
+		if !ok {
+			t.Errorf("event %q missing after replace", event)
+			continue
+		}
+		if !perchGroupPresent(arr) {
+			t.Errorf("event %q: perch entry missing after replace", event)
+		}
+	}
+
+	// File mode must be preserved (was 0640).
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat settings.json: %v", err)
+	}
+	if got := fi.Mode().Perm(); got != 0o640 {
+		t.Errorf("file mode after replace: got %04o, want 0640", got)
+	}
+}
+
+// ── Opencode.InstallStatusHook: replace mode (filesystem) ────────────────────
+
+// TestOpencode_InstallStatusHook_Replace_OverwritesAndPreservesMode ensures
+// replace=true overwrites perch-status.ts with the current embedded content
+// and preserves the existing file mode.
+func TestOpencode_InstallStatusHook_Replace_OverwritesAndPreservesMode(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	home, _ := os.UserHomeDir()
+	dir := filepath.Join(home, ".config", "opencode", "plugins")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "perch-status.ts")
+
+	// Write stale content with a custom mode.
+	staleContent := []byte("// stale content\n")
+	if err := os.WriteFile(path, staleContent, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	o := NewOpencode()
+	if err := o.InstallStatusHook(true); err != nil {
+		t.Fatalf("InstallStatusHook(replace=true): %v", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read perch-status.ts after replace: %v", err)
+	}
+	if string(got) != resources.PerchStatusTS {
+		t.Errorf("perch-status.ts content mismatch after replace:\ngot: %q\nwant: %q", string(got), resources.PerchStatusTS)
+	}
+
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat perch-status.ts: %v", err)
+	}
+	if got := fi.Mode().Perm(); got != 0o640 {
+		t.Errorf("file mode after replace: got %04o, want 0640", got)
 	}
 }
 
@@ -466,7 +809,7 @@ func TestClaude_InstallStatusHook_PreservesFileMode(t *testing.T) {
 	}
 
 	c := NewClaude()
-	if err := c.InstallStatusHook(); err != nil {
+	if err := c.InstallStatusHook(false); err != nil {
 		t.Fatalf("InstallStatusHook: %v", err)
 	}
 
