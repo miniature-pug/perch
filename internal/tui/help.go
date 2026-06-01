@@ -22,7 +22,7 @@ func (m Model) ShortHelp() []key.Binding {
 	if ok && it.live && it.liveTarget != "" {
 		b = append(b, m.keys.Kill)
 	}
-	b = append(b, m.keys.Filter, m.keys.CmdBar, m.keys.ScreenFwd, m.keys.Help, m.keys.Quit)
+	b = append(b, m.keys.Filter, m.keys.CmdBar, m.keys.ScreenFwd, m.keys.CollapseSidebar, m.keys.Help, m.keys.Quit)
 	return b
 }
 
@@ -34,5 +34,13 @@ func (m Model) FullHelp() [][]key.Binding {
 		{m.keys.Remove, m.keys.Kill},
 		{m.keys.Filter, m.keys.ClearFilter, m.keys.CmdBar},
 		{m.keys.ScreenFwd, m.keys.ScreenBack, m.keys.Help, m.keys.Quit},
+		{
+			m.keys.CmdBar,
+			m.keys.CollapseSidebar,
+			key.NewBinding(
+				key.WithKeys("prefix ←/→"),
+				key.WithHelp("tmux prefix ←/→", "focus agent / sidebar"),
+			),
+		},
 	}
 }

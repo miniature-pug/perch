@@ -9,6 +9,9 @@ var (
 	colorAccent = lipgloss.AdaptiveColor{Light: "#874BFD", Dark: "#7D56F4"}
 	colorNormal = lipgloss.AdaptiveColor{Light: "#1A1A1A", Dark: "#DDDDDD"}
 	colorError  = lipgloss.AdaptiveColor{Light: "#D70000", Dark: "#FF5F5F"}
+	// colorMuted is a readable dim used for secondary TEXT (footer, empty-state).
+	// Distinct from colorSubtle, which is intentionally near-background for BORDERS.
+	colorMuted = lipgloss.AdaptiveColor{Light: "#6C6C6C", Dark: "#999999"}
 )
 
 // styles holds the pre-built lipgloss styles used throughout the TUI.
@@ -39,7 +42,7 @@ var styles = struct {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorSubtle),
 	footer: lipgloss.NewStyle().
-		Foreground(colorSubtle).
+		Foreground(colorMuted).
 		MarginTop(0),
 	selectedRow: lipgloss.NewStyle().
 		Foreground(colorAccent).
@@ -53,7 +56,7 @@ var styles = struct {
 		Foreground(colorError).
 		Bold(true),
 	emptyState: lipgloss.NewStyle().
-		Foreground(colorSubtle).
+		Foreground(colorMuted).
 		Padding(1, 2),
 	helpOverlay: lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

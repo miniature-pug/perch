@@ -7,18 +7,19 @@ import "github.com/charmbracelet/bubbles/key"
 // Up/Down navigation is intentionally omitted: the bubbles/list model owns
 // those bindings via its built-in keymap.
 type keyMap struct {
-	Filter      key.Binding
-	ClearFilter key.Binding
-	Enter       key.Binding
-	New         key.Binding
-	Quit        key.Binding
-	Remove      key.Binding
-	Kill        key.Binding
-	Worktree    key.Binding
-	ScreenFwd   key.Binding
-	ScreenBack  key.Binding
-	Help        key.Binding
-	CmdBar      key.Binding
+	Filter          key.Binding
+	ClearFilter     key.Binding
+	Enter           key.Binding
+	New             key.Binding
+	Quit            key.Binding
+	Remove          key.Binding
+	Kill            key.Binding
+	Worktree        key.Binding
+	ScreenFwd       key.Binding
+	ScreenBack      key.Binding
+	Help            key.Binding
+	CmdBar          key.Binding
+	CollapseSidebar key.Binding
 }
 
 // defaultKeys returns the standard key map for perch.
@@ -34,7 +35,7 @@ func defaultKeys() keyMap {
 		),
 		Enter: key.NewBinding(
 			key.WithKeys("enter"),
-			key.WithHelp("↵", "switch"),
+			key.WithHelp("↵", "open"),
 		),
 		New: key.NewBinding(
 			key.WithKeys("n"),
@@ -71,6 +72,10 @@ func defaultKeys() keyMap {
 		CmdBar: key.NewBinding(
 			key.WithKeys(":"),
 			key.WithHelp(":", "command"),
+		),
+		CollapseSidebar: key.NewBinding(
+			key.WithKeys("c"),
+			key.WithHelp("c", "collapse sidebar"),
 		),
 	}
 }

@@ -786,6 +786,29 @@ func TestLaunchedMsg_NotInFrame_UsesAttach(t *testing.T) {
 	}
 }
 
+// --- Test: c toggles sidebar collapse (modeNormal ↔ modeFullPreview) ---
+
+func TestCollapseSidebarToggle(t *testing.T) {
+	m := New(nil)
+	m.ready = true
+	m.width, m.height = 100, 40
+	if m.mode != modeNormal {
+		t.Fatalf("precondition: mode = %v, want modeNormal", m.mode)
+	}
+	// First 'c' collapses the sidebar → modeFullPreview.
+	mdl, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	m = mdl.(Model)
+	if m.mode != modeFullPreview {
+		t.Fatalf("after 'c': mode = %v, want modeFullPreview", m.mode)
+	}
+	// Second 'c' restores the two-pane layout.
+	mdl, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	m = mdl.(Model)
+	if m.mode != modeNormal {
+		t.Fatalf("after second 'c': mode = %v, want modeNormal", m.mode)
+	}
+}
+
 // --- Test 4: q and ctrl+c both issue tea.Quit ---
 
 func TestQuitIssuesTeatQuit(t *testing.T) {

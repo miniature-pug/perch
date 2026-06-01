@@ -536,6 +536,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.mode = m.mode.prev()
 			m.relayout()
 			return m, m.previewCmd()
+
+		case key.Matches(msg, m.keys.CollapseSidebar):
+			// Dedicated alias: toggle between the two-pane view and a collapsed
+			// sidebar (preview full-width). Discoverability over the z/Z cycle.
+			if m.mode == modeFullPreview {
+				m.mode = modeNormal
+			} else {
+				m.mode = modeFullPreview
+			}
+			m.relayout()
+			return m, m.previewCmd()
 		}
 	}
 
