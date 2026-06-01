@@ -17,6 +17,7 @@ import (
 	"github.com/Miniature-Pug/perch/internal/proc"
 	"github.com/Miniature-Pug/perch/internal/resurrect"
 	"github.com/Miniature-Pug/perch/internal/state"
+	"github.com/Miniature-Pug/perch/internal/status"
 	"github.com/Miniature-Pug/perch/internal/tmux"
 	"github.com/Miniature-Pug/perch/internal/tui"
 )
@@ -150,16 +151,35 @@ func handleResurrect(stdout, stderr io.Writer) int {
 }
 
 // handleStatus dispatches `perch status set <working|waiting|done>`.
+// Invalid usage → exit 2. Empty $TMUX_PANE → exit 0 silently (must not fail
+// the agent's hook when run outside tmux). tmux error → print to stderr, exit 1.
 func handleStatus(args []string, stdout, stderr io.Writer) int {
-	if len(args) == 2 && args[0] == "set" {
-		switch args[1] {
-		case "working", "waiting", "done":
-			_, _ = fmt.Fprintf(stdout, "status set %s: not yet implemented\n", args[1])
-			return 0
-		}
+	if len(args) != 2 || args[0] != "set" {
+		_, _ = fmt.Fprintln(stderr, "Usage: perch status set <working|waiting|done>")
+		return 2
 	}
-	_, _ = fmt.Fprintln(stderr, "Usage: perch status set <working|waiting|done>")
-	return 2
+	st := args[1]
+	// Validate state before reading the environment so bad args always exit 2.
+	switch st {
+	case "working", "waiting", "done":
+		// valid
+	default:
+		_, _ = fmt.Fprintln(stderr, "Usage: perch status set <working|waiting|done>")
+		return 2
+	}
+
+	pane := os.Getenv("TMUX_PANE")
+	if pane == "" {
+		// Running outside tmux — silently succeed so the hook does not fail.
+		return 0
+	}
+
+	deps := status.Deps{Tmux: tmux.New()}
+	if err := status.Set(context.Background(), deps, pane, st); err != nil {
+		_, _ = fmt.Fprintf(stderr, "perch status set: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 // handleVersion prints the perch version and build info.

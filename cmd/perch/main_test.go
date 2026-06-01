@@ -75,19 +75,21 @@ func TestRun_Resurrect_Exit0(t *testing.T) {
 	}
 }
 
-// ── status set stubs ──────────────────────────────────────────────────────────
+// ── status set (FD4: empty $TMUX_PANE → silent exit 0) ───────────────────────
 
 func TestRun_StatusSetWorking_Exit0(t *testing.T) {
-	out, _, code := callRun([]string{"status", "set", "working"})
+	// Pin TMUX_PANE to empty so handleStatus takes the FD4 no-op path and never
+	// reaches the real tmux server — keeps the test hermetic even when run from
+	// inside a tmux pane.
+	t.Setenv("TMUX_PANE", "")
+	_, _, code := callRun([]string{"status", "set", "working"})
 	if code != 0 {
 		t.Errorf("expected exit 0 for status set working, got %d", code)
-	}
-	if !strings.Contains(out, "working") {
-		t.Errorf("expected 'working' in output; got: %q", out)
 	}
 }
 
 func TestRun_StatusSetWaiting_Exit0(t *testing.T) {
+	t.Setenv("TMUX_PANE", "")
 	_, _, code := callRun([]string{"status", "set", "waiting"})
 	if code != 0 {
 		t.Errorf("expected exit 0 for status set waiting, got %d", code)
@@ -95,6 +97,7 @@ func TestRun_StatusSetWaiting_Exit0(t *testing.T) {
 }
 
 func TestRun_StatusSetDone_Exit0(t *testing.T) {
+	t.Setenv("TMUX_PANE", "")
 	_, _, code := callRun([]string{"status", "set", "done"})
 	if code != 0 {
 		t.Errorf("expected exit 0 for status set done, got %d", code)
