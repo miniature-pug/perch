@@ -306,7 +306,7 @@ report status, prove the DoD green, wait for review.
 
 ### M7 — Recovery: `perch resurrect`  *(tmux REQUIRED)*
 
-- [ ] Objective: boot_id reconcile rebuilds windows after a tmux server restart.
+- [x] Objective: boot_id reconcile rebuilds windows after a tmux server restart.
 - Spec refs: `plan.md §7.4`, `§6.2` (`boot_id`), `§16.7`.
 - Deliverables: read `windows/*.json`, batched `list-panes -a`, two-track reconcile
       (live/intentional-close/restore), descendant-path tree match.

@@ -950,6 +950,19 @@ Build in this order; each milestone is independently runnable/testable.
    `docs/superpowers/plans/2026-05-31-perch-m6-worktree.md`.
 7. **Recovery** — `perch resurrect` boot_id reconcile. *Done when:* after killing the
    tmux server, `perch resurrect` rebuilds the windows from shadow records.
+   — ✅ **DONE** (M7-1..M7-3). reconcile engine (`internal/resurrect`) with single-snapshot
+   classify-then-mutate (FD1), pane-id match (FD2), three-case KEEP/PRUNE/RESTORE (FD3),
+   live-window guard (FD4), five RESTORE-branch guards incl. main-checkout skip (FD5),
+   idempotency via save-then-remove ordering (FD6), adapter-owned resume argv (FD7);
+   CLI wiring (`cmd/perch` `handleResurrect`); integration tests on real git + tmux 3.6
+   (private socket). Engine bugfix: same-pane-key collision on server restart guarded
+   (`paneID != w.PaneKey` before RemoveWindow), pinned by unit regression test.
+   **Honesty note:** *demonstrated* — server-restart restore, intentional-close prune,
+   double-run idempotency, main-checkout skip (real git + private-socket tmux);
+   *manual/deferred* — TUI auto-offer → M9; opencode resume integration uses placeholder
+   `sh` in integration (unit covers `--session <id>` argv); `save-failed` branch
+   intentionally not triggered (unwritable state dir mid-run is impractical to inject).
+   See `docs/superpowers/plans/2026-05-31-perch-m7-resurrect.md`.
 8. **Admin/status** — live status tick + drop-guard, status colours, `x` kill,
    attach/jump; `perch setup` installs claude hooks and writes `perch-status.ts`;
    verify opencode status end-to-end. *Done when:* icons reflect a live agent's
