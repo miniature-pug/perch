@@ -38,6 +38,9 @@ type Model struct {
 	// empty-state message. Empty in test/scaffold mode.
 	root string
 
+	// mode is the current screen layout (normal / full-list / full-preview).
+	mode screenMode
+
 	// loadErr holds the last whole-load failure message for display in the UI.
 	// Empty string means no error. Cleared on successful reload.
 	loadErr string
@@ -284,20 +287,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-
-		// Reserve 2 cells per border side + footer row.
-		listWidth := msg.Width * 30 / 100
-		previewWidth := msg.Width - listWidth
-		paneHeight := msg.Height - footerHeight - 2*borderSize
-
-		// Clamp all derived dimensions to ≥ 0 so subcomponents never receive
-		// negative sizes on very small terminals.
-		m.list.SetWidth(max(0, listWidth-2*borderSize))
-		m.list.SetHeight(max(0, paneHeight))
-		m.preview.Width = max(0, previewWidth-2*borderSize)
-		m.preview.Height = max(0, paneHeight)
+		m.relayout()
 		m.ready = true
-
 		return m, m.previewCmd()
 
 	case tea.KeyMsg:
@@ -405,6 +396,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m, m.worktreePreflightCmd(it)
+
+		case key.Matches(msg, m.keys.ScreenFwd):
+			m.mode = m.mode.next()
+			m.relayout()
+			return m, m.previewCmd()
+
+		case key.Matches(msg, m.keys.ScreenBack):
+			m.mode = m.mode.prev()
+			m.relayout()
+			return m, m.previewCmd()
 		}
 	}
 
@@ -427,9 +428,7 @@ func (m Model) View() string {
 		return "Initialising…"
 	}
 
-	leftPane := styles.leftPane.Render(m.list.View())
-	rightPane := styles.rightPane.Render(m.preview.View())
-	body := lipgloss.JoinHorizontal(lipgloss.Top, leftPane, rightPane)
+	body := m.bodyView()
 
 	if txt := m.emptyStateText(); txt != "" {
 		body = styles.emptyState.Render(txt)
@@ -555,6 +554,54 @@ func (m Model) emptyStateText() string {
 		return "No git repositories found under " + m.root
 	}
 	return "No git repositories found"
+}
+
+// relayout recomputes the list and preview dimensions from the current width,
+// height and screen mode. Called from the WindowSizeMsg handler and whenever the
+// screen mode changes (z/Z). All dimensions are clamped to ≥ 0.
+func (m *Model) relayout() {
+	paneHeight := max(0, m.height-footerHeight-2*borderSize)
+	switch {
+	case m.mode == modeFullList:
+		m.list.SetWidth(max(0, m.width-2*borderSize))
+		m.list.SetHeight(paneHeight)
+	case m.mode == modeFullPreview:
+		// Keep the list sized for selection bookkeeping even though it's hidden.
+		m.list.SetWidth(max(0, m.width-2*borderSize))
+		m.list.SetHeight(paneHeight)
+		m.preview.Width = max(0, m.width-2*borderSize)
+		m.preview.Height = paneHeight
+	case m.width < minWideWidth:
+		// Narrow: stack vertically, splitting the available height.
+		topH := max(0, paneHeight/2-borderSize)
+		botH := max(0, paneHeight-paneHeight/2-borderSize)
+		m.list.SetWidth(max(0, m.width-2*borderSize))
+		m.list.SetHeight(topH)
+		m.preview.Width = max(0, m.width-2*borderSize)
+		m.preview.Height = botH
+	default:
+		listWidth := m.width * 30 / 100
+		m.list.SetWidth(max(0, listWidth-2*borderSize))
+		m.list.SetHeight(paneHeight)
+		m.preview.Width = max(0, m.width-listWidth-2*borderSize)
+		m.preview.Height = paneHeight
+	}
+}
+
+// bodyView renders the pane area per the current screen mode.
+func (m Model) bodyView() string {
+	left := styles.leftPane.Render(m.list.View())
+	right := styles.rightPane.Render(m.preview.View())
+	switch {
+	case m.mode == modeFullList:
+		return left
+	case m.mode == modeFullPreview:
+		return right
+	case m.width < minWideWidth:
+		return lipgloss.JoinVertical(lipgloss.Left, left, right)
+	default:
+		return lipgloss.JoinHorizontal(lipgloss.Top, left, right)
+	}
 }
 
 // reloadCmd returns a tea.Cmd that reloads the item list. Used after a

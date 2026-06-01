@@ -15,6 +15,8 @@ type keyMap struct {
 	Remove      key.Binding
 	Kill        key.Binding
 	Worktree    key.Binding
+	ScreenFwd   key.Binding
+	ScreenBack  key.Binding
 }
 
 // defaultKeys returns the standard key map for perch.
@@ -51,6 +53,14 @@ func defaultKeys() keyMap {
 		Worktree: key.NewBinding(
 			key.WithKeys("w"),
 			key.WithHelp("w", "worktree"),
+		),
+		ScreenFwd: key.NewBinding(
+			key.WithKeys("z"),
+			key.WithHelp("z", "screen mode"),
+		),
+		ScreenBack: key.NewBinding(
+			key.WithKeys("Z"),
+			key.WithHelp("Z", "screen mode back"),
 		),
 	}
 }
