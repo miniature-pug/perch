@@ -118,11 +118,22 @@ func handleResurrect(stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	// Load the configured discovery roots so the reconcile can reject shadow
+	// records whose worktree path lies outside them (V7c). Degrade on error:
+	// with no roots the containment guard is dormant rather than blocking.
+	var roots []string
+	if globalPath, gerr := config.DefaultGlobalPath(); gerr == nil {
+		if cfg, cerr := config.Load(globalPath, ""); cerr == nil {
+			roots = cfg.Roots
+		}
+	}
+
 	deps := resurrect.Deps{
 		Tmux:    tmux.New(),
 		Runner:  proc.ExecRunner{},
 		BaseDir: baseDir,
 		Now:     time.Now().Unix(),
+		Roots:   roots,
 	}
 
 	report, err := resurrect.Reconcile(context.Background(), deps)

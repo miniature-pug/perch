@@ -34,6 +34,16 @@ type Deps struct {
 	BaseDir string
 	// Now is the unix timestamp written into restored Window.Updated fields.
 	Now int64
+	// Roots is the list of scan roots from the global config (cfg.Roots). When
+	// non-empty, the RESTORE branch rejects any window whose Tree does not reside
+	// under at least one root, preventing a compromised windows/*.json from
+	// directing git operations into an attacker-controlled directory (V7c).
+	//
+	// An empty Roots slice disables the containment check (fail-open) so that
+	// the production path continues to work before the caller is wired to pass
+	// roots. Production callers (cmd/perch/main.go) must load the config and
+	// populate this field to activate the guard.
+	Roots []string
 }
 
 // SkipNote records why a window record was skipped during reconciliation.
@@ -153,6 +163,22 @@ func Reconcile(ctx context.Context, deps Deps) (Report, error) {
 					PaneKey: w.PaneKey,
 					Tree:    w.Tree,
 					Reason:  "dup-window",
+				})
+				continue
+			}
+
+			// Guard 3a (V7c): reject trees outside the configured scan roots.
+			// This prevents a compromised windows/*.json from directing git
+			// operations into an attacker-controlled directory. Fail-open when
+			// deps.Roots is empty (not yet configured in the production caller).
+			if !treeUnderRoots(deps.Roots, w.Tree) {
+				// Transient skip: a roots misconfiguration should not permanently
+				// delete legitimate records; the record is re-evaluated on the
+				// next run (with correct roots or after the check passes).
+				report.Skipped = append(report.Skipped, SkipNote{
+					PaneKey: w.PaneKey,
+					Tree:    w.Tree,
+					Reason:  "tree-out-of-root",
 				})
 				continue
 			}
@@ -297,6 +323,34 @@ func isDescendant(parent, child string) bool {
 	p := filepath.Clean(parent)
 	c := filepath.Clean(child)
 	return c == p || strings.HasPrefix(c, p+string(os.PathSeparator))
+}
+
+// treeUnderRoots reports whether tree is contained within at least one of the
+// given scan roots. The containment check uses filepath.Rel to avoid prefix
+// false-positives (e.g. /root/foo is not under /root/fo). Both paths are
+// cleaned before comparison. When roots is empty the function returns true
+// (fail-open: no roots configured means no containment restriction).
+func treeUnderRoots(roots []string, tree string) bool {
+	if len(roots) == 0 {
+		return true // fail-open: guard is disabled when roots are not configured
+	}
+	cleanTree := filepath.Clean(tree)
+	for _, root := range roots {
+		cleanRoot := filepath.Clean(root)
+		// Accept tree == root exactly.
+		if cleanTree == cleanRoot {
+			return true
+		}
+		rel, err := filepath.Rel(cleanRoot, cleanTree)
+		if err != nil {
+			continue
+		}
+		// A path outside root starts with ".." or is "..".
+		if rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }
 
 // hasLivePaneByID reports whether any live (non-dead) pane in panes has the

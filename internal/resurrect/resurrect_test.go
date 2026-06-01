@@ -1368,3 +1368,196 @@ func TestReconcile_SkipIntraRunDuplicateWindow(t *testing.T) {
 		t.Errorf("surviving record PaneKey = %q, want %s", allWins[0].PaneKey, newPane)
 	}
 }
+
+// ── V7c exploit tests — out-of-root Tree not validated ───────────────────────
+
+// TestExploit_V7c_OutOfRootTreeSkipped verifies that a window record whose Tree
+// is outside the configured scan roots is skipped during reconcile and produces
+// no git subprocess calls. This encodes the exploit: on un-fixed code (no Roots
+// check) the git call would be issued against the out-of-root tree.
+//
+// The test FAILS on un-fixed code because git.ListWorktrees (and any other
+// subprocess) would be called for the attacker-controlled tree.
+func TestExploit_V7c_OutOfRootTreeSkipped(t *testing.T) {
+	baseDir := t.TempDir()
+	fake := proc.NewFakeRunner()
+
+	// scanRoot is the legitimate discovery root.
+	scanRoot := t.TempDir()
+	// evilTree is outside scanRoot — this simulates an attacker-controlled path.
+	// We put it in a sibling temp dir (not under scanRoot).
+	evilTree := t.TempDir() // different temp dir → outside scanRoot
+
+	const (
+		newBoot = "99999"
+		paneKey = "%300"
+	)
+
+	// Seed a window record with Tree set to the out-of-root path.
+	seedWindow(t, baseDir, model.Window{
+		PaneKey:     paneKey,
+		Tool:        model.ToolClaude,
+		SessionID:   "evil-session",
+		Tree:        evilTree, // attacker-controlled path
+		TmuxSession: "proj",
+		TmuxWindow:  "feat",
+		BootID:      "oldboot",
+	})
+
+	// Boot mismatch → RESTORE branch is entered.
+	fake.Respond(proc.FakeResult{Stdout: []byte(newBoot + "\n")},
+		"tmux", "display-message", "-p", "#{start_time}")
+	// No live panes.
+	fake.Respond(proc.FakeResult{Stdout: []byte("")},
+		"tmux", "list-panes", "-a", "-F", paneFormat)
+	// Note: NO git response registered for evilTree — if git is called, the
+	// FakeRunner returns its Default (zero FakeResult) which would allow the
+	// test to pass spuriously. To make the test fail explicitly when git IS
+	// called, we verify fake.Calls afterward.
+
+	deps := newDeps(t, baseDir, fake)
+	deps.Roots = []string{scanRoot} // configure the containment guard
+
+	report, err := Reconcile(context.Background(), deps)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Must have exactly one skip with reason "tree-out-of-root".
+	if len(report.Skipped) != 1 || report.Skipped[0].Reason != "tree-out-of-root" {
+		t.Errorf("Skipped = %v; want [{tree-out-of-root}] (V7c containment check not applied)", report.Skipped)
+	}
+	if len(report.Restored)+len(report.Kept)+len(report.Pruned) != 0 {
+		t.Errorf("unexpected mutations: restored=%v kept=%v pruned=%v",
+			report.Restored, report.Kept, report.Pruned)
+	}
+
+	// Critical: no git call must have been issued against the evil tree.
+	for _, c := range fake.Calls {
+		if len(c.Args) >= 3 && c.Args[0] == "-C" && c.Args[1] == evilTree {
+			t.Errorf("git was called with evil tree %q — V7c guard did not fire (calls: %v)", evilTree, fake.Calls)
+		}
+	}
+
+	// The record is a transient skip — it must NOT be deleted.
+	wins, _ := state.LoadWindows(baseDir)
+	if len(wins) != 1 {
+		t.Errorf("record count = %d; want 1 (transient skip keeps record)", len(wins))
+	}
+}
+
+// TestExploit_V7c_InRootTreeKept verifies that a window record whose Tree IS
+// under the configured scan root passes the containment check and proceeds to
+// the normal RESTORE path (git is called, launch proceeds). This is the
+// "legitimate" counterpart to the exploit test above.
+func TestExploit_V7c_InRootTreeKept(t *testing.T) {
+	baseDir := t.TempDir()
+	fake := proc.NewFakeRunner()
+
+	// scanRoot is the discovery root; tree is a subdirectory under it.
+	scanRoot := t.TempDir()
+	tree := filepath.Join(scanRoot, "myrepo", "worktrees", "feat")
+	if err := os.MkdirAll(tree, 0o755); err != nil {
+		t.Fatalf("setup: MkdirAll tree: %v", err)
+	}
+	mainTree := filepath.Join(scanRoot, "myrepo")
+	if err := os.MkdirAll(mainTree, 0o755); err != nil {
+		t.Fatalf("setup: MkdirAll mainTree: %v", err)
+	}
+
+	const (
+		oldBoot = "oldboot"
+		newBoot = "12345"
+		oldPane = "%310"
+		newPane = "%311"
+		sess    = "in-root-proj"
+		win     = "feat"
+		sid     = "claude-in-root-1"
+	)
+
+	seedWindow(t, baseDir, model.Window{
+		PaneKey:     oldPane,
+		Tool:        model.ToolClaude,
+		SessionID:   sid,
+		Tree:        tree, // legitimately under scanRoot
+		TmuxSession: sess,
+		TmuxWindow:  win,
+		BootID:      oldBoot,
+	})
+
+	// Boot mismatch → RESTORE branch.
+	fake.Respond(proc.FakeResult{Stdout: []byte(newBoot + "\n")},
+		"tmux", "display-message", "-p", "#{start_time}")
+	// No live panes.
+	fake.Respond(proc.FakeResult{Stdout: []byte("")},
+		"tmux", "list-panes", "-a", "-F", paneFormat)
+	// git worktree list: main at mainTree, linked at tree.
+	fake.Respond(proc.FakeResult{Stdout: worktreePorcelain(mainTree, tree)},
+		"git", "-C", tree, "worktree", "list", "--porcelain")
+
+	// Launch: no session yet → new-session succeeds.
+	fake.Respond(proc.FakeResult{Err: proc.FakeExitError{Code: 1}},
+		"tmux", "has-session", "-t", "="+sess)
+	fake.Respond(proc.FakeResult{Stdout: []byte(newPane + "\n")},
+		"tmux", "new-session", "-d", "-s", sess, "-n", win, "-c", tree, "-P", "-F", "#{pane_id}")
+	fake.Respond(proc.FakeResult{},
+		"tmux", "send-keys", "-t", newPane, "-l", "'claude' '--resume' '"+sid+"'")
+	fake.Respond(proc.FakeResult{},
+		"tmux", "send-keys", "-t", newPane, "Enter")
+	fake.Respond(proc.FakeResult{},
+		"tmux", "set-option", "-p", "-t", newPane, "@perch_session", sid)
+
+	deps := newDeps(t, baseDir, fake)
+	deps.Roots = []string{scanRoot} // containment guard: tree is under this root
+
+	report, err := Reconcile(context.Background(), deps)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Must be RESTORED (not skipped).
+	if len(report.Restored) != 1 || report.Restored[0] != oldPane {
+		t.Errorf("Restored = %v; want [%s] (in-root tree must pass containment check)", report.Restored, oldPane)
+	}
+	if len(report.Skipped) != 0 {
+		t.Errorf("Skipped = %v; want empty (in-root tree must not be skipped)", report.Skipped)
+	}
+
+	// Exactly one git call must have been issued for the in-root tree.
+	gitCalled := false
+	for _, c := range fake.Calls {
+		if len(c.Args) >= 2 && c.Args[0] == "-C" && c.Args[1] == tree {
+			gitCalled = true
+		}
+	}
+	if !gitCalled {
+		t.Errorf("expected git call for in-root tree %q; calls: %v", tree, fake.Calls)
+	}
+}
+
+// TestTreeUnderRoots exercises the containment helper directly with edge cases.
+func TestTreeUnderRoots(t *testing.T) {
+	cases := []struct {
+		name  string
+		roots []string
+		tree  string
+		want  bool
+	}{
+		{"empty roots fail-open", []string{}, "/any/path", true},
+		{"tree equals root", []string{"/root/a"}, "/root/a", true},
+		{"tree under root", []string{"/root/a"}, "/root/a/sub/dir", true},
+		{"tree outside root", []string{"/root/a"}, "/root/b/sub", false},
+		{"prefix not ancestor", []string{"/root/fo"}, "/root/foo", false},
+		{"tree under one of multiple roots", []string{"/root/a", "/root/b"}, "/root/b/sub", true},
+		{"tree under none of multiple roots", []string{"/root/a", "/root/b"}, "/root/c/sub", false},
+		{"parent escape", []string{"/root/a"}, "/root/a/../b", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := treeUnderRoots(tc.roots, tc.tree)
+			if got != tc.want {
+				t.Errorf("treeUnderRoots(%v, %q) = %v; want %v", tc.roots, tc.tree, got, tc.want)
+			}
+		})
+	}
+}

@@ -834,3 +834,110 @@ func TestSortedPaths_ReturnsAllPaths(t *testing.T) {
 		t.Errorf("paths (sorted) = %v; want %v", paths, all)
 	}
 }
+
+// ── V7b exploit tests — unbounded-read OOM DoS ────────────────────────────────
+
+// TestExploit_V7b_LoadState_OversizedRejected verifies that a state.json whose
+// byte count exceeds the 16 MiB cap causes LoadState to return an error and an
+// empty State instead of consuming arbitrary memory. This encodes the exploit:
+// the test FAILS on un-fixed code (which calls os.ReadFile with no size limit).
+func TestExploit_V7b_LoadState_OversizedRejected(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+
+	// Write a file larger than the 16 MiB cap.
+	const capBytes = 16 << 20 // must match state.maxStateFileSize
+	big := make([]byte, capBytes+1)
+	for i := range big {
+		big[i] = 'x' // fill with non-null bytes to prevent sparse-file shortcuts
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "state.json"), big, 0o644); err != nil {
+		t.Fatalf("setup: write oversized state.json: %v", err)
+	}
+
+	s, err := state.LoadState(tmp)
+	if err == nil {
+		t.Fatal("LoadState on oversized file: expected error, got nil (V7b not fixed)")
+	}
+	// Must return empty maps, not partial data.
+	if s.Mappings == nil {
+		t.Error("Mappings is nil; want non-nil empty map on error path")
+	}
+	if s.Projects == nil {
+		t.Error("Projects is nil; want non-nil empty map on error path")
+	}
+	if len(s.Mappings) != 0 {
+		t.Errorf("Mappings len = %d; want 0 on error path", len(s.Mappings))
+	}
+	if len(s.Projects) != 0 {
+		t.Errorf("Projects len = %d; want 0 on error path", len(s.Projects))
+	}
+}
+
+// TestExploit_V7b_LoadState_UnderCapParses verifies that a normal-sized
+// state.json (well below the 16 MiB cap) still parses correctly after the fix.
+func TestExploit_V7b_LoadState_UnderCapParses(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+
+	s := state.State{
+		Mappings: map[string]state.Mapping{
+			"ses_ok": {Tool: model.ToolClaude, Tree: "/repo", Choice: state.ChoiceWorktree},
+		},
+		Projects: map[string]state.ProjectStat{
+			"/repo": {Rank: 1.0, LastAccessed: 42},
+		},
+	}
+	if err := state.SaveState(tmp, s); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	loaded, err := state.LoadState(tmp)
+	if err != nil {
+		t.Fatalf("LoadState on normal-sized file: %v (under-cap should parse fine)", err)
+	}
+	if _, ok := loaded.Mappings["ses_ok"]; !ok {
+		t.Error("Mappings[ses_ok] missing after load")
+	}
+}
+
+// TestExploit_V7b_LoadWindows_OversizedSkipped verifies that a single oversized
+// windows/*.json is skipped (logged) while valid sibling files are still
+// returned. This encodes the exploit: the test FAILS on un-fixed code (which
+// calls os.ReadFile with no size limit on each window file).
+func TestExploit_V7b_LoadWindows_OversizedSkipped(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+
+	// Write one valid window record.
+	if err := state.SaveWindow(tmp, sampleWindow("%1")); err != nil {
+		t.Fatalf("SaveWindow valid: %v", err)
+	}
+
+	// Write one oversized window file directly (bypassing SaveWindow to avoid
+	// the cap being applied at write time).
+	const capBytes = 16 << 20 // must match state.maxStateFileSize
+	big := make([]byte, capBytes+1)
+	for i := range big {
+		big[i] = 'x'
+	}
+	bigPath := filepath.Join(tmp, "windows", "big.json")
+	if err := os.MkdirAll(filepath.Dir(bigPath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(bigPath, big, 0o644); err != nil {
+		t.Fatalf("setup: write oversized big.json: %v", err)
+	}
+
+	windows, err := state.LoadWindows(tmp)
+	if err != nil {
+		t.Fatalf("LoadWindows: unexpected hard error: %v", err)
+	}
+	// The oversized file must be skipped; the valid sibling must be returned.
+	if len(windows) != 1 {
+		t.Fatalf("LoadWindows returned %d windows; want 1 (oversized must be skipped, valid sibling kept)", len(windows))
+	}
+	if windows[0].PaneKey != "%1" {
+		t.Errorf("surviving window PaneKey = %q; want %%1", windows[0].PaneKey)
+	}
+}

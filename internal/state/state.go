@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/url"
 	"os"
@@ -20,6 +21,30 @@ import (
 
 	"github.com/Miniature-Pug/perch/internal/model"
 )
+
+// maxStateFileSize is the maximum number of bytes readLimited will read from
+// any state or window file. Files larger than this cap are rejected to prevent
+// a malicious or corrupt file from exhausting available memory (V7b).
+const maxStateFileSize int64 = 16 << 20 // 16 MiB
+
+// readLimited opens path and reads at most max bytes. If the actual content
+// exceeds max, an error is returned so the caller can treat the file as
+// malformed rather than risk an OOM.
+func readLimited(path string, max int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, max+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > max {
+		return nil, fmt.Errorf("file exceeds %d-byte limit (%d+ bytes)", max, max+1)
+	}
+	return data, nil
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -87,7 +112,7 @@ func LoadState(baseDir string) (State, error) {
 	}
 
 	path := filepath.Join(baseDir, "state.json")
-	data, err := os.ReadFile(path)
+	data, err := readLimited(path, maxStateFileSize)
 	if errors.Is(err, os.ErrNotExist) {
 		return empty, nil
 	}
@@ -205,7 +230,7 @@ func LoadWindows(baseDir string) ([]model.Window, error) {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
-		data, err := os.ReadFile(path)
+		data, err := readLimited(path, maxStateFileSize)
 		if err != nil {
 			log.Printf("state: skip unreadable window file %s: %v", path, err)
 			continue
