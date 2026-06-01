@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
@@ -14,6 +15,7 @@ import (
 	"github.com/Miniature-Pug/perch/internal/config"
 	"github.com/Miniature-Pug/perch/internal/discover"
 	"github.com/Miniature-Pug/perch/internal/doctor"
+	"github.com/Miniature-Pug/perch/internal/frame"
 	"github.com/Miniature-Pug/perch/internal/model"
 	"github.com/Miniature-Pug/perch/internal/proc"
 	"github.com/Miniature-Pug/perch/internal/resurrect"
@@ -38,10 +40,12 @@ func main() {
 // never directly to os.Stdout/os.Stderr. Returns the exit code.
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		return handleTUI("", stdout, stderr)
+		return handleBootstrap("", stdout, stderr)
 	}
 
 	switch args[0] {
+	case "--sidebar":
+		return handleSidebar(args[1:], stdout, stderr)
 	case "setup":
 		return handleSetup(args[1:], stdout, stderr)
 	case "resurrect":
@@ -101,6 +105,170 @@ func handleTUI(root string, stdout, stderr io.Writer) int {
 	}
 	if err := tui.Run(ctx, cfg); err != nil {
 		_, _ = fmt.Fprintf(stderr, "perch: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// bootstrapDeps is the injectable dependency bundle for handleBootstrap.
+// In production, bootstrapProduction() fills it from real OS/tmux calls.
+// In tests, fields are replaced with fakes so no real tmux or TUI is needed.
+type bootstrapDeps struct {
+	// tmuxClient is the Tmux instance used to run frame.Ensure.
+	tmuxClient tmux.Tmux
+	// executable returns the path to the running binary (os.Executable).
+	// Used to build the "perch --sidebar" command argv.
+	executable func() (string, error)
+	// fallback is called when frame setup fails. In production this is
+	// handleTUI. In tests it is replaced with a stub.
+	fallback func(root string, stdout, stderr io.Writer) int
+	// attach performs the terminal hand-off after a successful frame bootstrap.
+	// In production: outside tmux → exec tmux attach-session; inside tmux →
+	// switch-client. This is the one path NOT unit-tested (tty-dependent).
+	// In tests it is a no-op that records the call.
+	attach func(ctx context.Context, t tmux.Tmux, frameSession string) int
+}
+
+func bootstrapProduction() bootstrapDeps {
+	t := tmux.New()
+	return bootstrapDeps{
+		tmuxClient: t,
+		executable: os.Executable,
+		fallback: func(root string, stdout, stderr io.Writer) int {
+			return handleTUI(root, stdout, stderr)
+		},
+		attach: func(ctx context.Context, t tmux.Tmux, frameSession string) int {
+			argv := t.ExecArgs(t.AttachArgs(frameSession)...)
+			c := exec.Command(argv[0], argv[1:]...) //nolint:gosec // controlled input
+			c.Stdin = os.Stdin
+			c.Stdout = os.Stdout
+			c.Stderr = os.Stderr
+			_ = c.Run()
+			return 0
+		},
+	}
+}
+
+// handleBootstrap is the new default entry point when perch is run without a
+// subcommand. It bootstraps the persistent perch frame session (M11-0 T4):
+//
+//  1. Resolves the project root (cwd when root=="").
+//  2. Builds the sidebar command string using os.Executable.
+//  3. Calls frame.Ensure to create or reuse the perch frame.
+//  4. Attaches: switch-client when inside tmux, exec tmux attach-session outside.
+//
+// Graceful fallback: any error from frame.Ensure (or a missing tmux binary)
+// prints a warning and falls through to handleTUI so perch always launches
+// something useful.
+func handleBootstrap(root string, stdout, stderr io.Writer) int {
+	return bootstrap(bootstrapProduction(), root, stdout, stderr)
+}
+
+// bootstrap is the testable core of handleBootstrap. deps replaces real tmux
+// and OS calls so tests can drive every branch without a live server or TUI.
+func bootstrap(deps bootstrapDeps, root string, stdout, stderr io.Writer) int {
+	if root == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "perch: cannot determine working directory: %v\n", err)
+			return 1
+		}
+		root = cwd
+	}
+
+	// Build the sidebar argv: absolute path to this binary + "--sidebar". argv
+	// (not a joined string) keeps a binary path containing spaces intact.
+	sidebarArgv := []string{"perch", "--sidebar"} // fallback if os.Executable fails
+	if exe, err := deps.executable(); err == nil && exe != "" {
+		sidebarArgv = []string{exe, "--sidebar"}
+	}
+
+	ctx := context.Background()
+	info, err := frame.Ensure(ctx, deps.tmuxClient, frame.DefaultFrameSession, root, sidebarArgv)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "perch: frame setup: %v — falling back to direct TUI\n", err)
+		return deps.fallback(root, stdout, stderr)
+	}
+	_ = info // session/pane ids are only needed by handleSidebar (injected via $TMUX_PANE)
+
+	return deps.attach(ctx, deps.tmuxClient, frame.DefaultFrameSession)
+}
+
+// sidebarDeps is the injectable dependency bundle for handleSidebar. In
+// production, sidebarProduction() fills it. In tests, runTUI is replaced with
+// a stub so no Bubble Tea program is started.
+type sidebarDeps struct {
+	// tmuxClient is used by frame.SidebarContext to discover the frame context.
+	tmuxClient tmux.Tmux
+	// getenv resolves environment variables (e.g. TMUX_PANE).
+	getenv func(string) string
+	// runTUI wraps tui.Run. Tests replace this with a stub that captures the
+	// Config without launching a real terminal program.
+	runTUI func(ctx context.Context, cfg tui.Config) error
+}
+
+func sidebarProduction() sidebarDeps {
+	return sidebarDeps{
+		tmuxClient: tmux.New(),
+		getenv:     os.Getenv,
+		runTUI:     tui.Run,
+	}
+}
+
+// handleSidebar is the inner TUI that runs inside the frame's sidebar pane.
+// It resolves its own pane id from $TMUX_PANE, discovers the sibling placeholder
+// pane via frame.SidebarContext, then launches the TUI with the frame fields set.
+func handleSidebar(args []string, stdout, stderr io.Writer) int {
+	return sidebar(sidebarProduction(), args, stdout, stderr)
+}
+
+// sidebar is the testable core of handleSidebar. deps replaces real tmux and
+// TUI calls so tests can exercise routing without a live server or terminal.
+func sidebar(deps sidebarDeps, args []string, stdout, stderr io.Writer) int {
+	// args currently unused (reserved for future sidebar-specific flags).
+	_ = args
+
+	root, err := os.Getwd()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "perch: cannot determine working directory: %v\n", err)
+		return 1
+	}
+	baseDir, err := state.StateDir()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "perch: %v\n", err)
+		return 1
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	frameSession, placeholderPane, err := frame.SidebarContext(ctx, deps.tmuxClient, deps.getenv)
+	if err != nil {
+		// Not inside a frame (e.g. invoked directly for testing) — run without
+		// frame context (direct-TUI mode) so the sidebar is still useful.
+		_, _ = fmt.Fprintf(stderr, "perch: sidebar context: %v — running without frame\n", err)
+	}
+
+	var refreshMs int
+	if globalPath, gerr := config.DefaultGlobalPath(); gerr == nil {
+		if cfg, cerr := config.Load(globalPath, root); cerr == nil {
+			refreshMs = cfg.RefreshMs
+		}
+	}
+
+	cfg := tui.Config{
+		Tmux:            deps.tmuxClient,
+		Runner:          proc.ExecRunner{},
+		Claude:          agent.NewClaude(),
+		Root:            root,
+		BaseDir:         baseDir,
+		Now:             time.Now().Unix(),
+		RefreshMs:       refreshMs,
+		FrameSession:    frameSession,
+		PlaceholderPane: placeholderPane,
+	}
+	if runErr := deps.runTUI(ctx, cfg); runErr != nil {
+		_, _ = fmt.Fprintf(stderr, "perch: %v\n", runErr)
 		return 1
 	}
 	return 0
@@ -283,8 +451,9 @@ func handleVersion(stdout io.Writer) int {
 	return 0
 }
 
-// handlePathArg validates args[0] as an existing directory root and launches
-// the TUI, or prints usage to stderr and returns 2.
+// handlePathArg validates args[0] as an existing directory root and bootstraps
+// the perch frame (or falls back to direct TUI), or prints usage to stderr and
+// returns 2.
 func handlePathArg(arg string, stdout, stderr io.Writer) int {
 	info, err := os.Stat(arg)
 	if err != nil || !info.IsDir() {
@@ -292,7 +461,7 @@ func handlePathArg(arg string, stdout, stderr io.Writer) int {
 		printUsage(stderr)
 		return 2
 	}
-	return handleTUI(arg, stdout, stderr)
+	return handleBootstrap(arg, stdout, stderr)
 }
 
 // printUsage writes the usage summary to w.
