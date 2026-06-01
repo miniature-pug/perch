@@ -495,6 +495,142 @@ func TestLaunch_FrecencyAndShadowRecord(t *testing.T) {
 	}
 }
 
+// ── Fork claude session ───────────────────────────────────────────────────────
+
+func TestLaunch_ForkClaude(t *testing.T) {
+	r := proc.NewFakeRunner()
+	baseDir := t.TempDir()
+
+	sess := expectedSession()
+	win := expectedWindow("feat")
+	paneID := "%10"
+
+	registerLaunchCalls(r, sess, win, "/proj/myrepo", paneID)
+	ok := proc.FakeResult{}
+	r.Default = &ok
+	r.Respond(proc.FakeResult{Stdout: []byte("12345\n")},
+		"tmux", "display-message", "-p", "#{start_time}")
+
+	m := New(nil).WithLoader(loader{
+		Tmux:    fakeTmuxInside(r),
+		BaseDir: baseDir,
+		Now:     1000,
+	})
+
+	spec := launchSpec{
+		tool:        "claude",
+		sessionID:   "seed-abc",
+		fork:        true,
+		branch:      "feat",
+		treePath:    "/proj/myrepo",
+		projectPath: "/proj/myrepo",
+	}
+	msg := m.launchCmd(spec)()
+	lm, ok2 := msg.(launchedMsg)
+	if !ok2 {
+		t.Fatalf("want launchedMsg, got %T", msg)
+	}
+	if lm.err != nil {
+		t.Fatalf("launchedMsg error: %v", lm.err)
+	}
+
+	var sendKeysLiteral string
+	var setOptVal string
+	for _, c := range r.Calls {
+		if c.Name == "tmux" && len(c.Args) >= 5 && c.Args[0] == "send-keys" && c.Args[3] == "-l" {
+			sendKeysLiteral = c.Args[4]
+		}
+		if c.Name == "tmux" && len(c.Args) >= 1 && c.Args[0] == "set-option" {
+			for i, a := range c.Args {
+				if a == "@perch_session" && i+1 < len(c.Args) {
+					setOptVal = c.Args[i+1]
+				}
+			}
+		}
+	}
+
+	// The literal must carry ForkInto args + the pinned --session-id.
+	if !strings.Contains(sendKeysLiteral, "--resume") {
+		t.Errorf("send-keys literal %q: want --resume", sendKeysLiteral)
+	}
+	if !strings.Contains(sendKeysLiteral, "seed-abc") {
+		t.Errorf("send-keys literal %q: want seed id seed-abc", sendKeysLiteral)
+	}
+	if !strings.Contains(sendKeysLiteral, "--fork-session") {
+		t.Errorf("send-keys literal %q: want --fork-session", sendKeysLiteral)
+	}
+	if !strings.Contains(sendKeysLiteral, "--session-id") {
+		t.Errorf("send-keys literal %q: want --session-id", sendKeysLiteral)
+	}
+	// @perch_session is stamped with the pre-minted fork id.
+	if !uuidV4Re.MatchString(setOptVal) {
+		t.Errorf("set-option @perch_session = %q: want a v4 UUID", setOptVal)
+	}
+	// The same UUID appears in send-keys (pinned id == stamped id).
+	if !strings.Contains(sendKeysLiteral, setOptVal) {
+		t.Errorf("send-keys literal %q does not contain pinned UUID %q", sendKeysLiteral, setOptVal)
+	}
+}
+
+// ── Fork opencode → fresh-session fallback ────────────────────────────────────
+
+func TestLaunch_ForkOpencodeFallback(t *testing.T) {
+	r := proc.NewFakeRunner()
+	baseDir := t.TempDir()
+
+	sess := expectedSession()
+	win := expectedWindow("feat")
+	paneID := "%11"
+
+	registerLaunchCalls(r, sess, win, "/proj/myrepo", paneID)
+	ok := proc.FakeResult{}
+	r.Default = &ok
+	r.Respond(proc.FakeResult{Stdout: []byte("12345\n")},
+		"tmux", "display-message", "-p", "#{start_time}")
+
+	m := New(nil).WithLoader(loader{
+		Tmux:    fakeTmuxInside(r),
+		BaseDir: baseDir,
+		Now:     1000,
+	})
+
+	spec := launchSpec{
+		tool:        "opencode",
+		sessionID:   "ses_seed",
+		fork:        true,
+		branch:      "feat",
+		treePath:    "/proj/myrepo",
+		projectPath: "/proj/myrepo",
+	}
+	msg := m.launchCmd(spec)()
+	lm, ok2 := msg.(launchedMsg)
+	if !ok2 {
+		t.Fatalf("want launchedMsg, got %T", msg)
+	}
+	if lm.err != nil {
+		t.Fatalf("launchedMsg error: %v", lm.err)
+	}
+
+	// ErrForkUnsupported → no @perch_session stamp (sid stays empty).
+	for _, c := range r.Calls {
+		if c.Name == "tmux" && len(c.Args) >= 1 && c.Args[0] == "set-option" {
+			t.Errorf("unexpected set-option call for opencode fork fallback: %v", c.Args)
+		}
+	}
+
+	// send-keys literal must be bare 'opencode' (NewArgs{} returns nil).
+	var sendKeysLiteral string
+	for _, c := range r.Calls {
+		if c.Name == "tmux" && len(c.Args) >= 5 && c.Args[0] == "send-keys" && c.Args[3] == "-l" {
+			sendKeysLiteral = c.Args[4]
+			break
+		}
+	}
+	if sendKeysLiteral != "'opencode'" {
+		t.Errorf("send-keys literal = %q, want 'opencode'", sendKeysLiteral)
+	}
+}
+
 // ── New with empty list (no selection) ───────────────────────────────────────
 
 func TestLaunch_NewWithNoSelection(t *testing.T) {

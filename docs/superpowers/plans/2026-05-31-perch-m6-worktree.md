@@ -37,7 +37,7 @@ Resolved by advisor before authoring; treat as constraints, do NOT re-litigate.
 - **L1 — `run-shell` MUST be backgrounded.** Existing `RunShellArgs` returns `["run-shell", script]` with no `-b`; synchronous run would kill the pane mid-teardown. `Tmux.RunShell` inserts `-b` (do NOT mutate the pure builder's two-element contract). Nested bare `tmux` calls inside the script inherit `$TMUX` → under the socketed test server they target the test server (no `-L` inside the script).
 - **L2 — base = `BaseBranch` else `HEAD`.** `AddWorktree` takes `base` as an explicit arg; caller passes `cfg.BaseBranch` when non-empty, else `"HEAD"` (project HEAD commit, §7.1).
 - **L3 — `Validate(repoRoot)` wired at the create/command layer**, not inside `Load` (which has no repoRoot).
-- **L4 — forked claude id unknown at launch.** `--resume <id> --fork-session` mints a NEW id → stamping is the deferred/empty case unless the M6-4 demo confirms `--session-id <uuid>` pins it. launchCmd fork branch handles `errors.Is(err, agent.ErrForkUnsupported)` → fall back to fresh `NewArgs`.
+- **L4 — RESOLVED (M6-4): forked claude id IS pinnable.** Empirically verified against claude v2.1.159 (print-mode + interactive tmux-pty, with control showing auto-mint when unpinned): `claude --resume <seed> --fork-session --session-id <new>` lands the fork on exactly `<new>` (no mutual-exclusivity in `--help`; forked conversation renders). So perch pre-mints the forked id → it is KNOWN at launch → `@perch_session` stamped from the first load cycle (NOT the deferred/empty case). launchCmd fork branch: claude composes `ForkInto(seed) + NewArgs(NewOpts{SessionID: minted})` (adapter owns all flags); opencode `errors.Is(err, agent.ErrForkUnsupported)` → byte-identical opencode-new fallback (no sid, no stamp).
 - **L5 — two distinct path-safety layers.** (a) `checkSafe` validates config *strings* (relative, no `..`) → M6-3, `files.*` only. (b) §7.1 "inside repo before any FS op" operates on the *post-glob resolved absolute path* → M6-2, a different check. M6-2 does NOT lean on `checkSafe`.
 - **L6 — lockfile `<handle>` ≠ branch slug.** `.git/worktrees/<name>/locked` uses git's internal worktree dir name; derive from the worktree's `.git` gitdir pointer, not the handle.
 - **L7 — git slugify ≠ tmux `sanitize`.** Keep both; do not force-share across the package boundary.
@@ -134,14 +134,14 @@ Resolved by advisor before authoring; treat as constraints, do NOT re-litigate.
 
 - **Demonstrated:** claude headless fork into new worktree (FD5); deferred self-close teardown e2e (FD6/L1).
 - **Manual/deferred:** full alt-screen handover of a remove into the user's own terminal (in-script `switch-client` not headlessly drivable — same as M5 attach). opencode fork = `ErrForkUnsupported` by design. If `claude` absent on build machine, fork demo recorded not-demonstrated-here.
-- **Empirically-pending:** L1 (`-b` required, confirmed in integration), L4 (`--session-id` fork-id pinning, M6-4 demo), L6 (internal worktree name parsing, create integration).
+- **Empirically-pending:** L1 (`-b` required, confirmed in integration), L6 (internal worktree name parsing, create integration). [L4 RESOLVED in M6-4 — fork id pins via `--session-id`.]
 
 ## Whole-milestone checklist
 
 - [x] M6-1 git worktree add/remove/prune + placement + slugify + lock/internal-name — `internal/git/worktree.go`; 91.1% cov; spec SHIP + quality 0 bug/0 risk; lint 0
 - [x] M6-2 seeding (copy/symlink, security gate L5) + hooks (env via `sh -c`) — `internal/worktree/{seed,hooks}.go`; 83.2% cov; TOCTOU closed (resolved-path reuse); spec SHIP + lint 0
 - [x] M6-3 config validate split (FD2/L5) + worktree_dir validation + mapping enum + lookup/writer + plan.md §8 fix — config 92.1%/state 84.9%; SHIP; `.gitfoo`/`foo/../.git` regression guards added; lint 0
-- [ ] M6-4 fork wiring (claude native, opencode fallback L4) + headless claude-fork demo (FD5)
+- [x] M6-4 fork wiring (claude native pin+stamp, opencode ErrForkUnsupported→fresh fallback) + headless claude-fork demo (FD5) — L4 empirically RESOLVED (claude honours `--session-id` on `--fork-session`, fork id known at launch); `internal/tui/launch.go` compose `ForkInto+NewArgs{SessionID}` (no raw flags in TUI); unit tests (FakeRunner/model-state) `TestLaunch_Fork{Claude,OpencodeFallback}`; `//go:build integration` demo `launch_fork_integration_test.go` (skips absent deps, temp-guarded cleanup); spec SHIP + quality SHIP on production path; 2 integration-test BLOCKERs fixed (guard var, exec timeout); gate green (lint 0, all tests pass)
 - [ ] M6-5 `Tmux.RunShell`(`-b`) + `KillWindow` + `CurrentClientWindow` + `Connect` reuse + `DeferredRemove` + shadow teardown
 - [ ] M6-6 TUI `w`/`d`/`x` + minimal modals (FD3) + main-checkout & focused-in-tree guards (FD4) + no-reprompt + footer
 - [ ] M6-7 integration (§20.4) + deferred-self-close e2e + mapping-survives-restart + closeout

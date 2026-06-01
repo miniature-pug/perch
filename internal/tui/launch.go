@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -23,6 +24,7 @@ type launchSpec struct {
 	treePath    string // absolute working dir — Launch dir + SaveWindow.Tree
 	projectPath string // absolute repo root — SessionName + frecency key
 	resume      bool
+	fork        bool // fork an existing session into spec.treePath (vs resume in place)
 }
 
 // launchedMsg is delivered after the blocking launch work completes.
@@ -88,7 +90,28 @@ func (m Model) launchCmd(spec launchSpec) tea.Cmd {
 
 		var sid string
 		var argv []string
-		if spec.resume {
+		if spec.fork {
+			forkArgs, ferr := adapter.ForkInto(spec.sessionID, spec.treePath)
+			if errors.Is(ferr, agent.ErrForkUnsupported) {
+				// opencode has no native fork → start a fresh session; opencode
+				// assigns its own id so sid stays "" and @perch_session is not stamped.
+				argv = append([]string{adapter.Name()}, adapter.NewArgs(agent.NewOpts{})...)
+			} else if ferr != nil {
+				return launchedMsg{err: ferr}
+			} else {
+				// claude forks natively and honours --session-id, so pre-mint the
+				// forked id: it is known at launch, stamped into @perch_session, and
+				// written to the shadow record — the correct session is tracked from
+				// the first load cycle (D6).
+				var err error
+				sid, err = newSessionID()
+				if err != nil {
+					return launchedMsg{err: err}
+				}
+				argv = append([]string{adapter.Name()}, forkArgs...)
+				argv = append(argv, adapter.NewArgs(agent.NewOpts{SessionID: sid})...)
+			}
+		} else if spec.resume {
 			sid = spec.sessionID
 			argv = append([]string{adapter.Name()}, adapter.ResumeArgs(sid)...)
 		} else if model.Tool(spec.tool) == model.ToolClaude {
