@@ -477,9 +477,9 @@ func (m Model) View() string {
 	var messageLine string
 	switch {
 	case m.toast != "":
-		messageLine = styles.toast.Render(m.toast)
+		messageLine = styles.toast.MaxWidth(m.width).Render(m.toast)
 	case m.loadErr != "":
-		messageLine = styles.errorBar.Render("Error loading sessions: " + m.loadErr)
+		messageLine = styles.errorBar.MaxWidth(m.width).Render("Error loading sessions: " + m.loadErr)
 	}
 
 	// bodyRegionHeight is the space between the reserved message row and the footer.
@@ -488,16 +488,18 @@ func (m Model) View() string {
 
 	if m.showHelp {
 		overlay := styles.helpOverlay.Render(m.help.FullHelpView(m.FullHelp()))
+		overlay = lipgloss.NewStyle().MaxWidth(m.width).MaxHeight(bodyRegionHeight).Render(overlay)
 		centered := lipgloss.Place(m.width, bodyRegionHeight, lipgloss.Center, lipgloss.Center, overlay)
 		return lipgloss.JoinVertical(lipgloss.Left, messageLine, centered, footer)
 	}
 
 	if m.modal.kind != modalNone {
-		modalBox := renderModal(m.modal)
+		modalBox := lipgloss.NewStyle().MaxWidth(m.width).MaxHeight(bodyRegionHeight).Render(renderModal(m.modal))
 		centered := lipgloss.Place(m.width, bodyRegionHeight, lipgloss.Center, lipgloss.Center, modalBox)
 		return lipgloss.JoinVertical(lipgloss.Left, messageLine, centered, footer)
 	}
 
+	body = lipgloss.NewStyle().MaxWidth(m.width).Render(body)
 	return lipgloss.JoinVertical(lipgloss.Left, messageLine, body, footer)
 }
 

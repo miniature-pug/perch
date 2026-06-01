@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -56,5 +57,60 @@ func TestView_HelpFitsHeightExactly(t *testing.T) {
 	}
 	if h := lipgloss.Height(m.View()); h != testViewH {
 		t.Fatalf("View height with help = %d, want exactly %d", h, testViewH)
+	}
+}
+
+// View must never emit a line wider than the terminal — a wrapped over-wide line
+// would re-introduce vertical overflow that lipgloss.Height cannot detect.
+
+func TestView_LongToastStaysWithinWidthAndHeight(t *testing.T) {
+	m := New(liveSession())
+	m, _ = sizeModel(m, testViewW, testViewH)
+	m, _ = m.withToast(strings.Repeat("x", 200))
+	v := m.View()
+	if w := lipgloss.Width(v); w > testViewW {
+		t.Fatalf("View width with long toast = %d, want <= %d", w, testViewW)
+	}
+	if h := lipgloss.Height(v); h != testViewH {
+		t.Fatalf("View height with long toast = %d, want %d", h, testViewH)
+	}
+}
+
+func TestView_LongLoadErrStaysWithinWidthAndHeight(t *testing.T) {
+	m := New(liveSession())
+	m, _ = sizeModel(m, testViewW, testViewH)
+	m.loadErr = strings.Repeat("e", 200)
+	v := m.View()
+	if w := lipgloss.Width(v); w > testViewW {
+		t.Fatalf("View width with long loadErr = %d, want <= %d", w, testViewW)
+	}
+	if h := lipgloss.Height(v); h != testViewH {
+		t.Fatalf("View height with long loadErr = %d, want %d", h, testViewH)
+	}
+}
+
+func TestView_LongModalStaysWithinWidth(t *testing.T) {
+	m := New(liveSession())
+	m, _ = sizeModel(m, testViewW, testViewH)
+	m.modal = modalState{kind: modalRemoveConfirm, branch: strings.Repeat("b", 200)}
+	v := m.View()
+	if w := lipgloss.Width(v); w > testViewW {
+		t.Fatalf("View width with long modal branch = %d, want <= %d", w, testViewW)
+	}
+	if h := lipgloss.Height(v); h > testViewH {
+		t.Fatalf("View height with long modal = %d, want <= %d", h, testViewH)
+	}
+}
+
+func TestView_HelpOverlayStaysWithinWidth(t *testing.T) {
+	m := New(liveSession())
+	m, _ = sizeModel(m, testViewW, testViewH)
+	m = sendKey(m, '?')
+	v := m.View()
+	if w := lipgloss.Width(v); w > testViewW {
+		t.Fatalf("View width with help overlay = %d, want <= %d", w, testViewW)
+	}
+	if h := lipgloss.Height(v); h != testViewH {
+		t.Fatalf("View height with help overlay = %d, want %d", h, testViewH)
 	}
 }
