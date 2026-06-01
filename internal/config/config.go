@@ -9,6 +9,7 @@
 package config
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -130,6 +131,15 @@ type Config struct {
 	PreRemove   []string
 	PreMerge    []string
 	Wildcards   []WildcardRule
+
+	// ProjectConfigPath is the absolute path of the .perch.toml that was loaded,
+	// or empty when no project config was found.
+	ProjectConfigPath string
+	// ProjectConfigHash is the hex sha256 of the .perch.toml bytes, keyed to
+	// the same file as ProjectConfigPath. Empty when no project config was found.
+	// Do not import internal/trust from this package; the hash is computed inline
+	// to avoid an import cycle.
+	ProjectConfigHash string
 
 	// agentBins is sourced exclusively from the global config. It is unexported
 	// so callers cannot mutate it; access is via AgentBinary.
@@ -255,12 +265,12 @@ func Load(globalPath string, projectStartDir string) (*Config, error) {
 		return nil, err
 	}
 
-	pc, err := findAndLoadProject(projectStartDir)
+	pc, configPath, configBytes, err := findAndLoadProject(projectStartDir)
 	if err != nil {
 		return nil, err
 	}
 
-	return merge(gc, pc, projectStartDir)
+	return merge(gc, pc, projectStartDir, configPath, configBytes)
 }
 
 // loadGlobal reads the global config file. A missing file returns a zero globalConfig.
@@ -284,9 +294,11 @@ func loadGlobal(globalPath string) (*globalConfig, error) {
 
 // findAndLoadProject walks up from startDir looking for .perch.toml. Stops when
 // it reaches a .git boundary or the filesystem root. Returns nil when not found.
-func findAndLoadProject(startDir string) (*projectConfig, error) {
+// On success it also returns the resolved absolute path and raw bytes of the file
+// so callers can compute a stable content hash without a second read.
+func findAndLoadProject(startDir string) (*projectConfig, string, []byte, error) {
 	if startDir == "" {
-		return nil, nil
+		return nil, "", nil, nil
 	}
 
 	dir := filepath.Clean(startDir)
@@ -294,23 +306,27 @@ func findAndLoadProject(startDir string) (*projectConfig, error) {
 		candidate := filepath.Join(dir, ".perch.toml")
 		_, err := os.Stat(candidate)
 		if err == nil {
-			// Found — decode it.
-			pc := &projectConfig{}
-			if _, err := toml.DecodeFile(candidate, pc); err != nil {
-				return nil, fmt.Errorf("config: parse project config %q: %w", candidate, err)
+			// Found — read and decode it.
+			raw, err := os.ReadFile(candidate)
+			if err != nil {
+				return nil, "", nil, fmt.Errorf("config: read project config %q: %w", candidate, err)
 			}
-			return pc, nil
+			pc := &projectConfig{}
+			if _, err := toml.Decode(string(raw), pc); err != nil {
+				return nil, "", nil, fmt.Errorf("config: parse project config %q: %w", candidate, err)
+			}
+			return pc, candidate, raw, nil
 		}
 		// Only treat "not found" as "keep walking"; any other error (e.g. permission
 		// denied) must surface so the user knows something is wrong.
 		if !errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("config: stat project config %q: %w", candidate, err)
+			return nil, "", nil, fmt.Errorf("config: stat project config %q: %w", candidate, err)
 		}
 
 		// Stop at a .git boundary (repo root) or filesystem root.
 		atBoundary, err := hasGitDir(dir)
 		if err != nil {
-			return nil, err
+			return nil, "", nil, err
 		}
 		if atBoundary || isRoot(dir) {
 			break
@@ -323,7 +339,16 @@ func findAndLoadProject(startDir string) (*projectConfig, error) {
 		}
 		dir = parent
 	}
-	return nil, nil
+	return nil, "", nil, nil
+}
+
+// configHash computes the hex sha256 of a .perch.toml's raw bytes. It is
+// intentionally a local helper rather than importing internal/trust, which would
+// create an import cycle (trust imports nothing from config). The one-liner is
+// identical to trust.Hash; duplication is acceptable here.
+func configHash(b []byte) string {
+	sum := sha256.Sum256(b)
+	return fmt.Sprintf("%x", sum)
 }
 
 // hasGitDir reports whether dir contains a .git entry (directory or file for
@@ -359,7 +384,9 @@ func parseAgent(s string) (model.Tool, error) {
 
 // merge applies globalConfig and projectConfig on top of defaults.
 // Pointer fields on projectConfig are only applied when non-nil (explicit in TOML).
-func merge(gc *globalConfig, pc *projectConfig, startDir string) (*Config, error) {
+// configPath and configBytes are the resolved .perch.toml path and its raw bytes;
+// both empty when no project config was found.
+func merge(gc *globalConfig, pc *projectConfig, startDir string, configPath string, configBytes []byte) (*Config, error) {
 	cfg := &Config{
 		// Defaults.
 		RefreshMs: defaultRefreshMs,
@@ -441,6 +468,12 @@ func merge(gc *globalConfig, pc *projectConfig, startDir string) (*Config, error
 			for i, w := range pc.Wildcards {
 				cfg.Wildcards[i] = WildcardRule(w)
 			}
+		}
+
+		// Record provenance so trust-gate callers can key on path+hash.
+		if configPath != "" {
+			cfg.ProjectConfigPath = configPath
+			cfg.ProjectConfigHash = configHash(configBytes)
 		}
 	}
 

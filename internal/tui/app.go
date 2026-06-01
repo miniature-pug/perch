@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/charmbracelet/bubbles/help"
@@ -13,6 +14,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/Miniature-Pug/perch/internal/tmux"
+	"github.com/Miniature-Pug/perch/internal/trust"
 )
 
 const (
@@ -160,8 +162,14 @@ type worktreePreflightMsg struct {
 // runMainCmd) has finished its synchronous work. On success spec carries the
 // launchSpec to hand off to launchCmd.
 type worktreeCreatedMsg struct {
-	spec launchSpec
-	err  error
+	spec  launchSpec
+	err   error
+	trust *trustReq // non-nil when hooks are pending and require user approval
+}
+
+// trustNeededMsg is delivered by removeCmd when pre_remove hooks need approval.
+type trustNeededMsg struct {
+	trust *trustReq
 }
 
 // Update handles all incoming messages.
@@ -248,7 +256,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			return m.withToast("worktree failed: " + msg.err.Error())
 		}
+		// Hook trust approval pending: open the trust modal instead of launching.
+		if msg.trust != nil {
+			m.showHelp = false
+			m.modal = modalState{kind: modalTrustConfirm, trust: msg.trust}
+			return m, nil
+		}
 		return m, m.launchCmd(msg.spec)
+
+	case trustNeededMsg:
+		// Pre-remove hooks need approval.
+		if msg.trust != nil {
+			m.showHelp = false
+			m.modal = modalState{kind: modalTrustConfirm, trust: msg.trust}
+		}
+		return m, nil
 
 	case statusTickMsg:
 		// Always re-arm the tick; fire a poll only when not already in-flight
@@ -543,7 +565,7 @@ func (m Model) updateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.modal = modalState{}
 			switch ms.action {
 			case 0:
-				return m, m.worktreeCreateCmd(ms)
+				return m, m.worktreeCreateCmd(ms, nil)
 			case 1:
 				return m, m.runHereCmd(ms)
 			default: // 2
@@ -551,6 +573,45 @@ func (m Model) updateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		// Swallow all other keys while newSession modal is open.
+		return m, nil
+	}
+
+	// Trust confirm modal has its own distinct key set.
+	if m.modal.kind == modalTrustConfirm {
+		req := m.modal.trust
+		if req == nil {
+			m.modal = modalState{}
+			return m, nil
+		}
+		switch {
+		case msg.Type == tea.KeyRunes && string(msg.Runes) == "a":
+			// Approve always: persist to the trust store, then re-dispatch.
+			store, err := trust.Load(filepath.Join(m.loader.BaseDir, "trust.json"))
+			if err == nil {
+				if serr := store.Approve(req.configPath, req.hash); serr != nil {
+					m.modal = modalState{}
+					return m.withToast("trust: save failed: " + serr.Error())
+				}
+			} else {
+				// Best-effort: proceed even if we can't load the store; hooks still run.
+				m.modal = modalState{}
+				return m.withToast("trust: load failed: " + err.Error())
+			}
+			dec := &trustDecision{allow: true, approvedHash: req.hash}
+			return m.resumeAfterTrust(req, dec)
+
+		case msg.Type == tea.KeyRunes && string(msg.Runes) == "o":
+			// Approve once: re-dispatch without persisting.
+			dec := &trustDecision{allow: true, approvedHash: req.hash}
+			return m.resumeAfterTrust(req, dec)
+
+		case msg.Type == tea.KeyRunes && (string(msg.Runes) == "d" || string(msg.Runes) == "n"),
+			key.Matches(msg, m.keys.ClearFilter): // esc
+			// Deny: re-dispatch with hooks skipped; create/remove still proceeds.
+			dec := &trustDecision{allow: false}
+			return m.resumeAfterTrust(req, dec)
+		}
+		// Swallow all other keys while trust modal is open.
 		return m, nil
 	}
 
@@ -568,11 +629,11 @@ func (m Model) updateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case modalRemoveConfirm:
 			spec := m.modal
 			m.modal = modalState{}
-			return m, m.removeCmd(spec, false, false)
+			return m, m.removeCmd(spec, false, false, nil)
 		case modalForceConfirm:
 			spec := m.modal
 			m.modal = modalState{}
-			return m, m.removeCmd(spec, true, true)
+			return m, m.removeCmd(spec, true, true, nil)
 		case modalKillConfirm:
 			target := m.modal.target
 			paneKey := m.modal.paneKey
@@ -581,6 +642,20 @@ func (m Model) updateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	// Swallow all other keys while modal is open.
+	return m, nil
+}
+
+// resumeAfterTrust closes the trust modal and re-dispatches the pending Cmd
+// with the resolved trustDecision.
+func (m Model) resumeAfterTrust(req *trustReq, dec *trustDecision) (tea.Model, tea.Cmd) {
+	m.modal = modalState{}
+	if req.create != nil {
+		return m, m.worktreeCreateCmd(*req.create, dec)
+	}
+	if req.remove != nil {
+		r := req.remove
+		return m, m.removeCmd(r.spec, r.force, r.skipPrep, dec)
+	}
 	return m, nil
 }
 

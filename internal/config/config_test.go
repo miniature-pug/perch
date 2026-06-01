@@ -622,6 +622,60 @@ agent = "opencode"
 	}
 }
 
+// TestProjectConfigPath verifies that Load populates ProjectConfigPath and
+// ProjectConfigHash when a .perch.toml is found, and that both are empty when no
+// project config exists.
+func TestProjectConfigPath(t *testing.T) {
+	t.Run("with perch.toml", func(t *testing.T) {
+		tmp := t.TempDir()
+		initGitDir(t, tmp)
+
+		content := `post_create = ["echo hi"]`
+		tomlPath := filepath.Join(tmp, ".perch.toml")
+		writeFile(t, tomlPath, content)
+
+		cfg, err := config.Load("", tmp)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+
+		if cfg.ProjectConfigPath != tomlPath {
+			t.Errorf("ProjectConfigPath = %q; want %q", cfg.ProjectConfigPath, tomlPath)
+		}
+		if cfg.ProjectConfigHash == "" {
+			t.Error("ProjectConfigHash must be non-empty when .perch.toml is found")
+		}
+		// Verify hash is stable across calls.
+		cfg2, _ := config.Load("", tmp)
+		if cfg.ProjectConfigHash != cfg2.ProjectConfigHash {
+			t.Error("ProjectConfigHash must be deterministic")
+		}
+		// Verify hash changes when content changes.
+		writeFile(t, tomlPath, content+" # edited")
+		cfg3, _ := config.Load("", tmp)
+		if cfg.ProjectConfigHash == cfg3.ProjectConfigHash {
+			t.Error("ProjectConfigHash must change when file content changes")
+		}
+	})
+
+	t.Run("without perch.toml", func(t *testing.T) {
+		tmp := t.TempDir()
+		initGitDir(t, tmp)
+
+		cfg, err := config.Load("", tmp)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+
+		if cfg.ProjectConfigPath != "" {
+			t.Errorf("ProjectConfigPath = %q; want empty when no .perch.toml", cfg.ProjectConfigPath)
+		}
+		if cfg.ProjectConfigHash != "" {
+			t.Errorf("ProjectConfigHash = %q; want empty when no .perch.toml", cfg.ProjectConfigHash)
+		}
+	})
+}
+
 // TestAbsentAgentTakesDefault verifies that omitting agent entirely (absent, not empty
 // string) leaves the default in place and does not error.
 func TestAbsentAgentTakesDefault(t *testing.T) {

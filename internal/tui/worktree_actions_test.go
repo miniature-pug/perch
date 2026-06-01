@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/Miniature-Pug/perch/internal/proc"
 	"github.com/Miniature-Pug/perch/internal/state"
 	"github.com/Miniature-Pug/perch/internal/tmux"
+	"github.com/Miniature-Pug/perch/internal/trust"
 )
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -303,8 +305,8 @@ func TestRemove_DirtyForceFlow(t *testing.T) {
 	}
 	m.modal = spec
 
-	// Execute removeCmd(false, false).
-	cmd := m.removeCmd(spec, false, false)
+	// Execute removeCmd(false, false, nil) — no hooks in this test's config.
+	cmd := m.removeCmd(spec, false, false, nil)
 	resultMsg := cmd()
 	rm, ok := resultMsg.(removeResultMsg)
 	if !ok {
@@ -525,6 +527,8 @@ func (k modalKind) String() string {
 		return "modalForceConfirm"
 	case modalKillConfirm:
 		return "modalKillConfirm"
+	case modalTrustConfirm:
+		return "modalTrustConfirm"
 	default:
 		return "unknown"
 	}
@@ -560,7 +564,9 @@ func TestRemove_PreRemoveHooksRunFirst(t *testing.T) {
 		projectPath: projectPath,
 	}
 
-	cmd := m.removeCmd(spec, false, false)
+	// Pass dec with allow=true and approvedHash="" (matching Config.ProjectConfigHash=="").
+	dec := &trustDecision{allow: true, approvedHash: ""}
+	cmd := m.removeCmd(spec, false, false, dec)
 	resultMsg := cmd()
 	rm, okR := resultMsg.(removeResultMsg)
 	if !okR {
@@ -623,8 +629,8 @@ func TestRemove_SkipPrep_NoHooksNoLock(t *testing.T) {
 		projectPath: projectPath,
 	}
 
-	// Execute removeCmd with force=true, skipPrep=true (the retry path).
-	cmd := m.removeCmd(spec, true, true)
+	// Execute removeCmd with force=true, skipPrep=true (the retry path); dec irrelevant.
+	cmd := m.removeCmd(spec, true, true, nil)
 	resultMsg := cmd()
 	rm, okR := resultMsg.(removeResultMsg)
 	if !okR {
@@ -1177,7 +1183,8 @@ func TestWorktree_ConfigValidateFailure(t *testing.T) {
 		projectPath: "/proj/myrepo",
 	}
 
-	cmd := m.worktreeCreateCmd(ms)
+	// No PostCreate hooks → trust gate doesn't fire; dec=nil is fine.
+	cmd := m.worktreeCreateCmd(ms, nil)
 	resultMsg := cmd()
 	wm, ok := resultMsg.(worktreeCreatedMsg)
 	if !ok {
@@ -1198,5 +1205,294 @@ func TestWorktree_ConfigValidateFailure(t *testing.T) {
 	m2, _ := mustUpdate(t, m, wm)
 	if m2.toast == "" {
 		t.Error("want toast set after worktreeCreatedMsg{err!=nil}, got empty")
+	}
+}
+
+// ── EXPLOIT TESTS (T1) ────────────────────────────────────────────────────────
+// These tests encode the V1 vulnerability: an untrusted repo's post_create hooks
+// must NEVER spawn sh -c before the user approves the .perch.toml. They must
+// FAIL on un-fixed code (before the trust gate) and PASS after.
+
+// TestExploit_UntrustedHooks_CreateOpensModal asserts that:
+//  1. An untrusted repo with PostCreate hooks → worktreeCreateCmd returns a
+//     worktreeCreatedMsg with trust!=nil (opens modalTrustConfirm) and ZERO
+//     sh -c calls in FakeRunner.
+//  2. Pressing 'd' (deny) → worktree is still created (git worktree add IS called)
+//     but still ZERO sh -c calls.
+func TestExploit_UntrustedHooks_CreateOpensModal(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	r := proc.NewFakeRunner()
+	baseDir := t.TempDir()
+	projectPath := t.TempDir()
+
+	// The injected config has a post_create hook and a stable path+hash.
+	configPath := filepath.Join(projectPath, ".perch.toml")
+	configContent := []byte(`post_create = ["touch /tmp/pwned"]`)
+	configHashVal := trust.Hash(configContent)
+
+	ldr := loader{
+		Tmux:    fakeTmuxInside(r),
+		Runner:  r,
+		BaseDir: baseDir,
+		Now:     1000,
+		Config: &config.Config{
+			PostCreate:        []string{"touch /tmp/pwned"},
+			ProjectConfigPath: configPath,
+			ProjectConfigHash: configHashVal,
+		},
+	}
+
+	ok := proc.FakeResult{}
+	r.Default = &ok
+
+	m := New(nil).WithLoader(ldr)
+	ms := modalState{
+		kind:        modalNewSession,
+		action:      0,
+		tool:        "claude",
+		sessionID:   "exploit-sess",
+		treePath:    filepath.Join(projectPath, "worktrees", "feat"),
+		branch:      "feat",
+		projectPath: projectPath,
+	}
+
+	// Phase 1: untrusted, no trust entry → must stop before git work.
+	cmd := m.worktreeCreateCmd(ms, nil)
+	resultMsg := cmd()
+	wm, ok2 := resultMsg.(worktreeCreatedMsg)
+	if !ok2 {
+		t.Fatalf("want worktreeCreatedMsg, got %T", resultMsg)
+	}
+
+	// The trust field must be non-nil (gate fired).
+	if wm.trust == nil {
+		t.Fatal("EXPLOIT: untrusted repo with PostCreate hooks must return trust!=nil to prompt approval; got nil (hooks would run without consent)")
+	}
+
+	// No sh -c must have been called.
+	for _, c := range r.Calls {
+		if c.Name == "sh" {
+			t.Errorf("EXPLOIT: sh -c invoked before trust approval: %v", c.Args)
+		}
+	}
+
+	// No git worktree add must have been called (gate stops before FS mutation).
+	for _, c := range r.Calls {
+		if c.Name == "git" && len(c.Args) >= 4 && c.Args[2] == "worktree" && c.Args[3] == "add" {
+			t.Errorf("EXPLOIT: git worktree add called before trust approval: %v", c.Args)
+		}
+	}
+
+	// Feed the trustNeededMsg into Update → modal opens.
+	m2, _ := mustUpdate(t, m, wm)
+	if m2.modal.kind != modalTrustConfirm {
+		t.Errorf("want modal=modalTrustConfirm after trust-blocked create, got %v", m2.modal.kind)
+	}
+
+	// Phase 2: user presses 'd' (deny) → re-dispatches with dec.allow=false.
+	// Worktree IS created (git worktree add called), but hooks NOT run.
+	r.Calls = nil // reset call log
+
+	decDeny := &trustDecision{allow: false}
+	cmd2 := m.worktreeCreateCmd(ms, decDeny)
+	resultMsg2 := cmd2()
+	wm2, ok3 := resultMsg2.(worktreeCreatedMsg)
+	if !ok3 {
+		t.Fatalf("deny phase: want worktreeCreatedMsg, got %T", resultMsg2)
+	}
+	if wm2.err != nil {
+		t.Fatalf("deny phase: unexpected error: %v", wm2.err)
+	}
+	if wm2.trust != nil {
+		t.Error("deny phase: trust must be nil (already decided)")
+	}
+
+	// git worktree add MUST have been called (worktree creation is benign).
+	foundAdd := false
+	for _, c := range r.Calls {
+		if c.Name == "git" && len(c.Args) >= 4 && c.Args[2] == "worktree" && c.Args[3] == "add" {
+			foundAdd = true
+		}
+	}
+	if !foundAdd {
+		t.Error("deny phase: git worktree add must be called even when hooks are denied")
+	}
+
+	// Still ZERO sh -c calls.
+	for _, c := range r.Calls {
+		if c.Name == "sh" {
+			t.Errorf("deny phase: sh -c must NOT be called when hooks are denied: %v", c.Args)
+		}
+	}
+}
+
+// TestExploit_PreseededTrust_HooksRun asserts that when the trust store already
+// has a matching path@hash entry, hooks run immediately (no modal, sh -c present).
+func TestExploit_PreseededTrust_HooksRun(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	r := proc.NewFakeRunner()
+	baseDir := t.TempDir()
+	projectPath := t.TempDir()
+
+	configPath := filepath.Join(projectPath, ".perch.toml")
+	configContent := []byte(`post_create = ["echo trusted"]`)
+	configHashVal := trust.Hash(configContent)
+
+	// Pre-seed the trust store.
+	store, err := trust.Load(filepath.Join(baseDir, "trust.json"))
+	if err != nil {
+		t.Fatalf("Load trust store: %v", err)
+	}
+	if err := store.Approve(configPath, configHashVal); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+
+	ldr := loader{
+		Tmux:    fakeTmuxInside(r),
+		Runner:  r,
+		BaseDir: baseDir,
+		Now:     1000,
+		Config: &config.Config{
+			PostCreate:        []string{"echo trusted"},
+			ProjectConfigPath: configPath,
+			ProjectConfigHash: configHashVal,
+		},
+	}
+
+	ok := proc.FakeResult{}
+	r.Default = &ok
+
+	m := New(nil).WithLoader(ldr)
+	ms := modalState{
+		kind:        modalNewSession,
+		action:      0,
+		tool:        "claude",
+		sessionID:   "trusted-sess",
+		treePath:    filepath.Join(projectPath, "worktrees", "feat"),
+		branch:      "feat",
+		projectPath: projectPath,
+	}
+
+	cmd := m.worktreeCreateCmd(ms, nil)
+	resultMsg := cmd()
+	wm, ok2 := resultMsg.(worktreeCreatedMsg)
+	if !ok2 {
+		t.Fatalf("want worktreeCreatedMsg, got %T", resultMsg)
+	}
+	if wm.err != nil {
+		t.Fatalf("unexpected error: %v", wm.err)
+	}
+
+	// Trust must be nil (no modal needed — already trusted).
+	if wm.trust != nil {
+		t.Error("pre-seeded trust: trust field must be nil (no modal needed)")
+	}
+
+	// sh -c MUST have been called (hook ran).
+	foundSh := false
+	for _, c := range r.Calls {
+		if c.Name == "sh" {
+			foundSh = true
+		}
+	}
+	if !foundSh {
+		t.Errorf("pre-seeded trust: sh -c must be called when trust is pre-approved; calls: %v", r.Calls)
+	}
+}
+
+// TestExploit_UntrustedHooks_RemoveOpensModal asserts that an untrusted repo with
+// pre_remove hooks → removeCmd returns a trustNeededMsg (zero sh -c). Deny still
+// removes the worktree.
+func TestExploit_UntrustedHooks_RemoveOpensModal(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	r := proc.NewFakeRunner()
+	baseDir := t.TempDir()
+
+	configPath := "/proj/.perch.toml"
+	configContent := []byte(`pre_remove = ["touch /tmp/pwned"]`)
+	configHashVal := trust.Hash(configContent)
+
+	ldr := loader{
+		Tmux:    fakeTmuxInside(r),
+		Runner:  r,
+		BaseDir: baseDir,
+		Now:     1000,
+		Config: &config.Config{
+			PreRemove:         []string{"touch /tmp/pwned"},
+			ProjectConfigPath: configPath,
+			ProjectConfigHash: configHashVal,
+		},
+	}
+
+	ok := proc.FakeResult{}
+	r.Default = &ok
+
+	m := New(nil).WithLoader(ldr)
+
+	spec := modalState{
+		kind:        modalRemoveConfirm,
+		treePath:    "/proj/worktrees/feat",
+		branch:      "feat",
+		projectPath: "/proj",
+	}
+
+	// Phase 1: untrusted → must return trustNeededMsg, zero sh -c.
+	cmd := m.removeCmd(spec, false, false, nil)
+	resultMsg := cmd()
+
+	tn, ok2 := resultMsg.(trustNeededMsg)
+	if !ok2 {
+		t.Fatalf("EXPLOIT: want trustNeededMsg for untrusted pre_remove, got %T (hooks would run without consent)", resultMsg)
+	}
+	if tn.trust == nil {
+		t.Fatal("EXPLOIT: trustNeededMsg.trust must be non-nil")
+	}
+	if tn.trust.phase != "pre_remove" {
+		t.Errorf("trust.phase = %q; want pre_remove", tn.trust.phase)
+	}
+
+	// Zero sh -c calls.
+	for _, c := range r.Calls {
+		if c.Name == "sh" {
+			t.Errorf("EXPLOIT: sh -c invoked before trust approval: %v", c.Args)
+		}
+	}
+
+	// Phase 2: feed into Update → modal opens.
+	m2, _ := mustUpdate(t, m, tn)
+	if m2.modal.kind != modalTrustConfirm {
+		t.Errorf("want modal=modalTrustConfirm after trustNeededMsg, got %v", m2.modal.kind)
+	}
+
+	// Phase 3: deny → worktree still removed (git worktree remove called), zero sh -c.
+	r.Calls = nil
+
+	decDeny := &trustDecision{allow: false}
+	cmd2 := m.removeCmd(spec, false, false, decDeny)
+	resultMsg2 := cmd2()
+	rm, ok3 := resultMsg2.(removeResultMsg)
+	if !ok3 {
+		t.Fatalf("deny phase: want removeResultMsg, got %T", resultMsg2)
+	}
+	if rm.err != nil {
+		t.Fatalf("deny phase: unexpected error: %v", rm.err)
+	}
+
+	// git worktree remove MUST have been called.
+	foundRemove := false
+	for _, c := range r.Calls {
+		if c.Name == "git" && len(c.Args) >= 4 && c.Args[2] == "worktree" && c.Args[3] == "remove" {
+			foundRemove = true
+		}
+	}
+	if !foundRemove {
+		t.Error("deny phase: git worktree remove must be called even when hooks are denied")
+	}
+
+	// Still zero sh -c.
+	for _, c := range r.Calls {
+		if c.Name == "sh" {
+			t.Errorf("deny phase: sh -c must NOT be called when hooks are denied: %v", c.Args)
+		}
 	}
 }

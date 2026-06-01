@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"path/filepath"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -15,7 +16,31 @@ const (
 	modalRemoveConfirm           // confirm worktree removal
 	modalForceConfirm            // confirm force removal of dirty worktree
 	modalKillConfirm             // confirm kill-window
+	modalTrustConfirm            // ask user to approve .perch.toml hooks
 )
+
+// trustDecision is the resolved user choice for a pending hook-bearing action.
+// nil means "not yet decided" — the Cmd must gate.
+type trustDecision struct {
+	allow        bool   // run hooks?
+	approvedHash string // the hash the user approved (guards TOCTOU on re-check)
+}
+
+// removeResume carries the parameters needed to resume removeCmd after a trust decision.
+type removeResume struct {
+	spec     modalState
+	force    bool
+	skipPrep bool
+}
+
+// trustReq is carried on a trustNeededMsg when a hook-bearing action needs user approval.
+type trustReq struct {
+	configPath string
+	hash       string
+	phase      string        // "post_create" | "pre_remove"
+	create     *modalState   // non-nil to resume worktreeCreateCmd
+	remove     *removeResume // non-nil to resume removeCmd
+}
 
 // modalState carries everything an action Cmd needs so the handler is self-contained.
 type modalState struct {
@@ -28,6 +53,7 @@ type modalState struct {
 	projectPath string
 	tool        string
 	sessionID   string
+	trust       *trustReq // non-nil when kind==modalTrustConfirm
 }
 
 // modalStyle is the lipgloss style used to render the modal box.
@@ -56,6 +82,15 @@ func renderModal(ms modalState) string {
 			pickerLine(1, ms.action, labels[1]),
 			pickerLine(2, ms.action, labels[2]),
 		)
+	case modalTrustConfirm:
+		if ms.trust != nil {
+			dir := filepath.Dir(ms.trust.configPath)
+			content = fmt.Sprintf(
+				".perch.toml in %s defines shell hooks (%s). Run them?\n(a) trust always  (o) once  (d) deny",
+				dir,
+				ms.trust.phase,
+			)
+		}
 	default:
 		return ""
 	}
@@ -78,6 +113,8 @@ func modalFooterHint(kind modalKind) string {
 		return "y confirm · n/esc cancel"
 	case modalNewSession:
 		return "↑/↓ select · ↵ confirm · esc cancel"
+	case modalTrustConfirm:
+		return "a trust always · o once · d deny"
 	default:
 		return ""
 	}

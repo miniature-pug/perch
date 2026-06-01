@@ -13,6 +13,7 @@ import (
 	"github.com/Miniature-Pug/perch/internal/model"
 	"github.com/Miniature-Pug/perch/internal/state"
 	"github.com/Miniature-Pug/perch/internal/tmux"
+	"github.com/Miniature-Pug/perch/internal/trust"
 	"github.com/Miniature-Pug/perch/internal/worktree"
 )
 
@@ -72,12 +73,15 @@ func (m Model) preflightRemoveCmd(it item) tea.Cmd {
 
 // removeCmd returns a tea.Cmd that performs the full §7.2 worktree-remove
 // sequence in order:
-//  1. (unless skipPrep) load config + run pre_remove hooks
+//  1. (unless skipPrep) load config + run pre_remove hooks (gated by trust)
 //  2. (unless skipPrep) unlock the internal worktree lock file
 //  3. git worktree remove (force when force==true)
 //  4. kill the live tmux window if present
 //  5. remove the shadow state record if present
-func (m Model) removeCmd(spec modalState, force, skipPrep bool) tea.Cmd {
+//
+// dec is the resolved trust decision. nil means "not yet decided" — the Cmd
+// will gate on the trust store and return a trustNeededMsg if approval is required.
+func (m Model) removeCmd(spec modalState, force, skipPrep bool, dec *trustDecision) tea.Cmd {
 	if m.loader == nil {
 		return func() tea.Msg {
 			return removeResultMsg{spec: spec, err: errors.New("tui: removeCmd: no loader configured")}
@@ -96,16 +100,38 @@ func (m Model) removeCmd(spec modalState, force, skipPrep bool) tea.Cmd {
 			if err != nil {
 				return removeResultMsg{spec: spec, err: err}
 			}
+
 			if len(cfg.PreRemove) > 0 {
-				env := worktree.HookEnv{
-					Handle:       filepath.Base(spec.treePath),
-					WorktreePath: spec.treePath,
-					ProjectRoot:  spec.projectPath,
-					Branch:       spec.branch,
+				// Trust gate: check whether hooks may run.
+				if dec == nil {
+					// Not yet decided — consult the trust store.
+					store, err := trust.Load(filepath.Join(ldr.BaseDir, "trust.json"))
+					if err == nil && store.Trusted(cfg.ProjectConfigPath, cfg.ProjectConfigHash) {
+						dec = &trustDecision{allow: true, approvedHash: cfg.ProjectConfigHash}
+					} else {
+						// Approval required — return a trustNeededMsg; do nothing else.
+						return trustNeededMsg{trust: &trustReq{
+							configPath: cfg.ProjectConfigPath,
+							hash:       cfg.ProjectConfigHash,
+							phase:      "pre_remove",
+							remove:     &removeResume{spec: spec, force: force, skipPrep: skipPrep},
+						}}
+					}
 				}
-				if err := worktree.RunHooks(ctx, ldr.Runner, spec.treePath, "pre_remove", cfg.PreRemove, env); err != nil {
-					return removeResultMsg{spec: spec, err: err}
+
+				// Run hooks only when allowed and the hash still matches (TOCTOU guard).
+				if dec.allow && dec.approvedHash == cfg.ProjectConfigHash {
+					env := worktree.HookEnv{
+						Handle:       filepath.Base(spec.treePath),
+						WorktreePath: spec.treePath,
+						ProjectRoot:  spec.projectPath,
+						Branch:       spec.branch,
+					}
+					if err := worktree.RunHooks(ctx, ldr.Runner, spec.treePath, "pre_remove", cfg.PreRemove, env); err != nil {
+						return removeResultMsg{spec: spec, err: err}
+					}
 				}
+				// dec.allow==false or hash mismatch → skip hooks, continue with remove.
 			}
 
 			// 2. Best-effort unlock so git worktree remove isn't blocked.
@@ -183,9 +209,13 @@ func (m Model) worktreePreflightCmd(it item) tea.Cmd {
 }
 
 // worktreeCreateCmd performs the full worktree create chain:
-// config load → validate → branch/path derivation → git worktree add →
+// config load → validate → branch/path derivation → trust check → git worktree add →
 // seed → post_create hooks → state mapping → launchSpec.
-func (m Model) worktreeCreateCmd(ms modalState) tea.Cmd {
+//
+// dec is the resolved trust decision. nil means "not yet decided" — when hooks
+// are present the Cmd consults the trust store and returns a worktreeCreatedMsg
+// with a non-nil trust field if approval is required (stopping before any git work).
+func (m Model) worktreeCreateCmd(ms modalState, dec *trustDecision) tea.Cmd {
 	if m.loader == nil {
 		return func() tea.Msg {
 			return worktreeCreatedMsg{err: errors.New("tui: worktreeCreateCmd: no loader configured")}
@@ -212,7 +242,26 @@ func (m Model) worktreeCreateCmd(ms modalState) tea.Cmd {
 			return worktreeCreatedMsg{err: err}
 		}
 
-		// 3. Derive branch and handle.
+		// 3. Trust gate: check whether post_create hooks may run (before any git work).
+		if len(cfg.PostCreate) > 0 {
+			if dec == nil {
+				// Not yet decided — consult the trust store.
+				store, err := trust.Load(filepath.Join(ldr.BaseDir, "trust.json"))
+				if err == nil && store.Trusted(cfg.ProjectConfigPath, cfg.ProjectConfigHash) {
+					dec = &trustDecision{allow: true, approvedHash: cfg.ProjectConfigHash}
+				} else {
+					// Approval required — return without doing any git work.
+					return worktreeCreatedMsg{trust: &trustReq{
+						configPath: cfg.ProjectConfigPath,
+						hash:       cfg.ProjectConfigHash,
+						phase:      "post_create",
+						create:     &ms,
+					}}
+				}
+			}
+		}
+
+		// 4. Derive branch and handle.
 		uuid, err := newSessionID()
 		if err != nil {
 			return worktreeCreatedMsg{err: err}
@@ -225,40 +274,43 @@ func (m Model) worktreeCreateCmd(ms modalState) tea.Cmd {
 		branch := "perch/" + slug + "-" + short
 		handle := git.SlugifyBranch(branch)
 
-		// 4. Resolve the filesystem path.
+		// 5. Resolve the filesystem path.
 		treePath, err := git.WorktreePath(ms.projectPath, handle, cfg.WorktreeDir)
 		if err != nil {
 			return worktreeCreatedMsg{err: err}
 		}
 
-		// 5. Determine base branch.
+		// 6. Determine base branch.
 		base := cfg.BaseBranch
 		if base == "" {
 			base = "HEAD"
 		}
 
-		// 6. Create the git worktree.
+		// 7. Create the git worktree.
 		if err := git.AddWorktree(ctx, ldr.Runner, ms.projectPath, branch, treePath, base); err != nil {
 			return worktreeCreatedMsg{err: err}
 		}
 
-		// 7. Seed files.
+		// 8. Seed files.
 		if err := worktree.Seed(ms.projectPath, treePath, cfg.Files); err != nil {
 			return worktreeCreatedMsg{err: err}
 		}
 
-		// 8. Run post_create hooks.
-		env := worktree.HookEnv{
-			Handle:       handle,
-			WorktreePath: treePath,
-			ProjectRoot:  ms.projectPath,
-			Branch:       branch,
+		// 9. Run post_create hooks only when allowed and hash still matches (TOCTOU guard).
+		if len(cfg.PostCreate) > 0 && dec != nil && dec.allow && dec.approvedHash == cfg.ProjectConfigHash {
+			env := worktree.HookEnv{
+				Handle:       handle,
+				WorktreePath: treePath,
+				ProjectRoot:  ms.projectPath,
+				Branch:       branch,
+			}
+			if err := worktree.RunHooks(ctx, ldr.Runner, treePath, "post_create", cfg.PostCreate, env); err != nil {
+				return worktreeCreatedMsg{err: err}
+			}
 		}
-		if err := worktree.RunHooks(ctx, ldr.Runner, treePath, "post_create", cfg.PostCreate, env); err != nil {
-			return worktreeCreatedMsg{err: err}
-		}
+		// dec==nil (no hooks), dec.allow==false, or hash mismatch → skip hooks silently.
 
-		// 9. Record mapping.
+		// 10. Record mapping.
 		st, _ := state.LoadState(ldr.BaseDir)
 		state.SetMapping(&st, ms.sessionID, state.Mapping{
 			Tool:   model.Tool(ms.tool),
@@ -267,7 +319,7 @@ func (m Model) worktreeCreateCmd(ms modalState) tea.Cmd {
 		})
 		_ = state.SaveState(ldr.BaseDir, st)
 
-		// 10. Return the fork spec.
+		// 11. Return the fork spec.
 		return worktreeCreatedMsg{spec: launchSpec{
 			tool:        ms.tool,
 			sessionID:   ms.sessionID,
