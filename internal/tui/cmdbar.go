@@ -85,6 +85,9 @@ func parseCommand(input string) cmdSpec {
 		}
 		return cmdSpec{kind: cmdResurrect}
 	case "help", "h", "?":
+		if len(rest) > 0 {
+			return cmdSpec{parseErr: "help takes no arguments"}
+		}
 		return cmdSpec{kind: cmdHelp}
 	default:
 		return cmdSpec{parseErr: "unknown command: " + verb}

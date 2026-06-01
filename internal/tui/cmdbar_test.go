@@ -27,6 +27,7 @@ func TestParseCommand(t *testing.T) {
 		{"resurrect", "resurrect", cmdSpec{kind: cmdResurrect}},
 		{"help", "help", cmdSpec{kind: cmdHelp}},
 		{"help question", "?", cmdSpec{kind: cmdHelp}},
+		{"help rejects args", "help me", cmdSpec{parseErr: "help takes no arguments"}},
 		{"empty is silent cancel", "", cmdSpec{kind: cmdUnknown}},
 		{"whitespace is silent cancel", "   ", cmdSpec{kind: cmdUnknown}},
 		{"unknown verb", "frobnicate", cmdSpec{parseErr: "unknown command: frobnicate"}},
