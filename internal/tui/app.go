@@ -562,14 +562,13 @@ func (m Model) emptyStateText() string {
 func (m *Model) relayout() {
 	paneHeight := max(0, m.height-footerHeight-2*borderSize)
 	switch {
-	case m.mode == modeFullList:
-		m.list.SetWidth(max(0, m.width-2*borderSize))
+	case m.mode == modeFullList || m.mode == modeFullPreview:
+		// Full modes show one pane; size both so the hidden pane is valid the
+		// instant the mode flips (list keeps selection bookkeeping either way).
+		full := max(0, m.width-2*borderSize)
+		m.list.SetWidth(full)
 		m.list.SetHeight(paneHeight)
-	case m.mode == modeFullPreview:
-		// Keep the list sized for selection bookkeeping even though it's hidden.
-		m.list.SetWidth(max(0, m.width-2*borderSize))
-		m.list.SetHeight(paneHeight)
-		m.preview.Width = max(0, m.width-2*borderSize)
+		m.preview.Width = full
 		m.preview.Height = paneHeight
 	case m.width < minWideWidth:
 		// Narrow: stack vertically, splitting the available height.

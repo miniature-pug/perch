@@ -93,18 +93,23 @@ func TestScreenMode_ZShiftCyclesBackward(t *testing.T) {
 func TestRelayout_NarrowForcesVerticalStack(t *testing.T) {
 	m := New(nil)
 	m, _ = sizeModel(m, 50, 40)
-	if m.list.Width() < 40 {
-		t.Fatalf("narrow list width = %d, want near-full (vertical stack)", m.list.Width())
+	wantW := 50 - 2*borderSize
+	if m.list.Width() != wantW {
+		t.Fatalf("narrow list width = %d, want %d (full width, vertical stack)", m.list.Width(), wantW)
 	}
-	if m.preview.Width < 40 {
-		t.Fatalf("narrow preview width = %d, want near-full (vertical stack)", m.preview.Width)
+	if m.preview.Width != wantW {
+		t.Fatalf("narrow preview width = %d, want %d (full width, vertical stack)", m.preview.Width, wantW)
 	}
 }
 
 func TestRelayout_WideNormalSplits(t *testing.T) {
 	m := New(nil)
 	m, _ = sizeModel(m, 120, 40)
+	// Wide normal: list ~30%, preview the remainder; both bordered (2 cells each).
 	if m.list.Width() >= m.preview.Width {
 		t.Fatalf("wide normal: list width %d should be < preview width %d", m.list.Width(), m.preview.Width)
+	}
+	if got := m.list.Width() + m.preview.Width + 4*borderSize; got != 120 {
+		t.Fatalf("wide normal: list+preview+borders = %d, want 120 (full width budget)", got)
 	}
 }
