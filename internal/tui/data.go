@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/Miniature-Pug/perch/internal/agent"
+	"github.com/Miniature-Pug/perch/internal/config"
 	"github.com/Miniature-Pug/perch/internal/discover"
 	"github.com/Miniature-Pug/perch/internal/model"
 	"github.com/Miniature-Pug/perch/internal/proc"
@@ -40,6 +41,9 @@ type loader struct {
 	Root    string       // discover scan root
 	BaseDir string       // state base dir for frecency
 	Now     int64        // injected clock (no time.Now in logic)
+	// Config is an optional test override for per-project config loading.
+	// nil → load per-project on demand via config.Load in action Cmds.
+	Config *config.Config
 }
 
 // load returns a tea.Cmd that performs the full data fetch off the UI goroutine
@@ -114,12 +118,12 @@ func assembleItems(
 
 			// Claude sessions bound to this tree's directory.
 			for _, s := range claudeByDir[tree.Path] {
-				items = append(items, buildItemFromSession(s, proj.Name, tree.Branch, proj.Path, tree.Path, now, liveBySession))
+				items = append(items, buildItemFromSession(s, proj.Name, tree.Branch, proj.Path, tree.Path, now, liveBySession, tree.IsMain))
 			}
 
 			// Opencode sessions pre-fetched for this tree.
 			for _, s := range ocByTree[tree.Path] {
-				items = append(items, buildItemFromSession(s, proj.Name, tree.Branch, proj.Path, tree.Path, now, liveBySession))
+				items = append(items, buildItemFromSession(s, proj.Name, tree.Branch, proj.Path, tree.Path, now, liveBySession, tree.IsMain))
 			}
 		}
 	}
@@ -157,6 +161,7 @@ func buildItemFromSession(
 	projectName, branch, projectPath, treePath string,
 	now int64,
 	liveBySession map[string]tmux.Pane,
+	isMain bool,
 ) list.Item {
 	pane, isLive := liveBySession[s.ID]
 	status := StatusIdle
@@ -180,6 +185,7 @@ func buildItemFromSession(
 		projectPath:   projectPath,
 		treePath:      treePath,
 		liveTarget:    liveTarget,
+		isMain:        isMain,
 	}
 }
 

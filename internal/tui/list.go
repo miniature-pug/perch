@@ -67,6 +67,8 @@ type item struct {
 	treePath string
 	// liveTarget is the pre-built WindowTarget of the live pane's window; empty when idle.
 	liveTarget string
+	// isMain is true for the project's main checkout (never removable, §7.2).
+	isMain bool
 }
 
 // FilterValue returns the fuzzy-search key: project + tree + title + tool.

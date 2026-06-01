@@ -48,6 +48,10 @@ type Model struct {
 	// capturing is true while a CapturePane call is in-flight.
 	// It prevents overlapping capture commands.
 	capturing bool
+
+	// modal holds the currently-active modal prompt. Zero value (kind==modalNone)
+	// means no modal is visible.
+	modal modalState
 }
 
 // New returns a Model with the given items pre-loaded.
@@ -81,6 +85,42 @@ func (m Model) Init() tea.Cmd {
 		return m.loader.load()
 	}
 	return nil
+}
+
+// preflightRemoveMsg is delivered by preflightRemoveCmd after checking whether
+// the current client is focused in the target worktree window.
+type preflightRemoveMsg struct {
+	spec    modalState
+	focused bool
+	err     error
+}
+
+// removeResultMsg is delivered after removeCmd completes (success or failure).
+type removeResultMsg struct {
+	spec  modalState
+	dirty bool
+	err   error
+}
+
+// killResultMsg is delivered after killCmd completes.
+type killResultMsg struct{}
+
+// worktreePreflightMsg is delivered by worktreePreflightCmd after checking
+// the existing session→worktree mapping.
+// When prompt==true the picker modal should open (openModal is ready to assign).
+// When prompt==false the spec is fully resolved and launchCmd should fire immediately.
+type worktreePreflightMsg struct {
+	prompt    bool
+	openModal modalState
+	spec      launchSpec
+}
+
+// worktreeCreatedMsg is delivered after worktreeCreateCmd (or runHereCmd /
+// runMainCmd) has finished its synchronous work. On success spec carries the
+// launchSpec to hand off to launchCmd.
+type worktreeCreatedMsg struct {
+	spec launchSpec
+	err  error
 }
 
 // Update handles all incoming messages.
@@ -123,6 +163,59 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Reloading the list after detach is deferred.
 		return m, nil
 
+	case preflightRemoveMsg:
+		// Ignore stale messages if a different modal is already open.
+		if m.modal.kind != modalNone {
+			return m, nil
+		}
+		if msg.focused {
+			m.launchErr = "cannot remove the worktree you're focused in — switch away first"
+			return m, nil
+		}
+		// err means no attached client — treat as not focused; proceed to confirm.
+		m.modal = msg.spec
+		m.modal.kind = modalRemoveConfirm
+		return m, nil
+
+	case removeResultMsg:
+		if msg.dirty {
+			// Promote to force-confirm modal, keeping spec.
+			m.modal = msg.spec
+			m.modal.kind = modalForceConfirm
+			return m, nil
+		}
+		m.modal = modalState{}
+		if msg.err != nil {
+			m.launchErr = msg.err.Error()
+			return m, nil
+		}
+		// Success — reload list.
+		m.launchErr = ""
+		return m, m.reloadCmd()
+
+	case killResultMsg:
+		m.modal = modalState{}
+		// Reload list so the killed window no longer shows as live.
+		return m, m.reloadCmd()
+
+	case worktreePreflightMsg:
+		// Ignore stale messages if a different modal is already open.
+		if m.modal.kind != modalNone {
+			return m, nil
+		}
+		if msg.prompt {
+			m.modal = msg.openModal
+			return m, nil
+		}
+		return m, m.launchCmd(msg.spec)
+
+	case worktreeCreatedMsg:
+		if msg.err != nil {
+			m.launchErr = msg.err.Error()
+			return m, nil
+		}
+		return m, m.launchCmd(msg.spec)
+
 	case previewMsg:
 		m.capturing = false
 		sel, ok := m.selectedItem()
@@ -163,6 +256,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.list, cmd = m.list.Update(msg)
 			m.refreshStaticPreview()
 			return m, cmd
+		}
+
+		// While a modal is open it owns all keys.
+		if m.modal.kind != modalNone {
+			return m.updateModal(msg)
 		}
 
 		switch {
@@ -213,6 +311,49 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				projectPath: it.projectPath,
 				resume:      false,
 			})
+
+		case key.Matches(msg, m.keys.Remove):
+			it, ok := m.selectedItem()
+			if !ok || !it.isSession {
+				return m, nil
+			}
+			if it.isMain {
+				m.launchErr = "cannot remove the main checkout"
+				return m, nil
+			}
+			if it.live {
+				return m, m.preflightRemoveCmd(it)
+			}
+			m.modal = modalState{
+				kind:        modalRemoveConfirm,
+				treePath:    it.treePath,
+				branch:      it.tree,
+				projectPath: it.projectPath,
+				target:      it.liveTarget,
+				paneKey:     it.captureTarget,
+				tool:        it.tool,
+				sessionID:   it.id,
+			}
+			return m, nil
+
+		case key.Matches(msg, m.keys.Kill):
+			it, ok := m.selectedItem()
+			if !ok || !it.live || it.liveTarget == "" {
+				return m, nil
+			}
+			m.modal = modalState{
+				kind:    modalKillConfirm,
+				target:  it.liveTarget,
+				paneKey: it.captureTarget,
+			}
+			return m, nil
+
+		case key.Matches(msg, m.keys.Worktree):
+			it, ok := m.selectedItem()
+			if !ok || !it.isSession {
+				return m, nil
+			}
+			return m, m.worktreePreflightCmd(it)
 		}
 	}
 
@@ -239,9 +380,20 @@ func (m Model) View() string {
 	rightPane := styles.rightPane.Render(m.preview.View())
 	body := lipgloss.JoinHorizontal(lipgloss.Top, leftPane, rightPane)
 
-	footer := styles.footer.Render(
-		"↵ switch · n new · / filter · q quit",
-	)
+	// Footer hint changes when a modal is open.
+	var footerText string
+	if m.modal.kind != modalNone {
+		footerText = modalFooterHint(m.modal.kind)
+	} else {
+		footerText = "↵ switch · n new · w worktree · d remove · x kill · / filter · q quit"
+	}
+	footer := styles.footer.Render(footerText)
+
+	// Modal overlay: insert between body and footer when active.
+	if m.modal.kind != modalNone {
+		modalBox := renderModal(m.modal, m.width)
+		return lipgloss.JoinVertical(lipgloss.Left, body, modalBox, footer)
+	}
 
 	if m.launchErr != "" {
 		errBar := styles.errorBar.Render("Launch failed: " + m.launchErr)
@@ -254,6 +406,96 @@ func (m Model) View() string {
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, body, footer)
+}
+
+// updateModal handles all key events when a modal is open. It is called
+// exclusively from the KeyMsg case when m.modal.kind != modalNone.
+func (m Model) updateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// modalNewSession has its own navigation keys before the generic handler.
+	if m.modal.kind == modalNewSession {
+		switch {
+		case key.Matches(msg, m.keys.ClearFilter) || // esc
+			(msg.Type == tea.KeyRunes && string(msg.Runes) == "n"):
+			m.modal = modalState{}
+			return m, nil
+
+		case msg.Type == tea.KeyUp || (msg.Type == tea.KeyRunes && string(msg.Runes) == "k"):
+			if m.modal.action > 0 {
+				m.modal.action--
+			}
+			return m, nil
+
+		case msg.Type == tea.KeyDown || (msg.Type == tea.KeyRunes && string(msg.Runes) == "j"):
+			if m.modal.action < 2 {
+				m.modal.action++
+			}
+			return m, nil
+
+		case msg.Type == tea.KeyRunes && string(msg.Runes) == "1":
+			m.modal.action = 0
+			return m, nil
+
+		case msg.Type == tea.KeyRunes && string(msg.Runes) == "2":
+			m.modal.action = 1
+			return m, nil
+
+		case msg.Type == tea.KeyRunes && string(msg.Runes) == "3":
+			m.modal.action = 2
+			return m, nil
+
+		case key.Matches(msg, m.keys.Enter):
+			ms := m.modal
+			m.modal = modalState{}
+			switch ms.action {
+			case 0:
+				return m, m.worktreeCreateCmd(ms)
+			case 1:
+				return m, m.runHereCmd(ms)
+			default: // 2
+				return m, m.runMainCmd(ms)
+			}
+		}
+		// Swallow all other keys while newSession modal is open.
+		return m, nil
+	}
+
+	switch {
+	case key.Matches(msg, m.keys.ClearFilter) || // esc
+		(msg.Type == tea.KeyRunes && string(msg.Runes) == "n"):
+		// Cancel: close modal without any destructive action.
+		m.modal = modalState{}
+		return m, nil
+
+	case key.Matches(msg, m.keys.Enter) ||
+		(msg.Type == tea.KeyRunes && string(msg.Runes) == "y"):
+		// Confirm.
+		switch m.modal.kind {
+		case modalRemoveConfirm:
+			spec := m.modal
+			m.modal = modalState{}
+			return m, m.removeCmd(spec, false, false)
+		case modalForceConfirm:
+			spec := m.modal
+			m.modal = modalState{}
+			return m, m.removeCmd(spec, true, true)
+		case modalKillConfirm:
+			target := m.modal.target
+			paneKey := m.modal.paneKey
+			m.modal = modalState{}
+			return m, m.killCmd(target, paneKey)
+		}
+	}
+	// Swallow all other keys while modal is open.
+	return m, nil
+}
+
+// reloadCmd returns a tea.Cmd that reloads the item list. Used after a
+// successful remove or kill to refresh the display.
+func (m Model) reloadCmd() tea.Cmd {
+	if m.loader == nil {
+		return nil
+	}
+	return m.loader.load()
 }
 
 // selectedItem returns the currently selected list item as an item, or false.

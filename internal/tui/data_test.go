@@ -79,7 +79,7 @@ func TestBuildItemFromSession_LivePaneMatches(t *testing.T) {
 		"sess-1": {ID: "%17", Session: "myproj", Window: "main"},
 	}
 
-	it := buildItemFromSession(s, "myrepo", "main", "/proj/root", "/repo", 2000, liveBySession).(item)
+	it := buildItemFromSession(s, "myrepo", "main", "/proj/root", "/repo", 2000, liveBySession, false).(item)
 
 	if !it.live {
 		t.Error("want live=true, got false")
@@ -121,7 +121,7 @@ func TestBuildItemFromSession_DeadPaneNotLive(t *testing.T) {
 	}
 	liveBySession := buildLiveIndex(deadPanes)
 
-	it := buildItemFromSession(s, "myrepo", "main", "/proj/root", "/repo", 2000, liveBySession).(item)
+	it := buildItemFromSession(s, "myrepo", "main", "/proj/root", "/repo", 2000, liveBySession, false).(item)
 
 	if it.live {
 		t.Error("want live=false for dead pane, got true")
@@ -144,7 +144,7 @@ func TestBuildItemFromSession_NoMatchingPaneIsIdle(t *testing.T) {
 		"other-session": {ID: "%30", Session: "other", Window: "main"},
 	}
 
-	it := buildItemFromSession(s, "myrepo", "feature", "/proj/root", "/repo", 2000, liveBySession).(item)
+	it := buildItemFromSession(s, "myrepo", "feature", "/proj/root", "/repo", 2000, liveBySession, false).(item)
 
 	if it.live {
 		t.Error("want live=false when no matching pane, got true")
@@ -169,7 +169,7 @@ func TestBuildItemFromSession_EmptyPanes(t *testing.T) {
 	liveBySession := buildLiveIndex(nil) // empty index
 
 	for _, s := range sessions {
-		it := buildItemFromSession(s, "proj", "main", "/proj/root", "/r1", 5000, liveBySession).(item)
+		it := buildItemFromSession(s, "proj", "main", "/proj/root", "/r1", 5000, liveBySession, false).(item)
 		if it.live {
 			t.Errorf("session %s: want live=false with empty panes, got true", s.ID)
 		}

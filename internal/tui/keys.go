@@ -12,6 +12,9 @@ type keyMap struct {
 	Enter       key.Binding
 	New         key.Binding
 	Quit        key.Binding
+	Remove      key.Binding
+	Kill        key.Binding
+	Worktree    key.Binding
 }
 
 // defaultKeys returns the standard key map for perch.
@@ -36,6 +39,18 @@ func defaultKeys() keyMap {
 		Quit: key.NewBinding(
 			key.WithKeys("q", "ctrl+c"),
 			key.WithHelp("q", "quit"),
+		),
+		Remove: key.NewBinding(
+			key.WithKeys("d"),
+			key.WithHelp("d", "remove"),
+		),
+		Kill: key.NewBinding(
+			key.WithKeys("x"),
+			key.WithHelp("x", "kill"),
+		),
+		Worktree: key.NewBinding(
+			key.WithKeys("w"),
+			key.WithHelp("w", "worktree"),
 		),
 	}
 }
