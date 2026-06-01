@@ -226,6 +226,65 @@ func TestIntegration_ShadowRecord_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestIntegration_PerchPaneStatusRoundTrip verifies that @perch_pane_status
+// round-trips through a real tmux server: the option is empty on a fresh pane
+// and is readable through ListPanesAll after SetPaneOption writes it.
+func TestIntegration_PerchPaneStatusRoundTrip(t *testing.T) {
+	tmx := newTestServer(t)
+	ctx := context.Background()
+
+	paneID, err := tmx.NewSession(ctx, "perchs", "w1", t.TempDir())
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if paneID == "" {
+		t.Fatal("NewSession returned empty pane ID")
+	}
+
+	// Before: @perch_pane_status must be empty on a fresh pane.
+	panesBefore, err := tmx.ListPanesAll(ctx)
+	if err != nil {
+		t.Fatalf("ListPanesAll (before): %v", err)
+	}
+	foundBefore := false
+	for _, p := range panesBefore {
+		if p.ID == paneID {
+			foundBefore = true
+			if p.PerchStatus != "" {
+				t.Errorf("before SetPaneOption: PerchStatus = %q, want \"\"", p.PerchStatus)
+			}
+			break
+		}
+	}
+	if !foundBefore {
+		t.Fatalf("ListPanesAll (before): pane %q not found; panes: %+v", paneID, panesBefore)
+	}
+
+	// Set the option via the production path.
+	if err := tmx.SetPaneOption(ctx, paneID, "@perch_pane_status", "working"); err != nil {
+		t.Fatalf("SetPaneOption: %v", err)
+	}
+
+	// After: @perch_pane_status must equal "working".
+	panesAfter, err := tmx.ListPanesAll(ctx)
+	if err != nil {
+		t.Fatalf("ListPanesAll (after): %v", err)
+	}
+	foundAfter := false
+	for _, p := range panesAfter {
+		if p.ID == paneID {
+			foundAfter = true
+			if p.PerchStatus != "working" {
+				t.Errorf("after SetPaneOption: PerchStatus = %q, want \"working\"", p.PerchStatus)
+			}
+			break
+		}
+	}
+	if !foundAfter {
+		t.Fatalf("ListPanesAll (after): pane %q not found; panes: %+v", paneID, panesAfter)
+	}
+}
+
 // TestIntegration_SendKeys_RunsCommand verifies that SendKeys fires both the
 // literal keystroke and the trailing Enter, and that CapturePane reflects the
 // resulting shell output. The arithmetic marker PERCH_$((6*7)) ensures the

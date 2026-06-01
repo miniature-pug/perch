@@ -67,3 +67,5 @@ export const PerchStatus = async ({ $ }: { $: any }) => {
     },
   }
 }
+
+export default PerchStatus
