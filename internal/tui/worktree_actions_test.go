@@ -61,7 +61,7 @@ func pressKey(r rune) tea.KeyMsg {
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}
 }
 
-// ── Test 1: d on main item → launchErr set, no modal, no git calls ─────────
+// ── Test 1: d on main item → toast set, no modal, no git calls ─────────
 
 func TestRemove_MainItemBlocked(t *testing.T) {
 	r := proc.NewFakeRunner()
@@ -71,8 +71,8 @@ func TestRemove_MainItemBlocked(t *testing.T) {
 
 	m, _ = mustUpdate(t, m, pressKey('d'))
 
-	if m.launchErr == "" {
-		t.Error("want launchErr set for d on main item, got empty")
+	if m.toast == "" {
+		t.Error("want toast set for d on main item, got empty")
 	}
 	if m.modal.kind != modalNone {
 		t.Errorf("want modal=modalNone, got %v", m.modal.kind)
@@ -100,7 +100,7 @@ func TestRemove_IdleNonMain_OpensModal(t *testing.T) {
 	}
 }
 
-// ── Test 3: d on live non-main → preflight; focused=true → launchErr, no modal;
+// ── Test 3: d on live non-main → preflight; focused=true → toast, no modal;
 //            focused=false → modalRemoveConfirm ──────────────────────────────
 
 func TestRemove_LiveNonMain_Preflight(t *testing.T) {
@@ -121,7 +121,7 @@ func TestRemove_LiveNonMain_Preflight(t *testing.T) {
 		t.Errorf("want modal=modalNone before preflight resolves, got %v", m2.modal.kind)
 	}
 
-	// Sub-test A: focused=true → launchErr, no modal.
+	// Sub-test A: focused=true → toast, no modal.
 	specA := modalState{
 		kind:        modalRemoveConfirm,
 		treePath:    it.treePath,
@@ -133,8 +133,8 @@ func TestRemove_LiveNonMain_Preflight(t *testing.T) {
 		sessionID:   it.id,
 	}
 	mA, _ := mustUpdate(t, m, preflightRemoveMsg{spec: specA, focused: true})
-	if mA.launchErr == "" {
-		t.Error("focused=true: want launchErr set, got empty")
+	if mA.toast == "" {
+		t.Error("focused=true: want toast set, got empty")
 	}
 	if mA.modal.kind != modalNone {
 		t.Errorf("focused=true: want modal=modalNone, got %v", mA.modal.kind)
@@ -1194,9 +1194,9 @@ func TestWorktree_ConfigValidateFailure(t *testing.T) {
 		}
 	}
 
-	// Feed error message → launchErr is set.
+	// Feed error message → toast is set.
 	m2, _ := mustUpdate(t, m, wm)
-	if m2.launchErr == "" {
-		t.Error("want launchErr set after worktreeCreatedMsg{err!=nil}, got empty")
+	if m2.toast == "" {
+		t.Error("want toast set after worktreeCreatedMsg{err!=nil}, got empty")
 	}
 }

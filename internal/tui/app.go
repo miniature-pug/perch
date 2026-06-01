@@ -38,9 +38,11 @@ type Model struct {
 	// Empty string means no error. Cleared on successful reload.
 	loadErr string
 
-	// launchErr holds the last launch/attach failure message. Separate from
-	// loadErr so the two categories can be displayed distinctly.
-	launchErr string
+	// toast holds a transient, auto-dismissing status message ("" = none).
+	// Used for user-action rejections and launch/switch/attach failures.
+	toast string
+	// toastSeq increments per toast so a stale clear tick can't wipe a newer one.
+	toastSeq int
 
 	// previewContent holds the current text shown in the preview pane.
 	// Stored separately from the viewport so tests can assert without rendering.
@@ -160,26 +162,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case launchedMsg:
 		if msg.err != nil {
-			m.launchErr = msg.err.Error()
-			return m, nil
+			return m.withToast("launch failed: " + msg.err.Error())
 		}
-		m.launchErr = ""
 		target := tmux.WindowTarget(msg.session, msg.window)
 		return m.attachTo(target)
 
 	case switchedMsg:
 		if msg.err != nil {
-			m.launchErr = msg.err.Error()
-		} else {
-			m.launchErr = ""
+			return m.withToast("switch failed: " + msg.err.Error())
 		}
 		return m, nil
 
 	case attachFinishedMsg:
 		if msg.err != nil {
-			m.launchErr = msg.err.Error()
-		} else {
-			m.launchErr = ""
+			return m.withToast("attach failed: " + msg.err.Error())
 		}
 		// Reloading the list after detach is deferred.
 		return m, nil
@@ -190,8 +186,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.focused {
-			m.launchErr = "cannot remove the worktree you're focused in — switch away first"
-			return m, nil
+			return m.withToast("cannot remove the worktree you're focused in — switch away first")
 		}
 		// err means no attached client — treat as not focused; proceed to confirm.
 		m.modal = msg.spec
@@ -207,11 +202,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.modal = modalState{}
 		if msg.err != nil {
-			m.launchErr = msg.err.Error()
-			return m, nil
+			return m.withToast("remove failed: " + msg.err.Error())
 		}
 		// Success — reload list.
-		m.launchErr = ""
 		return m, m.reloadCmd()
 
 	case killResultMsg:
@@ -232,8 +225,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case worktreeCreatedMsg:
 		if msg.err != nil {
-			m.launchErr = msg.err.Error()
-			return m, nil
+			return m.withToast("worktree failed: " + msg.err.Error())
 		}
 		return m, m.launchCmd(msg.spec)
 
@@ -245,6 +237,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, c)
 		}
 		return m, tea.Batch(cmds...)
+
+	case clearToastMsg:
+		if msg.seq == m.toastSeq {
+			m.toast = ""
+		}
+		return m, nil
 
 	case statusPollMsg:
 		m.polling = false
@@ -367,8 +365,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if it.isMain {
-				m.launchErr = "cannot remove the main checkout"
-				return m, nil
+				return m.withToast("cannot remove the main checkout")
 			}
 			if it.live {
 				return m, m.preflightRemoveCmd(it)
@@ -444,9 +441,9 @@ func (m Model) View() string {
 		return lipgloss.JoinVertical(lipgloss.Left, body, modalBox, footer)
 	}
 
-	if m.launchErr != "" {
-		errBar := styles.errorBar.Render("Launch failed: " + m.launchErr)
-		return lipgloss.JoinVertical(lipgloss.Left, errBar, body, footer)
+	if m.toast != "" {
+		toastBar := styles.toast.Render(m.toast)
+		return lipgloss.JoinVertical(lipgloss.Left, toastBar, body, footer)
 	}
 
 	if m.loadErr != "" {

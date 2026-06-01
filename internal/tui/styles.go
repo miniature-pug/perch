@@ -25,6 +25,8 @@ var styles = struct {
 	dimRow lipgloss.Style
 	// errorBar renders a whole-load error message above the main body.
 	errorBar lipgloss.Style
+	// toast renders a transient, non-blocking message bar above the body.
+	toast lipgloss.Style
 }{
 	leftPane: lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -42,6 +44,9 @@ var styles = struct {
 		Foreground(colorNormal),
 	errorBar: lipgloss.NewStyle().
 		Foreground(colorError).
+		Bold(true),
+	toast: lipgloss.NewStyle().
+		Foreground(colorAccent).
 		Bold(true),
 }
 
