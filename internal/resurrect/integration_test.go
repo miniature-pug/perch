@@ -219,8 +219,15 @@ func TestIntegration_Resurrect_RestoreAfterServerRestart(t *testing.T) {
 }
 
 // TestIntegration_Resurrect_PruneIntentionallyClosed verifies that a record
-// whose pane no longer exists (but whose BootID matches the live server) is
-// deleted and no new window is created.
+// whose pane no longer exists (but whose BootID matches the live server AND
+// whose home session is still alive via another pane) is deleted and no new
+// window is created.
+//
+// This represents the "user intentionally closed the agent window" scenario:
+// the perch TUI session is still alive (another pane keeps it live) but the
+// specific agent pane the record tracks is gone. Under the new crash-stranded
+// discriminator, the home session must be alive for PRUNE to fire; if the
+// session is also gone, the record falls through to RESTORE (crash-stranded path).
 func TestIntegration_Resurrect_PruneIntentionallyClosed(t *testing.T) {
 	skipIfMissing(t, "tmux", "git")
 	ctx := context.Background()
@@ -229,9 +236,11 @@ func TestIntegration_Resurrect_PruneIntentionallyClosed(t *testing.T) {
 	_, wtPath := newGitRepo(t)
 	baseDir := t.TempDir()
 
-	// Bootstrap the server by launching a keepalive session so BootID works.
-	if _, err := tmx.NewSession(ctx, "keepalive", "kw", wtPath); err != nil {
-		t.Fatalf("NewSession (keepalive): %v", err)
+	// Create the "prune-sess" session with a real pane (simulates the perch TUI
+	// or another pane that keeps the session alive after the user closed the
+	// agent window). The agent's specific pane (%999) does not exist.
+	if _, err := tmx.NewSession(ctx, "prune-sess", "prune-win", wtPath); err != nil {
+		t.Fatalf("NewSession (prune-sess): %v", err)
 	}
 
 	boot, err := tmx.BootID(ctx)
@@ -240,7 +249,8 @@ func TestIntegration_Resurrect_PruneIntentionallyClosed(t *testing.T) {
 	}
 
 	const sid = "22222222-2222-4222-8222-222222222222"
-	// %999 is a pane id that does not exist on the live server.
+	// %999 is a pane id that does not exist on the live server (the agent pane
+	// was closed), but prune-sess itself is alive (another pane in it is live).
 	if err := state.SaveWindow(baseDir, model.Window{
 		PaneKey:     "%999",
 		Tool:        model.ToolClaude,
@@ -286,13 +296,15 @@ func TestIntegration_Resurrect_PruneIntentionallyClosed(t *testing.T) {
 		t.Errorf("LoadWindows returned %d records after prune, want 0", len(windows))
 	}
 
-	// No new window must have been created for prune-sess.
+	// No new window must have been created for the stale agent pane.
+	// prune-sess itself was created by us above; what matters is no new window was
+	// launched (no git/launch attempted). We assert Restored is empty above.
 	hasSess, err := tmx.HasSession(ctx, "prune-sess")
 	if err != nil {
 		t.Fatalf("HasSession: %v", err)
 	}
-	if hasSess {
-		t.Errorf("prune-sess was created but should not have been")
+	if !hasSess {
+		t.Errorf("prune-sess must remain alive (it has other panes, only the agent pane was removed)")
 	}
 }
 
@@ -469,5 +481,120 @@ func TestIntegration_Resurrect_SkipMainCheckout(t *testing.T) {
 	}
 	if len(windows) != 0 {
 		t.Errorf("LoadWindows returned %d records after skip:main, want 0", len(windows))
+	}
+}
+
+// TestIntegration_Resurrect_CrashStranded verifies the crash-stranded-pane fix
+// (M11-0 T5): when the tmux server is still alive (boot id unchanged) but the
+// agent's pane AND home session are gone (perch crashed while the agent was
+// displayed in the persistent frame and the frame was later killed), Reconcile
+// must RESTORE the agent, NOT prune it.
+//
+// Scenario:
+//  1. Start the server; record a shadow window for a real session.
+//  2. Kill the agent's home session (simulates frame teardown taking the agent).
+//     The server REMAINS running (boot id unchanged).
+//  3. Reconcile must classify the record as Restored (not Pruned).
+func TestIntegration_Resurrect_CrashStranded(t *testing.T) {
+	skipIfMissing(t, "tmux", "git")
+	ctx := context.Background()
+
+	tmx := newTestServer(t)
+	repoRoot, wtPath := newGitRepo(t)
+	baseDir := t.TempDir()
+
+	// Create the agent's home session so we can capture a real pane id and boot id.
+	agentSess := tmux.SessionName(repoRoot)
+	agentWin := tmux.WindowName("feat")
+	agentPane, err := tmx.Launch(ctx, agentSess, agentWin, wtPath, []string{"sh"})
+	if err != nil {
+		t.Fatalf("Launch (agent session): %v", err)
+	}
+
+	boot, err := tmx.BootID(ctx)
+	if err != nil {
+		t.Fatalf("BootID: %v", err)
+	}
+
+	// Also keep a separate session alive so the tmux server stays up after we
+	// kill the agent session (the server exits when the last session dies).
+	if _, err := tmx.NewSession(ctx, "keepalive", "kw", wtPath); err != nil {
+		t.Fatalf("NewSession (keepalive): %v", err)
+	}
+
+	const sid = "55555555-5555-4555-8555-555555555555"
+	if err := state.SaveWindow(baseDir, model.Window{
+		PaneKey:     agentPane,
+		Tool:        model.ToolClaude,
+		SessionID:   sid,
+		Tree:        wtPath,
+		TmuxSession: agentSess,
+		TmuxWindow:  agentWin,
+		BootID:      boot, // same as live server — crash-stranded signal
+		Updated:     time.Now().Unix(),
+	}); err != nil {
+		t.Fatalf("SaveWindow: %v", err)
+	}
+
+	// Kill the agent's home session (simulates the persistent frame being torn
+	// down after a perch crash, taking the agent pane with it).
+	// The keepalive session keeps the tmux server alive.
+	if err := tmx.KillSession(ctx, agentSess); err != nil {
+		t.Fatalf("KillSession (agent sess): %v", err)
+	}
+
+	// Verify the server is still up (boot id unchanged).
+	newBoot, err := tmx.BootID(ctx)
+	if err != nil {
+		t.Fatalf("BootID (post-kill): %v", err)
+	}
+	if newBoot != boot {
+		t.Fatalf("boot id changed after KillSession: was %q, now %q; test precondition violated", boot, newBoot)
+	}
+
+	report, err := Reconcile(ctx, Deps{
+		Tmux:    tmx,
+		Runner:  proc.ExecRunner{},
+		BaseDir: baseDir,
+		Now:     time.Now().Unix(),
+	})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	// Must be RESTORED (crash-stranded), not pruned.
+	if len(report.Restored) != 1 {
+		t.Errorf("Restored = %v (len %d), want 1 (crash-stranded must be restored)", report.Restored, len(report.Restored))
+	}
+	if len(report.Pruned) != 0 {
+		t.Errorf("Pruned = %v, want empty (crash-stranded must NOT be pruned)", report.Pruned)
+	}
+	if len(report.Kept) != 0 {
+		t.Errorf("Kept = %v, want empty", report.Kept)
+	}
+	// Skipped is empty unless the restore succeeded; if it hit a guard, report it.
+	if len(report.Skipped) != 0 {
+		t.Errorf("Skipped = %v, want empty (crash-stranded restore should succeed)", report.Skipped)
+	}
+
+	// The agent session must have been recreated.
+	hasSess, err := tmx.HasSession(ctx, agentSess)
+	if err != nil {
+		t.Fatalf("HasSession: %v", err)
+	}
+	if !hasSess {
+		t.Errorf("agent session %q was not recreated after crash-stranded restore", agentSess)
+	}
+
+	// The rewritten record must survive with the new pane id.
+	windows, err := state.LoadWindows(baseDir)
+	if err != nil {
+		t.Fatalf("LoadWindows: %v", err)
+	}
+	if len(windows) != 1 {
+		t.Fatalf("LoadWindows returned %d records after crash-stranded restore, want 1", len(windows))
+	}
+	if windows[0].SessionID != sid {
+		t.Errorf("restored record SessionID = %q, want %q", windows[0].SessionID, sid)
 	}
 }

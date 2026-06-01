@@ -133,16 +133,23 @@ func TestReconcile_Keep(t *testing.T) {
 // ── PRUNE ─────────────────────────────────────────────────────────────────────
 
 // TestReconcile_Prune verifies that a record whose pane is absent but boot
-// matches produces a PRUNE entry and the record file is removed.
+// matches AND whose home session is still alive (another pane in that session
+// is live) produces a PRUNE entry and the record file is removed.
+//
+// The live pane in the same session distinguishes "user closed this agent
+// window" (PRUNE) from "perch crashed while displaying the agent" (RESTORE).
+// Without a live session pane, the record would fall through to the RESTORE
+// branch (crash-stranded recovery), which is tested separately.
 func TestReconcile_Prune(t *testing.T) {
 	baseDir := t.TempDir()
 	fake := proc.NewFakeRunner()
 
 	const (
-		boot    = "12345"
-		paneKey = "%20"
-		sess    = "proj"
-		win     = "feat"
+		boot         = "12345"
+		paneKey      = "%20"
+		sess         = "proj"
+		win          = "feat"
+		survivorPane = "%21" // another pane in the same session keeps the session live
 	)
 
 	seedWindow(t, baseDir, model.Window{
@@ -158,8 +165,9 @@ func TestReconcile_Prune(t *testing.T) {
 	// Current boot matches the record's boot.
 	fake.Respond(proc.FakeResult{Stdout: []byte(boot + "\n")},
 		"tmux", "display-message", "-p", "#{start_time}")
-	// ListPanesAll → empty (pane is gone).
-	fake.Respond(proc.FakeResult{Stdout: []byte("")},
+	// ListPanesAll → the agent's pane is gone, but another pane in the same
+	// session is alive (e.g. the TUI pane). This is the legitimate-prune signal.
+	fake.Respond(proc.FakeResult{Stdout: []byte(paneLine(survivorPane, sess, "tui", false))},
 		"tmux", "list-panes", "-a", "-F", paneFormat)
 
 	deps := newDeps(t, baseDir, fake)
@@ -1532,6 +1540,207 @@ func TestExploit_V7c_InRootTreeKept(t *testing.T) {
 	}
 	if !gitCalled {
 		t.Errorf("expected git call for in-root tree %q; calls: %v", tree, fake.Calls)
+	}
+}
+
+// ── crash-stranded reconcile (T5: persistent-frame Risk 1) ───────────────────
+
+// TestReconcile_CrashStranded_Restored is the primary regression test for the
+// crash-stranded-pane scenario (M11-0 T5 / Risk 1): when perch crashes while
+// an agent pane is displayed inside the persistent frame, the frame session is
+// later killed and the agent pane dies with it. On the next reconcile run:
+//   - boot id is UNCHANGED (the tmux server is still alive — perch crashed, not tmux)
+//   - the agent's pane (`PaneKey`) is ABSENT from `list-panes -a`
+//   - the agent's home session (`TmuxSession`) is ALSO ABSENT (no pane in that session)
+//   - the agent's working tree still exists on disk
+//
+// The correct outcome is RESTORE (re-launch), NOT PRUNE. Before the fix the
+// switch case `!paneByID && bootMatch` triggered unconditionally and the record
+// was silently deleted (bug). After the fix the case requires the home session
+// to be alive; a dead session falls through to the default/RESTORE branch.
+//
+// This test FAILS on un-fixed code (it asserts Restored not Pruned).
+func TestReconcile_CrashStranded_Restored(t *testing.T) {
+	baseDir := t.TempDir()
+	fake := proc.NewFakeRunner()
+
+	// tree exists on disk (Guard 3 passes: the worktree is intact).
+	tree := t.TempDir()
+	mainTree := t.TempDir()
+
+	const (
+		boot    = "boot-alive" // same boot id on record and live server (server unchanged)
+		paneKey = "%400"
+		newPane = "%401"
+		sess    = "agent-home" // the agent's home session
+		win     = "feat"
+		sid     = "claude-stranded-1"
+	)
+
+	seedWindow(t, baseDir, model.Window{
+		PaneKey:     paneKey,
+		Tool:        model.ToolClaude,
+		SessionID:   sid,
+		Tree:        tree,
+		TmuxSession: sess,
+		TmuxWindow:  win,
+		BootID:      boot,
+	})
+
+	// BootID → current boot MATCHES the record (server still alive after perch crash).
+	fake.Respond(proc.FakeResult{Stdout: []byte(boot + "\n")},
+		"tmux", "display-message", "-p", "#{start_time}")
+	// ListPanesAll → NO pane in sess at all (home session was killed with the
+	// frame). The agent's PaneKey is absent and hasLiveSession(sess) == false.
+	fake.Respond(proc.FakeResult{Stdout: []byte("")},
+		"tmux", "list-panes", "-a", "-F", paneFormat)
+
+	// RESTORE branch: git worktree check → linked worktree at tree.
+	fake.Respond(proc.FakeResult{Stdout: worktreePorcelain(mainTree, tree)},
+		"git", "-C", tree, "worktree", "list", "--porcelain")
+
+	// Launch → no session → new-session returns newPane.
+	fake.Respond(proc.FakeResult{Err: proc.FakeExitError{Code: 1}},
+		"tmux", "has-session", "-t", "="+sess)
+	fake.Respond(proc.FakeResult{Stdout: []byte(newPane + "\n")},
+		"tmux", "new-session", "-d", "-s", sess, "-n", win, "-c", tree, "-P", "-F", "#{pane_id}")
+	fake.Respond(proc.FakeResult{},
+		"tmux", "send-keys", "-t", newPane, "-l", "'claude' '--resume' '"+sid+"'")
+	fake.Respond(proc.FakeResult{},
+		"tmux", "send-keys", "-t", newPane, "Enter")
+	// SetPaneOption @perch_session.
+	fake.Respond(proc.FakeResult{},
+		"tmux", "set-option", "-p", "-t", newPane, "@perch_session", sid)
+	// L3: post-launch BootID read returns the same boot (server unchanged).
+	fake.Respond(proc.FakeResult{Stdout: []byte(boot + "\n")},
+		"tmux", "display-message", "-p", "#{start_time}")
+
+	deps := newDeps(t, baseDir, fake)
+	report, err := Reconcile(context.Background(), deps)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Must be RESTORED (not pruned) — this is the bug assertion.
+	if len(report.Restored) != 1 || report.Restored[0] != paneKey {
+		t.Errorf("Restored = %v; want [%s] (crash-stranded must be restored, not pruned)", report.Restored, paneKey)
+	}
+	if len(report.Pruned) != 0 {
+		t.Errorf("Pruned = %v; want empty (crash-stranded must NOT be pruned)", report.Pruned)
+	}
+	if len(report.Kept)+len(report.Skipped) != 0 {
+		t.Errorf("unexpected entries: kept=%v skipped=%v", report.Kept, report.Skipped)
+	}
+
+	// Exactly one Launch must have been issued (the re-launch of the stranded agent).
+	if countLaunches(fake) != 1 {
+		t.Errorf("launch count = %d, want 1 (stranded agent must be re-launched)", countLaunches(fake))
+	}
+
+	// New record must be written with the new pane id.
+	wins, _ := state.LoadWindows(baseDir)
+	if len(wins) != 1 {
+		t.Fatalf("record count = %d, want 1 after crash-stranded restore", len(wins))
+	}
+	if wins[0].PaneKey != newPane {
+		t.Errorf("restored record PaneKey = %q, want %s", wins[0].PaneKey, newPane)
+	}
+	if wins[0].SessionID != sid {
+		t.Errorf("restored record SessionID = %q, want %s", wins[0].SessionID, sid)
+	}
+}
+
+// TestReconcile_CrashStranded_TreeGone_NotRestored is the negative companion
+// test: when the crash-stranded record's working tree is gone (user removed the
+// worktree), the record must still be pruned (tree-gone skip), NOT resurrected.
+// This validates that the fix doesn't accidentally resurrect legitimately dead
+// agents whose tree was deleted.
+func TestReconcile_CrashStranded_TreeGone_NotRestored(t *testing.T) {
+	baseDir := t.TempDir()
+	fake := proc.NewFakeRunner()
+
+	// Non-existent tree — simulates a worktree the user already removed.
+	deletedTree := filepath.Join(t.TempDir(), "deleted-worktree")
+
+	const (
+		boot    = "boot-alive"
+		paneKey = "%410"
+		sess    = "agent-home-gone"
+		win     = "feat"
+	)
+
+	seedWindow(t, baseDir, model.Window{
+		PaneKey:     paneKey,
+		Tool:        model.ToolClaude,
+		SessionID:   "claude-tree-gone-1",
+		Tree:        deletedTree, // does not exist
+		TmuxSession: sess,
+		TmuxWindow:  win,
+		BootID:      boot,
+	})
+
+	// Boot matches (server alive, same scenario as crash-stranded).
+	fake.Respond(proc.FakeResult{Stdout: []byte(boot + "\n")},
+		"tmux", "display-message", "-p", "#{start_time}")
+	// No panes in sess (home session gone — same crash-stranded signal).
+	fake.Respond(proc.FakeResult{Stdout: []byte("")},
+		"tmux", "list-panes", "-a", "-F", paneFormat)
+	// No git response needed — Guard 3 (tree-gone) fires before git is called.
+
+	deps := newDeps(t, baseDir, fake)
+	report, err := Reconcile(context.Background(), deps)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Must be a tree-gone skip (not restored).
+	if len(report.Skipped) != 1 || report.Skipped[0].Reason != "tree-gone" {
+		t.Errorf("Skipped = %v; want [{tree-gone}] (deleted-tree agent must not be restored)", report.Skipped)
+	}
+	if len(report.Restored) != 0 {
+		t.Errorf("Restored = %v; want empty (no restore when tree is gone)", report.Restored)
+	}
+	if len(report.Pruned) != 0 {
+		t.Errorf("Pruned = %v; want empty (tree-gone is a skip, not a prune)", report.Pruned)
+	}
+
+	// Definitive skip: record must be deleted.
+	wins, _ := state.LoadWindows(baseDir)
+	if len(wins) != 0 {
+		t.Errorf("record count = %d; want 0 (tree-gone definitive skip must delete the record)", len(wins))
+	}
+	// No Launch must be issued.
+	if countLaunches(fake) != 0 {
+		t.Errorf("launch count = %d; want 0 (no launch when tree is gone)", countLaunches(fake))
+	}
+}
+
+// TestHasLiveSession exercises the session-liveness helper directly.
+func TestHasLiveSession(t *testing.T) {
+	panes := []tmux.Pane{
+		{ID: "%1", Session: "alpha", Window: "w1", Dead: false},
+		{ID: "%2", Session: "alpha", Window: "w2", Dead: true},
+		{ID: "%3", Session: "beta", Window: "w1", Dead: false},
+	}
+	if !hasLiveSession(panes, "alpha") {
+		t.Error("hasLiveSession(alpha) = false; want true (%1 is alive in alpha)")
+	}
+	if !hasLiveSession(panes, "beta") {
+		t.Error("hasLiveSession(beta) = false; want true (%3 is alive in beta)")
+	}
+	if hasLiveSession(panes, "gamma") {
+		t.Error("hasLiveSession(gamma) = true; want false (no pane in gamma)")
+	}
+	// Session with only dead panes: %2 is in alpha but dead; %1 is also alive in alpha.
+	// Isolate the dead-only case with a separate slice.
+	deadOnly := []tmux.Pane{
+		{ID: "%5", Session: "delta", Window: "w1", Dead: true},
+	}
+	if hasLiveSession(deadOnly, "delta") {
+		t.Error("hasLiveSession(delta) = true; want false (only dead pane)")
+	}
+	if hasLiveSession(nil, "any") {
+		t.Error("hasLiveSession(nil panes, any) = true; want false")
 	}
 }
 

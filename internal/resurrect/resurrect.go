@@ -116,8 +116,11 @@ func Reconcile(ctx context.Context, deps Deps) (Report, error) {
 			// KEEP: the pane is alive and boot ids match — no I/O needed.
 			report.Kept = append(report.Kept, w.PaneKey)
 
-		case !paneByID && bootMatch:
-			// PRUNE: same server, pane intentionally closed.
+		case !paneByID && bootMatch && hasLiveSession(livePanes, w.TmuxSession):
+			// PRUNE: same server, home session alive, pane intentionally closed.
+			// If the home session is also gone (!hasLiveSession), the record falls
+			// through to the default (RESTORE) branch: the agent was stranded by a
+			// perch crash and must be re-launched, not silently dropped.
 			if rerr := state.RemoveWindow(deps.BaseDir, w.PaneKey); rerr != nil {
 				report.Skipped = append(report.Skipped, SkipNote{
 					PaneKey: w.PaneKey,
@@ -369,6 +372,20 @@ func hasLivePaneByID(panes []tmux.Pane, paneKey string) bool {
 func hasLiveWindowPane(panes []tmux.Pane, session, window string) bool {
 	for _, p := range panes {
 		if p.Session == session && p.Window == window && !p.Dead {
+			return true
+		}
+	}
+	return false
+}
+
+// hasLiveSession reports whether any live (non-dead) pane in panes belongs to
+// the given session. Used by the PRUNE discriminator: a record whose pane is
+// gone but whose home session is still alive means the user intentionally closed
+// the window; if the session itself is also gone, the agent may have been
+// stranded by a perch crash and should be re-launched (RESTORE path).
+func hasLiveSession(panes []tmux.Pane, session string) bool {
+	for _, p := range panes {
+		if p.Session == session && !p.Dead {
 			return true
 		}
 	}
