@@ -990,9 +990,26 @@ Build in this order; each milestone is independently runnable/testable.
    logic, TS is a reviewed port), claude live-hook-firing, `CLAUDE_CONFIG_DIR`/XDG
    overrides, `--replace`/standalone `perch attach`/auto-clear-on-focus → M9. See
    `docs/superpowers/plans/2026-05-31-perch-m8-status.md`.
-9. **UX layer** — command/filter bar, contextual keybindings + generated help,
-   confirmation modals, screen modes, theme pass, empty/error/small-screen states,
-   README with install + usage.
+9. ✅ **DONE (UX layer).** Transient auto-dismiss toasts (`tea.Tick`, seq-guarded
+   stale-clear) carry action errors/rejections; whole-load failure keeps the
+   persistent bar. Empty state ("No git repositories found under <root>"). Screen
+   modes `z`/`Z` (normal / full-list / full-preview) with a `minWideWidth` threshold
+   that reflows to vertical stacking on narrow terminals — layout math centralised in
+   `relayout()`/`bodyView()`. Contextual auto-generated help: `Model` implements
+   `bubbles/help.KeyMap`; the footer is `ShortHelpView(ShortHelp())` (selection-aware —
+   never advertises a key its handler rejects), the `?` overlay is `FullHelpView`; a
+   context-invalid key toasts a reason instead of a silent no-op. Theme verified
+   already-v1-correct (`AdaptiveColor` self-detects; **no** v2 `BackgroundColorMsg`
+   plumbing). Confirmation modals (M8) reused; single `modalState` kept (the only
+   nesting — force-confirm from remove-confirm — needs no stack). All states model-
+   tested via key-sequence→state (§20.5, no rendered-string asserts). README: install +
+   usage, every command/keybinding/version fact cross-checked against `main.go`/
+   `keys.go`/`.tool-versions`/`go.mod`. Gates green (build with embedded resources, unit
+   + `-race` integration on real git + tmux 3.6, lint 0, `go mod verify`). **Deferred to
+   post-v1 (FD-M9-1/2, ratify at checkpoint):** the `:` command bar (single-screen perch
+   has no command set in §10; building it would mean ripping out the tested list-built-in
+   `/` filter — §17 YAGNI; DoD §16.9 doesn't name it) and standalone `perch attach <query>`
+   (§10 "ship if time allows"). See `docs/superpowers/plans/2026-05-31-perch-m9-ux.md`.
 
 ---
 

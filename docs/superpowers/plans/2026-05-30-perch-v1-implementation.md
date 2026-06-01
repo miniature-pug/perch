@@ -329,14 +329,19 @@ report status, prove the DoD green, wait for review.
 
 ### M9 — UX layer  *(tmux for live; teatest for model)*
 
-- [ ] Objective: command/filter bar, contextual keybindings + generated help, confirm
-      modals, screen modes, theme pass, empty/error/small-screen states, README.
+- [x] Objective: command/filter bar, contextual keybindings + generated help, confirm
+      modals, screen modes, theme pass, empty/error/small-screen states, README. **DONE.**
 - Spec refs: `plan.md §11` (interaction model), `§12` (components), `§16.9`.
-- Deliverables: `internal/tui` (`table.go`, `prompt.go`, `confirm.go`, `help.go`);
-      single-input two-mode `:`/`/` bar with 100 ms debounce; generated footer + `?`
-      overlay from a binding registry; lipgloss popup stack; screen modes; one theme in
-      `styles.go` (adaptive light/dark). README install + usage.
-- DoD (`plan.md §16.9`): all states handled; teatest model tests green; README complete. §0 gate.
+- Deliverables (as shipped — see `docs/superpowers/plans/2026-05-31-perch-m9-ux.md`):
+      `internal/tui` (`toast.go`, `screen.go`, `help.go`; modal/confirm already in
+      `modal.go` from M8); contextual generated footer + `?` overlay from `bubbles/help`
+      (`Model` implements `help.KeyMap`); screen modes (`z`/`Z`) + narrow vertical reflow;
+      transient toasts; empty state; theme verified v1-correct in `styles.go`. README
+      install + usage. **Deferred (FD-M9-1/2):** `:` command bar (would require ripping out
+      the tested list-built-in `/` filter for a non-existent command set — YAGNI) and
+      standalone `perch attach`. The `table.go`/`prompt.go` files were not needed (no admin
+      table screen; no standalone prompt widget — the `:` bar is deferred).
+- DoD (`plan.md §16.9`): ✅ all states handled; ✅ teatest model tests green; ✅ README complete. §0 gate green.
 
 ---
 
