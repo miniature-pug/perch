@@ -3,6 +3,13 @@
 > **CONTROLLING DOC for the post-M9 finalization phase.** Survives compaction; resume from here.
 > **For agentic workers:** author a bite-sized TDD sub-plan per milestone (superpowers:writing-plans), execute via superpowers:subagent-driven-development (fresh implementer + two-stage review per task), checkpoint per milestone. Branch: `feat/perch-v1`.
 
+## ⏵ OVERNIGHT AUTONOMOUS RUN (user asleep, authorized 2026-06-01)
+
+The user authorized working overnight, unattended. **Do not stop-and-wait for per-milestone review tonight** — execute continuously and leave a morning report. Order:
+1. **Design spike FIRST** → write `docs/superpowers/plans/2026-06-01-perch-core-model-spike.md` (verify tmux `join-pane`/`break-pane`/`swap-pane` on an ISOLATED socket `tmux -L perch-spike`, then `kill-server` — NEVER touch the user's default tmux server). Decide the persistent-frame design.
+2. Then **M10 security** → **M11 persistent-frame rebuild** → **M12 polish** → **M13 docs**. Author each milestone's bite-sized sub-plan, execute via subagent-driven-development (fresh implementer + two-stage review), commit at every checkpoint.
+Rules for unattended work: delegate heavily (subagents = fresh context; keep main thread lean); commit locally after each green step (do NOT push; do NOT tag — `v0.1.0` is the user's action); security correctness is paramount — never ship a guessed mitigation, verify against primary sources + tests. For genuinely ambiguous PRODUCT decisions, make the best reversible call, record it as an `FD-` with rationale, and flag it in the morning report rather than blocking. Keep all gates green (build, unit+`-race` integration on real git/tmux 3.6, lint, `go mod verify`, `make vulncheck`). Leave a concise **MORNING REPORT** (what shipped, decisions made, anything needing the user) as the last action. Re-read this doc + memory `project_perch_finalization` on resume.
+
 ## Standing principles (user, 2026-06-01 — override any earlier "v1-lean / defer" framing)
 
 1. **Perfection over time.** Time is NOT a constraint. Goal: correct, efficient, simple, beautiful, lightweight. No shortcuts justified by effort.
