@@ -18,9 +18,17 @@ import (
 //  2. Forks it into a worktree dir via tmux, pinning a second UUID.
 //  3. Verifies the fork landed (capture-pane non-empty, session file exists).
 //
-// Skips cleanly when claude, tmux, or git are absent. Gated behind
-// //go:build integration — never run by `make test`.
+// Skips cleanly when claude/tmux/git are absent OR when PERCH_CLAUDE_E2E is
+// unset. This demo is NOT hermetic — it needs live claude auth, network, and a
+// trusted worktree folder (claude prompts to trust a fresh dir, which blocks a
+// headless launch), so it is excluded from the default `make test-integration`
+// gate and opted into explicitly. The L4 fact it illustrates (claude honours
+// --session-id on --fork-session) is verified independently; see the M6-4
+// commit + the M6 sub-plan.
 func TestIntegration_Fork_ClaudeForkedSessionLands(t *testing.T) {
+	if os.Getenv("PERCH_CLAUDE_E2E") == "" {
+		t.Skip("skipping: set PERCH_CLAUDE_E2E=1 to run the live claude-fork demo (needs claude auth + network + folder trust)")
+	}
 	// Skip if any required binary is absent.
 	for _, bin := range []string{"claude", "tmux", "git"} {
 		if _, err := exec.LookPath(bin); err != nil {

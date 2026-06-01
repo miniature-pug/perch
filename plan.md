@@ -925,6 +925,29 @@ Build in this order; each milestone is independently runnable/testable.
    mapping prompt, fork semantics, persistence/no-re-prompt, **remove with
    two-tier guardrails + deferred cleanup**. *Done when:* choices survive restart;
    "create worktree" forks into a new branch dir; remove safely handles dirty/locked.
+   — ✅ **DONE** (M6-1..M6-7). git worktree add/remove/prune + slugify/placement/lock
+   (`internal/git`), file seeding + post_create/pre_remove hooks (`internal/worktree`),
+   config validate split + binary mapping enum with no-re-prompt (`internal/config`+
+   `internal/state`), claude native fork (`--fork-session` + pinned `--session-id`) /
+   opencode fresh-session fallback, `Tmux.RunShell -b` + `KillWindow` +
+   `CurrentClientWindow` + Connect window-reuse + `worktree.DeferredRemove`, and the
+   TUI `w`/`d`/`x` keys with a minimal modal state machine, the §7.2 two-tier remove
+   guardrails (main-checkout + focused-in-tree hard errors; dirty→force escalation),
+   and the 3-action worktree-create flow. Gates green (unit + `-race` integration on
+   real git + tmux 3.6, `go mod verify` clean, gofmt/lint 0, coverage ≥80% on
+   `internal/` excl. `internal/tui`). **Honesty note:** *demonstrated* — claude fork
+   pinning verified empirically (print-mode + interactive tmux-pty, control showed
+   auto-mint when unpinned); deferred self-close demonstrated **end-to-end** on a
+   private tmux socket (the `run-shell -b` script's bare `tmux kill-window` inherits
+   `$TMUX` and tears down window + tree + prune + branch + shadow record, ≤2s);
+   `ErrWorktreeDirty` confirmed on an untracked file; mapping survives a simulated
+   restart. *Manual/deferred* — alt-screen handover of a remove into the user's own
+   terminal (not headlessly drivable, same as M5 attach); the in-repo claude-fork
+   e2e demo is **env-gated** (`PERCH_CLAUDE_E2E=1`) since it needs live claude auth +
+   network + folder-trust and isn't hermetic; opencode fork = `ErrForkUnsupported`
+   by design; a Seed/post_create failure after `git worktree add` leaves an orphaned
+   worktree dir (unique branch, non-blocking) — full create rollback deferred. See
+   `docs/superpowers/plans/2026-05-31-perch-m6-worktree.md`.
 7. **Recovery** — `perch resurrect` boot_id reconcile. *Done when:* after killing the
    tmux server, `perch resurrect` rebuilds the windows from shadow records.
 8. **Admin/status** — live status tick + drop-guard, status colours, `x` kill,

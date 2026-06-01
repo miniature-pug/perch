@@ -123,7 +123,7 @@ func TestIntegration_TUI_LiveIdleJoin(t *testing.T) {
 		Title:     "IT fixture session",
 		Updated:   time.Now().Unix(),
 	}
-	it := buildItemFromSession(s, "it-project", "main", dir, dir, time.Now().Unix(), idx).(item)
+	it := buildItemFromSession(s, "it-project", "main", dir, dir, time.Now().Unix(), idx, false).(item)
 
 	if !it.live {
 		t.Error("want live=true for fixture session with matching pane, got false")
