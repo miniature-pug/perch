@@ -426,31 +426,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.previewCmd()
 
 		case key.Matches(msg, m.keys.Enter):
-			it, ok := m.selectedItem()
-			if !ok || !it.isSession {
-				return m.withToast("not a session — nothing to open")
-			}
-			if it.live && it.liveTarget != "" {
-				if m.inFrame() {
-					// Frame mode: swap the agent into the main slot.
-					// swapInCmd sets m.swapping = true via pointer receiver; hoisted
-					// out of the return tuple to guarantee mutation order.
-					cmd := m.swapInCmd(it.captureTarget)
-					return m, cmd
-				}
-				// Legacy mode: switch-client / attach-session terminal handover.
-				// NEVER relaunch a live session: concurrent --resume can corrupt
-				// the shared transcript.
-				return m.attachTo(it.liveTarget)
-			}
-			return m, m.launchCmd(launchSpec{
-				tool:        it.tool,
-				sessionID:   it.id,
-				branch:      it.tree,
-				treePath:    it.treePath,
-				projectPath: it.projectPath,
-				resume:      true,
-			})
+			return m.activateSelected()
 
 		case key.Matches(msg, m.keys.New):
 			it, ok := m.selectedItem()
@@ -587,6 +563,39 @@ func (m Model) View() string {
 
 	body = lipgloss.NewStyle().MaxWidth(m.width).Render(body)
 	return lipgloss.JoinVertical(lipgloss.Left, messageLine, body, footer)
+}
+
+// activateSelected opens the highlighted row: in frame mode it swaps a live agent
+// into the main slot; in legacy mode it hands off the terminal; for an idle
+// session it launches a resume. It is the shared implementation behind the Enter
+// key and the ':attach' command, so the frame-vs-legacy decision lives in one
+// place.
+func (m Model) activateSelected() (tea.Model, tea.Cmd) {
+	it, ok := m.selectedItem()
+	if !ok || !it.isSession {
+		return m.withToast("not a session — nothing to open")
+	}
+	if it.live && it.liveTarget != "" {
+		if m.inFrame() {
+			// Frame mode: swap the agent into the main slot.
+			// swapInCmd sets m.swapping = true via pointer receiver; hoisted
+			// out of the return tuple to guarantee mutation order.
+			cmd := m.swapInCmd(it.captureTarget)
+			return m, cmd
+		}
+		// Legacy mode: switch-client / attach-session terminal handover.
+		// NEVER relaunch a live session: concurrent --resume can corrupt
+		// the shared transcript.
+		return m.attachTo(it.liveTarget)
+	}
+	return m, m.launchCmd(launchSpec{
+		tool:        it.tool,
+		sessionID:   it.id,
+		branch:      it.tree,
+		treePath:    it.treePath,
+		projectPath: it.projectPath,
+		resume:      true,
+	})
 }
 
 // updateModal handles all key events when a modal is open. It is called

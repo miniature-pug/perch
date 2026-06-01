@@ -1,6 +1,10 @@
 package tui
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/charmbracelet/bubbles/list"
+)
 
 func TestParseCommand(t *testing.T) {
 	tests := []struct {
@@ -39,5 +43,24 @@ func TestParseCommand(t *testing.T) {
 				t.Fatalf("parseCommand(%q) = %+v, want %+v", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestResolveItem(t *testing.T) {
+	items := []list.Item{
+		item{project: "perch", tree: "main", title: "perch", tool: "claude", isSession: true},
+		item{project: "kb", tree: "feat-x", title: "kb", tool: "opencode", isSession: true},
+		item{project: "perch", tree: "feat-y", title: "perch", tool: "claude", isSession: false}, // not a session
+	}
+	m := New(items)
+
+	if got := m.resolveItem("kb"); got != 1 {
+		t.Fatalf("resolveItem(kb) = %d, want 1", got)
+	}
+	if got := m.resolveItem("feat-y"); got != -1 {
+		t.Fatalf("resolveItem(feat-y) = %d, want -1 (non-session must not match)", got)
+	}
+	if got := m.resolveItem("zzzzz"); got != -1 {
+		t.Fatalf("resolveItem(zzzzz) = %d, want -1", got)
 	}
 }

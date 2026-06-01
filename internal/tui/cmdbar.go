@@ -1,6 +1,10 @@
 package tui
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/sahilm/fuzzy"
+)
 
 // cmdKind enumerates the recognised ':' command-bar verbs.
 type cmdKind int
@@ -92,4 +96,29 @@ func parseCommand(input string) cmdSpec {
 	default:
 		return cmdSpec{parseErr: "unknown command: " + verb}
 	}
+}
+
+// resolveItem fuzzy-matches query against the session rows currently in the list
+// and returns the index of the best match, or -1 when nothing matches. Matching
+// uses the same FilterValue (project + tree + title + tool) as the '/' filter and
+// skips non-session rows (the "start new" placeholders).
+func (m Model) resolveItem(query string) int {
+	listItems := m.list.Items()
+	var (
+		idxs    []int
+		targets []string
+	)
+	for i, li := range listItems {
+		it, ok := li.(item)
+		if !ok || !it.isSession {
+			continue
+		}
+		idxs = append(idxs, i)
+		targets = append(targets, it.FilterValue())
+	}
+	matches := fuzzy.Find(query, targets)
+	if len(matches) == 0 {
+		return -1
+	}
+	return idxs[matches[0].Index]
 }
