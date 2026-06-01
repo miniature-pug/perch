@@ -1005,11 +1005,14 @@ Build in this order; each milestone is independently runnable/testable.
    tested via key-sequence→state (§20.5, no rendered-string asserts). README: install +
    usage, every command/keybinding/version fact cross-checked against `main.go`/
    `keys.go`/`.tool-versions`/`go.mod`. Gates green (build with embedded resources, unit
-   + `-race` integration on real git + tmux 3.6, lint 0, `go mod verify`). **Deferred to
-   post-v1 (FD-M9-1/2, ratify at checkpoint):** the `:` command bar (single-screen perch
-   has no command set in §10; building it would mean ripping out the tested list-built-in
-   `/` filter — §17 YAGNI; DoD §16.9 doesn't name it) and standalone `perch attach <query>`
-   (§10 "ship if time allows"). See `docs/superpowers/plans/2026-05-31-perch-m9-ux.md`.
+   + `-race` integration on real git + tmux 3.6, lint 0, `go mod verify`). **UPDATE
+   (2026-06-01): the M9 deferrals are REVERSED.** The user set no-deferrals + security +
+   documentation-complete as standing directives, so the `:` command bar and `perch attach`
+   are now in scope for v1, alongside a security deep-dive and a docs/diagrams pass — v1 is
+   NOT done until those land. Controlling plan:
+   `docs/superpowers/plans/2026-06-01-perch-v1-finalization.md` (M10 security → M11 features
+   → M12 polish → M13 docs → user cuts `v0.1.0`). M9 sub-plan:
+   `docs/superpowers/plans/2026-05-31-perch-m9-ux.md`.
 
 ---
 
