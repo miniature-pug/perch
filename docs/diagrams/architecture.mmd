@@ -1,0 +1,75 @@
+flowchart TD
+    subgraph CLI["cmd/perch — CLI entry-point"]
+        main["main.go\ndispatch"]
+    end
+
+    subgraph Core["Core runtime"]
+        tui["internal/tui\nBubble Tea TUI + list"]
+        frame["internal/frame\npersistent tmux frame\nbootstrap + Ensure"]
+    end
+
+    subgraph CLIFlows["CLI sub-commands"]
+        attach["internal/attach\nperch attach &lt;query&gt;"]
+        resurrect["internal/resurrect\nKEEP / PRUNE / RESTORE\nreconciler"]
+        status["internal/status\nperch status set\n@perch_pane_status writer"]
+        doctor["internal/doctor\nperch doctor\nhealth check"]
+    end
+
+    subgraph DataLayer["Data &amp; config"]
+        state["internal/state\nstate.json (mappings + frecency)\nwindows/&lt;k&gt;.json (per-window)"]
+        config["internal/config\nglobal config.toml\n+ project .perch.toml"]
+        trust["internal/trust\nTOFU trust store\ntrust.json (mode 0600)"]
+        model["internal/model\nshared domain types\nWindow, Session, Tool…"]
+    end
+
+    subgraph Discovery["Discovery"]
+        discover["internal/discover\ngit repo scanner\nblacklist filter"]
+    end
+
+    subgraph Agents["Agent adapters"]
+        agent["internal/agent\nAdapter interface\nclaude / opencode"]
+        worktree["internal/worktree\nfile seed + lifecycle\nhooks (post_create, pre_remove…)"]
+    end
+
+    subgraph ShellSeam["Shell-out seam (§20.1)"]
+        proc["internal/proc\nRunner interface\nFakeRunner in tests"]
+        tmuxpkg["internal/tmux\ntmux command wrappers"]
+        git["internal/git\ngit command wrappers"]
+    end
+
+    subgraph External["External — tmux server"]
+        tmuxsrv[("tmux server\n(default socket)")]
+        agentsess["agent sessions\n(detached, one per agent)"]
+        framesess["perch frame session\n(sidebar + main pane)"]
+    end
+
+    main -->|"bootstrap frame"| frame
+    main -->|"launch TUI"| tui
+    main -->|"sub-cmds"| attach
+    main -->|"sub-cmds"| resurrect
+    main -->|"sub-cmds"| status
+    main -->|"sub-cmds"| doctor
+
+    tui -->|"swap-pane / launch"| frame
+    tui -->|"read/write"| state
+    tui -->|"frecency bump"| state
+    tui -->|"hook trust gate"| trust
+    tui -->|"load config"| config
+    tui -->|"agent argv"| agent
+    tui -->|"worktree create/remove"| worktree
+    tui -->|"project scan"| discover
+
+    frame -->|"shell-out"| tmuxpkg
+    attach -->|"read"| state
+    resurrect -->|"read/write"| state
+    resurrect -->|"shell-out"| tmuxpkg
+    status -->|"shell-out"| tmuxpkg
+
+    agent -->|"uses"| model
+    worktree -->|"hooks via"| proc
+    git -->|"uses"| proc
+    tmuxpkg -->|"uses"| proc
+
+    proc -->|"exec"| tmuxsrv
+    tmuxsrv --- agentsess
+    tmuxsrv --- framesess

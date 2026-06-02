@@ -1,0 +1,63 @@
+flowchart TD
+    subgraph Create["CREATE path — key w"]
+        w_start(["user presses w\non a session row"])
+        w_preflight["preflight:\ncheck existing mapping"]
+        w_mapping{"existing\nmapping?"}
+        w_picker["show new-session modal\n(worktree / run-here / run-main)"]
+        w_loadcfg["load config\n(.perch.toml + global config.toml)"]
+        w_validate["validate config"]
+        w_hooks_check{"post_create\nhooks present?"}
+        w_trust["TRUST GATE\nconsult trust.json\n(a) always / (o) once / (d) deny"]
+        w_trusted{"approved?"}
+        w_git_add["git worktree add\n(branch: perch/&lt;slug&gt;-&lt;uuid8&gt;)"]
+        w_seed["seed files\n(copy / symlink per config.Files)"]
+        w_post_create["run post_create hooks\n(TOCTOU re-hash guard)"]
+        w_state["record mapping\nin state.json"]
+        w_launch["launch agent\nin new detached tmux session"]
+
+        w_start --> w_preflight
+        w_preflight --> w_mapping
+        w_mapping -->|"yes — resume"| w_launch
+        w_mapping -->|"no"| w_picker
+        w_picker --> w_loadcfg
+        w_loadcfg --> w_validate
+        w_validate --> w_hooks_check
+        w_hooks_check -->|"no hooks"| w_git_add
+        w_hooks_check -->|"yes"| w_trust
+        w_trust --> w_trusted
+        w_trusted -->|"denied"| w_git_add
+        w_trusted -->|"approved"| w_git_add
+        w_git_add --> w_seed
+        w_seed --> w_post_create
+        w_post_create --> w_state
+        w_state --> w_launch
+    end
+
+    subgraph Remove["REMOVE path — key d"]
+        d_start(["user presses d\non a session row"])
+        d_preflight["preflight:\ncheck if client is focused\non this pane"]
+        d_confirm["show confirm modal"]
+        d_loadcfg2["load config"]
+        d_pre_check{"pre_remove\nhooks present?"}
+        d_trust2["TRUST GATE\nconsult trust.json\n(a) always / (o) once / (d) deny"]
+        d_trusted2{"approved?"}
+        d_pre_remove["run pre_remove hooks\n(TOCTOU re-hash guard)"]
+        d_unlock["unlock git worktree\ninternal lock file"]
+        d_git_remove["git worktree remove\n(force if dirty)"]
+        d_kill["kill tmux window\n(if live)"]
+        d_state2["remove windows/&lt;paneKey&gt;.json\nstate record"]
+
+        d_start --> d_preflight
+        d_preflight --> d_confirm
+        d_confirm --> d_loadcfg2
+        d_loadcfg2 --> d_pre_check
+        d_pre_check -->|"no hooks"| d_unlock
+        d_pre_check -->|"yes"| d_trust2
+        d_trust2 --> d_trusted2
+        d_trusted2 -->|"denied"| d_unlock
+        d_trusted2 -->|"approved"| d_pre_remove
+        d_pre_remove --> d_unlock
+        d_unlock --> d_git_remove
+        d_git_remove --> d_kill
+        d_kill --> d_state2
+    end

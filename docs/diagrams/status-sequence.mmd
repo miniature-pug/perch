@@ -1,0 +1,22 @@
+sequenceDiagram
+    participant Agent as Agent process
+    participant Hook as Agent hook / plugin
+    participant CLI as perch status set
+    participant Tmux as tmux (@perch_pane_status)
+    participant Poll as TUI statusPoll
+    participant Glyph as List glyph
+
+    Agent->>Hook: state change event<br/>(busy / idle / permission / user-msg)
+    Hook->>CLI: exec perch status set &lt;working|waiting|done&gt;
+    Note over Hook,CLI: hook shipped by perch setup;<br/>runs inside the agent session pane
+    CLI->>Tmux: SetPaneOption $TMUX_PANE<br/>@perch_pane_status = &lt;state&gt;
+    Tmux-->>CLI: ok
+
+    loop every refresh_ms (default 1 s)
+        Poll->>Tmux: ListPanesAll → read PerchStatus per pane
+        Tmux-->>Poll: pane list with @perch_pane_status values
+        Poll->>Glyph: statusPollMsg (sessionID to state map)
+        Glyph->>Glyph: render glyph<br/>working → 🤖<br/>waiting → 💬<br/>done → ✓<br/>live (no status) → ●<br/>idle → ○
+    end
+
+    Note over Poll,Glyph: On select ↵ (swap-in):<br/>SetPaneOption @perch_pane_status=""<br/>badge auto-cleared when user focuses agent
