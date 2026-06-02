@@ -73,6 +73,16 @@ func (o Tmux) SetSessionOption(ctx context.Context, session, key, val string) er
 	return nil
 }
 
+// SelectPane focuses a pane (select-pane -t <target>).
+func (o Tmux) SelectPane(ctx context.Context, target string) error {
+	_, stderr, err := o.runner().Run(ctx, o.bin(),
+		o.args("select-pane", "-t", target)...)
+	if err != nil {
+		return fmt.Errorf("tmux select-pane: %w: %s", err, strings.TrimSpace(string(stderr)))
+	}
+	return nil
+}
+
 // BindKey binds a key in a named key-table (bind-key -T <table> <key> <cmd...>).
 func (o Tmux) BindKey(ctx context.Context, table, keyName string, cmd ...string) error {
 	argv := append([]string{"bind-key", "-T", table, keyName}, cmd...)

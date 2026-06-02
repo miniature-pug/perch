@@ -893,6 +893,246 @@ func TestThemeAccentDefaultNilCfg(t *testing.T) {
 	}
 }
 
+// ── focusAgentCmd / activateSelected already-displayed ───────────────────────
+
+// collectSelectPaneCalls returns the args slices for every select-pane call.
+func collectSelectPaneCalls(r *proc.FakeRunner) [][]string {
+	var out [][]string
+	for _, c := range r.Calls {
+		if c.Name == "tmux" && len(c.Args) >= 1 && c.Args[0] == "select-pane" {
+			out = append(out, c.Args)
+		}
+	}
+	return out
+}
+
+// buildLiveItem builds a live item whose captureTarget is the given paneID.
+func buildLiveItem(captureTarget string) item {
+	return item{
+		tool:          "claude",
+		tree:          "feat",
+		id:            "live-sess-id",
+		projectPath:   "/proj/myrepo",
+		treePath:      "/proj/myrepo",
+		isSession:     true,
+		live:          true,
+		liveTarget:    "=sess:=win",
+		captureTarget: captureTarget,
+	}
+}
+
+// TestActivateSelected_AlreadyDisplayed_FocusesNotSwaps asserts that when the
+// selected item's captureTarget equals displayedPaneID, activateSelected issues
+// a select-pane (focus) call instead of swap-pane.
+func TestActivateSelected_AlreadyDisplayed_FocusesNotSwaps(t *testing.T) {
+	r := proc.NewFakeRunner()
+	ok := proc.FakeResult{}
+	r.Default = &ok
+
+	liveIt := buildLiveItem("%A")
+	m := New([]list.Item{liveIt}).WithLoader(loader{
+		Tmux: tmux.Tmux{
+			Runner: r,
+			Bin:    "tmux",
+			Getenv: func(key string) string {
+				if key == "TMUX" {
+					return "/tmp/tmux-1000/default,1234,0"
+				}
+				return ""
+			},
+		},
+		BaseDir: t.TempDir(),
+		Now:     1000,
+	})
+	m.frameSession = "perch"
+	m.placeholderPaneID = "%PL"
+	m.displayedPaneID = "%A" // same as captureTarget → already displayed
+
+	updated0, _ := m.Update(windowMsg)
+	m = updated0.(Model)
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Enter on already-displayed item: want non-nil cmd (focusAgentCmd), got nil")
+	}
+
+	// Execute cmd — it should call select-pane, not swap-pane.
+	cmd()
+
+	swaps := collectSwapPaneCalls(r)
+	if len(swaps) != 0 {
+		t.Errorf("already-displayed: want 0 swap-pane calls, got %d: %v", len(swaps), swaps)
+	}
+
+	selects := collectSelectPaneCalls(r)
+	if len(selects) == 0 {
+		t.Error("already-displayed: want select-pane call for focus, got none")
+	}
+	if len(selects) > 0 {
+		// Assert the target is the displayed pane.
+		if selects[0][2] != "%A" {
+			t.Errorf("select-pane target = %q, want %%A", selects[0][2])
+		}
+	}
+}
+
+// TestActivateSelected_DifferentLive_SwapsPane asserts that when the selected
+// item's captureTarget differs from displayedPaneID, swapInCmd is used (existing
+// behaviour is intact).
+func TestActivateSelected_DifferentLive_SwapsPane(t *testing.T) {
+	r := proc.NewFakeRunner()
+	// PaneSize on %PL for bring-in.
+	r.Respond(proc.FakeResult{Stdout: []byte("80\x1f24\n")},
+		"tmux", "display-message", "-p", "-t", "%PL", "#{pane_width}\x1f#{pane_height}")
+	ok := proc.FakeResult{}
+	r.Default = &ok
+
+	liveIt := buildLiveItem("%B") // captureTarget %B, but displayedPaneID is %A
+	m := New([]list.Item{liveIt}).WithLoader(loader{
+		Tmux: tmux.Tmux{
+			Runner: r,
+			Bin:    "tmux",
+			Getenv: func(key string) string {
+				if key == "TMUX" {
+					return "/tmp/tmux-1000/default,1234,0"
+				}
+				return ""
+			},
+		},
+		BaseDir: t.TempDir(),
+		Now:     1000,
+	})
+	m.frameSession = "perch"
+	m.placeholderPaneID = "%PL"
+	m.displayedPaneID = "%A" // different from captureTarget → must swap
+
+	updated0, _ := m.Update(windowMsg)
+	m = updated0.(Model)
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Enter on different live item: want cmd")
+	}
+	cmd()
+
+	swaps := collectSwapPaneCalls(r)
+	if len(swaps) == 0 {
+		t.Error("different live item: want swap-pane call, got none")
+	}
+
+	selects := collectSelectPaneCalls(r)
+	if len(selects) != 0 {
+		t.Errorf("different live item: want 0 select-pane calls, got %d", len(selects))
+	}
+}
+
+// TestActivateSelected_IdleResume_NoFocusNoSwap asserts that Enter on an idle
+// item dispatches launchCmd (resume), not focusAgentCmd or swapInCmd.
+func TestActivateSelected_IdleResume_NoFocusNoSwap(t *testing.T) {
+	r := proc.NewFakeRunner()
+	ok := proc.FakeResult{}
+	r.Default = &ok
+
+	idleIt := item{
+		tool:        "claude",
+		tree:        "feat",
+		id:          "idle-sess-id",
+		projectPath: "/proj/myrepo",
+		treePath:    "/proj/myrepo",
+		isSession:   true,
+		live:        false, // idle
+	}
+	m := New([]list.Item{idleIt}).WithLoader(loader{
+		Tmux: tmux.Tmux{
+			Runner: r,
+			Bin:    "tmux",
+			Getenv: func(key string) string {
+				if key == "TMUX" {
+					return "/tmp/tmux-1000/default,1234,0"
+				}
+				return ""
+			},
+		},
+		BaseDir: t.TempDir(),
+		Now:     1000,
+	})
+	m.frameSession = "perch"
+	m.placeholderPaneID = "%PL"
+	m.displayedPaneID = ""
+
+	updated0, _ := m.Update(windowMsg)
+	m = updated0.(Model)
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Enter on idle item: want launch cmd, got nil")
+	}
+
+	// The cmd must deliver a launchedMsg (launch path), not swappedMsg/switchedMsg.
+	msg := cmd()
+	if _, ok2 := msg.(launchedMsg); !ok2 {
+		t.Fatalf("idle resume: want launchedMsg, got %T: %v", msg, msg)
+	}
+
+	// No swap-pane or select-pane calls on the idle path.
+	swaps := collectSwapPaneCalls(r)
+	if len(swaps) != 0 {
+		t.Errorf("idle resume: want 0 swap-pane calls, got %d", len(swaps))
+	}
+	selects := collectSelectPaneCalls(r)
+	if len(selects) != 0 {
+		t.Errorf("idle resume: want 0 select-pane calls, got %d", len(selects))
+	}
+}
+
+// TestSwapIn_ResizeHeightIsMeasuredNotWindow asserts that swapInCmd passes the
+// height measured from the placeholder pane (PaneSize result) to ResizeWindow,
+// NOT the window height from WindowSizeMsg. This confirms the status-row-aware
+// (measured) resize is in effect.
+func TestSwapIn_ResizeHeightIsMeasuredNotWindow(t *testing.T) {
+	r := proc.NewFakeRunner()
+	// PaneSize returns h=24, which is DIFFERENT from windowMsg height (40).
+	// If ResizeWindow is called with -y 24, the height is measured (correct).
+	// If it were called with -y 40, the height would be the window value (wrong).
+	r.Respond(proc.FakeResult{Stdout: []byte("80\x1f24\n")},
+		"tmux", "display-message", "-p", "-t", "%PL", "#{pane_width}\x1f#{pane_height}")
+	ok := proc.FakeResult{}
+	r.Default = &ok
+
+	m := frameModel(r, "") // nothing displayed → single bring-in op
+
+	cmd := m.swapInCmd("%A")
+	if cmd == nil {
+		t.Fatal("swapInCmd: want non-nil cmd")
+	}
+	cmd()
+
+	// Scan for resize-window call and assert -y value is 24 (measured), not 40 (window).
+	foundResize := false
+	measuredHeight := -1
+	for _, c := range r.Calls {
+		if c.Name == "tmux" && len(c.Args) >= 1 && c.Args[0] == "resize-window" {
+			foundResize = true
+			// args: ["resize-window", "-t", target, "-x", w, "-y", h]
+			for i, a := range c.Args {
+				if a == "-y" && i+1 < len(c.Args) {
+					if c.Args[i+1] == "24" {
+						measuredHeight = 24
+					} else {
+						measuredHeight = -2 // wrong value sentinel
+					}
+				}
+			}
+		}
+	}
+	if !foundResize {
+		t.Fatal("want resize-window call, got none")
+	}
+	if measuredHeight != 24 {
+		t.Errorf("resize-window -y = %d, want 24 (measured pane height, not window height 40)", measuredHeight)
+	}
+}
+
 // TestThemeAccentDefaultEmptyAccent asserts that a Model with a loader whose
 // cfg has an empty Theme.Accent falls back to the TUI's defaultAccent.
 func TestThemeAccentDefaultEmptyAccent(t *testing.T) {

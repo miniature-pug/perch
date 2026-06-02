@@ -696,6 +696,15 @@ func (m Model) activateSelected() (tea.Model, tea.Cmd) {
 	}
 	if it.live && it.liveTarget != "" {
 		if m.inFrame() {
+			// Already displayed: the selected agent's home pane is the one
+			// currently occupying the frame main slot — just focus it.
+			// displayedPaneID holds the %N home pane id (set by swappedMsg
+			// handler), which is the same value as it.captureTarget.
+			// it.liveTarget is a "=sess:=win" window-target token — a different
+			// id space that is never stored in displayedPaneID.
+			if it.captureTarget != "" && it.captureTarget == m.displayedPaneID {
+				return m, m.focusAgentCmd()
+			}
 			// Frame mode: swap the agent into the main slot.
 			// swapInCmd sets m.swapping = true via pointer receiver; hoisted
 			// out of the return tuple to guarantee mutation order.

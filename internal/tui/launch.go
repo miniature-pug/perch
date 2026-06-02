@@ -212,6 +212,32 @@ func (m Model) launchCmd(spec launchSpec) tea.Cmd {
 	}
 }
 
+// focusAgentCmd returns a tea.Cmd that focuses the agent pane already displayed
+// in the frame main slot (select-pane -t displayedPaneID). Used when the user
+// presses Enter on the item that is already shown — avoiding a needless double-swap.
+//
+// Guard conditions (consistent with swapInCmd / closeWindowCmd):
+//   - loader == nil → no-op nil cmd
+//   - displayedPaneID == "" → no-op nil cmd
+//
+// Error handling is best-effort: SelectPane failures are silently swallowed so a
+// transient tmux hiccup never blocks the focus action (mirrors RefreshClient usage).
+func (m Model) focusAgentCmd() tea.Cmd {
+	if m.loader == nil || m.displayedPaneID == "" {
+		return nil
+	}
+	target := m.displayedPaneID
+	t := m.loader.Tmux
+	ctx := m.loader.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return func() tea.Msg {
+		_ = t.SelectPane(ctx, target)
+		return nil
+	}
+}
+
 // swapInCmd returns a tea.Cmd that displays the agent whose home pane id is
 // targetHome in the frame main slot. It uses planSwapIn to compute the minimal
 // op sequence, pre-sizes the agent session to the frame main dimensions (via
@@ -250,6 +276,10 @@ func (m *Model) swapInCmd(targetHome string) tea.Cmd {
 				// Bring-in op: pre-size the agent session to the frame main slot
 				// dimensions to avoid reflow shock on the app running inside it.
 				// op.dst is the placeholder, which is currently in the frame main slot.
+				// PaneSize queries #{pane_height} of op.dst (the actual main pane),
+				// which is already status-row-aware: tmux's pane_height excludes the
+				// 1-row status bar, so h is the true usable height and no arithmetic
+				// adjustment is needed.
 				if w, h, err := t.PaneSize(ctx, op.dst); err == nil {
 					// Best-effort: ignore resize errors (headless server may not
 					// support resize; the swap still proceeds).
