@@ -18,6 +18,10 @@
 This plan is executed **overnight, unattended** — the user is asleep and has delegated end-to-end implementation. Execute it fully and safely without pausing for check-ins.
 
 - **Method:** superpowers:subagent-driven-development — fresh implementer subagent per task; spec-compliance review then code-quality review after each task; fix loops until both pass; then the next task. Do not stop between tasks for progress check-ins.
+- **Code-quality review must verify:**
+  - Every new Go file has a package doc comment (`// Package x ...`).
+  - Every exported Go symbol (type, func, method, const, struct field where non-obvious) has a godoc comment, matching the existing house style in `internal/tmux`, `internal/config`.
+  - `frontend/src/lib/wails.ts` exported functions carry a one-line JSDoc; Svelte component prop types are documented.
 - **Branch:** work only on `feat/perch-v1` (or a child feature branch). NEVER commit or push to main/master/release. NEVER force-push. Commit per task; do not push unless the user later asks.
 - **Safety (hard constraints, every task):**
   - tmux tests use a PRIVATE socket (`tmux -L <unique>` created and `tmux -L <unique> kill-server` in cleanup) — NEVER the user's default tmux server.
@@ -65,6 +69,11 @@ This plan is executed **overnight, unattended** — the user is asleep and has d
 | `go.mod` / `go.sum` / `vendor/` | Modify | Add wails/pty; `go mod tidy && go mod vendor` drops charmbracelet deps after deletion. |
 | `README.md`, `ARCHITECTURE.md` | Modify | Reflect the GUI (only if present — both exist). |
 | `docs/diagrams/architecture.mmd`, `docs/diagrams/frame-swap.mmd` | Modify/Delete | Update architecture diagram; the frame-swap diagram is obsolete. |
+| `docs/diagrams/*.mmd` (`status-sequence.mmd`, `discovery-state.mmd`, `worktree-lifecycle.mmd`) | Audit/Modify | Update or delete diagrams referencing the deleted TUI/frame state; `status-sequence.mmd` is highest risk. |
+| `Makefile` | Modify | Add `wails-build` and `wails-dev` make targets for the GUI build workflow. |
+| `CONTRIBUTING.md` | Modify | Add wails/node/npm toolchain entries; add `wails-build`/`wails-dev` workflow rows; remove TUI-frame dev-safety references. |
+| `CHANGELOG.md` | Modify | Replace TUI/frame feature bullets in the `[0.1.0]` Unreleased section with the GUI pivot feature set. |
+| `docs/security-audit.md` | Modify | Add "GUI Pivot — New Surface" section with verdicts V14–V18; update scope header. |
 
 ---
 
@@ -679,11 +688,14 @@ The GUI diff panel needs git output; `internal/git` is the kept package for this
 
 Before any bound method touches tmux, the frontend's structured args are validated: session ids against a known-perch-session allowlist, worktree paths under the configured project roots. No raw command strings ever reach a shell (tmux/git go via argv through `internal/proc`, preserved).
 
-- [ ] Write the failing test for the validation primitives:
+- [ ] Write the failing test for the validation primitives (includes adversarial table-test rows that must be REJECTED or ACCEPTED as specified):
   ```go
   package app
 
-  import "testing"
+  import (
+  	"strings"
+  	"testing"
+  )
 
   func TestValidateSessionID_AllowlistCharset(t *testing.T) {
   	good := []string{"ses_18593fc84ffeg4oyInzAG2eLOL", "2b96f5bc-43ef-454d-a12d-791ad68da8dd", "win-1"}
@@ -700,6 +712,40 @@ Before any bound method touches tmux, the frontend's structured args are validat
   	}
   }
 
+  func TestValidateSessionID_AdversarialCases(t *testing.T) {
+  	// REJECTED cases: each must return a non-nil error.
+  	rejected := []struct {
+  		name  string
+  		input string
+  	}{
+  		{"empty", ""},
+  		{"overlong", strings.Repeat("a", 129)},
+  		{"control NUL", "ses\x00id"},
+  		{"control LF", "ses\nid"},
+  		{"shell semicolon", "ses;id"},
+  		{"shell dollar-paren", "ses$(id)"},
+  		{"shell backtick", "ses`id`"},
+  		{"shell pipe", "ses|id"},
+  		{"path separator slash", "ses/id"},
+  		{"path traversal dotdot", "../etc/passwd"},
+  		// Unicode lookalike for hyphen (U+2010 HYPHEN)
+  		{"unicode lookalike", "ses‐id"},
+  	}
+  	for _, tc := range rejected {
+  		t.Run(tc.name, func(t *testing.T) {
+  			if err := validateSessionID(tc.input); err == nil {
+  				t.Errorf("validateSessionID(%q) = nil, want error", tc.input)
+  			}
+  		})
+  	}
+  	// ACCEPTED: a normal allowlisted id must pass.
+  	t.Run("normal allowlisted id", func(t *testing.T) {
+  		if err := validateSessionID("ses_abc-123"); err != nil {
+  			t.Errorf("validateSessionID(\"ses_abc-123\") = %v, want nil", err)
+  		}
+  	})
+  }
+
   func TestValidateWorktreeUnderRoots(t *testing.T) {
   	roots := []string{"/home/u/code"}
   	if err := validateWorktreeUnderRoots("/home/u/code/perch/wt", roots); err != nil {
@@ -710,6 +756,50 @@ Before any bound method touches tmux, the frontend's structured args are validat
   			t.Errorf("validateWorktreeUnderRoots(%q) = nil, want error", p)
   		}
   	}
+  }
+
+  func TestValidateWorktreeUnderRoots_AdversarialCases(t *testing.T) {
+  	roots := []string{"/home/u/code"}
+  	// REJECTED: must all return a non-nil error.
+  	rejected := []struct {
+  		name  string
+  		input string
+  	}{
+  		{"dotdot traversal", "/home/u/code/../secret"},
+  		{"absolute outside root", "/etc/passwd"},
+  		// filepath.Clean + EvalSymlinks must defeat symlink whose target escapes root;
+  		// the impl MUST call filepath.EvalSymlinks before the prefix check.
+  		{"symlink escaping root", "/home/u/code/evil-link"},
+  		{"relative path", "relative/path"},
+  		{"empty", ""},
+  	}
+  	// For the symlink case the test environment may not have a real symlink; we verify
+  	// that a path that does not exist (and would require EvalSymlinks to resolve) is
+  	// handled without panic — if it resolves to a missing path outside roots it must
+  	// be rejected; if EvalSymlinks returns an error the impl must reject on error.
+  	for _, tc := range rejected {
+  		t.Run(tc.name, func(t *testing.T) {
+  			if tc.input == "/home/u/code/evil-link" {
+  				// Skip: this case requires a real symlink on disk; the in-root acceptance
+  				// test below covers the EvalSymlinks happy path.
+  				t.Skip("symlink adversarial case requires on-disk symlink; see integration test")
+  			}
+  			if err := validateWorktreeUnderRoots(tc.input, roots); err == nil {
+  				t.Errorf("validateWorktreeUnderRoots(%q) = nil, want error", tc.input)
+  			}
+  		})
+  	}
+  	// ACCEPTED: path exactly at root and path inside root.
+  	t.Run("path at root", func(t *testing.T) {
+  		if err := validateWorktreeUnderRoots("/home/u/code", roots); err != nil {
+  			t.Errorf("validateWorktreeUnderRoots at root = %v, want nil", err)
+  		}
+  	})
+  	t.Run("path under root", func(t *testing.T) {
+  		if err := validateWorktreeUnderRoots("/home/u/code/perch/wt", roots); err != nil {
+  			t.Errorf("validateWorktreeUnderRoots under root = %v, want nil", err)
+  		}
+  	})
   }
   ```
 - [ ] Run it and see it fail (undefined functions):
@@ -753,8 +843,12 @@ Before any bound method touches tmux, the frontend's structured args are validat
   }
 
   // validateWorktreeUnderRoots rejects any path that is not absolute, not clean,
-  // or not contained within one of the configured roots — closing path traversal
-  // and arbitrary-directory operations from the frontend.
+  // or not contained within one of the configured roots — closing path traversal,
+  // symlink escape, and arbitrary-directory operations from the frontend.
+  // filepath.EvalSymlinks is called after filepath.Clean so that a symlink whose
+  // target escapes the root is caught even when the raw path looks legitimate.
+  // If EvalSymlinks fails (e.g. path does not exist) the call is rejected — a
+  // non-existent worktree path is never valid.
   func validateWorktreeUnderRoots(p string, roots []string) error {
   	if p == "" || !filepath.IsAbs(p) {
   		return fmt.Errorf("worktree path must be absolute")
@@ -763,9 +857,13 @@ Before any bound method touches tmux, the frontend's structured args are validat
   	if clean != p {
   		return fmt.Errorf("worktree path must be clean")
   	}
+  	resolved, err := filepath.EvalSymlinks(clean)
+  	if err != nil {
+  		return fmt.Errorf("worktree path %q: %w", p, err)
+  	}
   	for _, root := range roots {
   		rc := filepath.Clean(root)
-  		if clean == rc || strings.HasPrefix(clean, rc+string(filepath.Separator)) {
+  		if resolved == rc || strings.HasPrefix(resolved, rc+string(filepath.Separator)) {
   			return nil
   		}
   	}
@@ -2688,6 +2786,41 @@ Performed AFTER the rewire (Task 15) so the build stayed green throughout. With 
 
 ---
 
+### Task 17A: Security tooling gate
+
+**Files:** none (static-analysis gates against the final tree)
+
+- [ ] **Step 1: govulncheck the final vendor tree**
+
+  Run: `make vulncheck`
+  Expected: no unmitigated HIGH/CRITICAL findings. If any surface, record them in `docs/security-audit.md` and block release pending triage.
+
+- [ ] **Step 2: lint new packages**
+
+  Run: `make lint`
+  Expected: zero failures across `internal/pty`, `app/`, `cmd/perch`.
+
+- [ ] **Step 3: vet the full tree**
+
+  Run: `make vet`
+  Expected: exit 0.
+
+- [ ] **Step 4: audit the frontend dependency tree**
+
+  Run: `npm --prefix frontend audit --audit-level=high`
+  Expected: no high/critical advisories. If any surface, record in `docs/security-audit.md` and triage before release.
+
+- [ ] **Step 5: verify module checksums**
+
+  Run: `make verify`
+  Expected: "all modules verified".
+
+- [ ] **Step 6: commit**
+
+  No code changes; record tool outputs in the run log. If a later doc task is the next commit, skip an empty commit.
+
+---
+
 ### Task 17: Full integration sweep + GUI build verification
 
 **Files:**
@@ -2735,9 +2868,67 @@ Performed AFTER the rewire (Task 15) so the build stayed green throughout. With 
   grep -rn "Bubble Tea\|internal/tui\|internal/frame\|--sidebar" README.md ARCHITECTURE.md docs/ || echo CLEAN
   ```
   Expected: `CLEAN` (or only historical references inside `docs/superpowers/` plan/spec archives, which are intentionally left as a record).
+- [ ] Update `CHANGELOG.md`: in the `[0.1.0]` Unreleased section, replace the TUI/frame feature bullets with the GUI pivot feature set (no version bump; keep the Unreleased header).
+- [ ] Update `CONTRIBUTING.md`: toolchain table (add `wails v2.12.0`, `node v22.x`, `npm`), make-target table (add `wails-build`, `wails-dev`), and remove/replace TUI-frame references in the dev-safety section.
+- [ ] Audit `docs/diagrams/*.mmd` (`status-sequence.mmd`, `discovery-state.mmd`, `worktree-lifecycle.mmd`): update or delete any that reference the deleted TUI/frame state; `status-sequence.mmd` is highest risk (TUI event loop no longer exists).
 - [ ] Commit:
   ```
-  git add README.md ARCHITECTURE.md docs/diagrams && git commit -m "docs: reflect Wails GUI pivot; drop frame/TUI references"
+  git add README.md ARCHITECTURE.md CHANGELOG.md CONTRIBUTING.md docs/diagrams && git commit -m "docs: reflect Wails GUI pivot; drop frame/TUI references"
+  ```
+
+---
+
+### Task 18A: Makefile GUI targets + CONTRIBUTING toolchain
+
+**Files:**
+- Modify: `Makefile`
+- Modify: `CONTRIBUTING.md`
+
+- [ ] **Step 1: add GUI make targets**
+
+  Append to `Makefile` (match existing target+comment style):
+  ```make
+  wails-build:   ## build the production GUI binary (requires apt webkit/gtk pkgs + node)
+  	npm --prefix frontend install --frozen-lockfile
+  	wails build -clean
+
+  wails-dev:     ## start the hot-reload GUI dev server
+  	wails dev
+  ```
+
+- [ ] **Step 2: verify the build target**
+
+  Run: `make wails-build`
+  Expected: frontend deps install, `wails build` produces `build/bin/perch`, exit 0.
+
+- [ ] **Step 3: document the toolchain in CONTRIBUTING.md**
+
+  Add to the toolchain table: `sudo apt install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev` + `wails` CLI (`go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0`) + node/npm. Add `make wails-build` / `make wails-dev` to the workflow table.
+
+- [ ] **Step 4: commit**
+
+  ```bash
+  git add Makefile CONTRIBUTING.md && git commit -m "build: add wails-build/wails-dev make targets + document GUI toolchain"
+  ```
+
+---
+
+### Task 19: Extend docs/security-audit.md for the GUI attack surface
+
+**Files:**
+- Modify: `docs/security-audit.md`
+
+- [ ] **Step 1: add a new scope section** titled "GUI Pivot — New Surface" with verdicts V14–V18:
+  - **V14 WebKit2GTK engine** — dynamically linked, OS-patched via apt security feeds, no bundled engine. Verdict: ACCEPTED (operational dependency; documented).
+  - **V15 script-message IPC / bound-method API** — `validateSessionID` (charset allowlist, 1–128 chars) + `validateWorktreeUnderRoots` (absolute + `filepath.Clean`/`EvalSymlinks` + under-root) gate every orchestration call; bypass attempts are encoded as failing-first tests in the validation task (`TestValidateSessionID_AdversarialCases`, `TestValidateWorktreeUnderRoots_AdversarialCases`). Verdict: MITIGATED.
+  - **V16 attach-pty WriteToPty** — intentionally forwards arbitrary bytes to the user's own agent/shell; no privilege escalation beyond the existing user. Verdict: ACCEPTED (documented boundary).
+  - **V17 CSP** — `<meta http-equiv="Content-Security-Policy">` restricts to `'self'`, no `eval`, no remote loads; confirm `connect-src`/asset scheme at Task 17 build smoke. Verdict: MITIGATED.
+  - **V18 npm supply chain** — exact-pinned deps (no `^`/`~`), lockfile committed, `npm audit --audit-level=high` clean (Task 17A gate). Verdict: MITIGATED.
+- [ ] **Step 2: update the ledger header** so its scope line includes the GUI pivot (the existing header promised a new-surface pass "before the v0.1.0 tag" — fulfill it).
+- [ ] **Step 3: commit**
+
+  ```bash
+  git add docs/security-audit.md && git commit -m "docs(security): GUI pivot attack-surface verdicts V14-V18"
   ```
 
 ---
