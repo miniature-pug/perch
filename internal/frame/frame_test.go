@@ -121,7 +121,7 @@ func TestEnsure_Create_HasExpectedCalls(t *testing.T) {
 		"set-option",      // Ensure: mouse on
 		"set-option",      // Ensure: status on
 		"set-option",      // Ensure: status-left-length 200
-		"set-option",      // Ensure: status-left <statusLeft>
+		"set-option",      // Ensure: status-left statusLeft
 		"set-option",      // Ensure: status-right ""
 	}
 	if !reflect.DeepEqual(subCmds, want) {
@@ -177,12 +177,12 @@ func TestEnsure_Create_SessionOptions(t *testing.T) {
 		rest []string // Args[1:]
 	}
 	wantCalls := []wantCall{
-		{"bind-key", []string{"-T", frame.NavKeyTable, frame.FocusListKey, "select-pane", "-L"}},
-		{"set-option", []string{"-t", "perch", "key-table", frame.NavKeyTable}},
+		{"bind-key", []string{"-T", "perchnav", "F12", "select-pane", "-L"}},
+		{"set-option", []string{"-t", "perch", "key-table", "perchnav"}},
 		{"set-option", []string{"-t", "perch", "mouse", "on"}},
 		{"set-option", []string{"-t", "perch", "status", "on"}},
 		{"set-option", []string{"-t", "perch", "status-left-length", "200"}},
-		{"set-option", []string{"-t", "perch", "status-left", frame.StatusLeft}},
+		{"set-option", []string{"-t", "perch", "status-left", " perch │ F12/click ▸ list   ↵ ▸ open/resume   esc ▸ close window   q ▸ quit (agents live) "}},
 		{"set-option", []string{"-t", "perch", "status-right", ""}},
 	}
 	if len(afterResize) != len(wantCalls) {
