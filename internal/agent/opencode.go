@@ -42,7 +42,7 @@ var _ Adapter = Opencode{}
 func NewOpencode() Opencode {
 	return Opencode{
 		Runner:   proc.ExecRunner{},
-		Bin:      "opencode",
+		Bin:      string(model.ToolOpencode),
 		LookPath: exec.LookPath,
 	}
 }
@@ -65,7 +65,7 @@ func (o Opencode) bin() string {
 	if o.Bin != "" {
 		return o.Bin
 	}
-	return "opencode"
+	return string(model.ToolOpencode)
 }
 
 // Name returns the canonical tool identifier.

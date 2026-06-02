@@ -582,7 +582,7 @@ func handleStatus(args []string, stdout, stderr io.Writer) int {
 	st := args[1]
 	// Validate state before reading the environment so bad args always exit 2.
 	switch st {
-	case "working", "waiting", "done":
+	case status.StateWorking, status.StateWaiting, status.StateDone:
 		// valid
 	default:
 		_, _ = fmt.Fprintln(stderr, "Usage: perch status set <working|waiting|done>")

@@ -18,6 +18,7 @@ import (
 	"text/tabwriter"
 
 	perch "github.com/Miniature-Pug/perch"
+	"github.com/Miniature-Pug/perch/internal/model"
 )
 
 // ── OS boundary ───────────────────────────────────────────────────────────────
@@ -198,16 +199,16 @@ var tools = []toolDescriptor{
 		buildOnly:       false,
 	},
 	{
-		name:            "claude",
-		pinnedKey:       "claude",
+		name:            string(model.ToolClaude),
+		pinnedKey:       string(model.ToolClaude),
 		versionArgs:     []string{"--version"},
 		hardRequirement: false, // governed by one-of-agents rule
 		buildOnly:       false,
 		agentTool:       true,
 	},
 	{
-		name:            "opencode",
-		pinnedKey:       "opencode",
+		name:            string(model.ToolOpencode),
+		pinnedKey:       string(model.ToolOpencode),
 		versionArgs:     []string{"--version"},
 		hardRequirement: false, // governed by one-of-agents rule
 		buildOnly:       false,

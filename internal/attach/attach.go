@@ -113,7 +113,7 @@ func Gather(ctx context.Context, deps Deps) ([]Candidate, error) {
 			// Opencode sessions for this tree.
 			oc := agent.Opencode{
 				Runner: deps.Runner,
-				Bin:    "opencode",
+				Bin:    string(model.ToolOpencode),
 				Dir:    tree.Path,
 			}
 			ocSessions, _ := oc.ListSessions(ctx)

@@ -104,7 +104,7 @@ func (l loader) load() tea.Cmd {
 				tree := &pt.Trees[i]
 				oc := agent.Opencode{
 					Runner: l.Runner,
-					Bin:    "opencode",
+					Bin:    string(model.ToolOpencode),
 					Dir:    tree.Path,
 				}
 				sessions, _ := oc.ListSessions(ctx) // degrade: skip tree on error

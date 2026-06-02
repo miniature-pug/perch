@@ -7,6 +7,8 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/Miniature-Pug/perch/internal/status"
 )
 
 // Status describes the agent activity state of a session row.
@@ -143,11 +145,11 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 // pane (StatusIdle).
 func statusFromOption(opt string, live bool) Status {
 	switch opt {
-	case "working":
+	case status.StateWorking:
 		return StatusWorking
-	case "waiting":
+	case status.StateWaiting:
 		return StatusWaiting
-	case "done":
+	case status.StateDone:
 		return StatusDone
 	}
 	if live {

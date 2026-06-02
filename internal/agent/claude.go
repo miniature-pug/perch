@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/Miniature-Pug/perch/internal/model"
+	"github.com/Miniature-Pug/perch/internal/status"
 )
 
 // Claude is the Adapter for Anthropic's claude-code CLI. It reads claude's
@@ -51,7 +52,7 @@ func NewClaude() Claude {
 	}
 	return Claude{
 		Home:     home,
-		Bin:      "claude",
+		Bin:      string(model.ToolClaude),
 		Exists:   defaultExists,
 		LookPath: exec.LookPath,
 	}
@@ -81,7 +82,7 @@ func (c Claude) bin() string {
 	if c.Bin != "" {
 		return c.Bin
 	}
-	return "claude"
+	return string(model.ToolClaude)
 }
 
 // Name returns the canonical tool identifier.
@@ -190,10 +191,10 @@ func (c Claude) InstallStatusHook(replace bool) error {
 var perchHooks = []struct {
 	event, matcher, command string
 }{
-	{"PostToolUse", "", "perch status set working"},
-	{"UserPromptSubmit", "", "perch status set working"},
-	{"Stop", "", "perch status set done"},
-	{"Notification", "permission_prompt|elicitation_dialog", "perch status set waiting"},
+	{"PostToolUse", "", "perch status set " + status.StateWorking},
+	{"UserPromptSubmit", "", "perch status set " + status.StateWorking},
+	{"Stop", "", "perch status set " + status.StateDone},
+	{"Notification", "permission_prompt|elicitation_dialog", "perch status set " + status.StateWaiting},
 }
 
 // mergeClaudeHooks merges perch's status hooks into existing settings.json
