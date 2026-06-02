@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -349,4 +350,102 @@ func TestApp_CreateAgent_ContainmentGuard(t *testing.T) {
 	if !containedUnderRoots(root, roots) {
 		t.Error("treePath equal to root must be accepted")
 	}
+}
+
+// TestApp_CreateAgent_ContainmentGuard_EndToEnd proves that the containment
+// guard inside CreateAgent fires — aborting before AddWorktree/Seed — when
+// config supplies a hostile worktree_dir. Two attack vectors are exercised:
+//
+//  1. Absolute worktree_dir in global config (accepted by config.Load; only the
+//     global config accepts absolute paths). The derived treePath lands in an
+//     unrelated temp dir outside the root.
+//
+//  2. Relative worktree_dir with ".." in project .perch.toml (relative paths
+//     are accepted by config.Load). After filepath.Clean the result can escape
+//     the project dir and even the root.
+//
+// In both cases CreateAgent must return an error and the target path must NOT
+// have been created on disk.
+func TestApp_CreateAgent_ContainmentGuard_EndToEnd(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "proj")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Init git repo so validateWorktreeUnderRoots (which requires path existence
+	// on disk) passes for projectPath. We don't need a commit because the guard
+	// fires before AddWorktree.
+	cmd := exec.Command("git", "init", "-q", repo)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+
+	newApp := func() *App {
+		return &App{
+			tmux:    tmux.Tmux{Runner: proc.NewFakeRunner(), Bin: "tmux"},
+			run:     proc.NewFakeRunner(),
+			roots:   []string{root},
+			emit:    func(string, ...any) {},
+			bridges: map[string]*ptyEntry{},
+		}
+	}
+
+	// ── Attack 1: absolute worktree_dir in global config ────────────────────────
+	t.Run("absolute_worktreedir_via_global_config", func(t *testing.T) {
+		escapeDest := t.TempDir() // real, outside root
+		cfgDir := t.TempDir()
+		t.Setenv("XDG_CONFIG_HOME", cfgDir)
+		t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+		// Write a global config with an absolute worktree_dir pointing outside the root.
+		perchCfgDir := filepath.Join(cfgDir, "perch")
+		if err := os.MkdirAll(perchCfgDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		cfgContent := fmt.Sprintf("worktree_dir = %q\n", escapeDest)
+		if err := os.WriteFile(filepath.Join(perchCfgDir, "config.toml"), []byte(cfgContent), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		a := newApp()
+		_, err := a.CreateAgent("claude", repo, "feat/x")
+		if err == nil {
+			t.Fatal("CreateAgent must error when worktreeDir is absolute and outside roots")
+		}
+		// Nothing must have been created at the escape destination.
+		entries, _ := os.ReadDir(escapeDest)
+		if len(entries) > 0 {
+			t.Errorf("escape destination %q must be empty after rejected CreateAgent; found %d entries", escapeDest, len(entries))
+		}
+	})
+
+	// ── Attack 2: relative ".." worktree_dir in project .perch.toml ─────────────
+	t.Run("dotdot_worktreedir_via_project_config", func(t *testing.T) {
+		cfgDir := t.TempDir()
+		t.Setenv("XDG_CONFIG_HOME", cfgDir)
+		t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+		// Write a .perch.toml with worktree_dir = "../../escape" (relative ".." is
+		// accepted by config.Load; only absolute paths are blocked in project config).
+		// With projectPath=<root>/proj and worktreeDir="../../escape":
+		//   filepath.Clean(<root>/proj/../../escape/feat-x) = <parentOfRoot>/escape/feat-x
+		// which is outside the root.
+		tomlContent := "worktree_dir = \"../../escape\"\n"
+		if err := os.WriteFile(filepath.Join(repo, ".perch.toml"), []byte(tomlContent), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Remove(filepath.Join(repo, ".perch.toml")) })
+
+		escapePath := filepath.Clean(filepath.Join(repo, "..", "..", "escape", "feat-x"))
+
+		a := newApp()
+		_, err := a.CreateAgent("claude", repo, "feat/x")
+		if err == nil {
+			t.Fatal("CreateAgent must error when worktreeDir uses '..' to escape outside roots")
+		}
+		// Nothing must have been created at the escape path.
+		if _, statErr := os.Stat(escapePath); !os.IsNotExist(statErr) {
+			t.Errorf("escape path %q must not exist after rejected CreateAgent", escapePath)
+		}
+	})
 }
