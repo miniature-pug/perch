@@ -73,6 +73,63 @@ func (o Tmux) SetSessionOption(ctx context.Context, session, key, val string) er
 	return nil
 }
 
+// KillPane removes a single pane (kill-pane -t <target>). Safe on a dead pane.
+func (o Tmux) KillPane(ctx context.Context, target string) error {
+	_, stderr, err := o.runner().Run(ctx, o.bin(),
+		o.args("kill-pane", "-t", target)...)
+	if err != nil {
+		return fmt.Errorf("tmux kill-pane: %w: %s", err, strings.TrimSpace(string(stderr)))
+	}
+	return nil
+}
+
+// RespawnPane restarts a (possibly dead) pane with cmd (respawn-pane -k -t
+// <target> <cmd>). cmd is passed as a single argv element — e.g. "sleep
+// infinity" is sent as-is without further word-splitting.
+func (o Tmux) RespawnPane(ctx context.Context, target, cmd string) error {
+	_, stderr, err := o.runner().Run(ctx, o.bin(),
+		o.args("respawn-pane", "-k", "-t", target, cmd)...)
+	if err != nil {
+		return fmt.Errorf("tmux respawn-pane: %w: %s", err, strings.TrimSpace(string(stderr)))
+	}
+	return nil
+}
+
+// SetWindowOption sets a window-scoped option (set-option -w -t <windowTarget>
+// <key> <val>).
+func (o Tmux) SetWindowOption(ctx context.Context, windowTarget, key, val string) error {
+	_, stderr, err := o.runner().Run(ctx, o.bin(),
+		o.args("set-option", "-w", "-t", windowTarget, key, val)...)
+	if err != nil {
+		return fmt.Errorf("tmux set-option: %w: %s", err, strings.TrimSpace(string(stderr)))
+	}
+	return nil
+}
+
+// PaneDead reports whether a pane has exited (pane_dead). A missing pane or
+// runner error returns an error. The underlying tmux call is:
+//
+//	display-message -t <target> -p '#{pane_dead}'
+//
+// "1" → dead (true), "0" → alive (false). Any other output is an error.
+// ListPanes also populates Pane.Dead for bulk queries; PaneDead is the
+// per-pane direct equivalent used when a single targeted check is needed.
+func (o Tmux) PaneDead(ctx context.Context, target string) (bool, error) {
+	stdout, stderr, err := o.runner().Run(ctx, o.bin(),
+		o.args("display-message", "-t", target, "-p", "#{pane_dead}")...)
+	if err != nil {
+		return false, fmt.Errorf("tmux display-message: %w: %s", err, strings.TrimSpace(string(stderr)))
+	}
+	switch strings.TrimSpace(string(stdout)) {
+	case "1":
+		return true, nil
+	case "0":
+		return false, nil
+	default:
+		return false, fmt.Errorf("tmux display-message: unexpected pane_dead output %q", strings.TrimSpace(string(stdout)))
+	}
+}
+
 // SelectPane focuses a pane (select-pane -t <target>).
 func (o Tmux) SelectPane(ctx context.Context, target string) error {
 	_, stderr, err := o.runner().Run(ctx, o.bin(),

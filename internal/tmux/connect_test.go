@@ -725,3 +725,165 @@ func TestCurrentClientWindow_ExecError_Wrapped(t *testing.T) {
 		t.Errorf("error should wrap execErr: %v", err)
 	}
 }
+
+// ── KillPane ──────────────────────────────────────────────────────────────────
+
+func TestKillPane_CallArgs(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{}, "tmux", "kill-pane", "-t", "%3")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	if err := o.KillPane(context.Background(), "%3"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(r.Calls) != 1 {
+		t.Fatalf("want 1 call, got %d", len(r.Calls))
+	}
+	want := []string{"kill-pane", "-t", "%3"}
+	if !reflect.DeepEqual(r.Calls[0].Args, want) {
+		t.Errorf("Call.Args = %v, want %v", r.Calls[0].Args, want)
+	}
+}
+
+func TestKillPane_ErrorWrapped(t *testing.T) {
+	execErr := errors.New("exec: tmux not found")
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Err: execErr, Stderr: []byte("tmux not found")},
+		"tmux", "kill-pane", "-t", "%3")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	err := o.KillPane(context.Background(), "%3")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, execErr) {
+		t.Errorf("error should wrap execErr: %v", err)
+	}
+}
+
+// ── RespawnPane ───────────────────────────────────────────────────────────────
+
+func TestRespawnPane_CallArgs(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{}, "tmux", "respawn-pane", "-k", "-t", "%3", "sleep infinity")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	if err := o.RespawnPane(context.Background(), "%3", "sleep infinity"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(r.Calls) != 1 {
+		t.Fatalf("want 1 call, got %d", len(r.Calls))
+	}
+	want := []string{"respawn-pane", "-k", "-t", "%3", "sleep infinity"}
+	if !reflect.DeepEqual(r.Calls[0].Args, want) {
+		t.Errorf("Call.Args = %v, want %v", r.Calls[0].Args, want)
+	}
+}
+
+func TestRespawnPane_ErrorWrapped(t *testing.T) {
+	execErr := errors.New("exec: tmux not found")
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Err: execErr, Stderr: []byte("tmux not found")},
+		"tmux", "respawn-pane", "-k", "-t", "%3", "sleep infinity")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	err := o.RespawnPane(context.Background(), "%3", "sleep infinity")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, execErr) {
+		t.Errorf("error should wrap execErr: %v", err)
+	}
+}
+
+// ── SetWindowOption ───────────────────────────────────────────────────────────
+
+func TestSetWindowOption_CallArgs(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{},
+		"tmux", "set-option", "-w", "-t", "perch:frame", "remain-on-exit", "on")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	if err := o.SetWindowOption(context.Background(), "perch:frame", "remain-on-exit", "on"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(r.Calls) != 1 {
+		t.Fatalf("want 1 call, got %d", len(r.Calls))
+	}
+	want := []string{"set-option", "-w", "-t", "perch:frame", "remain-on-exit", "on"}
+	if !reflect.DeepEqual(r.Calls[0].Args, want) {
+		t.Errorf("Call.Args = %v, want %v", r.Calls[0].Args, want)
+	}
+}
+
+func TestSetWindowOption_ErrorWrapped(t *testing.T) {
+	execErr := errors.New("exec: tmux not found")
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Err: execErr, Stderr: []byte("tmux not found")},
+		"tmux", "set-option", "-w", "-t", "perch:frame", "remain-on-exit", "on")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	err := o.SetWindowOption(context.Background(), "perch:frame", "remain-on-exit", "on")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, execErr) {
+		t.Errorf("error should wrap execErr: %v", err)
+	}
+}
+
+// ── PaneDead ──────────────────────────────────────────────────────────────────
+
+func TestPaneDead_ReturnsTrue_When1(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Stdout: []byte("1\n")},
+		"tmux", "display-message", "-t", "%3", "-p", "#{pane_dead}")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	dead, err := o.PaneDead(context.Background(), "%3")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !dead {
+		t.Errorf("PaneDead = false, want true")
+	}
+
+	want := []string{"display-message", "-t", "%3", "-p", "#{pane_dead}"}
+	if !reflect.DeepEqual(r.Calls[0].Args, want) {
+		t.Errorf("Call.Args = %v, want %v", r.Calls[0].Args, want)
+	}
+}
+
+func TestPaneDead_ReturnsFalse_When0(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Stdout: []byte("0\n")},
+		"tmux", "display-message", "-t", "%3", "-p", "#{pane_dead}")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	dead, err := o.PaneDead(context.Background(), "%3")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dead {
+		t.Errorf("PaneDead = true, want false")
+	}
+}
+
+func TestPaneDead_RunnerError_ReturnsError(t *testing.T) {
+	execErr := errors.New("exec: tmux not found")
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Err: execErr, Stderr: []byte("tmux not found")},
+		"tmux", "display-message", "-t", "%3", "-p", "#{pane_dead}")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	_, err := o.PaneDead(context.Background(), "%3")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, execErr) {
+		t.Errorf("error should wrap execErr: %v", err)
+	}
+}
