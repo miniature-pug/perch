@@ -270,6 +270,53 @@ func (m *Model) swapInCmd(targetHome string) tea.Cmd {
 	}
 }
 
+// swapDisplayedHome executes the planSwapHome ops for the given displayed/placeholder
+// pane ids, ignoring SwapPane errors. This is the shared best-effort helper used by
+// both closeWindowCmd (detach view) and quitFrameCmd (quit-time cleanup).
+// A dead displayed pane produces a swap-pane error that is silently swallowed so
+// neither caller is blocked by a pane that has already exited.
+func swapDisplayedHome(ctx context.Context, t tmux.Tmux, displayed, placeholder string) {
+	for _, op := range planSwapHome(displayed, placeholder) {
+		_ = t.SwapPane(ctx, op.src, op.dst)
+	}
+}
+
+// windowClosedMsg is delivered by closeWindowCmd after the swap-home attempt
+// completes (whether or not the swap succeeded). Applying it to the model resets
+// displayedPaneID to "" so the placeholder reclaims the frame main slot.
+type windowClosedMsg struct{}
+
+// closeWindowCmd returns a tea.Cmd that non-destructively detaches the view of
+// the currently displayed agent: it swaps the agent pane back to its home session
+// (so the agent process keeps running) and returns a windowClosedMsg that resets
+// displayedPaneID to "".
+//
+// Guard conditions:
+//   - loader == nil → no-op (returns a cmd that delivers windowClosedMsg immediately).
+//   - displayedPaneID == "" → no-op (nothing to close; still delivers windowClosedMsg
+//     so callers do not need a nil check on the returned cmd).
+//
+// Dead pane: if the swap-home errors (agent exited while displayed), the error
+// is swallowed and windowClosedMsg is still returned — the view reset is always safe.
+func (m Model) closeWindowCmd() tea.Cmd {
+	if m.loader == nil || m.displayedPaneID == "" {
+		return func() tea.Msg { return windowClosedMsg{} }
+	}
+
+	displayed := m.displayedPaneID
+	placeholder := m.placeholderPaneID
+	t := m.loader.Tmux
+	ctx := m.loader.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	return func() tea.Msg {
+		swapDisplayedHome(ctx, t, displayed, placeholder)
+		return windowClosedMsg{}
+	}
+}
+
 // quitFrameCmd returns a tea.Cmd that safely tears down the frame:
 //  1. Swaps the displayed agent back to its home session (planSwapHome) so the
 //     agent process is not killed with the frame.
@@ -278,11 +325,14 @@ func (m *Model) swapInCmd(targetHome string) tea.Cmd {
 //
 // ORDER IS CRITICAL: swap-home must complete before kill-session, or the agent
 // pane that currently occupies the frame main slot is destroyed with the session.
+// A dead displayed pane (swap-home errors) is handled gracefully: kill and quit
+// still proceed regardless.
 func (m Model) quitFrameCmd() tea.Cmd {
 	if m.loader == nil {
 		return tea.Quit
 	}
-	ops := planSwapHome(m.displayedPaneID, m.placeholderPaneID)
+	displayed := m.displayedPaneID
+	placeholder := m.placeholderPaneID
 	frameSession := m.frameSession
 	t := m.loader.Tmux
 	ctx := m.loader.ctx
@@ -291,11 +341,9 @@ func (m Model) quitFrameCmd() tea.Cmd {
 	}
 
 	return func() tea.Msg {
-		// Step 1: swap displayed agent home (best-effort — if it fails the user
-		// is losing data regardless; still proceed to kill the frame).
-		for _, op := range ops {
-			_ = t.SwapPane(ctx, op.src, op.dst)
-		}
+		// Step 1: swap displayed agent home (best-effort via shared helper).
+		// A dead displayed pane is silently swallowed; kill must still run.
+		swapDisplayedHome(ctx, t, displayed, placeholder)
 		// Step 2: kill the frame session.
 		_ = t.KillSession(ctx, frameSession)
 		// Step 3: stop the TUI.

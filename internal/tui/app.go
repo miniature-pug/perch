@@ -305,6 +305,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Reloading the list after detach is deferred.
 		return m, nil
 
+	case windowClosedMsg:
+		// Non-destructive close-window: the displayed agent has been swapped home
+		// (or was already gone); reset the view so the placeholder is shown again.
+		m.displayedPaneID = ""
+		return m, nil
+
 	case swappedMsg:
 		m.swapping = false
 		if msg.err != nil {
@@ -497,9 +503,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 
 		case key.Matches(msg, m.keys.ClearFilter):
-			// Esc resets the filter when not in active filtering mode.
-			m.list.ResetFilter()
-			return m, m.previewCmd()
+			// Esc: priority order —
+			//   1. If a filter is applied (FilterApplied state), clear it.
+			//      (The Filtering state is handled above before the switch, routing
+			//      keys to the list's text input so this branch never sees it.)
+			//   2. If in a frame with a displayed pane, close the window (detach view).
+			//   3. Otherwise no-op.
+			if m.list.FilterState() == list.FilterApplied {
+				m.list.ResetFilter()
+				return m, m.previewCmd()
+			}
+			if m.inFrame() && m.displayedPaneID != "" {
+				return m, m.closeWindowCmd()
+			}
+			return m, nil
 
 		case key.Matches(msg, m.keys.Enter):
 			return m.activateSelected()

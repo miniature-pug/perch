@@ -31,7 +31,7 @@ func defaultKeys() keyMap {
 		),
 		ClearFilter: key.NewBinding(
 			key.WithKeys("esc"),
-			key.WithHelp("esc", "clear filter"),
+			key.WithHelp("esc", "close window / clear filter"),
 		),
 		Enter: key.NewBinding(
 			key.WithKeys("enter"),
