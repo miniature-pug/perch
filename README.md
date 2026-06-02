@@ -1,26 +1,47 @@
 # perch
 
-perch is a keyboard-first Go TUI for managing AI coding sessions (claude and
-opencode) across git worktrees inside tmux. Think of it as a **website in a
-terminal**: the session list lives in a persistent left sidebar, and the right
-pane shows whichever agent you last opened — switching sessions swaps the agent
-into the main pane without re-running it.
+perch is a desktop GUI for managing AI coding sessions (`claude` and
+`opencode`) across git worktrees. `perch` (no arguments) opens a **Wails v2
+desktop window** — a Go backend embedded in a WebKit2GTK webview running a
+Svelte 5 SPA. The left sidebar lists agent sessions; clicking a session opens a
+full terminal (xterm.js) backed by a live tmux pane. There is no terminal TUI,
+no persistent tmux frame, and **no listening TCP port** in production —
+all IPC travels over the WebKit2GTK script-message channel and the `wails://`
+custom asset scheme.
 
 It is a single static binary with no background daemon and no database. Status
-is tick-polled from tmux pane options, and recovery after a server restart is a
-one-shot `perch resurrect`.
+is polled from tmux pane options roughly every second, and recovery after a
+server restart is a one-shot `perch resurrect`.
 
 ---
 
 ## Requirements
 
+### Runtime
+
 | Tool | Version |
 |------|---------|
 | tmux | 3.6 |
-| Go toolchain | 1.26.2 (build only) |
-| git | any recent version |
+| WebKit2GTK + GTK3 | (system libraries — Linux only) |
 
 At least one of **claude** or **opencode** must be installed and on `$PATH`.
+
+Install the system libraries on Debian/Ubuntu:
+
+```sh
+sudo apt install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.0-dev
+```
+
+> **Linux only.** macOS and Windows are not supported because WebKit2GTK is a
+> Linux-specific library. A native-toolkit port is a non-goal for v1.
+
+### Build-time (source builds only)
+
+| Tool | Version |
+|------|---------|
+| Go toolchain | 1.26.2 |
+| Node.js | v22 |
+| npm | (bundled with Node) |
 
 ---
 
@@ -31,8 +52,16 @@ At least one of **claude** or **opencode** must be installed and on `$PATH`.
 ```sh
 git clone https://github.com/Miniature-Pug/perch
 cd perch
-make build
+make gui-build
 ```
+
+`make gui-build` runs `npm --prefix frontend install && npm --prefix frontend run build`
+(builds the Svelte SPA into `frontend/dist/`) and then
+`go build -tags production -o bin/perch ./cmd/perch`.
+
+The `-tags production` build tag is **required** — it embeds the compiled
+frontend assets into the binary. Omitting it produces a binary that cannot
+serve the webview.
 
 Produces `./bin/perch`. The build is hermetic (vendored deps, `-trimpath`).
 
@@ -52,7 +81,7 @@ Module path: `github.com/Miniature-Pug/perch`
 ## Quick start
 
 ```sh
-# Bootstrap the perch tmux frame + sidebar TUI; root = current directory
+# Open the GUI; root = current directory
 perch
 
 # Same, but with an explicit project root
@@ -62,9 +91,10 @@ perch /path/to/projects
 perch setup
 ```
 
-`perch` creates (or reuses) a tmux session called `perch` containing a sidebar
-pane running the TUI and a main pane for the currently selected agent. If tmux
-is unavailable or frame setup fails, perch falls back to a direct two-pane TUI.
+`perch` (no arguments) opens the desktop GUI window. The sidebar lists all
+agent sessions discovered under the configured `roots`. Click any session to
+open an embedded terminal tab. Multiple tabs can be open simultaneously; each
+tab streams output from the underlying tmux pane in real time.
 
 ---
 
@@ -72,83 +102,14 @@ is unavailable or frame setup fails, perch falls back to a direct two-pane TUI.
 
 | Command | Purpose |
 |---------|---------|
-| `perch` | Bootstrap the tmux frame + TUI; root = cwd |
-| `perch <path>` | Bootstrap the tmux frame + TUI; root = given directory |
+| `perch` | Open the Wails GUI; root = cwd |
+| `perch <path>` | Open the Wails GUI; root = given directory |
 | `perch setup [--replace]` | Detect installed agents; install status hooks/plugins. `--replace` overwrites stale perch-owned hook entries |
 | `perch attach <query>` | Fuzzy-attach the terminal to a live agent session matching the query |
 | `perch resurrect` | Reconcile shadow records against live tmux panes (run after a server restart) |
 | `perch status set <state>` | Write agent status to the current tmux pane (`working`, `waiting`, or `done`) — used by installed hooks |
 | `perch doctor` | Check runtime dependencies and configuration |
 | `perch version` | Print version and build info |
-
----
-
-## Keybindings
-
-Up/Down navigation is owned by the list — they are not listed here.
-
-| Key | Action |
-|-----|--------|
-| `/` | Filter sessions |
-| `esc` | Close open agent window (non-destructive) / clear filter if active |
-| `↵` | Open / resume / focus selected session |
-| `F12` | Return focus to the sidebar from inside an agent |
-| `n` | New session |
-| `w` | New worktree |
-| `d` | Remove session record |
-| `x` | Kill session |
-| `z` | Screen mode (forward) |
-| `Z` | Screen mode (back) |
-| `c` | Collapse sidebar |
-| `?` | Toggle help |
-| `:` | Open command bar |
-| `q` / `ctrl+c` | Quit (agent sessions survive) |
-
-### Layout & focus
-
-Mouse support is on in the perch frame. Click any pane to focus it — click the
-sidebar to get back to the list, click the agent pane to type.
-
-Press **F12** from inside an agent to jump focus back to the sidebar list without
-touching the mouse.
-
-In the sidebar, **esc** closes the open agent's window — the agent session keeps
-running in its own tmux window; reopen it with **↵** any time (it resumes
-cleanly, not stale output).
-
-**q** quits perch; your agent sessions survive. Perch swaps them home before
-killing the frame.
-
-A status bar at the bottom of the perch frame shows these key hints at all times.
-
-> **Note:** because tmux owns the mouse in the frame, selecting text with the
-> mouse requires holding **Shift**.
-
-> **Power users:** the tmux prefix + `←`/`→` also moves between panes as a
-> secondary method.
-
----
-
-## Command bar
-
-Press `:` to open the command bar. Supported verbs:
-
-| Verb | Action |
-|------|--------|
-| `:q` / `:quit` | Quit perch |
-| `:new` | New session for the selected project |
-| `:attach <query>` | Fuzzy-select and open a live session matching the query |
-| `:proj <name>` / `:project <name>` | Jump to the session matching the given name |
-| `:setup [--replace]` | Run setup (suspends TUI, reruns agent hook install) |
-| `:doctor` | Run doctor (suspends TUI) |
-| `:resurrect` | Reconcile shadow records (frame-gated; see note below) |
-| `:help` / `:h` / `:?` | Toggle help |
-
-Unknown verbs show a toast error. An empty command bar entry silently cancels.
-
-**Note:** `:resurrect` is refused while inside the perch frame. Run it from a
-shell (`perch resurrect`) or let the startup auto-offer handle it after a server
-restart.
 
 ---
 
@@ -214,6 +175,14 @@ agent   = "claude"
 
 ## Security / trust model
 
+### No listening port
+
+perch opens **no TCP or Unix socket** in production. The Wails webview
+communicates with the Go backend exclusively over the WebKit2GTK
+script-message channel; static assets are served via the `wails://` custom
+scheme. The `ws://localhost:34115` reload socket is a `//go:build dev` only
+artifact and is never compiled into a production binary.
+
 ### Trust prompt for `.perch.toml` hooks
 
 When a repo's `.perch.toml` defines shell hooks (`post_create` or `pre_remove`)
@@ -261,10 +230,11 @@ See [docs/security-audit.md](docs/security-audit.md) and
 
 When an agent changes state, its hook calls `perch status set <working|waiting|done>`,
 which resolves the current pane from `$TMUX_PANE` and writes `@perch_pane_status`
-as a tmux pane option. The TUI polls those options on a low-frequency interval
-(default 1 s, configurable via `refresh_ms`) and updates the list glyph accordingly.
+as a tmux pane option. The backend polls those options on a ~1 s interval
+(configurable via `refresh_ms`) and pushes a `sessions-changed` event to the
+GUI sidebar, which re-renders the status glyph.
 
-Focusing an agent (swap-in) automatically clears its status badge.
+Glyphs: `🤖` working / `💬` waiting / `✓` done / `●` live (no status set) / `○` idle.
 
 There is no daemon — perch never parses agent internals and does not need a
 running background process.
@@ -273,17 +243,14 @@ running background process.
 
 ## Resurrect
 
-`perch resurrect` (and the bootstrap auto-offer after a detected server restart)
-runs the `Reconcile` engine, which classifies each shadow record as:
+`perch resurrect` runs the `Reconcile` engine, which classifies each shadow
+record as:
 
 - **KEEP** — the pane is still live and the boot ID matches: do nothing.
 - **PRUNE** — the pane is gone but the boot ID matches (clean shutdown): remove
   the record.
 - **RESTORE** — the boot ID differs or the server is cold: re-launch the agent
   in a new window.
-
-The auto-offer runs before the perch frame is created, prompts only on a real
-tty (defaults to `N`), and reports a summary of restored/pruned/kept sessions.
 
 ---
 
@@ -296,14 +263,14 @@ tty (defaults to `N`), and reports a summary of restored/pruned/kept sessions.
 - No CI/CD pipeline integration
 - No GitHub or PR integration
 - No sandboxing or containers
-- No web UI
+- No macOS / Windows support (WebKit2GTK is Linux-only)
 - No tools beyond claude and opencode (adapter interface keeps the door open)
 
 ---
 
 ## Diagrams
 
-Architecture, frame-swap, status-sequence, worktree-lifecycle, and
+Architecture, status-sequence, worktree-lifecycle, and
 discovery-state diagrams live in [`docs/diagrams/`](docs/diagrams/). They
 render in any Mermaid viewer or directly in GitHub (`.mmd` files in fenced
 blocks).

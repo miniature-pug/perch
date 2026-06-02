@@ -35,7 +35,7 @@ flowchart TD
     worktrees --> frecency_sort
     statejson -->|"ProjectStat rank + last_accessed"| frecency_sort
     frecency_sort --> candidates
-    candidates -->|"feeds TUI list"| tui_list["TUI session list"]
+    candidates -->|"feeds GUI sidebar"| tui_list["GUI session list"]
 
     windowsdir --> bootid
     windowsdir --> sessid

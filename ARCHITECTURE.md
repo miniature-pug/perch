@@ -7,8 +7,12 @@
 
 ## Overview
 
-perch is a keyboard-first Go TUI for managing AI coding sessions (`claude`,
-`opencode`) across git worktrees inside a tmux server.
+perch is a desktop GUI for managing AI coding sessions (`claude`, `opencode`)
+across git worktrees. The default invocation (`perch` or `perch <path>`)
+launches a **Wails v2 desktop window**: a Go backend embedded in a WebKit2GTK
+webview driving a Svelte 5 SPA. Six CLI subcommands (`setup`, `attach`,
+`resurrect`, `status`, `doctor`, `version`) are available for scripting and
+hook integration.
 
 Key properties:
 
@@ -16,90 +20,83 @@ Key properties:
   by invoking tmux sub-commands through the `proc.Runner` seam.
 - **Two plain-JSON state stores** — no database dependency (see
   [State & discovery](#state--discovery)).
+- **No listening TCP port in production** — IPC between the Svelte frontend
+  and the Go backend travels over the WebKit2GTK script-message channel;
+  assets are served via the `wails://` custom scheme. The
+  `ws://localhost:34115` reload socket is `//go:build dev` only.
 - **Module:** `github.com/Miniature-Pug/perch`
 - **Go directive:** `1.25.0` / **toolchain:** `go1.26.2`
-- **Charm stack:** bubbletea v1.3.10, bubbles v1.0.0, lipgloss v1.1.0
+- **Wails:** v2.12.0 / **Frontend:** Svelte 5 + Vite (in `frontend/`)
 - **tmux pin:** 3.6 (checked by `perch doctor`)
 - **Key deps:** `bmatcuk/doublestar/v4` (glob), `sahilm/fuzzy` (fuzzy match),
-  `BurntSushi/toml` (config)
+  `BurntSushi/toml` (config), `creack/pty` (attach-pty bridge)
+- **Linux only** — requires WebKit2GTK + GTK3 system libraries.
 
 ---
 
-## The Persistent Frame Model
+## The Wails GUI Model
 
-The normal launch path (`perch` or `perch <path>`) creates a **persistent tmux
-frame** — a dedicated tmux session named `perch` with exactly two panes:
+### Process model
+
+`perch` runs as a single OS process. The Wails runtime embeds a WebKit2GTK
+webview inside a GTK window. The Svelte SPA is compiled into the binary at
+build time (`-tags production` embeds the `frontend/dist/` assets). There is
+no separate frontend process and no HTTP server in production.
 
 ```
-┌──────────────┬────────────────────────────────────────┐
-│  sidebar     │              main slot                  │
-│  (TUI via    │  ← agent session swap-paned in here    │
-│  --sidebar)  │  (placeholder: sleep infinity at rest) │
-└──────────────┴────────────────────────────────────────┘
-         perch frame session
+┌─────────────────────────────────────────────────────────┐
+│  perch process                                           │
+│  ┌────────────────┐  Wails events + bound methods        │
+│  │  Go backend    │ ◄──────────────────────────────────► │
+│  │  (app.App)     │         WebKit2GTK webview            │
+│  └────────────────┘         (Svelte 5 SPA)               │
+│        │                                                  │
+│        │ tmux commands via proc.Runner                    │
+│        ▼                                                  │
+│  tmux server (default socket)                            │
+│    agent session A (detached)                            │
+│    agent session B (detached)                            │
+│    …                                                     │
+└─────────────────────────────────────────────────────────┘
 ```
 
-Design decisions:
+### Bound-method API
 
-| Aspect | Detail |
-|--------|--------|
-| **Agent sessions** | Each agent runs in its **own detached tmux session**; the frame session is only the UI shell. |
-| **Session switching** | Pressing `↵` on a session in the list runs `swap-pane` to move that agent's home pane into the main slot — no `switch-client`, no re-resume. |
-| **Placeholder pane** | `sleep infinity` keeps the main slot occupied when no agent is displayed. One placeholder pane exists for the frame's lifetime. |
-| **Quit safety** | `q` swaps the currently displayed agent pane **back to its home session** before `kill-session`-ing the frame, so agents survive a perch exit. |
-| **Fallback** | If `frame.Ensure` fails (e.g. name conflict), perch falls back to a direct two-pane TUI without the swap-pane switcher. |
-| **Focus model** | Once focus is in the agent's main pane, return to the sidebar with the tmux `prefix ←/→` (or `prefix o`). The sidebar remains visible. |
+The `app.App` struct is the Wails-bound object. Its exported methods form the
+API the Svelte frontend calls over the IPC bridge:
 
-See `docs/diagrams/frame-swap.mmd` for a flowchart of the swap-pane lifecycle.
+| Method | Purpose |
+|--------|---------|
+| `ListSessions()` | Return all known sessions with live-status info |
+| `OpenTerminal(tabID, sessionID)` | Spawn an attach-pty bridge for a session; start streaming output |
+| `WriteToPty(tabID, data)` | Forward keystrokes from the terminal tab to the pty |
+| `ResizePty(tabID, cols, rows)` | Propagate terminal resize to the pty |
+| `CloseTerminal(tabID)` | Tear down the attach-pty bridge for a tab |
+| `KillSession(id)` | Kill the agent's tmux session and remove the shadow record |
+| `Diff(worktreePath)` | Return a `git diff` summary for the given worktree |
+| `CreateAgent(tool, projectPath, branch)` | Create a new worktree + agent session |
 
-### 2-Pane Invariant & Death-Resilience
+Every argument crossing the IPC boundary is validated inside `app.App`:
+session IDs are checked against a `[A-Za-z0-9_-]` charset allowlist;
+worktree paths are resolved and verified to lie under the configured `roots`.
+All tmux/git work is done via argv through `internal/proc`, never a shell.
 
-**Invariant:** the frame window always has exactly two panes — the sidebar and
-the main slot. The main slot is occupied by one of:
-- the live placeholder (`sleep infinity`) when no agent is displayed,
-- a displayed agent's pane (swapped in from its home session), or
-- a transient dead pane pending recovery (see below).
+### Attach-pty rendering bridge
 
-**Placeholder exile:** `swap-pane` is a bilateral exchange. When an agent pane
-is swapped into the main slot, the placeholder is simultaneously exiled into
-the agent's home session. When the agent is swapped back home (on close, quit,
-or recovery), the placeholder returns to the main slot under its original pane
-id. Only one placeholder exists for the frame's lifetime.
+Opening a terminal tab calls `OpenTerminal`, which spawns `tmux attach-session`
+inside a pseudo-terminal via `creack/pty` (`internal/pty.Bridge`). The pty
+captures raw byte output and forwards it to the frontend as Wails events;
+the Svelte component feeds the bytes to an **xterm.js** terminal. Keystrokes
+typed in xterm.js are sent back through `WriteToPty`; terminal resize events
+flow through `ResizePty`. This gives every session tab a full interactive
+terminal rendered by xterm.js inside the webview.
 
-**Agent-exit recovery (M17):** the frame window has `remain-on-exit on` set
-during creation and re-stamped defensively on every `reuseFrame` call. When a
-displayed agent's process exits, its pane goes dead rather than being destroyed,
-preserving the frame's 2-pane topology. perch detects the dead displayed pane
-through two paths:
+### State sync
 
-1. **Refresh tick** — every `statusTickMsg` (default every 1000 ms) probes
-   `PaneDead` on the displayed pane id via `checkDisplayedDeadCmd`.
-2. **On close** — `closeWindowCmd` (triggered by `esc` or quit) probes liveness
-   and branches: alive → swap home only; dead → full recovery.
-
-**Recovery sequence (order is critical):**
-1. `swap-home` — the live placeholder (exiled in the agent's home session)
-   returns to the frame main slot; this simultaneously exiles the dead pane into
-   the agent's home window. Killing the dead pane before this step would destroy
-   it while it still occupied the frame main slot, stranding the placeholder.
-2. `kill-pane` the now-exiled dead pane. Only that one pane is removed — sibling
-   agent windows in the same project session survive.
-3. `select-pane -L` — focus returns to the sidebar.
-
-After recovery the agent shows idle; pressing `↵` resumes it with `--resume`.
-
-**`reuseFrame` self-heal:** when `Ensure` detects an existing frame session it
-repairs structural damage from older binaries before returning:
-- 2-pane frame with a dead main pane → `respawn-pane` in place (pane id stable).
-- 1-pane frame (only the sidebar remains) → `split-window` to recreate the
-  main slot with `placeholderCmd`.
-
-In both repair paths `remain-on-exit on` is also re-stamped, so frames created
-before M17 gain the guard on next launch.
-
-`internal/frame.Ensure` is the bootstrap primitive. It stamps the sidebar pane
-with the `@perch_frame` tmux option (FD-03 guard) so subsequent calls can
-identify an existing frame without ambiguity.
+A ~1 s poller calls `ListSessions` internally and emits a `sessions-changed`
+event to the frontend whenever the session set changes. The frontend reacts
+with an optimistic refresh after each mutating action (create, kill) so the
+sidebar stays responsive without waiting for the next poll cycle.
 
 ---
 
@@ -109,13 +106,13 @@ See `docs/diagrams/architecture.mmd` for the component dependency graph.
 
 | Package | Responsibility |
 |---------|----------------|
-| `cmd/perch` | CLI entry-point; dispatches subcommands, wires production dependencies, bootstraps the frame, runs sidebar or direct-TUI fallback. |
-| `internal/tui` | Keyboard-first Bubble Tea TUI — two-pane list + preview, swap-pane switching, worktree create/remove, command bar (`:`), trust modals, status glyphs. |
-| `internal/frame` | Persistent frame bootstrap (`Ensure`, `SidebarContext`); manages the `@perch_frame` marker, sidebar/placeholder split, and resize. |
+| `cmd/perch` | CLI entry-point; dispatches subcommands, wires production dependencies, launches the Wails GUI via `app.Run`. |
+| `app/` | Wails `App` struct — bound-method API, input validation (session-id charset allowlist, worktree path containment), attach-pty lifecycle management, ~1 s state-sync poller. |
+| `internal/pty` | Attach-pty bridge (`Bridge`): wraps `creack/pty`, runs `tmux attach-session`, batches and forwards pty output as Wails events, routes keystrokes and resize back to the pty. |
 | `internal/agent` | `Adapter` interface for AI coding tools; concrete adapters for `claude` and `opencode`. Adapters never panic; partial results degrade gracefully. |
 | `internal/attach` | `perch attach <query>`: fuzzy-matches a live/known session name and hands the terminal off to it. `Gather`/`Resolve` are separated for testability. |
 | `internal/config` | Two-layer TOML config load: global `config.toml` overlaid by project `.perch.toml`. Houses the **agent-binary security boundary** (see [Security model](#security-model)). |
-| `internal/discover` | Filesystem scanner: walks `roots` for `.git` entries up to `DefaultMaxDepth` (8), pruning `DefaultPrune` directories (`node_modules`, `vendor`, `.git`). |
+| `internal/discover` | Filesystem scanner: walks `roots` for `.git` entries up to `DefaultMaxDepth` (8), pruning `DefaultPrune` directories (`node_modules`, `vendor`, `.git`). Returns paths containing a `.git` entry. |
 | `internal/doctor` | `perch doctor` health check — read-only, no side effects; all OS calls injected for testability. Checks tmux version, agent binaries, config validity. |
 | `internal/git` | git subprocess wrappers behind `proc.Runner`; includes `ValidRef` for ref-name validation before any git worktree operation. |
 | `internal/match` | `**`-aware glob matching backed by `doublestar`; used for `blacklist` hide-filtering and `[[wildcard]]` agent assignment. Malformed patterns are skipped, never panic. |
@@ -124,9 +121,10 @@ See `docs/diagrams/architecture.mmd` for the component dependency graph.
 | `internal/resurrect` | Boot-id reconcile engine for `perch resurrect` — KEEP / PRUNE / RESTORE classifier, shared `classify()`, `StrandedCount` detector. |
 | `internal/state` | Two plain-JSON stores and frecency ranking (zoxide algorithm). Concurrent-safe per-window files; 16 MiB read cap. |
 | `internal/status` | `perch status set` writer; writes `@perch_pane_status` on the target pane. |
-| `internal/tmux` | tmux command wrappers behind `proc.Runner`; includes `capture-pane` (preview), `swap-pane`, `send-keys`, and cleanup-script helpers. |
+| `internal/tmux` | tmux command wrappers behind `proc.Runner`; includes `list-panes`, `new-session`, `send-keys`, and session-management helpers. |
 | `internal/trust` | TOFU trust store — records `(config-path → content-hash)` approvals in `trust.json` (mode 0600). |
 | `internal/worktree` | File seeding (copy/symlink) and lifecycle-hook execution for freshly created git linked worktrees. Deferred remove dispatches a backgrounded cleanup script. |
+| `frontend/` | Svelte 5 SPA (Vite build); communicates with Go via Wails events and bound methods; renders agent terminals via xterm.js. |
 
 ---
 
@@ -143,15 +141,15 @@ type Runner interface {
 
 Production code uses `ExecRunner` (wraps `os/exec`). Unit tests inject
 `FakeRunner`, which records calls in a `.Calls` slice and never spawns a real
-process. This makes the entire non-TUI surface area unit-testable without a
+process. This makes the entire non-frontend surface area unit-testable without a
 live tmux server or git repo.
 
 Integration tests (`//go:build integration`) use a **private tmux socket** so
 they never touch the user's default tmux server. They are run with
 `make test-integration` (requires tmux and git).
 
-Coverage target: **≥80% per package**. `internal/tui` is exempt (Bubble Tea
-terminal dependency makes unit coverage impractical).
+Coverage target: **≥80% per package**. `frontend/` is exempt (browser-rendered
+Svelte components require a headless browser for unit coverage).
 
 ---
 
@@ -189,7 +187,7 @@ each tier.
 3. **Frecency sort** — `internal/discover.Projects` (catalog layer) merges scan
    output with frecency stats and returns projects ordered by score.
 4. **Blacklist filter** — the `blacklist` config field contains `**`-glob
-   patterns. Matching paths are **hidden from the TUI list** after discovery;
+   patterns. Matching paths are **hidden from the GUI sidebar** after discovery;
    they are not excluded from the walk itself.
 
 ---
@@ -202,14 +200,14 @@ See `docs/diagrams/status-sequence.mmd` for the sequence diagram.
 Agent hook
   → perch status set <working|waiting|done>
     → tmux set-option @perch_pane_status <state> (on agent pane)
-      → TUI statusPoll (every refresh_ms, default 1000 ms)
-        → list glyph update
+      → backend poller (every refresh_ms, default 1000 ms)
+        → sessions-changed event → GUI sidebar glyph update
 ```
 
 Glyphs: `🤖` working / `💬` waiting / `✓` done / `●` live (no status set) / `○` idle (session exists, pane not live).
 
-Selecting a session (swap-in) **auto-clears** `@perch_pane_status` on the
-focused pane so the badge resets after the user engages.
+Opening a terminal tab (swap-in equivalent) **auto-clears** `@perch_pane_status`
+on the focused pane so the badge resets after the user engages.
 
 The `perch setup [--replace]` command installs the agent hooks (claude /
 opencode) that call `perch status set`.
@@ -220,7 +218,7 @@ opencode) that call `perch status set`.
 
 See `docs/diagrams/worktree-lifecycle.mmd` for the full flowchart.
 
-### Create (`w`)
+### Create
 
 1. Preflight checks (branch name validation via `git.ValidRef`).
 2. **Trust gate** — if `.perch.toml` defines `post_create` hooks, a modal
@@ -233,7 +231,7 @@ See `docs/diagrams/worktree-lifecycle.mmd` for the full flowchart.
 6. Agent launched in a new tmux session; window record written to
    `windows/<k>.json`.
 
-### Remove (`d`)
+### Remove
 
 1. Confirm modal.
 2. `pre_remove` hooks executed (trust-gated, TOCTOU re-hash before exec).
@@ -247,6 +245,15 @@ See `docs/diagrams/worktree-lifecycle.mmd` for the full flowchart.
 ## Security Model
 
 Full details: [`docs/security-audit.md`](docs/security-audit.md).
+
+### No listening port
+
+perch opens no TCP or Unix socket in production. The Wails webview and Go
+backend communicate over the WebKit2GTK script-message channel; the frontend
+is served from the embedded binary via the `wails://` custom scheme. The
+`ws://localhost:34115` hot-reload socket is `//go:build dev` only and is
+stripped from production builds. This eliminates an entire class of
+network-based attack surface.
 
 ### Trust (TOFU on `.perch.toml`)
 
@@ -273,6 +280,16 @@ corresponding fields; unknown TOML keys are silently dropped by
 `BurntSushi/toml`. This is a structural guarantee — a malicious `.perch.toml`
 cannot influence which binary is executed, and `startup_command` runs without a
 trust prompt precisely because it is sourced from the user's own global config.
+
+### Bound-method input validation
+
+Every argument the Svelte frontend sends over the IPC bridge is validated in
+`app.App` before any tmux or git operation:
+
+| Constraint | Detail |
+|------------|--------|
+| Session IDs | Validated against `[A-Za-z0-9_-]` charset allowlist; length-capped. Only sessions perch already knows about are accepted (`liveSession` allowlist check). |
+| Worktree paths | Resolved to absolute paths and verified to lie under the configured `roots` (`validateWorktreeUnderRoots`). |
 
 ### Other hardening
 
@@ -306,26 +323,10 @@ actions to each recorded window:
 | **PRUNE** | Pane is gone, same boot, home session is still alive | Remove the stale record |
 | **RESTORE** | Boot mismatch or server is cold (no current boot) | Re-launch the agent |
 
-The shared `classify()` ensures `StrandedCount` (the pre-frame read-only
+The shared `classify()` ensures `StrandedCount` (the pre-launch read-only
 detector) cannot drift from `Reconcile`'s actual decision logic.
 
-### Bootstrap auto-offer
-
-Before bootstrapping the frame, `cmd/perch` checks `StrandedCount`. If
-stranded sessions are detected **and** stdin is a TTY, the user is prompted:
-
-```
-perch: N session(s) were stranded by a restart. Restore them? [y/N]
-```
-
-Default is `N`; only `y`/`yes` triggers `Reconcile`. Non-TTY stdin (piped /
-CI) skips the prompt entirely and never blocks. The offer runs **pre-frame** so
-`Reconcile` sees the normal (non-frame) tmux topology.
-
-`perch resurrect` (the subcommand) runs `Reconcile` directly and is also
-available as the `:resurrect` command bar verb — though `:resurrect` refuses
-when run inside the frame and directs the user to invoke it at the shell or
-startup instead.
+`perch resurrect` (the subcommand) runs `Reconcile` directly.
 
 ---
 
@@ -339,7 +340,7 @@ Two config files; both TOML.
 | Field | Effect |
 |-------|--------|
 | `roots` | Directories scanned for git repos. |
-| `blacklist` | `**`-glob patterns — matching paths are hidden from the TUI list (post-discovery filter, not a walk prune). |
+| `blacklist` | `**`-glob patterns — matching paths are hidden from the GUI sidebar (post-discovery filter, not a walk prune). |
 | `sort_order` | Priority list for the project selector (e.g. `["running","frecency"]`). |
 | `refresh_ms` | Status-poll interval in milliseconds (default 1000). |
 | `worktree_dir` | Default worktree parent directory (absolute allowed in global config). |

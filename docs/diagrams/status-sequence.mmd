@@ -3,8 +3,8 @@ sequenceDiagram
     participant Hook as Agent hook / plugin
     participant CLI as perch status set
     participant Tmux as tmux (@perch_pane_status)
-    participant Poll as TUI statusPoll
-    participant Glyph as List glyph
+    participant Poll as backend poller (app.App)
+    participant GUI as GUI sidebar glyph
 
     Agent->>Hook: state change event<br/>(busy / idle / permission / user-msg)
     Hook->>CLI: exec perch status set &lt;working|waiting|done&gt;
@@ -15,8 +15,8 @@ sequenceDiagram
     loop every refresh_ms (default 1 s)
         Poll->>Tmux: ListPanesAll → read PerchStatus per pane
         Tmux-->>Poll: pane list with @perch_pane_status values
-        Poll->>Glyph: statusPollMsg (sessionID to state map)
-        Glyph->>Glyph: render glyph<br/>working → 🤖<br/>waiting → 💬<br/>done → ✓<br/>live (no status) → ●<br/>idle → ○
+        Poll->>GUI: sessions-changed event (when set differs)
+        GUI->>GUI: render glyph<br/>working → 🤖<br/>waiting → 💬<br/>done → ✓<br/>live (no status) → ●<br/>idle → ○
     end
 
-    Note over Poll,Glyph: On select ↵ (swap-in):<br/>SetPaneOption @perch_pane_status=""<br/>badge auto-cleared when user focuses agent
+    Note over Poll,GUI: On terminal tab open:<br/>SetPaneOption @perch_pane_status=""<br/>badge auto-cleared when user focuses agent

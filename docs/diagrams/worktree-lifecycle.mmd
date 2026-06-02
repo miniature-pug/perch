@@ -1,6 +1,6 @@
 flowchart TD
-    subgraph Create["CREATE path — key w"]
-        w_start(["user presses w\non a session row"])
+    subgraph Create["CREATE path"]
+        w_start(["user creates worktree\n(GUI new-session action)"])
         w_preflight["preflight:\ncheck existing mapping"]
         w_mapping{"existing\nmapping?"}
         w_picker["show new-session modal\n(worktree / run-here / run-main)"]
@@ -33,9 +33,9 @@ flowchart TD
         w_state --> w_launch
     end
 
-    subgraph Remove["REMOVE path — key d"]
-        d_start(["user presses d\non a session row"])
-        d_preflight["preflight:\ncheck if client is focused\non this pane"]
+    subgraph Remove["REMOVE path"]
+        d_start(["user removes session\n(GUI kill action)"])
+        d_preflight["preflight:\ncheck session exists\nand is removable"]
         d_confirm["show confirm modal"]
         d_loadcfg2["load config"]
         d_pre_check{"pre_remove\nhooks present?"}

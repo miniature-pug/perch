@@ -3,9 +3,10 @@ flowchart TD
         main["main.go\ndispatch"]
     end
 
-    subgraph Core["Core runtime"]
-        tui["internal/tui\nBubble Tea TUI + list"]
-        frame["internal/frame\npersistent tmux frame\nbootstrap + Ensure"]
+    subgraph GUILayer["GUI layer"]
+        apppkg["app/\nWails App + bound methods\ninput validation + state-sync poller"]
+        pty["internal/pty\nattach-pty bridge\n(creack/pty + xterm.js events)"]
+        frontend["frontend/\nSvelte 5 SPA\nWails events + bound methods"]
     end
 
     subgraph CLIFlows["CLI sub-commands"]
@@ -40,26 +41,25 @@ flowchart TD
     subgraph External["External — tmux server"]
         tmuxsrv[("tmux server\n(default socket)")]
         agentsess["agent sessions\n(detached, one per agent)"]
-        framesess["perch frame session\n(sidebar + main pane)"]
     end
 
-    main -->|"bootstrap frame"| frame
-    main -->|"launch TUI"| tui
+    main -->|"launch GUI"| apppkg
     main -->|"sub-cmds"| attach
     main -->|"sub-cmds"| resurrect
     main -->|"sub-cmds"| status
     main -->|"sub-cmds"| doctor
 
-    tui -->|"swap-pane / launch"| frame
-    tui -->|"read/write"| state
-    tui -->|"frecency bump"| state
-    tui -->|"hook trust gate"| trust
-    tui -->|"load config"| config
-    tui -->|"agent argv"| agent
-    tui -->|"worktree create/remove"| worktree
-    tui -->|"project scan"| discover
+    frontend <-->|"Wails events + bound methods\n(WebKit2GTK IPC, no TCP port)"| apppkg
+    apppkg -->|"open terminal tab"| pty
+    apppkg -->|"read/write"| state
+    apppkg -->|"load config"| config
+    apppkg -->|"agent argv"| agent
+    apppkg -->|"worktree create/remove"| worktree
+    apppkg -->|"project scan"| discover
+    apppkg -->|"orchestration"| tmuxpkg
 
-    frame -->|"shell-out"| tmuxpkg
+    pty -->|"tmux attach via"| tmuxpkg
+
     attach -->|"read"| state
     resurrect -->|"read/write"| state
     resurrect -->|"shell-out"| tmuxpkg
@@ -72,4 +72,3 @@ flowchart TD
 
     proc -->|"exec"| tmuxsrv
     tmuxsrv --- agentsess
-    tmuxsrv --- framesess

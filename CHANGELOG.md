@@ -8,54 +8,70 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- **Persistent-frame TUI** — `perch` bootstraps a dedicated `perch` tmux session
-  with a sidebar pane (the TUI) and a live main pane. Selecting an agent session
-  swap-panes it into the main slot; quitting swaps the agent home before killing
-  the frame so agent sessions survive. Falls back to a direct two-pane TUI when
-  `frame.Ensure` fails.
+- **Wails v2 desktop GUI** — `perch` (no arguments) opens a native desktop
+  window: a Go backend embedded in a WebKit2GTK webview driving a Svelte 5 SPA.
+  The GUI sidebar lists all agent sessions; clicking any session opens a full
+  interactive terminal tab (xterm.js). Multiple tabs can be open simultaneously.
+  A directory path argument opens the GUI scoped to that root.
 
-- **`:` command bar** — press `:` inside the TUI to open an inline command prompt.
-  Supported verbs: `q`/`quit`, `new`, `attach <query>`, `proj`/`project <name>`,
-  `setup [--replace]`, `doctor`, `resurrect`, `help`/`h`/`?`. `:resurrect` is
-  intentionally blocked inside the frame (the user is directed to the startup
-  auto-offer or shell instead).
+- **Attach-pty terminal bridge** — each GUI terminal tab attaches to the
+  underlying tmux pane via `creack/pty` (`internal/pty.Bridge`). Raw pty output
+  is streamed to xterm.js over Wails events; keystrokes and resize events flow
+  back through bound methods. Agents run in detached tmux sessions and remain
+  alive when the GUI window is closed.
 
-- **`perch attach <query>`** — fuzzy-match and attach to a live agent session from
-  outside the TUI. Returns exit 1 on no match, exit 2 on an ambiguous match with
-  the candidate list. The raw query string is never passed to tmux.
+- **Bound-method API with input validation** — `app.App` exposes the GUI
+  operations (`ListSessions`, `OpenTerminal`, `WriteToPty`, `ResizePty`,
+  `CloseTerminal`, `KillSession`, `Diff`, `CreateAgent`) over the Wails IPC
+  bridge. Every argument crossing the boundary is validated: session IDs against
+  a `[A-Za-z0-9_-]` charset allowlist; worktree paths resolved and confined
+  under configured `roots`. All tmux/git work goes through argv via
+  `internal/proc`, never a shell.
 
-- **`perch resurrect` + restart auto-offer** — `resurrect.Reconcile` classifies
-  each recorded window as KEEP (pane live, boot-id match), PRUNE (pane gone,
-  same boot), or RESTORE (boot-id mismatch → server restarted, re-launch agent).
-  At bootstrap, if stranded sessions are detected, perch offers an interactive
-  prompt (tty-gated, default N) before the frame is created.
+- **No listening port** — all frontend/backend IPC travels over the WebKit2GTK
+  script-message channel; assets are served via the `wails://` custom scheme.
+  The `ws://localhost:34115` hot-reload socket is `//go:build dev` only and is
+  absent from production binaries.
+
+- **~1 s state sync** — a backend poller reads live session state every
+  `refresh_ms` (default 1 000 ms) and emits a `sessions-changed` event to the
+  frontend when the session set changes. Each mutating action (create, kill)
+  also triggers an optimistic refresh for immediate sidebar feedback.
+
+- **`perch attach <query>`** — fuzzy-match and attach to a live agent session
+  from outside the GUI. Returns exit 1 on no match, exit 2 on an ambiguous
+  match with the candidate list. The raw query string is never passed to tmux.
+
+- **`perch resurrect`** — `resurrect.Reconcile` classifies each recorded
+  window as KEEP (pane live, boot-id match), PRUNE (pane gone, same boot), or
+  RESTORE (boot-id mismatch → server restarted, re-launch agent).
 
 - **`perch setup [--replace]`** — detects installed AI coding tools (claude,
   opencode) and writes the `perch status set` hook into each tool's config file.
   Additive and idempotent without `--replace`; with `--replace`, stale
   perch-owned blocks are overwritten while all foreign config is preserved.
 
-- **`perch doctor`** — runtime dependency check: tmux version, git, agent binaries,
-  and state dir availability. Reports pass/fail per check.
+- **`perch doctor`** — runtime dependency check: tmux version, git, agent
+  binaries, and state dir availability. Reports pass/fail per check.
 
-- **Worktree create/remove with file seeding and lifecycle hooks** — press `w` to
-  create a linked git worktree. Files listed under `[files].copy` or
-  `[files].symlink` in `.perch.toml` are seeded into the new tree.
-  `post_create` hooks run after creation; `pre_remove` hooks run before removal.
-  Both hook phases are trust-gated.
+- **Worktree create/remove with file seeding and lifecycle hooks** — GUI
+  new-session action creates a linked git worktree. Files listed under
+  `[files].copy` or `[files].symlink` in `.perch.toml` are seeded into the new
+  tree. `post_create` hooks run after creation; `pre_remove` hooks run before
+  removal. Both hook phases are trust-gated.
 
-- **TOFU trust model for `.perch.toml` hooks** — opening a repo whose `.perch.toml`
-  defines shell hooks (`post_create`, `pre_remove`, `pre_merge`) triggers a trust
-  modal: `(a)` always / `(o)` once / `(d)` deny. Trust decisions are keyed on the
-  resolved config path and its content hash, stored mode 0600 in
+- **TOFU trust model for `.perch.toml` hooks** — opening a repo whose
+  `.perch.toml` defines shell hooks (`post_create`, `pre_remove`) triggers a
+  trust modal: `(a)` always / `(o)` once / `(d)` deny. Trust decisions are
+  keyed on the resolved config path and its content hash, stored mode 0600 in
   `<state_dir>/trust.json`. The hash is re-verified immediately before exec to
   close the TOCTOU window.
 
-- **Configurable theme accent, agent binary paths, startup command, default/wildcard
-  agent selection, blacklist (glob) UI filter, and sort order** — all via
-  `~/.config/perch/config.toml` (global) and `.perch.toml` (per-project, walked
-  up from the worktree root). Agent binary paths are a global-only security
-  boundary and cannot be set in project config.
+- **Configurable theme accent, agent binary paths, startup command,
+  default/wildcard agent selection, blacklist (glob) UI filter, and sort
+  order** — all via `~/.config/perch/config.toml` (global) and `.perch.toml`
+  (per-project, walked up from the worktree root). Agent binary paths are a
+  global-only security boundary and cannot be set in project config.
 
 - **Two-store JSON state + frecency** — `state.json` holds session→worktree
   mappings and per-project frecency scores (`rank`, `last_accessed`). Each live
@@ -63,50 +79,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   16 MiB read cap). Boot-id is stamped on every window record for the resurrect
   classifier.
 
-- **Three-tier config discovery** — perch merges configuration from: (1) the global
-  config file, (2) the nearest `.perch.toml` walked up from the project root, and
-  (3) built-in defaults. Project config cannot override the global agent-binary
-  map.
+- **Three-tier config discovery** — perch merges configuration from: (1) the
+  global config file, (2) the nearest `.perch.toml` walked up from the project
+  root, and (3) built-in defaults. Project config cannot override the global
+  agent-binary map.
 
 - **Full security hardening** — path traversal guards on worktree operations,
   relative-only `worktree_dir` in project config, git ref validation, state-file
-  size caps, `capture-pane` without `-e` (no escape sequences leaked), and
-  the global-only agent-binary boundary. See `docs/security-audit.md` for the
-  complete ledger.
+  size caps, `capture-pane` without `-e` (no escape sequences leaked), the
+  global-only agent-binary boundary, and the no-listening-port guarantee. See
+  `docs/security-audit.md` for the complete ledger.
 
-- **Non-destructive close-window (`esc`)** — pressing `esc` in the sidebar when
-  no filter is active detaches the agent view without killing the session. The
-  agent keeps running in its own tmux window and can be reopened with `↵` any time.
-
-- **F12 / mouse-click: return focus to list** — pressing `F12` from inside an
-  agent pane jumps focus back to the sidebar list instantly. Clicking the sidebar
-  with the mouse does the same. Both bindings are scoped to the perch frame only;
-  no global tmux configuration is modified.
-
-- **Frame status bar** — a persistent status bar at the bottom of the perch frame
-  shows the active navigation key hints at all times.
-
-- **Mouse support in the frame** — tmux mouse mode is enabled session-wide in the
-  perch frame so that clicking any pane focuses it. Selecting text with the mouse
-  requires holding **Shift** because tmux owns the mouse event.
-
-- **`↵` open / resume / focus** — pressing Enter on a session that is already
-  shown in the main pane focuses it rather than re-launching it; if the agent
-  process had exited, it is resumed cleanly.
-
-### Fixed
-
-- **Frame no longer collapses when a displayed agent exits** — the frame window
-  now has `remain-on-exit on`, so an agent that exits (Ctrl-C / `exit`) leaves
-  a dead pane in the main slot instead of destroying it. perch detects the dead
-  pane on every refresh tick and on close, and self-heals: the live placeholder
-  (parked in the agent's home session) is swapped back into the main slot,
-  reclaiming it without leaks; the now-exiled dead pane is then removed with
-  `kill-pane` (sibling agent windows in the same project session are unaffected).
-  The agent shows idle; pressing `↵` resumes it cleanly with `--resume`.
-  Frames damaged to a single pane by an older binary are repaired automatically
-  on the next launch (`reuseFrame` re-splits the placeholder or respawns a dead
-  main pane as needed).
+- **Linux-only build** — requires WebKit2GTK + GTK3 system libraries. Build
+  with `make gui-build` (`-tags production` is required to embed the frontend
+  assets).
 
 ### Notes
 
