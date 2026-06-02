@@ -114,6 +114,7 @@ func TestEnsure_Create_HasExpectedCalls(t *testing.T) {
 		"send-keys",       // Launch: send Enter
 		"set-option",      // Ensure: stamp @perch_frame=1
 		"split-window",    // Ensure: add main/placeholder pane
+		"set-option",      // Ensure: set remain-on-exit on frame window (M17-2)
 		"display-message", // Ensure: PaneSize for resize
 		"resize-pane",     // Ensure: resize sidebar to sidebarWidth
 		"bind-key",        // Ensure: bind F12 in perchnav table
@@ -201,6 +202,58 @@ func TestEnsure_Create_SessionOptions(t *testing.T) {
 		if !reflect.DeepEqual(c.Args[1:], w.rest) {
 			t.Errorf("call[%d]: args[1:]=%v, want %v", i, c.Args[1:], w.rest)
 		}
+	}
+}
+
+// TestEnsure_Create_RemainOnExit verifies that createFrame issues
+// set-option -w -t =perch:=frame remain-on-exit on after the split-window call.
+func TestEnsure_Create_RemainOnExit(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Default = &proc.FakeResult{} // succeed everything by default
+	// has-session fails → session absent
+	r.Respond(proc.FakeResult{Err: proc.FakeExitError{Code: 1}},
+		"tmux", "has-session", "-t", "=perch")
+	// new-session → sidebar pane
+	r.Respond(proc.FakeResult{Stdout: []byte("%1\n")},
+		"tmux", "new-session", "-d", "-s", "perch", "-n", "frame", "-c", "/root", "-P", "-F", "#{pane_id}")
+	// split-window → main pane
+	r.Respond(proc.FakeResult{Stdout: []byte("%2\n")},
+		"tmux", "split-window", "-d", "-h", "-P", "-F", "#{pane_id}", "-t", "=perch:=frame", "-c", "/root", "sleep infinity")
+
+	tmx := newFakeTmux(r)
+	_, err := frame.Ensure(context.Background(), tmx, "perch", "/root", []string{"perch", "--sidebar"})
+	if err != nil {
+		t.Fatal("unexpected error:", err)
+	}
+
+	// Find split-window call index; remain-on-exit must come after it.
+	splitIdx := -1
+	for i, c := range r.Calls {
+		if len(c.Args) > 0 && c.Args[0] == "split-window" {
+			splitIdx = i
+			break
+		}
+	}
+	if splitIdx < 0 {
+		t.Fatal("split-window call not found")
+	}
+
+	// Search for the set-option -w remain-on-exit call after split-window.
+	found := false
+	for _, c := range r.Calls[splitIdx+1:] {
+		if len(c.Args) >= 6 &&
+			c.Args[0] == "set-option" &&
+			c.Args[1] == "-w" &&
+			c.Args[2] == "-t" &&
+			c.Args[3] == "=perch:=frame" &&
+			c.Args[4] == "remain-on-exit" &&
+			c.Args[5] == "on" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("createFrame: missing set-option -w -t =perch:=frame remain-on-exit on after split-window")
 	}
 }
 

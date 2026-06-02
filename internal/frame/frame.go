@@ -154,6 +154,10 @@ func createFrame(ctx context.Context, t tmux.Tmux, session, root string, sidebar
 		return Info{}, fmt.Errorf("frame.Ensure: split main pane: %w", err)
 	}
 
+	// remain-on-exit: a displayed agent that exits leaves a dead pane instead of
+	// destroying the frame's main slot; M17 recovery reclaims it.
+	_ = t.SetWindowOption(ctx, frameTarget, "remain-on-exit", "on")
+
 	// Resize the sidebar to sidebarWidth columns. Use the current sidebar height
 	// so we only change the width, not the height.
 	_, h, err := t.PaneSize(ctx, sidebarPane)
