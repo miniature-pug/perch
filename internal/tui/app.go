@@ -506,7 +506,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m, m.launchCmd(launchSpec{
-				tool:        it.tool,
+				tool:        m.resolveTool(it.treePath, it.tool),
 				branch:      it.tree,
 				treePath:    it.treePath,
 				projectPath: it.projectPath,

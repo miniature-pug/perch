@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/Miniature-Pug/perch/internal/agent"
+	"github.com/Miniature-Pug/perch/internal/match"
 	"github.com/Miniature-Pug/perch/internal/model"
 	"github.com/Miniature-Pug/perch/internal/state"
 	"github.com/Miniature-Pug/perch/internal/tmux"
@@ -69,6 +70,33 @@ func newSessionID() (string, error) {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:]), nil
 }
 
+// resolveTool determines the agent tool for a new session following the
+// config-defined priority order:
+//  1. itemTool (existing session metadata) always wins when non-empty.
+//  2. The first [[wildcard]] rule whose Pattern matches treePath (via **-aware globs).
+//  3. The [default_session].agent / project agent from the global config.
+//  4. "claude" as the unconditional final fallback.
+//
+// resolveTool is intentionally nil-safe: when m.cfg is nil it returns itemTool
+// unchanged (non-empty) or "claude" (empty itemTool). Only affects NEW launches;
+// callers must not use it for resume paths where the session's own tool is authoritative.
+func (m Model) resolveTool(treePath, itemTool string) string {
+	if itemTool != "" {
+		return itemTool
+	}
+	if m.cfg != nil {
+		for _, w := range m.cfg.Wildcards {
+			if match.MatchAny([]string{w.Pattern}, treePath) {
+				return string(w.Agent)
+			}
+		}
+		if m.cfg.Agent != "" {
+			return string(m.cfg.Agent)
+		}
+	}
+	return "claude"
+}
+
 // launchCmd returns a tea.Cmd that performs the full blocking launch off the
 // UI goroutine and delivers a launchedMsg when done.
 func (m Model) launchCmd(spec launchSpec) tea.Cmd {
@@ -89,6 +117,14 @@ func (m Model) launchCmd(spec launchSpec) tea.Cmd {
 			return launchedMsg{err: fmt.Errorf("unknown tool: %q", spec.tool)}
 		}
 
+		// Resolve the binary path: prefer the configured absolute path for this
+		// tool (from [agents] in the global config), falling back to the bare name
+		// when no config is set or no entry exists for the tool.
+		bin := adapter.Name()
+		if m.cfg != nil {
+			bin = m.cfg.AgentBinary(model.Tool(spec.tool))
+		}
+
 		var sid string
 		var argv []string
 		if spec.fork {
@@ -96,7 +132,7 @@ func (m Model) launchCmd(spec launchSpec) tea.Cmd {
 			if errors.Is(ferr, agent.ErrForkUnsupported) {
 				// opencode has no native fork → start a fresh session; opencode
 				// assigns its own id so sid stays "" and @perch_session is not stamped.
-				argv = append([]string{adapter.Name()}, adapter.NewArgs(agent.NewOpts{})...)
+				argv = append([]string{bin}, adapter.NewArgs(agent.NewOpts{})...)
 			} else if ferr != nil {
 				return launchedMsg{err: ferr}
 			} else {
@@ -109,22 +145,22 @@ func (m Model) launchCmd(spec launchSpec) tea.Cmd {
 				if err != nil {
 					return launchedMsg{err: err}
 				}
-				argv = append([]string{adapter.Name()}, forkArgs...)
+				argv = append([]string{bin}, forkArgs...)
 				argv = append(argv, adapter.NewArgs(agent.NewOpts{SessionID: sid})...)
 			}
 		} else if spec.resume {
 			sid = spec.sessionID
-			argv = append([]string{adapter.Name()}, adapter.ResumeArgs(sid)...)
+			argv = append([]string{bin}, adapter.ResumeArgs(sid)...)
 		} else if model.Tool(spec.tool) == model.ToolClaude {
 			var err error
 			sid, err = newSessionID()
 			if err != nil {
 				return launchedMsg{err: err}
 			}
-			argv = append([]string{adapter.Name()}, adapter.NewArgs(agent.NewOpts{SessionID: sid})...)
+			argv = append([]string{bin}, adapter.NewArgs(agent.NewOpts{SessionID: sid})...)
 		} else {
 			// opencode assigns its own session ids — do not pass one.
-			argv = append([]string{adapter.Name()}, adapter.NewArgs(agent.NewOpts{})...)
+			argv = append([]string{bin}, adapter.NewArgs(agent.NewOpts{})...)
 		}
 
 		session := tmux.SessionName(spec.projectPath)
@@ -142,6 +178,13 @@ func (m Model) launchCmd(spec launchSpec) tea.Cmd {
 		if sid != "" {
 			// resume always has sid; opencode-new never does (D6).
 			_ = l.Tmux.SetPaneOption(ctx, paneID, "@perch_session", sid)
+		}
+
+		// Send the startup_command to the newly launched agent pane when configured.
+		// Best-effort: ignore send errors so a misconfigured command never blocks the
+		// launch. The command is sent as-is (raw) so the user's shell interprets it.
+		if m.cfg != nil && m.cfg.StartupCommand != "" {
+			_ = l.Tmux.SendKeys(ctx, paneID, m.cfg.StartupCommand)
 		}
 
 		// Frecency bump for the project root.

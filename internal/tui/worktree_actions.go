@@ -319,9 +319,11 @@ func (m Model) worktreeCreateCmd(ms modalState, dec *trustDecision) tea.Cmd {
 		})
 		_ = state.SaveState(ldr.BaseDir, st)
 
-		// 11. Return the fork spec.
+		// 11. Return the fork spec. resolveTool is applied here so a new worktree
+		// launch respects wildcard and default-agent config. When ms.tool is
+		// non-empty (existing session metadata) it is returned unchanged.
 		return worktreeCreatedMsg{spec: launchSpec{
-			tool:        ms.tool,
+			tool:        m.resolveTool(treePath, ms.tool),
 			sessionID:   ms.sessionID,
 			branch:      branch,
 			treePath:    treePath,
@@ -346,7 +348,7 @@ func (m Model) runHereCmd(ms modalState) tea.Cmd {
 			_ = state.SaveState(ldr.BaseDir, st)
 		}
 		return worktreeCreatedMsg{spec: launchSpec{
-			tool:        ms.tool,
+			tool:        m.resolveTool(ms.treePath, ms.tool),
 			sessionID:   ms.sessionID,
 			branch:      ms.branch,
 			treePath:    ms.treePath,
@@ -371,7 +373,7 @@ func (m Model) runMainCmd(ms modalState) tea.Cmd {
 			_ = state.SaveState(ldr.BaseDir, st)
 		}
 		return worktreeCreatedMsg{spec: launchSpec{
-			tool:        ms.tool,
+			tool:        m.resolveTool(ms.projectPath, ms.tool),
 			sessionID:   ms.sessionID,
 			branch:      ms.branch,
 			treePath:    ms.projectPath,

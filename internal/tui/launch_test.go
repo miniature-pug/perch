@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -9,6 +10,8 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/Miniature-Pug/perch/internal/config"
+	"github.com/Miniature-Pug/perch/internal/model"
 	"github.com/Miniature-Pug/perch/internal/proc"
 	"github.com/Miniature-Pug/perch/internal/state"
 	"github.com/Miniature-Pug/perch/internal/tmux"
@@ -707,5 +710,302 @@ func TestLaunch_ShadowRecordFileExists(t *testing.T) {
 	}
 	if len(entries) != 1 {
 		t.Errorf("want 1 window json file, got %d", len(entries))
+	}
+}
+
+// ── resolveTool ───────────────────────────────────────────────────────────────
+
+// TestResolveTool_ItemToolWins asserts that a non-empty itemTool is always
+// returned unchanged, regardless of config.
+func TestResolveTool_ItemToolWins(t *testing.T) {
+	m := New(nil)
+	m.cfg = &config.Config{
+		Agent:     model.Tool("opencode"),
+		Wildcards: []config.WildcardRule{{Pattern: "**/experiments/**", Agent: model.Tool("opencode")}},
+	}
+	got := m.resolveTool("/any/path", "opencode")
+	if got != "opencode" {
+		t.Errorf("resolveTool with itemTool=%q: want %q, got %q", "opencode", "opencode", got)
+	}
+}
+
+// TestResolveTool_WildcardWins asserts that a matching wildcard rule is used
+// when itemTool is empty, overriding the default agent.
+func TestResolveTool_WildcardWins(t *testing.T) {
+	m := New(nil)
+	m.cfg = &config.Config{
+		Agent: model.Tool("opencode"),
+		Wildcards: []config.WildcardRule{
+			{Pattern: "**/experiments/**", Agent: model.Tool("claude")},
+		},
+	}
+	got := m.resolveTool("/home/user/projects/experiments/foo", "")
+	if got != "claude" {
+		t.Errorf("resolveTool with wildcard match: want %q, got %q", "claude", got)
+	}
+}
+
+// TestResolveTool_DefaultAgentWins asserts that cfg.Agent is used when itemTool
+// is empty and no wildcard matches.
+func TestResolveTool_DefaultAgentWins(t *testing.T) {
+	m := New(nil)
+	m.cfg = &config.Config{
+		Agent: model.Tool("opencode"),
+	}
+	got := m.resolveTool("/home/user/projects/normal/foo", "")
+	if got != "opencode" {
+		t.Errorf("resolveTool with cfg.Agent: want %q, got %q", "opencode", got)
+	}
+}
+
+// TestResolveTool_FallbackClaude asserts that when cfg is nil and itemTool is
+// empty, "claude" is returned as the unconditional fallback.
+func TestResolveTool_FallbackClaude(t *testing.T) {
+	m := New(nil) // no cfg
+	got := m.resolveTool("/any/path", "")
+	if got != "claude" {
+		t.Errorf("resolveTool with nil cfg + empty itemTool: want %q, got %q", "claude", got)
+	}
+}
+
+// ── Agent binary ──────────────────────────────────────────────────────────────
+
+// loadConfigWithAgents writes a temporary global config file with the given
+// [agents] table and loads it via config.Load, so the unexported agentBins
+// field is populated from TOML rather than through direct struct initialisation.
+func loadConfigWithAgents(t *testing.T, agents map[string]string) *config.Config {
+	t.Helper()
+	var sb strings.Builder
+	sb.WriteString("[agents]\n")
+	for name, path := range agents {
+		sb.WriteString(name + " = " + `"` + path + `"` + "\n")
+	}
+	gp := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(gp, []byte(sb.String()), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := config.Load(gp, "")
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	return cfg
+}
+
+// TestLaunch_AgentBinaryFromConfig verifies that when [agents] maps claude to
+// an absolute path, that path is used as argv[0] in the send-keys literal.
+func TestLaunch_AgentBinaryFromConfig(t *testing.T) {
+	r := proc.NewFakeRunner()
+	baseDir := t.TempDir()
+
+	sess := expectedSession()
+	win := expectedWindow("feat")
+	paneID := "%20"
+
+	registerLaunchCalls(r, sess, win, "/proj/myrepo", paneID)
+	ok := proc.FakeResult{}
+	r.Default = &ok
+	r.Respond(proc.FakeResult{Stdout: []byte("12345\n")},
+		"tmux", "display-message", "-p", "#{start_time}")
+
+	cfg := loadConfigWithAgents(t, map[string]string{"claude": "/opt/claude"})
+
+	it := baseItem("claude", "feat", "")
+	m := New([]list.Item{it}).WithLoader(loader{
+		Tmux:    fakeTmuxInside(r),
+		BaseDir: baseDir,
+		Now:     1000,
+	})
+	m.cfg = cfg
+
+	spec := launchSpec{
+		tool:        "claude",
+		branch:      "feat",
+		treePath:    "/proj/myrepo",
+		projectPath: "/proj/myrepo",
+		resume:      false,
+	}
+	msg := m.launchCmd(spec)()
+	lm, ok2 := msg.(launchedMsg)
+	if !ok2 {
+		t.Fatalf("want launchedMsg, got %T", msg)
+	}
+	if lm.err != nil {
+		t.Fatalf("launchedMsg error: %v", lm.err)
+	}
+
+	// The send-keys literal must start with the configured binary path.
+	var sendKeysLiteral string
+	for _, c := range r.Calls {
+		if c.Name == "tmux" && len(c.Args) >= 5 && c.Args[0] == "send-keys" && c.Args[3] == "-l" {
+			sendKeysLiteral = c.Args[4]
+			break
+		}
+	}
+	if !strings.HasPrefix(sendKeysLiteral, "'/opt/claude'") {
+		t.Errorf("send-keys literal %q: want prefix '/opt/claude'", sendKeysLiteral)
+	}
+}
+
+// TestLaunch_AgentBinaryFallbackNoCfg verifies that when no config is set the
+// bare tool name ("claude") is used as argv[0].
+func TestLaunch_AgentBinaryFallbackNoCfg(t *testing.T) {
+	r := proc.NewFakeRunner()
+	baseDir := t.TempDir()
+
+	sess := expectedSession()
+	win := expectedWindow("feat")
+	paneID := "%21"
+
+	registerLaunchCalls(r, sess, win, "/proj/myrepo", paneID)
+	ok := proc.FakeResult{}
+	r.Default = &ok
+	r.Respond(proc.FakeResult{Stdout: []byte("12345\n")},
+		"tmux", "display-message", "-p", "#{start_time}")
+
+	it := baseItem("claude", "feat", "")
+	// No cfg set: m.cfg remains nil.
+	m := New([]list.Item{it}).WithLoader(loader{
+		Tmux:    fakeTmuxInside(r),
+		BaseDir: baseDir,
+		Now:     1000,
+	})
+
+	spec := launchSpec{
+		tool:        "claude",
+		branch:      "feat",
+		treePath:    "/proj/myrepo",
+		projectPath: "/proj/myrepo",
+		resume:      false,
+	}
+	msg := m.launchCmd(spec)()
+	lm, ok2 := msg.(launchedMsg)
+	if !ok2 {
+		t.Fatalf("want launchedMsg, got %T", msg)
+	}
+	if lm.err != nil {
+		t.Fatalf("launchedMsg error: %v", lm.err)
+	}
+
+	// The send-keys literal must start with 'claude' (bare name).
+	var sendKeysLiteral string
+	for _, c := range r.Calls {
+		if c.Name == "tmux" && len(c.Args) >= 5 && c.Args[0] == "send-keys" && c.Args[3] == "-l" {
+			sendKeysLiteral = c.Args[4]
+			break
+		}
+	}
+	if !strings.HasPrefix(sendKeysLiteral, "'claude'") {
+		t.Errorf("send-keys literal %q: want prefix 'claude' (bare fallback)", sendKeysLiteral)
+	}
+}
+
+// ── startup_command ───────────────────────────────────────────────────────────
+
+// TestLaunch_StartupCommandSent verifies that when cfg.StartupCommand is set,
+// a send-keys call carrying the startup command is issued after the agent launch.
+func TestLaunch_StartupCommandSent(t *testing.T) {
+	r := proc.NewFakeRunner()
+	baseDir := t.TempDir()
+
+	sess := expectedSession()
+	win := expectedWindow("feat")
+	paneID := "%30"
+
+	registerLaunchCalls(r, sess, win, "/proj/myrepo", paneID)
+	ok := proc.FakeResult{}
+	r.Default = &ok
+	r.Respond(proc.FakeResult{Stdout: []byte("12345\n")},
+		"tmux", "display-message", "-p", "#{start_time}")
+
+	m := New(nil).WithLoader(loader{
+		Tmux:    fakeTmuxInside(r),
+		BaseDir: baseDir,
+		Now:     1000,
+	})
+	m.cfg = &config.Config{StartupCommand: "echo hi"}
+
+	spec := launchSpec{
+		tool:        "claude",
+		branch:      "feat",
+		treePath:    "/proj/myrepo",
+		projectPath: "/proj/myrepo",
+		resume:      false,
+	}
+	msg := m.launchCmd(spec)()
+	lm, ok2 := msg.(launchedMsg)
+	if !ok2 {
+		t.Fatalf("want launchedMsg, got %T", msg)
+	}
+	if lm.err != nil {
+		t.Fatalf("launchedMsg error: %v", lm.err)
+	}
+
+	// Collect all send-keys -l literals.
+	var literals []string
+	for _, c := range r.Calls {
+		if c.Name == "tmux" && len(c.Args) >= 5 && c.Args[0] == "send-keys" && c.Args[3] == "-l" {
+			literals = append(literals, c.Args[4])
+		}
+	}
+	// At least two send-keys -l calls: one for the agent cmd, one for startup_command.
+	foundStartup := false
+	for _, lit := range literals {
+		if lit == "echo hi" {
+			foundStartup = true
+		}
+	}
+	if !foundStartup {
+		t.Errorf("startup_command send-keys not found in calls: literals=%v", literals)
+	}
+}
+
+// TestLaunch_StartupCommandNotSentWhenEmpty verifies that when StartupCommand
+// is empty, no extra send-keys is issued beyond the agent launch.
+func TestLaunch_StartupCommandNotSentWhenEmpty(t *testing.T) {
+	r := proc.NewFakeRunner()
+	baseDir := t.TempDir()
+
+	sess := expectedSession()
+	win := expectedWindow("feat")
+	paneID := "%31"
+
+	registerLaunchCalls(r, sess, win, "/proj/myrepo", paneID)
+	ok := proc.FakeResult{}
+	r.Default = &ok
+	r.Respond(proc.FakeResult{Stdout: []byte("12345\n")},
+		"tmux", "display-message", "-p", "#{start_time}")
+
+	m := New(nil).WithLoader(loader{
+		Tmux:    fakeTmuxInside(r),
+		BaseDir: baseDir,
+		Now:     1000,
+	})
+	m.cfg = &config.Config{} // StartupCommand is ""
+
+	spec := launchSpec{
+		tool:        "claude",
+		branch:      "feat",
+		treePath:    "/proj/myrepo",
+		projectPath: "/proj/myrepo",
+		resume:      false,
+	}
+	msg := m.launchCmd(spec)()
+	lm, ok2 := msg.(launchedMsg)
+	if !ok2 {
+		t.Fatalf("want launchedMsg, got %T", msg)
+	}
+	if lm.err != nil {
+		t.Fatalf("launchedMsg error: %v", lm.err)
+	}
+
+	// Count send-keys -l calls: only 1 is expected (the agent launch command).
+	var count int
+	for _, c := range r.Calls {
+		if c.Name == "tmux" && len(c.Args) >= 5 && c.Args[0] == "send-keys" && c.Args[3] == "-l" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("want exactly 1 send-keys -l call (agent cmd), got %d", count)
 	}
 }

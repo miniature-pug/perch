@@ -173,7 +173,7 @@ func (m Model) dispatchCommand(spec cmdSpec) (tea.Model, tea.Cmd) {
 			return m.withToast("no selection — nothing to start")
 		}
 		return m, m.launchCmd(launchSpec{
-			tool:        it.tool,
+			tool:        m.resolveTool(it.treePath, it.tool),
 			branch:      it.tree,
 			treePath:    it.treePath,
 			projectPath: it.projectPath,
