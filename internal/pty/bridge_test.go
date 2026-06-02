@@ -7,6 +7,37 @@ import (
 	"time"
 )
 
+func TestBridge_WriteForwardsToPty(t *testing.T) {
+	pr, pw := io.Pipe()
+	b := &Bridge{ptyFile: pw}
+
+	go func() { _, _ = b.Write([]byte("ls\r")) }()
+
+	buf := make([]byte, 3)
+	if _, err := io.ReadFull(pr, buf); err != nil {
+		t.Fatalf("ReadFull: %v", err)
+	}
+	if string(buf) != "ls\r" {
+		t.Fatalf("pty received %q, want %q", buf, "ls\r")
+	}
+}
+
+func TestBridge_ResizeCallsSetter(t *testing.T) {
+	var gotCols, gotRows uint16
+	b := &Bridge{
+		setsize: func(cols, rows uint16) error {
+			gotCols, gotRows = cols, rows
+			return nil
+		},
+	}
+	if err := b.Resize(120, 40); err != nil {
+		t.Fatalf("Resize: %v", err)
+	}
+	if gotCols != 120 || gotRows != 40 {
+		t.Fatalf("setter got cols=%d rows=%d, want 120/40", gotCols, gotRows)
+	}
+}
+
 func TestPumpReader_BatchesChunksAsIntSlices(t *testing.T) {
 	pr, pw := io.Pipe()
 
