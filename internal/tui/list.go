@@ -85,7 +85,12 @@ var rowTruncStyle = lipgloss.NewStyle()
 
 // itemDelegate renders each list row with a cursor marker, status glyph, tool
 // label, title, and relative time.
-type itemDelegate struct{}
+// selectedRow is the accent-derived style for the highlighted row; it is set
+// from the Model's theme in New (default accent) and updated in WithLoader when
+// the configured accent is resolved. Zero-value renders without accent styling.
+type itemDelegate struct {
+	selectedRow lipgloss.Style
+}
 
 // Height returns how many terminal rows a single item occupies.
 func (d itemDelegate) Height() int { return 1 }
@@ -117,7 +122,7 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 
 	var rowStyle lipgloss.Style
 	if index == m.Index() {
-		rowStyle = styles.selectedRow
+		rowStyle = d.selectedRow
 	} else {
 		rowStyle = styles.dimRow
 	}

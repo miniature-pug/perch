@@ -48,6 +48,10 @@ type Model struct {
 	// Every read site must nil-guard so the zero-value fallback is preserved.
 	cfg *config.Config
 
+	// theme holds the accent-derived instance-level styles resolved from cfg.Theme.Accent
+	// (or defaultAccent when unset). Built in New and rebuilt in WithLoader.
+	theme theme
+
 	// root is the discovery scan root, captured from the loader for the
 	// empty-state message. Empty in test/scaffold mode.
 	root string
@@ -123,7 +127,10 @@ type Model struct {
 // New returns a Model with the given items pre-loaded.
 // Width and height start at zero; they are updated by the first tea.WindowSizeMsg.
 func New(items []list.Item) Model {
-	l := list.New(items, itemDelegate{}, 0, 0)
+	// Build the default theme before the list so the delegate carries the accent.
+	th := newTheme(defaultAccent)
+
+	l := list.New(items, itemDelegate{selectedRow: th.selectedRow}, 0, 0)
 	// Disable the built-in quit binding so our own Quit key is the only exit.
 	l.KeyMap.Quit.SetEnabled(false)
 	l.KeyMap.ForceQuit.SetEnabled(false)
@@ -141,6 +148,7 @@ func New(items []list.Item) Model {
 		help:    help.New(),
 		cmdline: ti,
 		refresh: time.Second, // default; overridable via WithRefresh
+		theme:   th,
 	}
 }
 
@@ -164,10 +172,22 @@ func (m Model) WithExecPath(p string) Model {
 // WithLoader returns a copy of m with the given loader wired in.
 // Init will then return the load Cmd automatically.
 // m.cfg is set from l.GlobalCfg; it remains nil when l.GlobalCfg is nil (test/scaffold mode).
+// When a non-empty Theme.Accent is configured, the accent-derived theme styles
+// are rebuilt from it and the list delegate is updated accordingly.
 func (m Model) WithLoader(l loader) Model {
 	m.loader = &l
 	m.root = l.Root
 	m.cfg = l.GlobalCfg
+
+	// Resolve the accent from config; fall back to the TUI default.
+	accent := defaultAccent
+	if m.cfg != nil && m.cfg.Theme.Accent != "" {
+		accent = m.cfg.Theme.Accent
+	}
+	m.theme = newTheme(accent)
+	// Propagate the accent-aware selectedRow style to the list delegate.
+	m.list.SetDelegate(itemDelegate{selectedRow: m.theme.selectedRow})
+
 	return m
 }
 
@@ -615,9 +635,9 @@ func (m Model) View() string {
 	overlayBox := ""
 	switch {
 	case m.showHelp:
-		overlayBox = styles.helpOverlay.Render(m.help.FullHelpView(m.FullHelp()))
+		overlayBox = m.theme.helpOverlay.Render(m.help.FullHelpView(m.FullHelp()))
 	case m.modal.kind != modalNone:
-		overlayBox = renderModal(m.modal)
+		overlayBox = renderModal(m.modal, m.theme.modalBox)
 	}
 
 	if overlayBox != "" {

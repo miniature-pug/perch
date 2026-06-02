@@ -56,15 +56,10 @@ type modalState struct {
 	trust       *trustReq // non-nil when kind==modalTrustConfirm
 }
 
-// modalStyle is the lipgloss style used to render the modal box.
-var modalStyle = lipgloss.NewStyle().
-	Border(lipgloss.RoundedBorder()).
-	BorderForeground(colorAccent).
-	Padding(0, 1)
-
 // renderModal returns a lipgloss-rendered modal box appropriate for ms.kind.
-// The box is rendered at a fixed inner width.
-func renderModal(ms modalState) string {
+// boxStyle is the accent-derived style used for the box border; it is supplied
+// by the caller (Model.theme.modalBox) so each instance carries its own accent.
+func renderModal(ms modalState, boxStyle lipgloss.Style) string {
 	var content string
 	switch ms.kind {
 	case modalRemoveConfirm:
@@ -98,7 +93,7 @@ func renderModal(ms modalState) string {
 	default:
 		return ""
 	}
-	return modalStyle.Render(content)
+	return boxStyle.Render(content)
 }
 
 // pickerLine renders one row of the modalNewSession picker.

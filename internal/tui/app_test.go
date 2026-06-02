@@ -6,8 +6,10 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/exp/teatest"
 
+	"github.com/Miniature-Pug/perch/internal/config"
 	"github.com/Miniature-Pug/perch/internal/proc"
 	"github.com/Miniature-Pug/perch/internal/tmux"
 )
@@ -840,5 +842,75 @@ func TestQuitIssuesTeatQuit(t *testing.T) {
 			tm.WaitFinished(t, teatest.WithFinalTimeout(3*time.Second))
 			// If WaitFinished returns without error, the program exited cleanly.
 		})
+	}
+}
+
+// ── Theme accent tests ────────────────────────────────────────────────────────
+
+// TestThemeAccentConfigured asserts that a Model built with a loader carrying a
+// non-empty Theme.Accent wires that accent colour into all three accent sites:
+// selectedRow foreground, helpOverlay border, and modalBox border.
+func TestThemeAccentConfigured(t *testing.T) {
+	const wantAccent = "#00FF00"
+
+	m := New(nil).WithLoader(loader{
+		GlobalCfg: &config.Config{
+			Theme: config.Theme{Accent: wantAccent},
+		},
+	})
+
+	wantColor := lipgloss.Color(wantAccent)
+
+	// selectedRow foreground
+	if got := m.theme.selectedRow.GetForeground(); got != wantColor {
+		t.Errorf("selectedRow foreground: want %v, got %v", wantColor, got)
+	}
+	// helpOverlay border
+	if got := m.theme.helpOverlay.GetBorderTopForeground(); got != wantColor {
+		t.Errorf("helpOverlay border foreground: want %v, got %v", wantColor, got)
+	}
+	// modalBox border
+	if got := m.theme.modalBox.GetBorderTopForeground(); got != wantColor {
+		t.Errorf("modalBox border foreground: want %v, got %v", wantColor, got)
+	}
+}
+
+// TestThemeAccentDefaultNilCfg asserts that a Model built without a loader (nil
+// cfg) uses the TUI's defaultAccent "#EE6FF8" for all three accent sites.
+func TestThemeAccentDefaultNilCfg(t *testing.T) {
+	m := New(nil)
+
+	wantColor := lipgloss.Color(defaultAccent)
+
+	if got := m.theme.selectedRow.GetForeground(); got != wantColor {
+		t.Errorf("selectedRow foreground: want %v, got %v", wantColor, got)
+	}
+	if got := m.theme.helpOverlay.GetBorderTopForeground(); got != wantColor {
+		t.Errorf("helpOverlay border foreground: want %v, got %v", wantColor, got)
+	}
+	if got := m.theme.modalBox.GetBorderTopForeground(); got != wantColor {
+		t.Errorf("modalBox border foreground: want %v, got %v", wantColor, got)
+	}
+}
+
+// TestThemeAccentDefaultEmptyAccent asserts that a Model with a loader whose
+// cfg has an empty Theme.Accent falls back to the TUI's defaultAccent.
+func TestThemeAccentDefaultEmptyAccent(t *testing.T) {
+	m := New(nil).WithLoader(loader{
+		GlobalCfg: &config.Config{
+			Theme: config.Theme{Accent: ""},
+		},
+	})
+
+	wantColor := lipgloss.Color(defaultAccent)
+
+	if got := m.theme.selectedRow.GetForeground(); got != wantColor {
+		t.Errorf("selectedRow foreground: want %v, got %v", wantColor, got)
+	}
+	if got := m.theme.helpOverlay.GetBorderTopForeground(); got != wantColor {
+		t.Errorf("helpOverlay border foreground: want %v, got %v", wantColor, got)
+	}
+	if got := m.theme.modalBox.GetBorderTopForeground(); got != wantColor {
+		t.Errorf("modalBox border foreground: want %v, got %v", wantColor, got)
 	}
 }
