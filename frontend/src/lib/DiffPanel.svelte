@@ -4,9 +4,13 @@
   let result = $state<DiffResult | null>(null);
 
   $effect(() => {
-    if (worktreePath) {
-      diff(worktreePath).then((r) => (result = r)).catch(() => (result = null));
-    }
+    const wt = worktreePath;
+    if (!wt) return;
+    let cancelled = false;
+    diff(wt)
+      .then((r) => { if (!cancelled) result = r; })
+      .catch(() => { if (!cancelled) result = null; });
+    return () => { cancelled = true; }; // stale resolutions are ignored on path change/destroy
   });
 </script>
 
