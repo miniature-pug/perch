@@ -13,8 +13,10 @@ import (
 	"sync"
 
 	internalpty "github.com/Miniature-Pug/perch/internal/pty"
+	"github.com/Miniature-Pug/perch/internal/git"
 	"github.com/Miniature-Pug/perch/internal/proc"
 	"github.com/Miniature-Pug/perch/internal/tmux"
+	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // ptyEntry pairs a live attach Bridge with its frontend tab id.
@@ -261,4 +263,64 @@ func (a *App) KillSession(id string) error {
 	}
 	a.emit("sessions-changed")
 	return nil
+}
+
+// DiffResult is the frontend view of a worktree's uncommitted diff.
+type DiffResult struct {
+	Patch   string `json:"patch"`
+	Files   int    `json:"files"`
+	Added   int    `json:"added"`
+	Removed int    `json:"removed"`
+}
+
+// Diff returns the uncommitted diff + stat for worktreePath. The path is
+// validated to live under a configured root before git is invoked via argv.
+func (a *App) Diff(worktreePath string) (DiffResult, error) {
+	if err := validateWorktreeUnderRoots(worktreePath, a.roots); err != nil {
+		return DiffResult{}, err
+	}
+	patch, err := git.Diff(context.Background(), a.run, worktreePath)
+	if err != nil {
+		return DiffResult{}, err
+	}
+	st, err := git.DiffStat(context.Background(), a.run, worktreePath)
+	if err != nil {
+		return DiffResult{}, err
+	}
+	return DiffResult{Patch: patch, Files: st.Files, Added: st.Added, Removed: st.Removed}, nil
+}
+
+// NewApp builds the production App. emit is a no-op until startup installs the
+// wails runtime closure, so methods that emit are safe to call pre-startup
+// (e.g. in headless tests that set their own emit).
+func NewApp(roots []string) *App {
+	return &App{
+		tmux:    tmux.New(),
+		run:     proc.ExecRunner{},
+		roots:   roots,
+		emit:    func(string, ...any) {},
+		bridges: map[string]*ptyEntry{},
+	}
+}
+
+// startup is the Wails OnStartup hook. It captures the runtime context and
+// installs the production emit seam (runtime.EventsEmit). This is the ONLY place
+// the wails runtime context is bound; all other code uses the emit seam.
+func (a *App) startup(ctx context.Context) {
+	a.emit = func(event string, data ...any) {
+		wailsruntime.EventsEmit(ctx, event, data...)
+	}
+}
+
+// shutdown closes every live attach pty. The agent sessions persist on the tmux
+// server; only the GUI's attach clients are torn down.
+func (a *App) shutdown(_ context.Context) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for id, e := range a.bridges {
+		if e.bridge != nil {
+			_ = e.bridge.Close()
+		}
+		delete(a.bridges, id)
+	}
 }

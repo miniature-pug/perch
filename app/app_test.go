@@ -251,3 +251,20 @@ func TestApp_CloseTerminal_RemovesEntry(t *testing.T) {
 		t.Fatal("CloseTerminal should remove the registry entry")
 	}
 }
+
+func TestApp_Diff_RejectsOutsideRoots(t *testing.T) {
+	a := &App{run: proc.NewFakeRunner(), roots: []string{"/home/u/code"}}
+	if _, err := a.Diff("/etc"); err == nil {
+		t.Fatal("Diff outside roots should error")
+	}
+}
+
+func TestNewApp_Defaults(t *testing.T) {
+	a := NewApp([]string{"/home/u/code"})
+	if a.bridges == nil {
+		t.Fatal("NewApp must initialise the bridge registry")
+	}
+	if a.emit == nil {
+		t.Fatal("NewApp must install a non-nil pre-startup emit (no-op until startup)")
+	}
+}
