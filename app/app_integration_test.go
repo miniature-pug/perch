@@ -20,7 +20,14 @@ func newTestServer(t *testing.T) tmux.Tmux {
 	t.Helper()
 	socket := fmt.Sprintf("perch-app-test-%d", os.Getpid())
 	tmx := tmux.Tmux{Runner: proc.ExecRunner{}, Bin: "tmux", Socket: socket}
-	t.Cleanup(func() { _ = tmx.KillServer(context.Background()) })
+	t.Cleanup(func() {
+		_ = tmx.KillServer(context.Background())
+		dir := os.Getenv("TMUX_TMPDIR")
+		if dir == "" {
+			dir = fmt.Sprintf("/tmp/tmux-%d", os.Getuid())
+		}
+		_ = os.Remove(filepath.Join(dir, socket))
+	})
 	return tmx
 }
 

@@ -324,10 +324,10 @@ func adapterFor(tool string) (agent.Adapter, bool) {
 }
 
 // containedUnderRoots reports whether the lexically-cleaned treePath is at or
-// under one of the configured roots (symlink-resolved when the root exists on
-// disk). This is a LEXICAL containment check, intended for paths that do not
-// yet exist (e.g. a to-be-created worktree directory). Because treePath is
-// not yet on disk, filepath.EvalSymlinks cannot be called on it.
+// under one of the configured roots. This is a LEXICAL containment check,
+// intended for paths that do not yet exist (e.g. a to-be-created worktree
+// directory). Because treePath is not yet on disk, filepath.EvalSymlinks
+// cannot be called on it.
 //
 // Security rationale: git.WorktreePath (internal/git/worktree.go:65-88)
 // incorporates a config-supplied worktreeDir. When worktreeDir is absolute
@@ -338,21 +338,33 @@ func adapterFor(tool string) (agent.Adapter, bool) {
 // (e.g. the default case produces a sibling directory that IS under the root
 // but not under projectPath). Paths that resolve outside every configured
 // root are rejected.
+//
+// Symlink handling: both the lexical (unresolved) form of each root AND its
+// EvalSymlinks-resolved form are checked. When a configured root is itself a
+// symlink (e.g. "/sym" → "/real"), treePath is derived from the unresolved
+// root path ("/sym/proj__worktrees/feat-x"), so checking only the resolved
+// root ("/real") would wrongly reject it. Accepting under EITHER form does
+// not open an escape: a hostile worktree_dir (absolute "/etc" or dotdot
+// "../../escape") produces a treePath whose Clean form is under NEITHER the
+// unresolved NOR the resolved form of any legitimate root, so it is still
+// rejected.
 func containedUnderRoots(treePath string, roots []string) bool {
 	clean := filepath.Clean(treePath)
 	if !filepath.IsAbs(clean) {
 		return false
 	}
+	contained := func(root string) bool {
+		return clean == root || strings.HasPrefix(clean, root+string(filepath.Separator))
+	}
 	for _, root := range roots {
 		rootClean := filepath.Clean(root)
-		// Attempt to resolve the root so that a root containing a symlink
-		// component does not false-reject a real child. Errors (missing root)
-		// fall back to the unresolved clean root.
-		if resolved, err := filepath.EvalSymlinks(rootClean); err == nil {
-			rootClean = resolved
-		}
-		if clean == rootClean || strings.HasPrefix(clean, rootClean+string(filepath.Separator)) {
+		if contained(rootClean) {
 			return true
+		}
+		if resolved, err := filepath.EvalSymlinks(rootClean); err == nil {
+			if contained(resolved) {
+				return true
+			}
 		}
 	}
 	return false

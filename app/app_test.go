@@ -320,6 +320,36 @@ func TestApp_CreateAgent_ValidatesInputs(t *testing.T) {
 	}
 }
 
+// TestContainedUnderRoots_SymlinkRoot verifies that containedUnderRoots accepts
+// a treePath expressed via a symlinked root (e.g. the configured root is a
+// symlink to a real directory) while still rejecting paths that escape all
+// roots via an absolute path or a dotdot traversal.
+func TestContainedUnderRoots_SymlinkRoot(t *testing.T) {
+	realDir := t.TempDir()
+	linkParent := t.TempDir()
+	linkRoot := filepath.Join(linkParent, "link-root")
+	if err := os.Symlink(realDir, linkRoot); err != nil {
+		t.Fatalf("os.Symlink: %v", err)
+	}
+
+	// treePath is built from the LINK path (lexical only — it does not exist on disk yet).
+	treePathViaLink := filepath.Join(linkRoot, "proj__worktrees", "feat-x")
+
+	// PRIMARY ASSERTION: a treePath under a symlinked root MUST be accepted.
+	if !containedUnderRoots(treePathViaLink, []string{linkRoot}) {
+		t.Errorf("containedUnderRoots(%q, [%q]) = false, want true (symlinked root must not false-reject)", treePathViaLink, linkRoot)
+	}
+
+	// ESCAPE assertions: escapes must still be rejected under the symlinked root.
+	if containedUnderRoots("/etc/feat-x", []string{linkRoot}) {
+		t.Error("containedUnderRoots(\"/etc/feat-x\", symlinked root) = true, want false (absolute escape must be rejected)")
+	}
+	dotdotEscape := filepath.Clean(filepath.Join(linkRoot, "..", "..", "escape", "feat-x"))
+	if containedUnderRoots(dotdotEscape, []string{linkRoot}) {
+		t.Errorf("containedUnderRoots(%q, symlinked root) = true, want false (dotdot escape must be rejected)", dotdotEscape)
+	}
+}
+
 // TestApp_CreateAgent_ContainmentGuard proves that a config-supplied
 // worktreeDir with an adversarial value (absolute or dotdot-relative) causes
 // CreateAgent to error and never create anything outside projectPath.
