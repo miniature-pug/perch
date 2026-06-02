@@ -347,8 +347,9 @@ func (m Model) runHereCmd(ms modalState) tea.Cmd {
 			})
 			_ = state.SaveState(ldr.BaseDir, st)
 		}
+		// resume: the existing session's tool is authoritative (matches the mapping above).
 		return worktreeCreatedMsg{spec: launchSpec{
-			tool:        m.resolveTool(ms.treePath, ms.tool),
+			tool:        ms.tool,
 			sessionID:   ms.sessionID,
 			branch:      ms.branch,
 			treePath:    ms.treePath,
@@ -372,8 +373,9 @@ func (m Model) runMainCmd(ms modalState) tea.Cmd {
 			})
 			_ = state.SaveState(ldr.BaseDir, st)
 		}
+		// resume: the existing session's tool is authoritative (matches the mapping above).
 		return worktreeCreatedMsg{spec: launchSpec{
-			tool:        m.resolveTool(ms.projectPath, ms.tool),
+			tool:        ms.tool,
 			sessionID:   ms.sessionID,
 			branch:      ms.branch,
 			treePath:    ms.projectPath,
