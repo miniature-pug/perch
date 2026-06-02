@@ -3,8 +3,10 @@ package pty
 import (
 	"context"
 	"io"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -165,5 +167,86 @@ func TestSpawn_RoundTrip(t *testing.T) {
 	mu.Unlock()
 	if !strings.Contains(got, "hi") {
 		t.Errorf("round-trip bytes = %q, want to contain %q", got, "hi")
+	}
+}
+
+// TestSpawn_CloseKillsProcessGroup proves Close reaps children the login
+// shell forks, not just the shell itself. Spawns a shell that backgrounds a
+// long sleep and prints the child PID; after Close, that PID must be gone.
+func TestSpawn_CloseKillsProcessGroup(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	var mu sync.Mutex
+	var buf []byte
+	emit := func(event string, data ...any) {
+		if event != "pg" || len(data) != 1 {
+			return
+		}
+		if chunk, ok := data[0].([]int); ok {
+			mu.Lock()
+			for _, v := range chunk {
+				buf = append(buf, byte(v))
+			}
+			mu.Unlock()
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Background a SIGHUP-ignoring sleep so that killing the session leader
+	// (which sends SIGHUP to the foreground group) is NOT enough to kill it.
+	// Only a SIGKILL to the whole process group will work — which is what the
+	// fix sends via syscall.Kill(-pgid, SIGKILL).
+	script := "nohup sleep 30 >/dev/null 2>&1 & echo PGTESTPID=$!; sleep 5"
+	br, err := Spawn(ctx, t.TempDir(), []string{"sh", "-c", script}, "pg", emit, 80, 24)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+
+	// Parse the child PID from emitted output.
+	var childPID int
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && childPID == 0 {
+		mu.Lock()
+		out := string(buf)
+		mu.Unlock()
+		if i := strings.Index(out, "PGTESTPID="); i >= 0 {
+			rest := out[i+len("PGTESTPID="):]
+			j := strings.IndexAny(rest, "\r\n")
+			if j > 0 {
+				if pid, perr := strconv.Atoi(strings.TrimSpace(rest[:j])); perr == nil {
+					childPID = pid
+				}
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if childPID == 0 {
+		t.Fatalf("never captured child PID; output=%q", string(buf))
+	}
+
+	// Sanity: child is alive now.
+	if err := syscall.Kill(childPID, 0); err != nil {
+		t.Fatalf("child %d should be alive before Close: %v", childPID, err)
+	}
+
+	if err := br.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// After Close, the backgrounded child must be dead (signal 0 -> ESRCH).
+	gone := false
+	d2 := time.Now().Add(3 * time.Second)
+	for time.Now().Before(d2) {
+		if err := syscall.Kill(childPID, 0); err != nil {
+			gone = true // ESRCH or EPERM => not ours/alive
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !gone {
+		t.Errorf("child %d survived Close — process group not killed", childPID)
+		_ = syscall.Kill(childPID, syscall.SIGKILL) // cleanup
 	}
 }

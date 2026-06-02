@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"syscall"
 
 	creackpty "github.com/creack/pty"
 )
@@ -83,7 +84,12 @@ func Spawn(ctx context.Context, cwd string, argv []string, event string, emit Em
 		closer: func() error {
 			ferr := f.Close()
 			if cmd.Process != nil {
-				_ = cmd.Process.Kill()
+				// Kill the whole process group (the shell is a session/group leader via
+				// creack/pty's Setsid), so children the shell forked die too. Negative
+				// pid targets the group. Fall back to killing just the process.
+				if perr := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); perr != nil {
+					_ = cmd.Process.Kill()
+				}
 				_, _ = cmd.Process.Wait()
 			}
 			return ferr
