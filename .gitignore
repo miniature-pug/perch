@@ -39,3 +39,8 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+frontend/node_modules/
+frontend/dist/
+frontend/wailsjs/
+build/bin/
