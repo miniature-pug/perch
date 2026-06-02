@@ -94,6 +94,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   shown in the main pane focuses it rather than re-launching it; if the agent
   process had exited, it is resumed cleanly.
 
+### Fixed
+
+- **Frame no longer collapses when a displayed agent exits** — the frame window
+  now has `remain-on-exit on`, so an agent that exits (Ctrl-C / `exit`) leaves
+  a dead pane in the main slot instead of destroying it. perch detects the dead
+  pane on every refresh tick and on close, and self-heals: the live placeholder
+  (parked in the agent's home session) is swapped back into the main slot,
+  reclaiming it without leaks; the now-exiled dead pane is then removed with
+  `kill-pane` (sibling agent windows in the same project session are unaffected).
+  The agent shows idle; pressing `↵` resumes it cleanly with `--resume`.
+  Frames damaged to a single pane by an older binary are repaired automatically
+  on the next launch (`reuseFrame` re-splits the placeholder or respawns a dead
+  main pane as needed).
+
 ### Notes
 
 - The `pre_merge` config field and the merge feature (§7.3) are intentionally

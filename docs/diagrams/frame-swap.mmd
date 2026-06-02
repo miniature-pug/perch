@@ -25,3 +25,7 @@ flowchart TD
     placeholder -.->|"parks in agent home session\nduring swap-in"| AgentSessionA
 
     sidebar -->|"q: quit\n1-swap displayed pane home\n2-KillSession frame"| survive["agent sessions\nsurvive in own sessions"]
+
+    paneA -->|"agent exits (Ctrl-C/exit)\nremain-on-exit keeps dead pane\nin frame main slot"| deadPane["Dead pane\n(main slot, remain-on-exit)"]
+    deadPane -->|"perch detects (refresh tick\nor close): swap-home\n→ placeholder returns to main\n→ kill-pane dead pane"| placeholder
+    deadPane -.->|"exiled dead pane\nkilled after swap-home"| AgentSessionA

@@ -52,6 +52,51 @@ Design decisions:
 
 See `docs/diagrams/frame-swap.mmd` for a flowchart of the swap-pane lifecycle.
 
+### 2-Pane Invariant & Death-Resilience
+
+**Invariant:** the frame window always has exactly two panes — the sidebar and
+the main slot. The main slot is occupied by one of:
+- the live placeholder (`sleep infinity`) when no agent is displayed,
+- a displayed agent's pane (swapped in from its home session), or
+- a transient dead pane pending recovery (see below).
+
+**Placeholder exile:** `swap-pane` is a bilateral exchange. When an agent pane
+is swapped into the main slot, the placeholder is simultaneously exiled into
+the agent's home session. When the agent is swapped back home (on close, quit,
+or recovery), the placeholder returns to the main slot under its original pane
+id. Only one placeholder exists for the frame's lifetime.
+
+**Agent-exit recovery (M17):** the frame window has `remain-on-exit on` set
+during creation and re-stamped defensively on every `reuseFrame` call. When a
+displayed agent's process exits, its pane goes dead rather than being destroyed,
+preserving the frame's 2-pane topology. perch detects the dead displayed pane
+through two paths:
+
+1. **Refresh tick** — every `statusTickMsg` (default every 1000 ms) probes
+   `PaneDead` on the displayed pane id via `checkDisplayedDeadCmd`.
+2. **On close** — `closeWindowCmd` (triggered by `esc` or quit) probes liveness
+   and branches: alive → swap home only; dead → full recovery.
+
+**Recovery sequence (order is critical):**
+1. `swap-home` — the live placeholder (exiled in the agent's home session)
+   returns to the frame main slot; this simultaneously exiles the dead pane into
+   the agent's home window. Killing the dead pane before this step would destroy
+   it while it still occupied the frame main slot, stranding the placeholder.
+2. `kill-pane` the now-exiled dead pane. Only that one pane is removed — sibling
+   agent windows in the same project session survive.
+3. `select-pane -L` — focus returns to the sidebar.
+
+After recovery the agent shows idle; pressing `↵` resumes it with `--resume`.
+
+**`reuseFrame` self-heal:** when `Ensure` detects an existing frame session it
+repairs structural damage from older binaries before returning:
+- 2-pane frame with a dead main pane → `respawn-pane` in place (pane id stable).
+- 1-pane frame (only the sidebar remains) → `split-window` to recreate the
+  main slot with `placeholderCmd`.
+
+In both repair paths `remain-on-exit on` is also re-stamped, so frames created
+before M17 gain the guard on next launch.
+
 `internal/frame.Ensure` is the bootstrap primitive. It stamps the sidebar pane
 with the `@perch_frame` tmux option (FD-03 guard) so subsequent calls can
 identify an existing frame without ambiguity.
