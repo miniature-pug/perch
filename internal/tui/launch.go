@@ -177,7 +177,7 @@ func (m Model) launchCmd(spec launchSpec) tea.Cmd {
 
 		if sid != "" {
 			// resume always has sid; opencode-new never does (D6).
-			_ = l.Tmux.SetPaneOption(ctx, paneID, "@perch_session", sid)
+			_ = l.Tmux.SetPaneOption(ctx, paneID, tmux.OptionPerchSession, sid)
 		}
 
 		// Send the startup_command to the newly launched agent pane when configured.
@@ -263,7 +263,7 @@ func (m *Model) swapInCmd(targetHome string) tea.Cmd {
 		// Auto-clear the status badge on focus (M11-3): an agent the user is now
 		// looking at is no longer "waiting"/"done". The status hook re-sets it on
 		// the next agent state change.
-		_ = t.SetPaneOption(ctx, targetHome, "@perch_pane_status", "")
+		_ = t.SetPaneOption(ctx, targetHome, tmux.OptionPerchPaneStatus, "")
 		// Nudge all clients to repaint so the newly-displayed agent reflows.
 		_ = t.RefreshClient(ctx)
 		return swappedMsg{target: targetHome}

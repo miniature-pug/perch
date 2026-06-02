@@ -116,7 +116,7 @@ func createFrame(ctx context.Context, t tmux.Tmux, session, root string, sidebar
 	// spaces is preserved (no string-splitting).
 	argv := sidebarArgv
 	if len(argv) == 0 {
-		argv = []string{"perch", "--sidebar"}
+		argv = []string{DefaultFrameSession, "--sidebar"}
 	}
 
 	// Launch creates the session via Connect → NewSession (no cmd), then sends

@@ -118,7 +118,7 @@ func (o Tmux) CurrentClientWindow(ctx context.Context) (session, window string, 
 		return "", "", fmt.Errorf("tmux display-message: %w: %s", err, strings.TrimSpace(string(stderr)))
 	}
 	out := strings.TrimSpace(string(stdout))
-	parts := strings.SplitN(out, "\x1f", 2)
+	parts := strings.SplitN(out, FieldDelim, 2)
 	if len(parts) < 2 {
 		return "", "", fmt.Errorf("tmux display-message: unexpected output %q", out)
 	}

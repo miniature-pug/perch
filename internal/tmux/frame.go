@@ -122,7 +122,7 @@ func (o Tmux) PaneSize(ctx context.Context, paneID string) (w, h int, err error)
 		return 0, 0, fmt.Errorf("tmux display-message: %w: %s", rerr, strings.TrimSpace(string(stderr)))
 	}
 	out := strings.TrimSpace(string(stdout))
-	parts := strings.SplitN(out, "\x1f", 2)
+	parts := strings.SplitN(out, FieldDelim, 2)
 	if len(parts) < 2 {
 		return 0, 0, fmt.Errorf("tmux display-message: unexpected output %q", out)
 	}

@@ -39,7 +39,7 @@ func Set(ctx context.Context, deps Deps, pane, state string) error {
 	if !validStates[state] {
 		return fmt.Errorf("status: invalid state %q (must be working, waiting, or done)", state)
 	}
-	return deps.Tmux.SetPaneOption(ctx, pane, "@perch_pane_status", state)
+	return deps.Tmux.SetPaneOption(ctx, pane, tmux.OptionPerchPaneStatus, state)
 }
 
 // ── Machine ───────────────────────────────────────────────────────────────────

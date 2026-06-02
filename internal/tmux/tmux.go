@@ -12,9 +12,34 @@ import (
 	"github.com/Miniature-Pug/perch/internal/proc"
 )
 
+// Protocol / identifier constants. These are the single source of truth for
+// tmux pane option names and the field delimiter used across all format
+// strings. All call sites reference these instead of raw string literals.
+const (
+	// OptionPerchSession is the tmux pane option that stores the perch/agent
+	// session ID. Set by launch and resurrect; read by list-panes via paneFormat.
+	OptionPerchSession = "@perch_session"
+	// OptionPerchPaneStatus is the tmux pane option that stores the live agent
+	// status badge ("working", "waiting", "done"). Set by the status hook.
+	OptionPerchPaneStatus = "@perch_pane_status"
+	// FieldDelim is the ASCII unit separator (0x1f) used to delimit fields in
+	// tmux format strings. Exported so cross-package callers (e.g. resurrect)
+	// can reference the same delimiter without defining their own literal.
+	FieldDelim = "\x1f"
+)
+
 // paneFormat is the -F format string for list-panes. Fields are delimited by
-// 0x1f (ASCII unit separator) so spaces in paths cannot split a field. One
-// pane per line. Field order must match parsePanes.
+// FieldDelim (ASCII unit separator, 0x1f) so spaces in paths cannot split a
+// field. One pane per line. Field order must match parsePanes.
+//
+// NOTE: paneFormat is intentionally kept as a single self-contained string
+// literal rather than being rebuilt from OptionPerchSession/OptionPerchPaneStatus
+// and FieldDelim. The option names appear inside #{...} wrappers, making
+// interpolation awkward (e.g. "#{" + OptionPerchSession + "}"), and the parse
+// tests assert the exact format value — changing it risks silent drift. The
+// const definitions above are the single source of truth for the option names
+// at every *set/get* call site; the paneFormat embed is the only intentional
+// exception and is kept local to this package.
 const paneFormat = "#{pane_id}\x1f#{pane_pid}\x1f#{pane_current_command}\x1f#{pane_dead}\x1f#{pane_current_path}\x1f#{session_name}\x1f#{window_name}\x1f#{@perch_session}\x1f#{@perch_pane_status}"
 
 // Tmux drives a tmux server. The zero value is ready to use (production
@@ -193,7 +218,7 @@ func parsePanes(raw []byte) []Pane {
 		// Bound the split to maxFields parts. If the actual line contains more
 		// than maxFields-1 delimiters, the surplus is absorbed into the last
 		// field rather than shifting subsequent column offsets.
-		fields := strings.SplitN(line, "\x1f", maxFields+1)
+		fields := strings.SplitN(line, FieldDelim, maxFields+1)
 		if len(fields) < minFields {
 			// Defensive: skip malformed lines rather than panic or return garbage.
 			continue

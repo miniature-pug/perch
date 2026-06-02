@@ -778,12 +778,12 @@ func handleDebugTmux(args []string, stdout, stderr io.Writer) int {
 	syntheticID := "perch-debug-" + paneID
 	target := tmux.WindowTarget(session, window)
 
-	if err := t.SetPaneOption(ctx, target, "@perch_session", syntheticID); err != nil {
+	if err := t.SetPaneOption(ctx, target, tmux.OptionPerchSession, syntheticID); err != nil {
 		_, _ = fmt.Fprintf(stderr, "perch debug tmux: set-option: %v\n", err)
 		return 1
 	}
 
-	got, err := t.GetPaneOption(ctx, target, "@perch_session")
+	got, err := t.GetPaneOption(ctx, target, tmux.OptionPerchSession)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "perch debug tmux: get-option: %v\n", err)
 		return 1

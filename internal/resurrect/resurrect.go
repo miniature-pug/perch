@@ -177,7 +177,7 @@ func Reconcile(ctx context.Context, deps Deps) (Report, error) {
 			// Launch would send-keys into it instead of creating a new agent pane.
 			// Also skip when an earlier restore in this same run already (re)created
 			// a pane in that session+window (the snapshot cannot reflect that pane).
-			windowKey := w.TmuxSession + "\x1f" + w.TmuxWindow
+			windowKey := w.TmuxSession + tmux.FieldDelim + w.TmuxWindow
 			if hasLiveWindowPane(livePanes, w.TmuxSession, w.TmuxWindow) {
 				_ = state.RemoveWindow(deps.BaseDir, w.PaneKey) // definitive skip
 				report.Skipped = append(report.Skipped, SkipNote{
@@ -281,7 +281,7 @@ func Reconcile(ctx context.Context, deps Deps) (Report, error) {
 			}
 
 			// Re-stamp @perch_session so the TUI can discover this pane.
-			_ = deps.Tmux.SetPaneOption(ctx, paneID, "@perch_session", w.SessionID)
+			_ = deps.Tmux.SetPaneOption(ctx, paneID, tmux.OptionPerchSession, w.SessionID)
 
 			// L3: read the restored server's boot id once and cache it.
 			if !bootResolved {
