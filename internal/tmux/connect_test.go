@@ -195,6 +195,88 @@ func TestSetPaneOption_ErrorWrapsSterr(t *testing.T) {
 	}
 }
 
+// ── SetSessionOption ──────────────────────────────────────────────────────────
+
+func TestSetSessionOption_MouseOn(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{},
+		"tmux", "set-option", "-t", "perch", "mouse", "on")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	if err := o.SetSessionOption(context.Background(), "perch", "mouse", "on"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	wantArgs := []string{"set-option", "-t", "perch", "mouse", "on"}
+	if !reflect.DeepEqual(r.Calls[0].Args, wantArgs) {
+		t.Errorf("Call.Args = %v, want %v", r.Calls[0].Args, wantArgs)
+	}
+}
+
+func TestSetSessionOption_StatusOn(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{},
+		"tmux", "set-option", "-t", "perch", "status", "on")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	if err := o.SetSessionOption(context.Background(), "perch", "status", "on"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	wantArgs := []string{"set-option", "-t", "perch", "status", "on"}
+	if !reflect.DeepEqual(r.Calls[0].Args, wantArgs) {
+		t.Errorf("Call.Args = %v, want %v", r.Calls[0].Args, wantArgs)
+	}
+}
+
+func TestSetSessionOption_ErrorWrapsSterr(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Err: proc.FakeExitError{Code: 1}, Stderr: []byte("unknown option")},
+		"tmux", "set-option", "-t", "perch", "mouse", "on")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	err := o.SetSessionOption(context.Background(), "perch", "mouse", "on")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "unknown option") {
+		t.Errorf("error should contain stderr: %v", err)
+	}
+}
+
+// ── BindKey ───────────────────────────────────────────────────────────────────
+
+func TestBindKey_CallArgs(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{},
+		"tmux", "bind-key", "-T", "perchnav", "F12", "select-pane", "-L")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	if err := o.BindKey(context.Background(), "perchnav", "F12", "select-pane", "-L"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	wantArgs := []string{"bind-key", "-T", "perchnav", "F12", "select-pane", "-L"}
+	if !reflect.DeepEqual(r.Calls[0].Args, wantArgs) {
+		t.Errorf("Call.Args = %v, want %v", r.Calls[0].Args, wantArgs)
+	}
+}
+
+func TestBindKey_ErrorWrapsSterr(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Err: proc.FakeExitError{Code: 1}, Stderr: []byte("invalid table")},
+		"tmux", "bind-key", "-T", "perchnav", "F12", "select-pane", "-L")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	err := o.BindKey(context.Background(), "perchnav", "F12", "select-pane", "-L")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "invalid table") {
+		t.Errorf("error should contain stderr: %v", err)
+	}
+}
+
 // ── KillSession ───────────────────────────────────────────────────────────────
 
 func TestKillSession_Success(t *testing.T) {

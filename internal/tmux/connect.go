@@ -63,6 +63,26 @@ func (o Tmux) SetPaneOption(ctx context.Context, target, key, val string) error 
 	return nil
 }
 
+// SetSessionOption sets a session-scoped tmux option (set-option -t <session> <key> <val>).
+func (o Tmux) SetSessionOption(ctx context.Context, session, key, val string) error {
+	_, stderr, err := o.runner().Run(ctx, o.bin(),
+		o.args("set-option", "-t", session, key, val)...)
+	if err != nil {
+		return fmt.Errorf("tmux set-option: %w: %s", err, strings.TrimSpace(string(stderr)))
+	}
+	return nil
+}
+
+// BindKey binds a key in a named key-table (bind-key -T <table> <key> <cmd...>).
+func (o Tmux) BindKey(ctx context.Context, table, keyName string, cmd ...string) error {
+	argv := append([]string{"bind-key", "-T", table, keyName}, cmd...)
+	_, stderr, err := o.runner().Run(ctx, o.bin(), o.args(argv...)...)
+	if err != nil {
+		return fmt.Errorf("tmux bind-key: %w: %s", err, strings.TrimSpace(string(stderr)))
+	}
+	return nil
+}
+
 // KillSession terminates the session named session. Killing the last session
 // causes the tmux server to exit, so a subsequent kill returns exit 1 (no
 // server running). Exit codes ≥1 are treated as "already gone" and silently
