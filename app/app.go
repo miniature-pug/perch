@@ -6,6 +6,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -120,4 +121,87 @@ func validateWorktreeUnderRoots(p string, roots []string) error {
 		}
 	}
 	return fmt.Errorf("worktree path %q is outside configured roots", p)
+}
+
+// SessionInfo is the frontend-facing view of one live agent session. It is
+// JSON-marshalled and sent to the Svelte sidebar to populate the sessions list.
+type SessionInfo struct {
+	ID      string `json:"id"`
+	Session string `json:"session"`
+	Window  string `json:"window"`
+	PaneID  string `json:"paneId"`
+	Status  string `json:"status"`
+	Dir     string `json:"dir"`
+}
+
+// ListSessions returns every live perch agent session. Status is derived from
+// the pane-dead flag (dead → "exited") and the @perch_pane_status option
+// (non-empty passthrough, empty → "idle"). Panes without @perch_session are
+// non-perch panes and are excluded. This method backs the sidebar's
+// sessions-changed refresh.
+func (a *App) ListSessions() ([]SessionInfo, error) {
+	panes, err := a.tmux.ListPanesAll(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SessionInfo, 0, len(panes))
+	for _, p := range panes {
+		if p.PerchSession == "" {
+			continue
+		}
+		status := p.PerchStatus
+		switch {
+		case p.Dead:
+			status = "exited"
+		case status == "":
+			status = "idle"
+		}
+		out = append(out, SessionInfo{
+			ID:      p.PerchSession,
+			Session: p.Session,
+			Window:  p.Window,
+			PaneID:  p.ID,
+			Status:  status,
+			Dir:     p.Path,
+		})
+	}
+	return out, nil
+}
+
+// liveSession looks up id in the currently-live perch sessions, enforcing the
+// allowlist: the frontend can only act on sessions perch already knows about,
+// never an arbitrary tmux target. The id is validated before any tmux call.
+func (a *App) liveSession(id string) (SessionInfo, bool, error) {
+	if err := validateSessionID(id); err != nil {
+		return SessionInfo{}, false, err
+	}
+	sessions, err := a.ListSessions()
+	if err != nil {
+		return SessionInfo{}, false, err
+	}
+	for _, s := range sessions {
+		if s.ID == id {
+			return s, true, nil
+		}
+	}
+	return SessionInfo{}, false, nil
+}
+
+// KillSession kills the tmux window backing the agent session id. The id is
+// validated against the live allowlist and the kill target is derived from the
+// matched session's own tmux session/window — the raw id never enters argv.
+func (a *App) KillSession(id string) error {
+	s, ok, err := a.liveSession(id)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("unknown session %q", id)
+	}
+	target := tmux.WindowTarget(s.Session, s.Window)
+	if err := a.tmux.KillWindow(context.Background(), target); err != nil {
+		return err
+	}
+	a.emit("sessions-changed")
+	return nil
 }

@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Miniature-Pug/perch/internal/proc"
+	"github.com/Miniature-Pug/perch/internal/tmux"
 )
 
 func TestValidateSessionID_AllowlistCharset(t *testing.T) {
@@ -102,6 +105,97 @@ func TestApp_Emit_UsesSeam(t *testing.T) {
 	a.emit("sessions-changed")
 	if gotEvent != "sessions-changed" {
 		t.Fatalf("emit seam event = %q, want sessions-changed", gotEvent)
+	}
+}
+
+// paneLine builds one 0x1f-delimited list-panes line matching tmux's real
+// paneFormat field order:
+//
+//	#{pane_id}\x1f#{pane_pid}\x1f#{pane_current_command}\x1f#{pane_dead}\x1f
+//	#{pane_current_path}\x1f#{session_name}\x1f#{window_name}\x1f
+//	#{@perch_session}\x1f#{@perch_pane_status}
+func paneLine(id, dead, sess, win, perchSess, status string) string {
+	return strings.Join([]string{id, "1234", "claude", dead, "/wt", sess, win, perchSess, status}, "\x1f")
+}
+
+// realPaneFormat is the exact -F value that ListPanesAll issues. It must match
+// the unexported paneFormat constant in internal/tmux/tmux.go (tmux.go:43)
+// byte-for-byte so that FakeRunner.Respond key-matches what ListPanesAll sends.
+const realPaneFormat = "#{pane_id}\x1f#{pane_pid}\x1f#{pane_current_command}\x1f#{pane_dead}\x1f#{pane_current_path}\x1f#{session_name}\x1f#{window_name}\x1f#{@perch_session}\x1f#{@perch_pane_status}"
+
+func TestApp_ListSessions_DerivesStatus(t *testing.T) {
+	r := proc.NewFakeRunner()
+	out := paneLine("%1", "0", "perch", "feat-x", "ses_abc", "working") + "\n" +
+		paneLine("%2", "1", "perch", "fix-y", "ses_def", "")
+	r.Respond(proc.FakeResult{Stdout: []byte(out)}, "tmux", "list-panes", "-a", "-F", realPaneFormat)
+
+	a := &App{tmux: tmux.Tmux{Runner: r, Bin: "tmux"}, run: r}
+	got, err := a.ListSessions()
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d sessions, want 2", len(got))
+	}
+	if got[0].ID != "ses_abc" || got[0].Status != "working" {
+		t.Errorf("session 0 = %+v", got[0])
+	}
+	if got[1].Status != "exited" {
+		t.Errorf("dead pane should report exited; got %q", got[1].Status)
+	}
+}
+
+func TestApp_ListSessions_EmptyStatusBecomesIdle(t *testing.T) {
+	r := proc.NewFakeRunner()
+	out := paneLine("%1", "0", "perch", "feat-x", "ses_abc", "")
+	r.Respond(proc.FakeResult{Stdout: []byte(out)}, "tmux", "list-panes", "-a", "-F", realPaneFormat)
+
+	a := &App{tmux: tmux.Tmux{Runner: r, Bin: "tmux"}, run: r}
+	got, err := a.ListSessions()
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d sessions, want 1", len(got))
+	}
+	if got[0].Status != "idle" {
+		t.Errorf("empty status should become idle; got %q", got[0].Status)
+	}
+}
+
+func TestApp_ListSessions_ExcludesNonPerchPanes(t *testing.T) {
+	r := proc.NewFakeRunner()
+	// second line has no @perch_session (empty) — should be excluded
+	out := paneLine("%1", "0", "perch", "feat-x", "ses_abc", "working") + "\n" +
+		paneLine("%2", "0", "perch", "other", "", "")
+	r.Respond(proc.FakeResult{Stdout: []byte(out)}, "tmux", "list-panes", "-a", "-F", realPaneFormat)
+
+	a := &App{tmux: tmux.Tmux{Runner: r, Bin: "tmux"}, run: r}
+	got, err := a.ListSessions()
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d sessions, want 1 (non-perch pane must be excluded)", len(got))
+	}
+}
+
+func TestApp_KillSession_RejectsUnknownID(t *testing.T) {
+	r := proc.NewFakeRunner()
+	out := paneLine("%1", "0", "perch", "feat-x", "ses_abc", "working")
+	r.Respond(proc.FakeResult{Stdout: []byte(out)}, "tmux", "list-panes", "-a", "-F", realPaneFormat)
+
+	a := &App{tmux: tmux.Tmux{Runner: r, Bin: "tmux"}, run: r}
+	if err := a.KillSession("ses_NOT_LIVE"); err == nil {
+		t.Fatal("KillSession on unknown id should error (allowlist)")
+	}
+}
+
+func TestApp_KillSession_RejectsInvalidID(t *testing.T) {
+	r := proc.NewFakeRunner()
+	a := &App{tmux: tmux.Tmux{Runner: r, Bin: "tmux"}, run: r}
+	if err := a.KillSession("../evil"); err == nil {
+		t.Fatal("KillSession with invalid charset should error (validateSessionID)")
 	}
 }
 
