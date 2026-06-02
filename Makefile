@@ -8,7 +8,6 @@ BIN_DIR  := $(ROOT_DIR)/bin
 PKG      := ./...
 VERSION  := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS  := -s -w -X main.version=$(VERSION)
-PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
 
 # Hermetic, reproducible builds: vendored deps, no network at build time.
 export GOFLAGS := -mod=vendor
@@ -20,16 +19,25 @@ ifeq (, $(shell command -v go))
 $(error 'go' not found on PATH)
 endif
 
-.PHONY: build install run test test-integration test-all coverage lint fmt vet tidy vendor verify vulncheck doctor clean cross
+.PHONY: build install run gui-build gui-run test test-integration test-all coverage lint fmt vet tidy vendor verify vulncheck doctor clean cross
 
-build:                ## build the binary into ./bin (vendored, reproducible)
+build:                ## build the binary into ./bin (vendored, reproducible); -tags production required for GUI
 	@mkdir -p $(BIN_DIR)
-	@go build -trimpath -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/$(BIN) ./cmd/perch
+	@go build -tags production -trimpath -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/$(BIN) ./cmd/perch
 
 install:              ## install to GOBIN / ~/go/bin
-	@go install -trimpath -ldflags '$(LDFLAGS)' ./cmd/perch
+	@go install -tags production -trimpath -ldflags '$(LDFLAGS)' ./cmd/perch
 
-run: build            ## build then run
+run: build            ## build then run (needs an X/Wayland display for the GUI)
+	@$(BIN_DIR)/$(BIN)
+
+gui-build:            ## build the production GUI binary (frontend build + go build -tags production)
+	npm --prefix frontend install
+	npm --prefix frontend run build
+	@mkdir -p $(BIN_DIR)
+	@go build -tags production -trimpath -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/$(BIN) ./cmd/perch
+
+gui-run: gui-build    ## build then launch the GUI (needs an X/Wayland display)
 	@$(BIN_DIR)/$(BIN)
 
 test:                 ## unit tests
@@ -69,13 +77,11 @@ vulncheck:            ## scan deps for known CVEs (pinned govulncheck)
 doctor: build         ## run perch's own dependency check
 	@$(BIN_DIR)/$(BIN) doctor
 
-cross:                ## cross-compile all platforms into ./bin
-	@mkdir -p $(BIN_DIR); for p in $(PLATFORMS); do \
-	  os=$${p%/*}; arch=$${p#*/}; \
-	  echo "building $$os/$$arch"; \
-	  GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags '$(LDFLAGS)' \
-	    -o $(BIN_DIR)/$(BIN)-$$os-$$arch ./cmd/perch; \
-	done
+cross:                ## cross-compile for linux/amd64 (GUI uses cgo+WebKit; Linux-only; per-target toolchain needed for other OS/arch)
+	@mkdir -p $(BIN_DIR)
+	@echo "building linux/amd64"
+	@GOOS=linux GOARCH=amd64 go build -tags production -trimpath -ldflags '$(LDFLAGS)' \
+	  -o $(BIN_DIR)/$(BIN)-linux-amd64 ./cmd/perch
 
 clean:
 	@rm -rf $(BIN_DIR)
