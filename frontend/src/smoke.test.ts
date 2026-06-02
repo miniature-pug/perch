@@ -5,6 +5,7 @@ vi.mock("./lib/wails", () => ({
   listSessions: vi.fn(async () => []),
   onSessionsChanged: vi.fn(() => () => {}),
   createAgent: vi.fn(async () => "ses_new"),
+  killSession: vi.fn(async () => {}),
 }));
 
 test("App mounts and renders the sessions nav", async () => {

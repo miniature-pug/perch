@@ -26,3 +26,13 @@ test("invokes onselect when a session is clicked", async () => {
   await fireEvent.click(screen.getByText("feat-x"));
   expect(picked?.id).toBe("ses_a");
 });
+
+test("invokes onkill with the session when kill button is clicked", async () => {
+  const { fireEvent } = await import("@testing-library/svelte");
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  let killed: any;
+  render(Sidebar, { props: { onkill: (s: any) => (killed = s) } });
+  await waitFor(() => screen.getByLabelText("kill feat-x"));
+  await fireEvent.click(screen.getByLabelText("kill feat-x"));
+  expect(killed?.id).toBe("ses_a");
+});

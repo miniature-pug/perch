@@ -4,22 +4,29 @@
   import Terminal from "./lib/Terminal.svelte";
   import DiffPanel from "./lib/DiffPanel.svelte";
   import CommandPalette from "./lib/CommandPalette.svelte";
-  import { createAgent, type SessionInfo } from "./lib/wails";
+  import NewAgentDialog from "./lib/NewAgentDialog.svelte";
+  import ConfirmDialog from "./lib/ConfirmDialog.svelte";
+  import { createAgent, killSession, type SessionInfo } from "./lib/wails";
 
   type OpenTab = { id: string; label: string; sessionId: string; dir: string };
   let tabs = $state<OpenTab[]>([]);
   let activeId = $state("");
   let paletteOpen = $state(false);
+  let newAgentOpen = $state(false);
+  let pendingKill = $state<SessionInfo | null>(null);
 
-  async function newAgent() {
-    const projectPath = window.prompt("Project path?") ?? "";
-    const branch = window.prompt("Branch name?") ?? "";
-    if (projectPath && branch) {
-      await createAgent("claude", projectPath, branch);
+  const commands = [
+    { id: "new-agent", label: "New agent", run: () => { paletteOpen = false; newAgentOpen = true; } },
+  ];
+
+  async function handleNewAgent(tool: string, projectPath: string, branch: string) {
+    try {
+      await createAgent(tool, projectPath, branch);
+    } catch (err) {
+      console.error("createAgent failed:", err);
     }
-    paletteOpen = false;
+    newAgentOpen = false;
   }
-  const commands = [{ id: "new-agent", label: "New agent", run: newAgent }];
 
   function openSession(s: SessionInfo) {
     if (!tabs.find((t) => t.id === s.id)) {
@@ -44,7 +51,7 @@
 <svelte:window onkeydown={onKey} />
 
 <div class="layout">
-  <Sidebar onselect={openSession} />
+  <Sidebar onselect={openSession} onkill={(s) => (pendingKill = s)} />
   <section class="main">
     <Tabs {tabs} {activeId} onselect={(id) => (activeId = id)} onclose={closeTab} />
     {#if active}
@@ -57,3 +64,22 @@
 </div>
 
 <CommandPalette open={paletteOpen} {commands} />
+
+<NewAgentDialog
+  open={newAgentOpen}
+  onsubmit={handleNewAgent}
+  oncancel={() => (newAgentOpen = false)}
+/>
+
+<ConfirmDialog
+  open={pendingKill !== null}
+  message={pendingKill ? `Kill agent "${pendingKill.window}"? The session and its agent will be terminated.` : ""}
+  confirmLabel="Kill"
+  onconfirm={async () => {
+    if (pendingKill) {
+      await killSession(pendingKill.id);
+      pendingKill = null;
+    }
+  }}
+  oncancel={() => (pendingKill = null)}
+/>

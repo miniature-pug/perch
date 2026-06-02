@@ -2,7 +2,10 @@
   import { onMount, onDestroy } from "svelte";
   import { listSessions, onSessionsChanged, type SessionInfo } from "./wails";
 
-  let { onselect }: { onselect?: (s: SessionInfo) => void } = $props();
+  let {
+    onselect,
+    onkill,
+  }: { onselect?: (s: SessionInfo) => void; onkill?: (s: SessionInfo) => void } = $props();
   let sessions = $state<SessionInfo[]>([]);
   let off: (() => void) | undefined;
 
@@ -24,6 +27,10 @@
           <span class="branch">{s.window}</span>
           <span class="status status-{s.status}">{s.status}</span>
         </button>
+        <button
+          aria-label={"kill " + s.window}
+          onclick={(e) => { e.stopPropagation(); onkill?.(s); }}
+        >✕</button>
       </li>
     {/each}
   </ul>
