@@ -6,10 +6,17 @@
 package pty
 
 import (
+	"context"
+	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"sync"
 	"time"
+
+	creackpty "github.com/creack/pty"
+
+	"github.com/Miniature-Pug/perch/internal/tmux"
 )
 
 // EmitFunc delivers a named event with optional payload to the frontend. In
@@ -60,6 +67,48 @@ func (b *Bridge) Close() error {
 	b.closer = nil
 	b.ptyFile = nil
 	return c()
+}
+
+// maxChunk bounds a single emitted byte chunk; flushInterval is the read-loop
+// pacing hint. Sized for snappy interactive latency with bounded IPC volume.
+const (
+	maxChunk      = 16 * 1024
+	flushInterval = 8 * time.Millisecond
+)
+
+// Spawn starts `tmux -L <socket> attach-session -t <session>` inside a
+// pseudo-terminal and begins pumping its output to emit on the given event.
+// The attach argv is built explicitly using attach-session (not AttachArgs,
+// which branches on $TMUX to switch-client) so the behaviour is
+// environment-independent: a pty is always a fresh client and attach-session
+// is always correct. The raw session string is passed through
+// tmux.SessionTarget (prepends '=') and is never passed to a shell. Closing
+// the returned Bridge kills only this attach client; the agent session itself
+// survives.
+func Spawn(ctx context.Context, t tmux.Tmux, session, event string, emit EmitFunc) (*Bridge, error) {
+	argv := t.ExecArgs("attach-session", "-t", tmux.SessionTarget(session))
+	if len(argv) == 0 {
+		return nil, fmt.Errorf("pty Spawn: empty tmux argv")
+	}
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	f, err := creackpty.StartWithSize(cmd, &creackpty.Winsize{Cols: 80, Rows: 24})
+	if err != nil {
+		return nil, fmt.Errorf("pty Spawn: start: %w", err)
+	}
+	b := &Bridge{
+		ptyFile: f,
+		setsize: func(cols, rows uint16) error {
+			return creackpty.Setsize(f, &creackpty.Winsize{Cols: cols, Rows: rows})
+		},
+		closer: func() error {
+			ferr := f.Close()
+			_ = cmd.Process.Kill()
+			_, _ = cmd.Process.Wait()
+			return ferr
+		},
+	}
+	go pumpReader(f, event, emit, maxChunk, flushInterval)
+	return b, nil
 }
 
 // pumpReader reads r until EOF, coalescing reads into chunks no larger than
