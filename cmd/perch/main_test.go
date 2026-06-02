@@ -710,12 +710,3 @@ func TestPrintUsage_ContainsAttach(t *testing.T) {
 		t.Errorf("printUsage must mention 'attach'; stderr: %q", errOut)
 	}
 }
-
-// ── exec-layer error helper ───────────────────────────────────────────────────
-
-// execLayerError simulates an exec-layer failure (binary missing / PATH issue).
-// proc.ExitCode returns -1 for errors that don't implement ExitCode().
-type execLayerError struct{}
-
-func (e *execLayerError) Error() string { return "exec: no such file or directory" }
-
