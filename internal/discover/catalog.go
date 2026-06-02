@@ -7,7 +7,6 @@ import (
 	"github.com/Miniature-Pug/perch/internal/git"
 	"github.com/Miniature-Pug/perch/internal/model"
 	"github.com/Miniature-Pug/perch/internal/proc"
-	"github.com/Miniature-Pug/perch/internal/state"
 )
 
 // ProjectTrees bundles a discovered git project with its working trees.
@@ -31,7 +30,7 @@ func Projects(
 	r proc.Runner,
 	root string,
 	opts Options,
-	stats map[string]state.ProjectStat,
+	stats map[string]ProjectStat,
 	now int64,
 ) ([]*ProjectTrees, error) {
 	paths, err := Scan(root, opts)
@@ -77,16 +76,16 @@ func Projects(
 
 	// Build a stats copy restricted to discovered paths so that SortedPaths
 	// returns exactly the right set in frecency order.
-	discovered := make(map[string]state.ProjectStat, len(byPath))
+	discovered := make(map[string]ProjectStat, len(byPath))
 	for p := range byPath {
 		if s, ok := stats[p]; ok {
 			discovered[p] = s
 		} else {
-			discovered[p] = state.ProjectStat{} // zero → alphabetical tiebreak
+			discovered[p] = ProjectStat{} // zero → alphabetical tiebreak
 		}
 	}
 
-	ordered := state.SortedPaths(discovered, now)
+	ordered := SortedPaths(discovered, now)
 
 	result := make([]*ProjectTrees, 0, len(ordered))
 	for _, p := range ordered {

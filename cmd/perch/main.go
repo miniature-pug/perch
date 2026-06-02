@@ -17,7 +17,6 @@ import (
 	"github.com/Miniature-Pug/perch/internal/discover"
 	"github.com/Miniature-Pug/perch/internal/doctor"
 	"github.com/Miniature-Pug/perch/internal/proc"
-	"github.com/Miniature-Pug/perch/internal/state"
 )
 
 // version is injected at build time via ldflags:
@@ -227,7 +226,7 @@ func handleDebugDiscover(args []string, stdout, stderr io.Writer) int {
 		proc.ExecRunner{},
 		root,
 		discover.Options{},
-		map[string]state.ProjectStat{},
+		map[string]discover.ProjectStat{},
 		time.Now().Unix(),
 	)
 	if err != nil {

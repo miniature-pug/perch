@@ -9,7 +9,6 @@ import (
 
 	"github.com/Miniature-Pug/perch/internal/model"
 	"github.com/Miniature-Pug/perch/internal/proc"
-	"github.com/Miniature-Pug/perch/internal/state"
 )
 
 // porcelainForPath returns a minimal git worktree porcelain blob for a single
@@ -76,7 +75,7 @@ func TestProjects_Dedup(t *testing.T) {
 	r.Respond(proc.FakeResult{Stdout: mainBlob}, "git", "-C", projA, "worktree", "list", "--porcelain")
 	r.Respond(proc.FakeResult{Stdout: mainBlob}, "git", "-C", wtDir, "worktree", "list", "--porcelain")
 
-	results, err := Projects(context.Background(), r, root, Options{}, map[string]state.ProjectStat{}, 0)
+	results, err := Projects(context.Background(), r, root, Options{}, map[string]ProjectStat{}, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -114,7 +113,7 @@ func TestProjects_ColdStartAlphabetical(t *testing.T) {
 			"git", "-C", d, "worktree", "list", "--porcelain")
 	}
 
-	results, err := Projects(context.Background(), r, root, Options{}, map[string]state.ProjectStat{}, 0)
+	results, err := Projects(context.Background(), r, root, Options{}, map[string]ProjectStat{}, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -152,7 +151,7 @@ func TestProjects_FrecencyOrdering(t *testing.T) {
 	}
 
 	// Give bravo a high rank accessed right now → it scores highest.
-	stats := map[string]state.ProjectStat{
+	stats := map[string]ProjectStat{
 		bravo: {Rank: 100, LastAccessed: now},
 	}
 
@@ -191,7 +190,7 @@ func TestProjects_TreesAttached(t *testing.T) {
 	r.Respond(proc.FakeResult{Stdout: blob}, "git", "-C", mainPath, "worktree", "list", "--porcelain")
 	r.Respond(proc.FakeResult{Stdout: blob}, "git", "-C", linkedPath, "worktree", "list", "--porcelain")
 
-	results, err := Projects(context.Background(), r, root, Options{}, map[string]state.ProjectStat{}, 0)
+	results, err := Projects(context.Background(), r, root, Options{}, map[string]ProjectStat{}, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -279,7 +278,7 @@ func TestProjects_BareOnlyRepoSkipped(t *testing.T) {
 		r2.Respond(proc.FakeResult{Stdout: []byte("worktree " + bareOnlyDir + "\nbare\n")},
 			"git", "-C", bareOnlyDir, "worktree", "list", "--porcelain")
 
-		results, err := Projects(context.Background(), r2, bareOnlyRoot, Options{}, map[string]state.ProjectStat{}, 0)
+		results, err := Projects(context.Background(), r2, bareOnlyRoot, Options{}, map[string]ProjectStat{}, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -295,7 +294,7 @@ func TestProjects_BareOnlyRepoSkipped(t *testing.T) {
 		r.Respond(proc.FakeResult{Stdout: normalBlob},
 			"git", "-C", normalDir, "worktree", "list", "--porcelain")
 
-		results, err := Projects(context.Background(), r, root, Options{}, map[string]state.ProjectStat{}, 0)
+		results, err := Projects(context.Background(), r, root, Options{}, map[string]ProjectStat{}, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -331,7 +330,7 @@ func TestProjects_SkipOnRunnerError(t *testing.T) {
 		Err:    errors.New("exit status 128"),
 	}, "git", "-C", bad, "worktree", "list", "--porcelain")
 
-	results, err := Projects(context.Background(), r, root, Options{}, map[string]state.ProjectStat{}, 0)
+	results, err := Projects(context.Background(), r, root, Options{}, map[string]ProjectStat{}, 0)
 	if err != nil {
 		t.Fatalf("Projects returned error %v; want nil (skip-and-continue)", err)
 	}
