@@ -230,3 +230,24 @@ func TestValidateWorktreeUnderRoots_SymlinkEscape(t *testing.T) {
 		t.Errorf("symlink resolving inside root must be accepted: %v", err)
 	}
 }
+
+func TestApp_WriteToPty_UnknownTab(t *testing.T) {
+	a := &App{bridges: map[string]*ptyEntry{}}
+	if err := a.WriteToPty("nope", []byte("x")); err == nil {
+		t.Fatal("WriteToPty on unknown tab should error")
+	}
+	if err := a.ResizePty("nope", 80, 24); err == nil {
+		t.Fatal("ResizePty on unknown tab should error")
+	}
+}
+
+func TestApp_CloseTerminal_RemovesEntry(t *testing.T) {
+	a := &App{bridges: map[string]*ptyEntry{}}
+	a.putBridge("t1", &ptyEntry{bridge: nil}) // nil bridge: Close is a no-op guard
+	if err := a.CloseTerminal("t1"); err != nil {
+		t.Fatalf("CloseTerminal: %v", err)
+	}
+	if _, ok := a.getBridge("t1"); ok {
+		t.Fatal("CloseTerminal should remove the registry entry")
+	}
+}

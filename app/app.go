@@ -187,6 +187,63 @@ func (a *App) liveSession(id string) (SessionInfo, bool, error) {
 	return SessionInfo{}, false, nil
 }
 
+// OpenTerminal spawns a tmux attach pty for the live session id and registers a
+// Bridge under tabID. Output flows to the "pty-data:<tabID>" event. The session
+// id is validated against the live allowlist before any pty is spawned.
+func (a *App) OpenTerminal(tabID, sessionID string) error {
+	if err := validateSessionID(tabID); err != nil {
+		return fmt.Errorf("invalid tab id: %w", err)
+	}
+	s, ok, err := a.liveSession(sessionID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("unknown session %q", sessionID)
+	}
+	event := "pty-data:" + tabID
+	br, err := internalpty.Spawn(context.Background(), a.tmux, s.Session, event, a.emit)
+	if err != nil {
+		return err
+	}
+	a.putBridge(tabID, &ptyEntry{bridge: br})
+	return nil
+}
+
+// WriteToPty forwards raw keystroke bytes from xterm.js to the tab's pty.
+func (a *App) WriteToPty(tabID string, data []byte) error {
+	e, ok := a.getBridge(tabID)
+	if !ok || e.bridge == nil {
+		return fmt.Errorf("unknown terminal tab %q", tabID)
+	}
+	_, err := e.bridge.Write(data)
+	return err
+}
+
+// ResizePty applies addon-fit's reported dimensions to the tab's pty winsize.
+func (a *App) ResizePty(tabID string, cols, rows uint16) error {
+	e, ok := a.getBridge(tabID)
+	if !ok || e.bridge == nil {
+		return fmt.Errorf("unknown terminal tab %q", tabID)
+	}
+	return e.bridge.Resize(cols, rows)
+}
+
+// CloseTerminal tears down the tab's attach pty (the agent session survives) and
+// removes the registry entry. A nil bridge is tolerated so the registry guard is
+// testable without a real pty.
+func (a *App) CloseTerminal(tabID string) error {
+	e, ok := a.getBridge(tabID)
+	if !ok {
+		return fmt.Errorf("unknown terminal tab %q", tabID)
+	}
+	a.removeBridge(tabID)
+	if e.bridge == nil {
+		return nil
+	}
+	return e.bridge.Close()
+}
+
 // KillSession kills the tmux window backing the agent session id. The id is
 // validated against the live allowlist and the kill target is derived from the
 // matched session's own tmux session/window — the raw id never enters argv.
