@@ -1,9 +1,12 @@
 package pty
 
 import (
+	"context"
 	"io"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestBridge_WriteForwardsToPty(t *testing.T) {
@@ -80,5 +83,87 @@ func TestPumpReader_BatchesChunksAsIntSlices(t *testing.T) {
 		if len(c) > 4096 {
 			t.Fatalf("chunk %d exceeded max size: %d", i, len(c))
 		}
+	}
+}
+
+func TestLoginShellArgv_UsesShellEnv(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+	argv := LoginShellArgv()
+	if len(argv) != 2 || argv[0] != "/bin/sh" || argv[1] != "-l" {
+		t.Fatalf("LoginShellArgv = %v, want [/bin/sh -l]", argv)
+	}
+}
+
+func TestLoginShellArgv_FallsBackToBash(t *testing.T) {
+	t.Setenv("SHELL", "")
+	argv := LoginShellArgv()
+	if len(argv) != 2 || argv[0] != "/bin/bash" || argv[1] != "-l" {
+		t.Fatalf("LoginShellArgv = %v, want [/bin/bash -l]", argv)
+	}
+}
+
+func TestBridge_CloseIdempotent(t *testing.T) {
+	closed := 0
+	b := &Bridge{closer: func() error { closed++; return nil }}
+	if err := b.Close(); err != nil {
+		t.Fatalf("first Close: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if closed != 1 {
+		t.Errorf("closer called %d times, want exactly 1", closed)
+	}
+}
+
+// TestSpawn_RoundTrip spawns `sh -c 'printf hi'` and asserts emitted []int
+// bytes contain "hi". Polls with a deadline before Close so bytes are not lost.
+func TestSpawn_RoundTrip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	var mu sync.Mutex
+	var collected []byte
+
+	emit := func(event string, data ...any) {
+		if event != "test-event" {
+			return
+		}
+		if len(data) == 1 {
+			if chunk, ok := data[0].([]int); ok {
+				mu.Lock()
+				for _, v := range chunk {
+					collected = append(collected, byte(v))
+				}
+				mu.Unlock()
+			}
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	br, err := Spawn(ctx, t.TempDir(), []string{"sh", "-c", "printf hi"}, "test-event", emit, 80, 24)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		got := string(collected)
+		mu.Unlock()
+		if strings.Contains(got, "hi") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	_ = br.Close()
+
+	mu.Lock()
+	got := string(collected)
+	mu.Unlock()
+	if !strings.Contains(got, "hi") {
+		t.Errorf("round-trip bytes = %q, want to contain %q", got, "hi")
 	}
 }

@@ -6,13 +6,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"sync"
+
+	creackpty "github.com/creack/pty"
 )
 
-// EmitFunc delivers a named event with optional payload to the frontend.
 type EmitFunc func(event string, data ...any)
 
-// Bridge owns one pseudo-terminal.
 type Bridge struct {
 	mu      sync.Mutex
 	ptyFile io.WriteCloser
@@ -61,12 +62,35 @@ func LoginShellArgv() []string {
 	return []string{sh, "-l"}
 }
 
-// Spawn is the frozen direct-pty signature. Implemented in Task 0.3.
-func Spawn(_ context.Context, _ string, argv []string, _ string, _ EmitFunc, _ uint16, _ uint16) (*Bridge, error) {
+// Spawn starts argv[0] argv[1:] inside a pty in working directory cwd,
+// pumping output to emit on `event` as bounded []int chunks (≤ maxChunk).
+// No tmux. Closing the returned Bridge kills the process group and reaps it.
+func Spawn(ctx context.Context, cwd string, argv []string, event string, emit EmitFunc, cols, rows uint16) (*Bridge, error) {
 	if len(argv) == 0 {
 		return nil, fmt.Errorf("pty Spawn: argv must not be empty")
 	}
-	return nil, fmt.Errorf("pty Spawn: not yet implemented")
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // caller-controlled input
+	cmd.Dir = cwd
+	f, err := creackpty.StartWithSize(cmd, &creackpty.Winsize{Cols: cols, Rows: rows})
+	if err != nil {
+		return nil, fmt.Errorf("pty Spawn: start %q: %w", argv[0], err)
+	}
+	b := &Bridge{
+		ptyFile: f,
+		setsize: func(c, r uint16) error {
+			return creackpty.Setsize(f, &creackpty.Winsize{Cols: c, Rows: r})
+		},
+		closer: func() error {
+			ferr := f.Close()
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+				_, _ = cmd.Process.Wait()
+			}
+			return ferr
+		},
+	}
+	go pumpReader(f, event, emit, maxChunk)
+	return b, nil
 }
 
 func pumpReader(r io.Reader, event string, emit EmitFunc, maxChunk int) {
