@@ -693,6 +693,8 @@ Before any bound method touches tmux, the frontend's structured args are validat
   package app
 
   import (
+  	"os"
+  	"path/filepath"
   	"strings"
   	"testing"
   )
@@ -747,59 +749,65 @@ Before any bound method touches tmux, the frontend's structured args are validat
   }
 
   func TestValidateWorktreeUnderRoots(t *testing.T) {
-  	roots := []string{"/home/u/code"}
-  	if err := validateWorktreeUnderRoots("/home/u/code/perch/wt", roots); err != nil {
+  	root := t.TempDir()
+  	sub := filepath.Join(root, "perch", "wt")
+  	if err := os.MkdirAll(sub, 0o755); err != nil {
+  		t.Fatal(err)
+  	}
+  	roots := []string{root}
+  	// ACCEPT: real path under root, and the root itself.
+  	if err := validateWorktreeUnderRoots(sub, roots); err != nil {
   		t.Errorf("path under root rejected: %v", err)
   	}
-  	for _, p := range []string{"/etc/passwd", "/home/u/code/../secret", "relative/path", ""} {
+  	if err := validateWorktreeUnderRoots(root, roots); err != nil {
+  		t.Errorf("path at root rejected: %v", err)
+  	}
+  	// REJECT.
+  	outside := t.TempDir() // a real directory NOT under root → tests containment
+  	for _, p := range []string{
+  		"/etc/passwd",                         // real, outside root (containment)
+  		outside,                               // real, outside root (containment)
+  		root + "/../secret",                   // non-clean (rejected before resolve)
+  		"relative/path",                       // not absolute
+  		"",                                    // empty
+  		filepath.Join(root, "does-not-exist"), // in-root but missing → resolve error
+  	} {
   		if err := validateWorktreeUnderRoots(p, roots); err == nil {
   			t.Errorf("validateWorktreeUnderRoots(%q) = nil, want error", p)
   		}
   	}
   }
 
-  func TestValidateWorktreeUnderRoots_AdversarialCases(t *testing.T) {
-  	roots := []string{"/home/u/code"}
-  	// REJECTED: must all return a non-nil error.
-  	rejected := []struct {
-  		name  string
-  		input string
-  	}{
-  		{"dotdot traversal", "/home/u/code/../secret"},
-  		{"absolute outside root", "/etc/passwd"},
-  		// filepath.Clean + EvalSymlinks must defeat symlink whose target escapes root;
-  		// the impl MUST call filepath.EvalSymlinks before the prefix check.
-  		{"symlink escaping root", "/home/u/code/evil-link"},
-  		{"relative path", "relative/path"},
-  		{"empty", ""},
+  // TestValidateWorktreeUnderRoots_SymlinkEscape uses REAL on-disk symlinks so the
+  // EvalSymlinks containment check is actually exercised (not skipped). The escape
+  // link points at a real directory OUTSIDE the root, so EvalSymlinks resolves
+  // successfully and it is the prefix check — not a resolve error — that rejects it.
+  func TestValidateWorktreeUnderRoots_SymlinkEscape(t *testing.T) {
+  	root := t.TempDir()
+  	roots := []string{root}
+
+  	// ESCAPE → must be REJECTED by containment (target resolves successfully).
+  	outsideTarget := t.TempDir() // real dir outside root
+  	escapeLink := filepath.Join(root, "evil-link")
+  	if err := os.Symlink(outsideTarget, escapeLink); err != nil {
+  		t.Fatal(err)
   	}
-  	// For the symlink case the test environment may not have a real symlink; we verify
-  	// that a path that does not exist (and would require EvalSymlinks to resolve) is
-  	// handled without panic — if it resolves to a missing path outside roots it must
-  	// be rejected; if EvalSymlinks returns an error the impl must reject on error.
-  	for _, tc := range rejected {
-  		t.Run(tc.name, func(t *testing.T) {
-  			if tc.input == "/home/u/code/evil-link" {
-  				// Skip: this case requires a real symlink on disk; the in-root acceptance
-  				// test below covers the EvalSymlinks happy path.
-  				t.Skip("symlink adversarial case requires on-disk symlink; see integration test")
-  			}
-  			if err := validateWorktreeUnderRoots(tc.input, roots); err == nil {
-  				t.Errorf("validateWorktreeUnderRoots(%q) = nil, want error", tc.input)
-  			}
-  		})
+  	if err := validateWorktreeUnderRoots(escapeLink, roots); err == nil {
+  		t.Error("symlink whose target escapes root must be rejected by containment")
   	}
-  	// ACCEPTED: path exactly at root and path inside root.
-  	t.Run("path at root", func(t *testing.T) {
-  		if err := validateWorktreeUnderRoots("/home/u/code", roots); err != nil {
-  			t.Errorf("validateWorktreeUnderRoots at root = %v, want nil", err)
-  		}
-  	})
-  	t.Run("path under root", func(t *testing.T) {
-  		if err := validateWorktreeUnderRoots("/home/u/code/perch/wt", roots); err != nil {
-  			t.Errorf("validateWorktreeUnderRoots under root = %v, want nil", err)
-  		}
-  	})
+
+  	// INSIDE → must be ACCEPTED.
+  	realInside := filepath.Join(root, "real")
+  	if err := os.MkdirAll(realInside, 0o755); err != nil {
+  		t.Fatal(err)
+  	}
+  	goodLink := filepath.Join(root, "good-link")
+  	if err := os.Symlink(realInside, goodLink); err != nil {
+  		t.Fatal(err)
+  	}
+  	if err := validateWorktreeUnderRoots(goodLink, roots); err != nil {
+  		t.Errorf("symlink resolving inside root must be accepted: %v", err)
+  	}
   }
   ```
 - [ ] Run it and see it fail (undefined functions):
@@ -843,12 +851,19 @@ Before any bound method touches tmux, the frontend's structured args are validat
   }
 
   // validateWorktreeUnderRoots rejects any path that is not absolute, not clean,
-  // or not contained within one of the configured roots — closing path traversal,
-  // symlink escape, and arbitrary-directory operations from the frontend.
-  // filepath.EvalSymlinks is called after filepath.Clean so that a symlink whose
-  // target escapes the root is caught even when the raw path looks legitimate.
-  // If EvalSymlinks fails (e.g. path does not exist) the call is rejected — a
-  // non-existent worktree path is never valid.
+  // does not exist, or — after resolving symlinks — is not contained within one of
+  // the configured roots. It closes path traversal, symlink escape, and
+  // arbitrary-directory operations from the frontend.
+  //
+  // CONTRACT — the path MUST already exist on disk. filepath.EvalSymlinks is
+  // called after filepath.Clean so a symlink whose target escapes a root is caught
+  // even when the raw path looks legitimate; EvalSymlinks errors on a non-existent
+  // path, which is rejected. Every real caller passes an existing path (Diff on a
+  // checked-out worktree, CreateAgent on an existing project root), so callers MUST
+  // NOT hand this a to-be-created path. Each root is itself symlink-resolved so a
+  // root containing a symlink component still matches; a root that cannot be
+  // resolved is skipped (it can contain nothing). The trailing-separator prefix
+  // check prevents a sibling like "<root>-evil" from matching root "<root>".
   func validateWorktreeUnderRoots(p string, roots []string) error {
   	if p == "" || !filepath.IsAbs(p) {
   		return fmt.Errorf("worktree path must be absolute")
@@ -862,8 +877,12 @@ Before any bound method touches tmux, the frontend's structured args are validat
   		return fmt.Errorf("worktree path %q: %w", p, err)
   	}
   	for _, root := range roots {
-  		rc := filepath.Clean(root)
-  		if resolved == rc || strings.HasPrefix(resolved, rc+string(filepath.Separator)) {
+  		rootResolved, err := filepath.EvalSymlinks(filepath.Clean(root))
+  		if err != nil {
+  			continue
+  		}
+  		if resolved == rootResolved ||
+  			strings.HasPrefix(resolved, rootResolved+string(filepath.Separator)) {
   			return nil
   		}
   	}
@@ -1262,6 +1281,8 @@ These wire xterm.js to the bridge. `WriteToPty`/`ResizePty`/`CloseTerminal` oper
 
 `Diff` exposes the git diff/stat to the frontend (worktree path validated under roots). `NewApp` constructs the App with production deps but a nil emit; `startup(ctx)` installs the production `runtime.EventsEmit` closure. `Run` is the production launcher that calls `wails.Run` with no-port options.
 
+> **Cleanup obligation (from Task 1):** Task 1 added `internal/wailsdeps/deps.go` — a `//go:build tools` blank-import of wails + pty — to keep the deps through `go mod tidy` before any real code imported them. By the END of this task, `internal/pty` (Task 4) imports `creack/pty` and `app` imports the wails runtime, so both are imported by real production code. **Delete `internal/wailsdeps/deps.go` in this task**, then confirm `go mod tidy` keeps both deps (real imports now pin them) and `go build ./... && go vet ./...` stays green. Include the deletion in this task's commit.
+
 - [ ] Write the failing test for `Diff` worktree validation and `NewApp` defaults:
   ```go
   func TestApp_Diff_RejectsOutsideRoots(t *testing.T) {
@@ -1443,6 +1464,8 @@ These wire xterm.js to the bridge. `WriteToPty`/`ResizePty`/`CloseTerminal` oper
 - Test: `app/app_test.go`, `app/app_integration_test.go`
 
 §6 requires creating a new agent (worktree + session) from the GUI ("[+ New agent]", "new agent on an arbitrary branch"). This re-homes the orchestration formerly in `internal/tui/launch.go` into a bound method, reusing `git.AddWorktree`, `worktree.Seed`, `tmux.Launch`, `SetPaneOption`, `BootID`, and `state.SaveWindow` — all real signatures verified from source. `projectPath` is validated under roots; `branch` is validated via `git.ValidRef`; the tool is validated against the known adapters.
+
+> **SECURITY (containment of the derived worktree path):** `treePath` is derived from `gitpkg.WorktreePath(projectPath, handle, worktreeDir)` where `worktreeDir` comes from config. `validateWorktreeUnderRoots` validates `projectPath` but NOT the derived `treePath` (which does not yet exist, so it can't be EvalSymlinks-resolved). If `worktreeDir` is absolute or contains `..`, `treePath` could escape the roots, and `AddWorktree`/`Seed` would then write outside the sandbox. **This task MUST guarantee containment of `treePath`:** verify `WorktreePath`'s behavior with an absolute/`..`-laden `worktreeDir`, and if it does not already force the result under `projectPath`, reject such a config (or clamp `worktreeDir` to a relative, `..`-free value) BEFORE calling `AddWorktree`. Add a unit test: a config `worktreeDir` of `/etc` or `../../escape` must NOT cause a worktree to be created outside `projectPath`. Note: `validateWorktreeUnderRoots` cannot be used on `treePath` directly (non-existent path → resolve error) — validate the cleaned, not-yet-created path lexically (absolute-rejection + `..`-rejection + `strings.HasPrefix` under the resolved `projectPath`).
 
 - [ ] Write the failing UNIT test for argument validation (FakeRunner-backed; no sockets, no real agent):
   ```go
