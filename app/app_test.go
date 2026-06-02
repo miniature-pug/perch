@@ -479,3 +479,21 @@ func TestApp_CreateAgent_ContainmentGuard_EndToEnd(t *testing.T) {
 		}
 	})
 }
+
+func TestApp_PollOnce_EmitsOnlyOnChange(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Stdout: []byte(paneLine("%1", "0", "perch", "feat-x", "ses_abc", "working"))},
+		"tmux", "list-panes", "-a", "-F", realPaneFormat)
+
+	var emits int
+	a := &App{tmux: tmux.Tmux{Runner: r, Bin: "tmux"}, run: r, emit: func(string, ...any) { emits++ }}
+
+	a.pollOnce() // first observation differs from the empty zero-value → emit
+	if emits != 1 {
+		t.Fatalf("first pollOnce emits = %d, want 1", emits)
+	}
+	a.pollOnce() // identical signature → no emit
+	if emits != 1 {
+		t.Fatalf("unchanged pollOnce emits = %d, want still 1", emits)
+	}
+}

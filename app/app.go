@@ -509,18 +509,73 @@ func NewApp(roots []string) *App {
 	}
 }
 
-// startup is the Wails OnStartup hook. It captures the runtime context and
-// installs the production emit seam (runtime.EventsEmit). This is the ONLY place
-// the wails runtime context is bound; all other code uses the emit seam.
+// pollInterval is the state-sync tick (spec §3.3, ~1s).
+const pollInterval = time.Second
+
+// sessionsSignature is a cheap order-stable fingerprint of the session set used
+// to suppress no-op sessions-changed emits.
+func sessionsSignature(ss []SessionInfo) string {
+	var b strings.Builder
+	for _, s := range ss {
+		b.WriteString(s.ID)
+		b.WriteByte('=')
+		b.WriteString(s.Status)
+		b.WriteByte(';')
+	}
+	return b.String()
+}
+
+// pollOnce reads the live sessions once and emits sessions-changed only if the
+// signature changed since the last emit. Errors are swallowed: a transient tmux
+// hiccup must not kill the poller.
+func (a *App) pollOnce() {
+	sessions, err := a.ListSessions()
+	if err != nil {
+		return
+	}
+	sig := sessionsSignature(sessions)
+	a.mu.Lock()
+	changed := sig != a.lastSig
+	a.lastSig = sig
+	a.mu.Unlock()
+	if changed {
+		a.emit("sessions-changed")
+	}
+}
+
+// startPolling runs pollOnce every pollInterval until stopPoll is closed. Called
+// from startup in a goroutine.
+func (a *App) startPolling() {
+	t := time.NewTicker(pollInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-a.stopPoll:
+			return
+		case <-t.C:
+			a.pollOnce()
+		}
+	}
+}
+
+// startup is the Wails OnStartup hook. It captures the runtime context,
+// installs the production emit seam (runtime.EventsEmit), and starts the
+// background sessions poller (spec §3.3).
 func (a *App) startup(ctx context.Context) {
 	a.emit = func(event string, data ...any) {
 		wailsruntime.EventsEmit(ctx, event, data...)
 	}
+	a.stopPoll = make(chan struct{})
+	go a.startPolling()
 }
 
-// shutdown closes every live attach pty. The agent sessions persist on the tmux
-// server; only the GUI's attach clients are torn down.
+// shutdown stops the background poller and closes every live attach pty. The
+// agent sessions persist on the tmux server; only the GUI's attach clients are
+// torn down.
 func (a *App) shutdown(_ context.Context) {
+	if a.stopPoll != nil {
+		close(a.stopPoll)
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for id, e := range a.bridges {
