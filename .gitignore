@@ -45,3 +45,6 @@ frontend/dist/
 frontend/wailsjs/
 build/bin/
 frontend/package.json.md5
+
+# brainstorm visual companion
+.superpowers/
