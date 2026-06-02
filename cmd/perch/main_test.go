@@ -256,7 +256,7 @@ func TestPrintUsage_NoDebug(t *testing.T) {
 // ── removed verbs → exit 2 ────────────────────────────────────────────────────
 
 func TestRun_RemovedVerbs_Exit2(t *testing.T) {
-	for _, verb := range []string{"resurrect", "status"} {
+	for _, verb := range []string{"attach", "resurrect", "status"} {
 		t.Run(verb, func(t *testing.T) {
 			_, errOut, code := callRun([]string{verb})
 			if code != 2 {

@@ -79,7 +79,7 @@ func (a *App) removeBridge(tabID string) {
 const maxSessionIDLen = 128
 
 // validateSessionID enforces the perch session-id charset [A-Za-z0-9_-], length
-// 1..128 — the same contract internal/tmux applies to @perch_session values, so
+// 1..128 — bounded length for opaque session identifiers, so
 // the frontend can never inject a tmux target, delimiter, path, or shell metachar.
 func validateSessionID(s string) error {
 	if s == "" || len(s) > maxSessionIDLen {
