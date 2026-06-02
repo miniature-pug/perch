@@ -1,4 +1,4 @@
-# perch — Security Audit (M10)
+# perch — Security Audit (M10 + GUI pivot)
 
 > Threat model: (a) a malicious/untrusted **repo** opened in perch (its `.perch.toml` is
 > attacker-controlled), (b) malicious **agent output** rendered into the TUI, (c) malicious
@@ -13,8 +13,12 @@
 > before the `v0.1.0` tag. M10 DoD is not "security forever," it is "every M0–M9 vector
 > has a written verdict and every confirmed hole is fixed with an exploit-encoding test."
 >
-> Date: 2026-06-01. Method: one read-only investigator per vector group, primary-source
+> Date: 2026-06-01 (M10). Method: one read-only investigator per vector group, primary-source
 > code reading; every fix lands with a regression test that FAILS on the un-fixed code.
+>
+> **GUI-pivot pass (2026-06-02):** the new attack surface introduced by the Wails + WebKit2GTK
+> + Svelte frontend (IPC binding, attach-pty, CSP/no-port, npm supply chain) is audited here as
+> V14–V18. This fulfills the "new-surface pass before v0.1.0" commitment made in M10 scope.
 
 ## Verdict summary
 
@@ -39,6 +43,11 @@
 | V10 | `perch status set` sink | — | MITIGATED | enum-validated before any tmux write; empty `$TMUX_PANE`→exit 0; argv not shell |
 | V12 | dependency/vendor integrity | — | CLEAN (1 note) | `go mod verify` ok; Charm v1 locked; `teatest` test-only untagged pseudo (see note) |
 | V13 | build hygiene | — | CLEAN | `-trimpath`, version-only ldflags, no secrets, sane `.gitignore`/`.tool-versions` |
+| V14 | WebKit2GTK rendering engine (dynamically linked; CVE patching via distro apt, not perch) | — | **ACCEPTED** | keep system library current via apt; documented operational dependency |
+| V15 | script-message IPC / bound-method API (untrusted frontend → Go; session/path/ref/enum validation; argv-only tmux) | HIGH | **MITIGATED** | `validateSessionID` allowlist, `validateWorktreeUnderRoots` symlink-escape defeat, `CreateAgent` containment; TOCTOU residual = INFO (out of threat model) |
+| V16 | attach-pty `WriteToPty` (keystroke bytes forwarded verbatim to user's own pty) | — | **ACCEPTED** | documented boundary; confers no privilege beyond the user's own |
+| V17 | CSP + no listening port (restrictive `<meta>` CSP; no TCP port in production build) | — | **MITIGATED** | `connect-src 'self'`, no eval; `ws://` reload socket dev-tag-only; verified in production ELF |
+| V18 | npm/frontend supply chain (exact-pinned, `package-lock.json` committed; 4 MODERATE Svelte advisories) | MEDIUM | **MITIGATED** | advisories non-reachable: no SSR, no `{@html}`, no `<svelte:element>`; re-evaluate if any are added |
 
 ## Confirmed holes — detail & fix
 
@@ -129,6 +138,78 @@ execution path found). `make vulncheck` → "No vulnerabilities found"; `go mod 
 
 > **Note (go directive):** bumping `golang.org/x/sys` to v0.44.0 raised the module's `go`
 > directive 1.24.2 → 1.25.0 (the dependency requires it); the toolchain stays `go1.26.2`.
+
+## GUI Pivot — New Surface (V14–V18)
+
+### V14 — WebKit2GTK rendering engine (ACCEPTED)
+The GUI renders in the OS WebKit2GTK 4.0 webview, dynamically linked via cgo/pkg-config
+(`libwebkit2gtk-4.0-dev`). No engine is bundled; CVEs are patched through the distro's apt security
+feed, not perch's release cycle. **Verdict: ACCEPTED** — operational dependency, documented. Keep
+the system library current via `apt upgrade`; perch cannot own the WebKit2GTK patch cadence.
+
+### V15 — script-message IPC / bound-method API (MITIGATED, TOCTOU=INFO)
+The untrusted Svelte frontend reaches Go only through bound methods over the WebKit2GTK
+script-message channel (no HTTP). The IPC namespace (`window.go.app.App.<Method>`) was verified
+against the vendored Wails binding generator. Every argument is validated before any tmux/git work
+(which is always argv, never a shell):
+
+- **`validateSessionID`** — charset allowlist `[A-Za-z0-9_-]`, length 1–128, byte-level (immune to
+  Unicode-confusion); rejects shell metachars, control chars, path separators, traversal sequences.
+- **`validateWorktreeUnderRoots`** — requires absolute + clean + existing path; `filepath.EvalSymlinks`
+  on path AND roots; trailing-separator prefix check (defeats the `/root` vs `/root-evil` sibling
+  trick); rejects symlink-escape by containment.
+- **`CreateAgent` containment** — `containedUnderRoots` confines the derived (not-yet-existing)
+  worktree path under a configured root, rejecting absolute or `..` `worktree_dir` config values.
+  `branch` is `git.ValidRef`-validated (rejects leading `-` flag-injection); `tool` is an exhaustive
+  enum (`claude`/`opencode`). **This mitigates the pre-existing V2′ finding for the GUI create path.**
+- **`KillSession`/`OpenTerminal`** enforce a LIVE allowlist: the kill/attach target is derived from a
+  matched live session's own tmux session/window — the frontend-supplied id never enters argv
+  directly.
+
+Backed by failing-first adversarial tests (`TestValidateSessionID_AdversarialCases`,
+`TestValidateWorktreeUnderRoots_SymlinkEscape`, `TestApp_CreateAgent_ContainmentGuard`,
+`TestApp_CreateAgent_EndToEnd`) and two independent offensive security reviews (validation
+primitives; `CreateAgent`) that found no exploitable bypass.
+
+Residual: a same-user TOCTOU gap exists between worktree-path validation and the later `git -C`
+use. **NOT exploitable under the threat model** (local single OS user — such an attacker already
+holds the user's privileges). TOCTOU = INFO, out of threat model. **Verdict: MITIGATED.**
+
+### V16 — attach-pty `WriteToPty` (ACCEPTED)
+Keystroke bytes from xterm.js are forwarded verbatim to the agent's pty (the user's own
+shell/agent). This is the intended terminal channel; it confers no privilege beyond what the user
+already holds, and the bytes reach a pty (not a shell parsed by perch). **Verdict: ACCEPTED** —
+documented boundary.
+
+### V17 — CSP + no listening port (MITIGATED)
+`frontend/index.html` declares a restrictive Content-Security-Policy via `<meta http-equiv>`:
+
+```
+default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
+img-src 'self' data:; connect-src 'self'; font-src 'self';
+object-src 'none'; base-uri 'none'; frame-ancestors 'none'
+```
+
+No remote origins, no `eval`, no inline script. The production binary (built `go build -tags
+production`) exposes **no listening TCP port**: IPC is the WebKit script-message channel, assets
+are served via the `wails://` custom scheme, and the `ws://localhost:34115` reload socket is
+compiled in only under `//go:build dev`. Verified: the production ELF has no `net.Listen` /
+DevServer path outside the dev-tagged code. **Verdict: MITIGATED.**
+
+### V18 — npm/frontend supply chain (MITIGATED, advisories non-reachable)
+Frontend dependencies are exact-pinned (no `^`/`~`), `frontend/package-lock.json` is committed, and
+`npm audit --audit-level=high` is clean (Task 17A gate). Residual: 4 MODERATE Svelte advisories:
+
+| Advisory | Class | Reachable? |
+|----------|-------|------------|
+| GHSA-pr6f-5x2q-rwfp | SSR XSS | No — no SSR; client-only `mount()` |
+| GHSA-f3cj-j4f6-wq85 | SSR XSS | No — no SSR |
+| GHSA-rcqx-6q8c-2c42 | DOM-clobbering XSS via `{@html}` | No — grep of `frontend/src` finds zero `{@html}` |
+| GHSA-9rmh-mm8f-r9h6 | `<svelte:element>` ReDoS | No — grep finds zero `<svelte:element>` |
+
+All four are non-reachable. The pin is retained (fixes require `--force` past the pinned range and
+would violate the ≥30-day-old-library rule). **Verdict: MITIGATED.** Re-evaluate and bump if perch
+ever adds SSR, `{@html}`, or `<svelte:element>`.
 
 ## Follow-up (M11 surface — audit before tag)
 Bootstrap self-re-exec argv; `join/break/swap-pane` target construction (argv-safe, session names
