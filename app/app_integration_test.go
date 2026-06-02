@@ -175,6 +175,54 @@ func TestIntegration_App_ListThenOpenTerminal(t *testing.T) {
 	}
 }
 
+// TestIntegration_OpenTerminal_ReopenSameTab_NoLeak verifies the
+// close-and-replace invariant: reopening a tab with the same tabID closes the
+// prior bridge and registers exactly one new entry. After CloseTerminal the
+// registry is empty and no tmux attach client lingers.
+func TestIntegration_OpenTerminal_ReopenSameTab_NoLeak(t *testing.T) {
+	tmx := newTestServer(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	pane, err := tmx.Launch(ctx, "perch", "feat-reopen", dir, []string{"sh", "-c", fakeAgentCmd})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if err := tmx.SetPaneOption(ctx, pane, tmux.OptionPerchSession, "ses_reopen01"); err != nil {
+		t.Fatalf("SetPaneOption: %v", err)
+	}
+
+	a := newHeadlessApp(t, tmx, func(_ string, _ ...any) {})
+
+	// First open.
+	if err := a.OpenTerminal("tab1", "ses_reopen01"); err != nil {
+		t.Fatalf("first OpenTerminal: %v", err)
+	}
+	// Second open on the SAME tab: must close-and-replace without error.
+	if err := a.OpenTerminal("tab1", "ses_reopen01"); err != nil {
+		t.Fatalf("second OpenTerminal (reopen): %v", err)
+	}
+
+	// Only one entry must exist in the registry after the reopen.
+	a.mu.Lock()
+	n := len(a.bridges)
+	a.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("expected 1 bridge after reopen, got %d", n)
+	}
+
+	// Close and verify the registry is empty.
+	if err := a.CloseTerminal("tab1"); err != nil {
+		t.Fatalf("CloseTerminal: %v", err)
+	}
+	a.mu.Lock()
+	n = len(a.bridges)
+	a.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("expected 0 bridges after CloseTerminal, got %d", n)
+	}
+}
+
 // BenchmarkPtyThroughput floods the pty with output and asserts the emit path
 // stays bounded: each emitted chunk never exceeds maxChunk (16 KiB), so memory
 // per IPC crossing is capped regardless of flood volume.

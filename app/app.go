@@ -51,12 +51,22 @@ type App struct {
 	// last emitted session set; stopPoll is closed by shutdown to stop the ticker.
 	lastSig  string
 	stopPoll chan struct{}
+	// stopOnce guards close(stopPoll) so double-shutdown (e.g. in tests) cannot panic.
+	stopOnce sync.Once
 }
 
+// putBridge registers e under tabID. If a prior entry exists its bridge is
+// closed after the lock is released (close-and-replace: never orphan a
+// displaced pty). Never hold a.mu across bridge.Close (it kills a process /
+// closes fds and may block).
 func (a *App) putBridge(tabID string, e *ptyEntry) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
+	old := a.bridges[tabID]
 	a.bridges[tabID] = e
+	a.mu.Unlock()
+	if old != nil && old.bridge != nil {
+		_ = old.bridge.Close() // close-and-replace: never leak a displaced bridge
+	}
 }
 
 func (a *App) getBridge(tabID string) (*ptyEntry, bool) {
@@ -199,6 +209,8 @@ func (a *App) liveSession(id string) (SessionInfo, bool, error) {
 // OpenTerminal spawns a tmux attach pty for the live session id and registers a
 // Bridge under tabID. Output flows to the "pty-data:<tabID>" event. The session
 // id is validated against the live allowlist before any pty is spawned.
+// OpenTerminal is idempotent per tabID: if a bridge already exists for tabID,
+// the old bridge is closed and replaced (close-and-replace via putBridge).
 func (a *App) OpenTerminal(tabID, sessionID string) error {
 	if err := validateSessionID(tabID); err != nil {
 		return fmt.Errorf("invalid tab id: %w", err)
@@ -440,8 +452,20 @@ func (a *App) CreateAgent(tool, projectPath, branch string) (string, error) {
 	if err := gitpkg.AddWorktree(ctx, a.run, projectPath, branch, treePath, base); err != nil {
 		return "", err
 	}
+
+	// rollbackWorktree is a best-effort cleanup helper. It removes the worktree
+	// dir and git registration when a post-AddWorktree step fails. The git branch
+	// created by AddWorktree is NOT removed here — it is an intentional residue
+	// (re-creating with the same branch name returns ErrBranchExists, which is
+	// the correct signal). force=true is required because Seed may have written
+	// untracked files into the tree.
+	rollbackWorktree := func() {
+		_ = gitpkg.RemoveWorktree(ctx, a.run, projectPath, treePath, true)
+	}
+
 	// Seed files into the worktree.
 	if err := worktree.Seed(projectPath, treePath, files); err != nil {
+		rollbackWorktree()
 		return "", fmt.Errorf("seed worktree: %w", err)
 	}
 
@@ -456,6 +480,7 @@ func (a *App) CreateAgent(tool, projectPath, branch string) (string, error) {
 	if model.Tool(tool) == model.ToolClaude {
 		sid, err = newSessionID()
 		if err != nil {
+			rollbackWorktree()
 			return "", err
 		}
 		argv = append([]string{bin}, adapter.NewArgs(agent.NewOpts{SessionID: sid})...)
@@ -468,6 +493,7 @@ func (a *App) CreateAgent(tool, projectPath, branch string) (string, error) {
 	winName := tmux.WindowName(branch)
 	paneID, err := a.tmux.Launch(ctx, sessName, winName, treePath, argv)
 	if err != nil {
+		rollbackWorktree()
 		return "", err
 	}
 
@@ -562,6 +588,9 @@ func (a *App) startPolling() {
 // installs the production emit seam (runtime.EventsEmit), and starts the
 // background sessions poller (spec §3.3).
 func (a *App) startup(ctx context.Context) {
+	// Wails calls OnStartup exactly once, before the frontend can invoke any
+	// bound method or before any pump goroutine is spawned, so this assignment
+	// is ordered-safe without a mutex (happens-before any reader of a.emit).
 	a.emit = func(event string, data ...any) {
 		wailsruntime.EventsEmit(ctx, event, data...)
 	}
@@ -571,11 +600,14 @@ func (a *App) startup(ctx context.Context) {
 
 // shutdown stops the background poller and closes every live attach pty. The
 // agent sessions persist on the tmux server; only the GUI's attach clients are
-// torn down.
+// torn down. shutdown is safe to call more than once: stopOnce guards
+// close(stopPoll) so a second call cannot panic.
 func (a *App) shutdown(_ context.Context) {
-	if a.stopPoll != nil {
-		close(a.stopPoll)
-	}
+	a.stopOnce.Do(func() {
+		if a.stopPoll != nil {
+			close(a.stopPoll)
+		}
+	})
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for id, e := range a.bridges {

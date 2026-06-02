@@ -4,7 +4,6 @@ import (
 	"io"
 	"sync"
 	"testing"
-	"time"
 )
 
 func TestBridge_WriteForwardsToPty(t *testing.T) {
@@ -57,7 +56,7 @@ func TestPumpReader_BatchesChunksAsIntSlices(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		pumpReader(pr, "pty-data:t1", emit, 4096, 8*time.Millisecond)
+		pumpReader(pr, "pty-data:t1", emit, 4096)
 		close(done)
 	}()
 

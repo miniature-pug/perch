@@ -497,3 +497,96 @@ func TestApp_PollOnce_EmitsOnlyOnChange(t *testing.T) {
 		t.Fatalf("unchanged pollOnce emits = %d, want still 1", emits)
 	}
 }
+
+// TestApp_PutBridge_ClosesDisplaced verifies that putBridge with a non-nil
+// displaced entry (nil bridge inside) does not panic and that the new entry
+// wins. The close path for a real bridge (non-nil closer) is covered by the
+// integration test TestIntegration_OpenTerminal_ReopenSameTab_NoLeak.
+func TestApp_PutBridge_ClosesDisplaced(t *testing.T) {
+	a := &App{bridges: map[string]*ptyEntry{}}
+
+	// First put: entry with a nil bridge (CloseTerminal-style entry).
+	a.putBridge("t1", &ptyEntry{bridge: nil})
+	// Second put: displaces the first. Must not panic even with nil bridge inside.
+	a.putBridge("t1", &ptyEntry{bridge: nil})
+	// Only one entry must exist.
+	if _, ok := a.getBridge("t1"); !ok {
+		t.Fatal("expected t1 present after second putBridge")
+	}
+	a.mu.Lock()
+	if len(a.bridges) != 1 {
+		t.Fatalf("expected 1 bridge entry, got %d", len(a.bridges))
+	}
+	a.mu.Unlock()
+}
+
+// TestApp_Shutdown_DoubleClose verifies that calling shutdown twice does not
+// panic. Without the sync.Once guard the second close(stopPoll) would panic.
+func TestApp_Shutdown_DoubleClose(t *testing.T) {
+	a := &App{
+		bridges:  map[string]*ptyEntry{},
+		emit:     func(string, ...any) {},
+		stopPoll: make(chan struct{}),
+	}
+	ctx := t.Context()
+	// First shutdown closes the channel; second must not panic.
+	a.shutdown(ctx)
+	a.shutdown(ctx) // must not panic
+}
+
+// TestApp_CreateAgent_RollbackOnLaunchFailure verifies that CreateAgent removes
+// the worktree created by AddWorktree when tmux.Launch fails, so no orphaned
+// directory is left behind. A real git repo + real git runner is used so that
+// AddWorktree actually creates the worktree directory; a failing FakeRunner
+// (Default=error) is injected as the tmux runner so Launch errors reliably.
+func TestApp_CreateAgent_RollbackOnLaunchFailure(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "proj")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"init", "-q", repo},
+		{"-C", repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-qm", "init"},
+	} {
+		cmd := exec.Command("git", args...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	// All tmux calls (new-session, etc.) fail so Connect → Launch errors.
+	launchErrResult := proc.FakeResult{Err: fmt.Errorf("tmux: injected failure")}
+	failTmuxRunner := proc.NewFakeRunner()
+	failTmuxRunner.Default = &launchErrResult
+
+	a := &App{
+		// a.run uses the real ExecRunner so AddWorktree and RemoveWorktree work.
+		tmux:    tmux.Tmux{Runner: failTmuxRunner, Bin: "tmux"},
+		run:     proc.ExecRunner{},
+		roots:   []string{root},
+		emit:    func(string, ...any) {},
+		bridges: map[string]*ptyEntry{},
+	}
+
+	_, err := a.CreateAgent("claude", repo, "feat/rollback-test")
+	if err == nil {
+		t.Fatal("CreateAgent must error when Launch fails")
+	}
+
+	// Prove the flow reached Launch — AddWorktree succeeded and created the dir —
+	// so "treePath absent" below is attributable to rollback, not to AddWorktree
+	// silently failing (which would make the assertion vacuous).
+	if len(failTmuxRunner.Calls) == 0 {
+		t.Fatal("expected tmux Launch to be attempted; rollback assertion would otherwise be vacuous")
+	}
+
+	// The worktree directory must have been removed by rollback.
+	treePath := filepath.Join(root, "proj__worktrees", "feat-rollback-test")
+	if _, statErr := os.Stat(treePath); !os.IsNotExist(statErr) {
+		t.Errorf("worktree %q must not exist after rollback; stat=%v", treePath, statErr)
+	}
+}

@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"sync"
-	"time"
 
 	creackpty "github.com/creack/pty"
 
@@ -69,12 +68,9 @@ func (b *Bridge) Close() error {
 	return c()
 }
 
-// maxChunk bounds a single emitted byte chunk; flushInterval is the read-loop
-// pacing hint. Sized for snappy interactive latency with bounded IPC volume.
-const (
-	maxChunk      = 16 * 1024
-	flushInterval = 8 * time.Millisecond
-)
+// maxChunk bounds a single emitted byte chunk. Sized for snappy interactive
+// latency with bounded IPC volume.
+const maxChunk = 16 * 1024
 
 // Spawn starts `tmux -L <socket> attach-session -t <session>` inside a
 // pseudo-terminal and begins pumping its output to emit on the given event.
@@ -107,17 +103,17 @@ func Spawn(ctx context.Context, t tmux.Tmux, session, event string, emit EmitFun
 			return ferr
 		},
 	}
-	go pumpReader(f, event, emit, maxChunk, flushInterval)
+	go pumpReader(f, event, emit, maxChunk)
 	return b, nil
 }
 
-// pumpReader reads r until EOF, coalescing reads into chunks no larger than
-// maxChunk and flushing at least every flush interval, emitting each chunk on
-// event. Each chunk is emitted as a []int so Wails' JSON encoding delivers it
-// to the frontend as a number[] (a []byte would JSON-encode as a base64 string,
-// breaking the frontend's Uint8Array.from(number[]) reconstruction). Batching
-// bounds IPC crossings under flood load. Returns when r reaches EOF or errors.
-func pumpReader(r io.Reader, event string, emit EmitFunc, maxChunk int, flush time.Duration) {
+// pumpReader reads r until EOF or error, emitting each read as a bounded
+// (≤maxChunk) []int chunk on event. Each chunk is emitted as a []int so
+// Wails' JSON encoding delivers it to the frontend as a number[] (a []byte
+// would JSON-encode as a base64 string, breaking the frontend's
+// Uint8Array.from(number[]) reconstruction). Batching is bounded by maxChunk
+// and the OS pty read granularity — no timer is involved.
+func pumpReader(r io.Reader, event string, emit EmitFunc, maxChunk int) {
 	buf := make([]byte, maxChunk)
 	for {
 		n, err := r.Read(buf)
@@ -131,7 +127,5 @@ func pumpReader(r io.Reader, event string, emit EmitFunc, maxChunk int, flush ti
 		if err != nil {
 			return
 		}
-		_ = flush // reserved: the read loop is already chunk-bounded by maxChunk;
-		// flush coalescing is applied at the os pty layer where reads block.
 	}
 }
