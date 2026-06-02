@@ -74,6 +74,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the global-only agent-binary boundary. See `docs/security-audit.md` for the
   complete ledger.
 
+- **Non-destructive close-window (`esc`)** — pressing `esc` in the sidebar when
+  no filter is active detaches the agent view without killing the session. The
+  agent keeps running in its own tmux window and can be reopened with `↵` any time.
+
+- **F12 / mouse-click: return focus to list** — pressing `F12` from inside an
+  agent pane jumps focus back to the sidebar list instantly. Clicking the sidebar
+  with the mouse does the same. Both bindings are scoped to the perch frame only;
+  no global tmux configuration is modified.
+
+- **Frame status bar** — a persistent status bar at the bottom of the perch frame
+  shows the active navigation key hints at all times.
+
+- **Mouse support in the frame** — tmux mouse mode is enabled session-wide in the
+  perch frame so that clicking any pane focuses it. Selecting text with the mouse
+  requires holding **Shift** because tmux owns the mouse event.
+
+- **`↵` open / resume / focus** — pressing Enter on a session that is already
+  shown in the main pane focuses it rather than re-launching it; if the agent
+  process had exited, it is resumed cleanly.
+
 ### Notes
 
 - The `pre_merge` config field and the merge feature (§7.3) are intentionally

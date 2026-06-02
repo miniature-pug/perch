@@ -35,7 +35,7 @@ func defaultKeys() keyMap {
 		),
 		Enter: key.NewBinding(
 			key.WithKeys("enter"),
-			key.WithHelp("↵", "open"),
+			key.WithHelp("↵", "open / resume / focus"),
 		),
 		New: key.NewBinding(
 			key.WithKeys("n"),

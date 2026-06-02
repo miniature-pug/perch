@@ -90,8 +90,9 @@ Up/Down navigation is owned by the list — they are not listed here.
 | Key | Action |
 |-----|--------|
 | `/` | Filter sessions |
-| `esc` | Clear filter |
-| `↵` | Open selected session (swap into main pane) |
+| `esc` | Close open agent window (non-destructive) / clear filter if active |
+| `↵` | Open / resume / focus selected session |
+| `F12` | Return focus to the sidebar from inside an agent |
 | `n` | New session |
 | `w` | New worktree |
 | `d` | Remove session record |
@@ -101,15 +102,30 @@ Up/Down navigation is owned by the list — they are not listed here.
 | `c` | Collapse sidebar |
 | `?` | Toggle help |
 | `:` | Open command bar |
-| `q` / `ctrl+c` | Quit |
+| `q` / `ctrl+c` | Quit (agent sessions survive) |
 
 ### Layout & focus
 
-The sidebar stays visible at all times. Pressing `↵` swaps the selected agent
-into the main pane and moves focus there. To return focus to the sidebar, use
-the tmux prefix followed by `←` or `→` (the default-socket model — this is
-intentional; perch uses the default tmux socket and relies on standard tmux key
-bindings for cross-pane navigation).
+Mouse support is on in the perch frame. Click any pane to focus it — click the
+sidebar to get back to the list, click the agent pane to type.
+
+Press **F12** from inside an agent to jump focus back to the sidebar list without
+touching the mouse.
+
+In the sidebar, **esc** closes the open agent's window — the agent session keeps
+running in its own tmux window; reopen it with **↵** any time (it resumes
+cleanly, not stale output).
+
+**q** quits perch; your agent sessions survive. Perch swaps them home before
+killing the frame.
+
+A status bar at the bottom of the perch frame shows these key hints at all times.
+
+> **Note:** because tmux owns the mouse in the frame, selecting text with the
+> mouse requires holding **Shift**.
+
+> **Power users:** the tmux prefix + `←`/`→` also moves between panes as a
+> secondary method.
 
 ---
 

@@ -38,8 +38,12 @@ func (m Model) FullHelp() [][]key.Binding {
 			m.keys.CmdBar,
 			m.keys.CollapseSidebar,
 			key.NewBinding(
+				key.WithKeys("F12 / click"),
+				key.WithHelp("F12 / click", "focus list (from agent)"),
+			),
+			key.NewBinding(
 				key.WithKeys("prefix ←/→"),
-				key.WithHelp("tmux prefix ←/→", "focus agent / sidebar"),
+				key.WithHelp("tmux prefix ←/→", "focus agent / sidebar (also works)"),
 			),
 		},
 	}
