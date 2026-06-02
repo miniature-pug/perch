@@ -394,7 +394,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if c := m.statusPollCmd(); c != nil {
 			cmds = append(cmds, c)
 		}
+		// Frame self-heal: when an agent is displayed, probe whether its pane has
+		// died (user Ctrl-C/exit while focused in the main slot). A dead pane is
+		// recovered on the resulting displayedPaneCheckedMsg without any keypress.
+		if m.inFrame() && m.displayedPaneID != "" {
+			if c := m.checkDisplayedDeadCmd(); c != nil {
+				cmds = append(cmds, c)
+			}
+		}
 		return m, tea.Batch(cmds...)
+
+	case displayedPaneCheckedMsg:
+		// Deadness probe result for the displayed frame pane. Recover only when the
+		// pane is confirmed dead AND still displayed (the probe may race a manual
+		// close/swap that already reset displayedPaneID).
+		if msg.dead && m.inFrame() && m.displayedPaneID != "" {
+			return m, m.recoverDeadDisplayedCmd()
+		}
+		return m, nil
 
 	case execFinishedMsg:
 		if msg.err != nil {

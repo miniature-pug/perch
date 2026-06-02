@@ -311,23 +311,84 @@ func swapDisplayedHome(ctx context.Context, t tmux.Tmux, displayed, placeholder 
 	}
 }
 
-// windowClosedMsg is delivered by closeWindowCmd after the swap-home attempt
-// completes (whether or not the swap succeeded). Applying it to the model resets
-// displayedPaneID to "" so the placeholder reclaims the frame main slot.
+// windowClosedMsg is delivered by closeWindowCmd / recoverDeadDisplayedCmd after
+// the swap-home (and, for the dead path, kill-pane) attempt completes — whether
+// or not the underlying tmux ops succeeded. Applying it to the model resets
+// displayedPaneID to "" so the placeholder reclaims the frame main slot;
+// placeholderPaneID is left untouched (the placeholder pane id is stable across
+// swap-pane — only its location moves).
 type windowClosedMsg struct{}
 
-// closeWindowCmd returns a tea.Cmd that non-destructively detaches the view of
-// the currently displayed agent: it swaps the agent pane back to its home session
-// (so the agent process keeps running) and returns a windowClosedMsg that resets
-// displayedPaneID to "".
+// recoverFrameDead performs the dead-displayed-pane recovery sequence on the
+// given tmux server, best-effort (all errors swallowed). ORDER IS CRITICAL:
+//
+//  1. swap-home: the LIVE placeholder returns to the frame main slot under its
+//     ORIGINAL pane id (placeholder id unchanged); this EXILES the dead displayed
+//     pane into the agent's home window. Killing before this swap would destroy
+//     the dead pane while it still occupies the frame main slot, stranding the
+//     placeholder exiled-alive.
+//  2. kill-pane the now-exiled DEAD displayed pane (ids are stable across swap, so
+//     `displayed` still addresses it). Topology-safe: only that one pane is
+//     removed — a shared project session keeping sibling agent windows survives.
+//  3. focus the sidebar (select-pane -L): after swap-home the active pane is the
+//     placeholder in the main slot; -L moves left to the sidebar, matching the F12
+//     navigation binding.
+func recoverFrameDead(ctx context.Context, t tmux.Tmux, displayed, placeholder string) {
+	swapDisplayedHome(ctx, t, displayed, placeholder)
+	_ = t.KillPane(ctx, displayed)
+	_ = t.SelectPaneLeft(ctx)
+}
+
+// recoverDeadDisplayedCmd returns a tea.Cmd that recovers the frame after the
+// displayed agent's process has exited (its pane is dead under remain-on-exit).
+// It runs recoverFrameDead (swap-home → kill the exiled dead pane → focus sidebar)
+// and returns a windowClosedMsg that resets displayedPaneID to "".
 //
 // Guard conditions:
-//   - loader == nil → no-op (returns a cmd that delivers windowClosedMsg immediately).
-//   - displayedPaneID == "" → no-op (nothing to close; still delivers windowClosedMsg
-//     so callers do not need a nil check on the returned cmd).
+//   - loader == nil → no-op (delivers windowClosedMsg immediately).
+//   - displayedPaneID == "" → no-op (nothing to recover; still delivers
+//     windowClosedMsg so callers need no nil check on the returned cmd).
 //
-// Dead pane: if the swap-home errors (agent exited while displayed), the error
-// is swallowed and windowClosedMsg is still returned — the view reset is always safe.
+// All tmux errors are swallowed (best-effort, consistent with the other frame
+// cmds): the view reset must always happen so the frame is never wedged.
+func (m Model) recoverDeadDisplayedCmd() tea.Cmd {
+	if m.loader == nil || m.displayedPaneID == "" {
+		return func() tea.Msg { return windowClosedMsg{} }
+	}
+
+	displayed := m.displayedPaneID
+	placeholder := m.placeholderPaneID
+	t := m.loader.Tmux
+	ctx := m.loader.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	return func() tea.Msg {
+		recoverFrameDead(ctx, t, displayed, placeholder)
+		return windowClosedMsg{}
+	}
+}
+
+// closeWindowCmd returns a tea.Cmd that detaches the view of the currently
+// displayed agent, branching on whether its pane is still alive:
+//
+//   - ALIVE: swap the agent pane back to its home session (so the process keeps
+//     running, resumable) — NO kill. This is the normal close (esc).
+//   - DEAD (agent exited while displayed, under remain-on-exit): full recovery —
+//     swap home + kill the exiled dead pane + focus the sidebar. Killing only the
+//     dead frame pane without swap-home would leak the orphaned-alive placeholder
+//     and corrupt the agent's resume; the full recovery avoids both (M17-4).
+//
+// Aliveness is probed with PaneDead(displayed); a probe error is treated as ALIVE
+// (fail safe: prefer keeping the agent over an unintended kill).
+//
+// Guard conditions:
+//   - loader == nil → no-op (delivers windowClosedMsg immediately).
+//   - displayedPaneID == "" → no-op (no probe, no tmux calls; still delivers
+//     windowClosedMsg so callers need no nil check on the returned cmd).
+//
+// In all paths a windowClosedMsg is returned so the view reset always happens.
 func (m Model) closeWindowCmd() tea.Cmd {
 	if m.loader == nil || m.displayedPaneID == "" {
 		return func() tea.Msg { return windowClosedMsg{} }
@@ -342,8 +403,50 @@ func (m Model) closeWindowCmd() tea.Cmd {
 	}
 
 	return func() tea.Msg {
-		swapDisplayedHome(ctx, t, displayed, placeholder)
+		dead, err := t.PaneDead(ctx, displayed)
+		if err == nil && dead {
+			recoverFrameDead(ctx, t, displayed, placeholder)
+		} else {
+			// Alive (or probe failed → fail safe): swap home only, agent survives.
+			swapDisplayedHome(ctx, t, displayed, placeholder)
+		}
 		return windowClosedMsg{}
+	}
+}
+
+// displayedPaneCheckedMsg carries the result of a periodic deadness probe of the
+// displayed frame pane. When dead is true the statusTickMsg handler dispatches
+// recoverDeadDisplayedCmd so the frame self-heals without any keypress.
+type displayedPaneCheckedMsg struct{ dead bool }
+
+// checkDisplayedDeadCmd returns a tea.Cmd that probes whether the displayed frame
+// pane has exited (PaneDead) and reports the result via displayedPaneCheckedMsg.
+//
+// statusPoll's reload data cannot answer this: ListPanesAll excludes dead panes
+// and keys by @perch_session, whereas displayedPaneID is a raw %N pane id — a dead
+// displayed pane simply drops out of the poll, so a targeted PaneDead probe is
+// used instead. A probe error is reported as NOT dead (fail safe: never recover —
+// and thus never kill — on an inconclusive read).
+//
+// Guard conditions return nil (the caller omits the probe from the tick batch):
+//   - loader == nil
+//   - displayedPaneID == ""
+func (m Model) checkDisplayedDeadCmd() tea.Cmd {
+	if m.loader == nil || m.displayedPaneID == "" {
+		return nil
+	}
+	target := m.displayedPaneID
+	t := m.loader.Tmux
+	ctx := m.loader.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return func() tea.Msg {
+		dead, err := t.PaneDead(ctx, target)
+		if err != nil {
+			dead = false
+		}
+		return displayedPaneCheckedMsg{dead: dead}
 	}
 }
 

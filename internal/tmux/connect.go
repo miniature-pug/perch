@@ -140,6 +140,20 @@ func (o Tmux) SelectPane(ctx context.Context, target string) error {
 	return nil
 }
 
+// SelectPaneLeft moves focus to the pane to the left of the active pane
+// (select-pane -L). In the perch frame the sidebar sits to the left of the
+// main slot, so this focuses the sidebar after a displayed agent is returned
+// home — matching the F12 navigation binding (bind-key select-pane -L). The
+// Model does not track the sidebar pane id, so directional selection is used.
+func (o Tmux) SelectPaneLeft(ctx context.Context) error {
+	_, stderr, err := o.runner().Run(ctx, o.bin(),
+		o.args("select-pane", "-L")...)
+	if err != nil {
+		return fmt.Errorf("tmux select-pane -L: %w: %s", err, strings.TrimSpace(string(stderr)))
+	}
+	return nil
+}
+
 // BindKey binds a key in a named key-table (bind-key -T <table> <key> <cmd...>).
 func (o Tmux) BindKey(ctx context.Context, table, keyName string, cmd ...string) error {
 	argv := append([]string{"bind-key", "-T", table, keyName}, cmd...)

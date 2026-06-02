@@ -481,6 +481,41 @@ func TestSelectPane_ErrorWrapped(t *testing.T) {
 	}
 }
 
+// ── SelectPaneLeft ────────────────────────────────────────────────────────────
+
+func TestSelectPaneLeft_CallArgs(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{}, "tmux", "select-pane", "-L")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	if err := o.SelectPaneLeft(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(r.Calls) != 1 {
+		t.Fatalf("want 1 call, got %d", len(r.Calls))
+	}
+	want := []string{"select-pane", "-L"}
+	if !reflect.DeepEqual(r.Calls[0].Args, want) {
+		t.Errorf("Call.Args = %v, want %v", r.Calls[0].Args, want)
+	}
+}
+
+func TestSelectPaneLeft_ErrorWrapped(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Err: proc.FakeExitError{Code: 1}, Stderr: []byte("no left pane")},
+		"tmux", "select-pane", "-L")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	err := o.SelectPaneLeft(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "no left pane") {
+		t.Errorf("error should contain stderr: %v", err)
+	}
+}
+
 // ── Connect ───────────────────────────────────────────────────────────────────
 
 func TestConnect_SessionAbsent_CreatesSession(t *testing.T) {

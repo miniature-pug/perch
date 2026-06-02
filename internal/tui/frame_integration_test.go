@@ -165,6 +165,144 @@ func TestIntegration_Frame_DataLossGate_Positive(t *testing.T) {
 	}
 }
 
+// paneDead reports the pane_dead flag for paneID via ListPanesAll. Returns
+// (false, false) when the pane is not found.
+func paneState(t *testing.T, tmx tmux.Tmux, paneID string) (found, dead bool) {
+	t.Helper()
+	ctx := context.Background()
+	panes, err := tmx.ListPanesAll(ctx)
+	if err != nil {
+		return false, false
+	}
+	for _, p := range panes {
+		if p.ID == paneID {
+			return true, p.Dead
+		}
+	}
+	return false, false
+}
+
+// TestIntegration_Frame_RecoverDeadDisplayed exercises the M17-4 self-heal path
+// end to end on a private tmux server: an agent is swapped into the frame main
+// slot, its process exits while displayed (the pane goes dead under
+// remain-on-exit), and recoverDeadDisplayedCmd restores the frame to its resting
+// shape — [sidebar, live placeholder] — with the dead pane reaped, then proves
+// the frame is still usable by swapping a second agent in.
+func TestIntegration_Frame_RecoverDeadDisplayed(t *testing.T) {
+	tmx := newFrameTestServer(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	// ── Build the frame session: window "frame" = [sidebar, placeholder]. ─────
+	sidebarPane, err := tmx.NewSession(ctx, "rec-frame", "frame", dir)
+	if err != nil {
+		t.Fatalf("NewSession rec-frame: %v", err)
+	}
+	placeholderPane, err := tmx.SplitWindow(ctx, sidebarPane, dir, true, "")
+	if err != nil {
+		t.Fatalf("SplitWindow placeholder: %v", err)
+	}
+	// remain-on-exit on the frame window: a displayed agent that exits leaves a
+	// DEAD pane in the main slot (the precondition the recovery handles) instead
+	// of the pane silently vanishing.
+	frameTarget := tmux.WindowTarget("rec-frame", "frame")
+	if err := tmx.SetWindowOption(ctx, frameTarget, "remain-on-exit", "on"); err != nil {
+		t.Fatalf("SetWindowOption remain-on-exit: %v", err)
+	}
+
+	// ── Build the agent session running an interactive shell. ────────────────
+	agentPane, err := tmx.NewSession(ctx, "rec-agent", "main", dir)
+	if err != nil {
+		t.Fatalf("NewSession rec-agent: %v", err)
+	}
+	time.Sleep(150 * time.Millisecond)
+
+	// ── Construct the Model with frame context. ──────────────────────────────
+	m := New(nil).WithLoader(loader{
+		Tmux:    tmx,
+		BaseDir: t.TempDir(),
+		Now:     1000,
+	})
+	m.frameSession = "rec-frame"
+	m.placeholderPaneID = placeholderPane
+	m.displayedPaneID = ""
+
+	// ── Swap the agent into the frame main slot. ─────────────────────────────
+	swapMsg := m.swapInCmd(agentPane)()
+	if sm, ok := swapMsg.(swappedMsg); !ok || sm.err != nil || sm.noop {
+		t.Fatalf("swapInCmd: unexpected msg %T %+v", swapMsg, swapMsg)
+	}
+	m.swapping = false
+	m.displayedPaneID = agentPane
+
+	// ── Kill the agent's shell process so its pane goes dead in the frame. ───
+	// `exit` on the interactive shell terminates it; remain-on-exit keeps the
+	// pane present-but-dead.
+	if err := tmx.SendKeys(ctx, agentPane, "exit"); err != nil {
+		t.Fatalf("SendKeys exit: %v", err)
+	}
+	// Poll for the pane to become dead (avoids a fixed sleep flake).
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		found, dead := paneState(t, tmx, agentPane)
+		if found && dead {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("agent pane %q did not go dead (found=%v dead=%v)", agentPane, found, dead)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// ── Run the recovery. ─────────────────────────────────────────────────────
+	recMsg := m.recoverDeadDisplayedCmd()()
+	if _, ok := recMsg.(windowClosedMsg); !ok {
+		t.Fatalf("recoverDeadDisplayedCmd: want windowClosedMsg, got %T", recMsg)
+	}
+	m.displayedPaneID = "" // simulate the windowClosedMsg handler
+
+	// Allow the kill-pane to propagate.
+	time.Sleep(150 * time.Millisecond)
+
+	// ── Assert: the dead agent pane is reaped. ───────────────────────────────
+	if found, _ := paneState(t, tmx, agentPane); found {
+		t.Errorf("dead displayed pane %q still present after recovery (kill-pane did not run)", agentPane)
+	}
+
+	// ── Assert: the frame window is [sidebar, live placeholder] = 2 panes. ───
+	framePanes, err := tmx.ListPanes(ctx, frameTarget)
+	if err != nil {
+		t.Fatalf("ListPanes frame: %v", err)
+	}
+	if len(framePanes) != 2 {
+		t.Fatalf("frame window has %d panes after recovery, want 2 (sidebar+placeholder): %+v", len(framePanes), framePanes)
+	}
+	for _, p := range framePanes {
+		if p.Dead {
+			t.Errorf("frame pane %q is dead after recovery, want all alive", p.ID)
+		}
+	}
+	// The placeholder must be one of the two frame panes (id stable across swap).
+	if found, dead := paneState(t, tmx, placeholderPane); !found || dead {
+		t.Errorf("placeholder %q after recovery: found=%v dead=%v, want found+alive", placeholderPane, found, dead)
+	}
+
+	// ── Assert: the frame is reusable — swap a second agent in. ──────────────
+	agent2Pane, err := tmx.NewSession(ctx, "rec-agent2", "main", dir)
+	if err != nil {
+		t.Fatalf("NewSession rec-agent2: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	swap2 := m.swapInCmd(agent2Pane)()
+	if sm, ok := swap2.(swappedMsg); !ok || sm.err != nil || sm.noop {
+		t.Fatalf("second swapInCmd: unexpected msg %T %+v (frame not reusable)", swap2, swap2)
+	}
+	if found, dead := paneState(t, tmx, agent2Pane); !found || dead {
+		t.Errorf("second agent %q after re-swap: found=%v dead=%v, want found+alive", agent2Pane, found, dead)
+	}
+}
+
 // TestIntegration_Frame_DataLossGate_NegativeControl is the negative control:
 // it proves the gate has teeth by intentionally killing the frame WITHOUT
 // swapping the agent home. The agent pane (still in the frame) should die with
