@@ -1,3 +1,8 @@
+// Command perch is a keyboard-first TUI for managing AI coding sessions
+// (claude, opencode) across git worktrees inside tmux. Run without arguments it
+// bootstraps a persistent tmux frame (sidebar + live main pane) and launches the
+// TUI; it also provides the setup, attach, resurrect, status, doctor, and
+// version subcommands. See ARCHITECTURE.md for the full design.
 package main
 
 import (

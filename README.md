@@ -1,9 +1,14 @@
 # perch
 
-perch is a keyboard-first Go TUI for discovering, launching, and managing AI
-coding sessions (claude and opencode) across git worktrees in tmux. It is a
-single static binary with no background daemon and no database — status is
-tick-polled from tmux pane options, and recovery is a one-shot `perch resurrect`.
+perch is a keyboard-first Go TUI for managing AI coding sessions (claude and
+opencode) across git worktrees inside tmux. Think of it as a **website in a
+terminal**: the session list lives in a persistent left sidebar, and the right
+pane shows whichever agent you last opened — switching sessions swaps the agent
+into the main pane without re-running it.
+
+It is a single static binary with no background daemon and no database. Status
+is tick-polled from tmux pane options, and recovery after a server restart is a
+one-shot `perch resurrect`.
 
 ---
 
@@ -12,12 +17,10 @@ tick-polled from tmux pane options, and recovery is a one-shot `perch resurrect`
 | Tool | Version |
 |------|---------|
 | tmux | 3.6 |
-| golang | 1.26.2 (toolchain) |
-| claude | 2.1.158 (optional) |
-| opencode | 1.15.12 (optional) |
+| Go toolchain | 1.26.2 (build only) |
+| git | any recent version |
 
-At least one agent (claude and/or opencode) must be installed and on `$PATH`.
-git must be available for worktree discovery.
+At least one of **claude** or **opencode** must be installed and on `$PATH`.
 
 ---
 
@@ -49,15 +52,19 @@ Module path: `github.com/Miniature-Pug/perch`
 ## Quick start
 
 ```sh
-# Launch TUI; root = current working directory
+# Bootstrap the perch tmux frame + sidebar TUI; root = current directory
 perch
 
-# Launch TUI; root = path
+# Same, but with an explicit project root
 perch /path/to/projects
 
-# Install agent status hooks/plugins (run once after install)
+# One-time setup: install status hooks for detected agents (claude / opencode)
 perch setup
 ```
+
+`perch` creates (or reuses) a tmux session called `perch` containing a sidebar
+pane running the TUI and a main pane for the currently selected agent. If tmux
+is unavailable or frame setup fails, perch falls back to a direct two-pane TUI.
 
 ---
 
@@ -65,11 +72,12 @@ perch setup
 
 | Command | Purpose |
 |---------|---------|
-| `perch` | Launch the TUI with root set to cwd |
-| `perch [path]` | Launch the TUI with root set to the given directory |
-| `perch setup` | Detect installed agents; install status hooks/plugins |
-| `perch resurrect` | Reconcile shadow records against live tmux panes (run after reboot) |
-| `perch status set <state>` | Write agent status to the current tmux pane (`working`, `waiting`, or `done`) |
+| `perch` | Bootstrap the tmux frame + TUI; root = cwd |
+| `perch <path>` | Bootstrap the tmux frame + TUI; root = given directory |
+| `perch setup [--replace]` | Detect installed agents; install status hooks/plugins. `--replace` overwrites stale perch-owned hook entries |
+| `perch attach <query>` | Fuzzy-attach the terminal to a live agent session matching the query |
+| `perch resurrect` | Reconcile shadow records against live tmux panes (run after a server restart) |
+| `perch status set <state>` | Write agent status to the current tmux pane (`working`, `waiting`, or `done`) — used by installed hooks |
 | `perch doctor` | Check runtime dependencies and configuration |
 | `perch version` | Print version and build info |
 
@@ -77,104 +85,189 @@ perch setup
 
 ## Keybindings
 
-### Navigation (list built-ins)
+Up/Down navigation is owned by the list — they are not listed here.
 
 | Key | Action |
 |-----|--------|
-| `j` / `↓` | Move down |
-| `k` / `↑` | Move up |
-
-### Actions
-
-| Key | Action |
-|-----|--------|
-| `↵` | Switch to selected session |
+| `/` | Filter sessions |
+| `esc` | Clear filter |
+| `↵` | Open selected session (swap into main pane) |
 | `n` | New session |
 | `w` | New worktree |
-| `x` | Kill session |
 | `d` | Remove session record |
-
-### Filter
-
-| Key | Action |
-|-----|--------|
-| `/` | Filter |
-| `esc` | Clear filter |
-
-### Display
-
-| Key | Action |
-|-----|--------|
+| `x` | Kill session |
 | `z` | Screen mode (forward) |
 | `Z` | Screen mode (back) |
+| `c` | Collapse sidebar |
 | `?` | Toggle help |
+| `:` | Open command bar |
 | `q` / `ctrl+c` | Quit |
+
+### Layout & focus
+
+The sidebar stays visible at all times. Pressing `↵` swaps the selected agent
+into the main pane and moves focus there. To return focus to the sidebar, use
+the tmux prefix followed by `←` or `→` (the default-socket model — this is
+intentional; perch uses the default tmux socket and relies on standard tmux key
+bindings for cross-pane navigation).
+
+---
+
+## Command bar
+
+Press `:` to open the command bar. Supported verbs:
+
+| Verb | Action |
+|------|--------|
+| `:q` / `:quit` | Quit perch |
+| `:new` | New session for the selected project |
+| `:attach <query>` | Fuzzy-select and open a live session matching the query |
+| `:proj <name>` / `:project <name>` | Jump to the session matching the given name |
+| `:setup [--replace]` | Run setup (suspends TUI, reruns agent hook install) |
+| `:doctor` | Run doctor (suspends TUI) |
+| `:resurrect` | Reconcile shadow records (frame-gated; see note below) |
+| `:help` / `:h` / `:?` | Toggle help |
+
+Unknown verbs show a toast error. An empty command bar entry silently cancels.
+
+**Note:** `:resurrect` is refused while inside the perch frame. Run it from a
+shell (`perch resurrect`) or let the startup auto-offer handle it after a server
+restart.
 
 ---
 
 ## Configuration
 
-Config is optional — perch runs on sensible defaults. Files are TOML. Project
-config overrides global per-field.
+Config is optional — perch runs on sensible defaults. Files are TOML. Config is
+discovered in three tiers (global → project walk-up → project wins per field).
 
-### Discovery (three-tier)
+### Discovery
 
-1. **Global:** `$XDG_CONFIG_HOME/perch/config.toml`
-2. **Per-project:** walk up from cwd to the repo root looking for `.perch.toml`
-   (linked worktrees fall back to the main worktree root)
-3. Project config overrides global per-field; all fields have defaults
+1. **Global:** `$XDG_CONFIG_HOME/perch/config.toml` (default `~/.config/perch/config.toml`)
+2. **Per-project:** walk up from the launch directory to the nearest `.git`
+   boundary, looking for `.perch.toml`. Linked worktrees fall back to the main
+   worktree root.
+3. Project config overrides global per-field; all fields have defaults.
 
-### Global config (`config.toml`)
+### Global config (`~/.config/perch/config.toml`)
 
 ```toml
-roots        = ["~/projects"]          # default: launch cwd
-sort_order   = ["running", "pinned", "frecency"]
-blacklist    = ["**/archive/**"]
-refresh_ms   = 1000                    # status tick interval in ms
+roots        = ["~/projects"]       # directories perch scans for git repos (default: launch cwd)
+sort_order   = ["running","frecency"] # live sessions first, then frecency; unknown tokens ignored
+blacklist    = ["**/archive/**"]    # doublestar globs that hide matching project/tree paths
+refresh_ms   = 1000                 # status-tick interval in milliseconds
 
 [default_session]
-agent           = "claude"
-startup_command = ""
+agent           = "claude"          # default tool for new sessions
+startup_command = ""                # command sent to the agent after launch
 
 [theme]
-accent = "#EE6FF8"
+accent = "#EE6FF8"                  # UI accent colour
+
+[agents]
+claude   = "/usr/local/bin/claude"  # absolute binary path (global-only security boundary)
+opencode = "/usr/local/bin/opencode"
 ```
 
 ### Per-project config (`.perch.toml`)
 
 ```toml
 base_branch  = "main"
-worktree_dir = "../wt"
-agent        = "opencode"
+worktree_dir = "../wt"          # relative paths only; absolute paths are rejected
+agent        = "opencode"       # overrides [default_session].agent for this project
+
+post_create = ["direnv allow", "pnpm install"]   # hooks run after worktree creation
+pre_remove  = ["pnpm run cleanup"]               # hooks run before worktree removal
 
 [files]
-copy    = [".env", ".env.local"]
-symlink = ["node_modules"]
+copy    = [".env", ".env.local"]    # files copied into each new worktree
+symlink = ["node_modules"]          # files symlinked into each new worktree
 
-post_create = ["direnv allow", "pnpm install"]
-pre_remove  = []
+[[wildcard]]
+pattern = "**/experiments/**"   # path-glob rule to auto-pick an agent for matching trees
+agent   = "claude"
 ```
 
-### Security
+**New-session tool resolution order:**
+1. Existing session metadata (the tool already stored for that session)
+2. First matching `[[wildcard]]` rule
+3. `[default_session].agent` / project `agent`
+4. `"claude"` as unconditional fallback
 
-Agent binary resolution is **global-only** and cannot be overridden by a
-per-project `.perch.toml`. A project config may select which known agent to use
-and supply model or prompt options, but it cannot point at an arbitrary
-executable. This prevents a malicious repo from hijacking the agent binary
-resolved at launch.
+---
+
+## Security / trust model
+
+### Trust prompt for `.perch.toml` hooks
+
+When a repo's `.perch.toml` defines shell hooks (`post_create` or `pre_remove`)
+and perch needs to run them, it displays a trust modal:
+
+```
+.perch.toml in <dir> defines shell hooks (<phase>). Run them?
+(a) trust always  (o) once  (d) deny
+```
+
+- `a` — trust always: stores approval keyed on the config path + content hash
+  in `<state-dir>/trust.json` (mode 0600); re-prompts if the file changes.
+- `o` — once: runs the hooks this time only.
+- `d` — deny: skips the hooks.
+
+The file is re-hashed immediately before hook execution to close the TOCTOU
+window.
+
+### Global-only agent binary boundary
+
+`[agents]` binary paths and `startup_command` come **only** from the global
+config. A project `.perch.toml` has no `[agents]` field — the struct
+intentionally lacks it, so any such key in a project file is silently dropped by
+the TOML decoder. A malicious repo cannot point perch at an arbitrary binary.
+
+`startup_command` is trusted without a prompt because it comes from your own
+global config, not from a project file.
+
+### Relative-only project `worktree_dir`
+
+Project `.perch.toml` may only set a relative `worktree_dir`. Absolute paths
+are accepted only from the global config.
+
+See [docs/security-audit.md](docs/security-audit.md) and
+[ARCHITECTURE.md](ARCHITECTURE.md) for the full security model.
 
 ---
 
 ## Status pipeline
 
-`perch setup` installs hooks into each detected agent: for claude it writes
-`~/.claude/settings.json` hooks; for opencode it writes
-`~/.config/opencode/plugins/perch-status.ts`. When an agent changes state its
-hook calls `perch status set <working|waiting|done>`, which resolves the current
-pane from `$TMUX_PANE` and writes `@perch_pane_status` as a tmux pane option.
-The TUI tick-polls those options on a low-frequency interval (default 1 s,
-configurable via `refresh_ms`). There is no daemon — perch never parses agent
-internals and does not need a running background process.
+`perch setup` installs hooks into each detected agent:
+
+- **claude:** writes `~/.claude/settings.json` hooks
+- **opencode:** writes `~/.config/opencode/plugins/perch-status.ts`
+
+When an agent changes state, its hook calls `perch status set <working|waiting|done>`,
+which resolves the current pane from `$TMUX_PANE` and writes `@perch_pane_status`
+as a tmux pane option. The TUI polls those options on a low-frequency interval
+(default 1 s, configurable via `refresh_ms`) and updates the list glyph accordingly.
+
+Focusing an agent (swap-in) automatically clears its status badge.
+
+There is no daemon — perch never parses agent internals and does not need a
+running background process.
+
+---
+
+## Resurrect
+
+`perch resurrect` (and the bootstrap auto-offer after a detected server restart)
+runs the `Reconcile` engine, which classifies each shadow record as:
+
+- **KEEP** — the pane is still live and the boot ID matches: do nothing.
+- **PRUNE** — the pane is gone but the boot ID matches (clean shutdown): remove
+  the record.
+- **RESTORE** — the boot ID differs or the server is cold: re-launch the agent
+  in a new window.
+
+The auto-offer runs before the perch frame is created, prompts only on a real
+tty (defaults to `N`), and reports a summary of restored/pruned/kept sessions.
 
 ---
 
@@ -189,3 +282,12 @@ internals and does not need a running background process.
 - No sandboxing or containers
 - No web UI
 - No tools beyond claude and opencode (adapter interface keeps the door open)
+
+---
+
+## Diagrams
+
+Architecture, frame-swap, status-sequence, worktree-lifecycle, and
+discovery-state diagrams live in [`docs/diagrams/`](docs/diagrams/). They
+render in any Mermaid viewer or directly in GitHub (`.mmd` files in fenced
+blocks).
