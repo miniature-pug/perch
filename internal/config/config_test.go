@@ -50,7 +50,8 @@ func TestDefaults(t *testing.T) {
 		t.Errorf("default Accent = %q; want #EE6FF8", cfg.Theme.Accent)
 	}
 	// Assert the full slice, not just its length — a reordered or wrong default would fail here.
-	want := []string{"running", "pinned", "frecency"}
+	// "pinned" was an unplanned tier and has been removed; the default is now ["running","frecency"].
+	want := []string{"running", "frecency"}
 	if !reflect.DeepEqual(cfg.SortOrder, want) {
 		t.Errorf("default SortOrder = %v; want %v", cfg.SortOrder, want)
 	}

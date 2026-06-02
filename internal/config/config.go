@@ -22,7 +22,10 @@ import (
 )
 
 // defaultSortOrder is the priority order for the left-panel project list.
-var defaultSortOrder = []string{"running", "pinned", "frecency"}
+// Supported tokens are "running" (live-session rows first) and "frecency"
+// (preserve discover's frecency-descending order). Unknown tokens (e.g. a
+// user-supplied "pinned") are silently ignored at the sort site.
+var defaultSortOrder = []string{"running", "frecency"}
 
 // defaultAccent is the default UI accent colour.
 const defaultAccent = "#EE6FF8"

@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -11,6 +12,7 @@ import (
 	"github.com/Miniature-Pug/perch/internal/agent"
 	"github.com/Miniature-Pug/perch/internal/config"
 	"github.com/Miniature-Pug/perch/internal/discover"
+	"github.com/Miniature-Pug/perch/internal/match"
 	"github.com/Miniature-Pug/perch/internal/model"
 	"github.com/Miniature-Pug/perch/internal/proc"
 	"github.com/Miniature-Pug/perch/internal/state"
@@ -77,6 +79,12 @@ func (l loader) load() tea.Cmd {
 			return itemsLoadedMsg{err: fmt.Errorf("tui: discover projects: %w", err)}
 		}
 
+		// Blacklist: drop any project/tree whose path matches a configured pattern.
+		// This is a post-discovery UI filter — discover's own walk-pruning is unchanged.
+		if l.GlobalCfg != nil && len(l.GlobalCfg.Blacklist) > 0 {
+			pts = filterBlacklist(pts, l.GlobalCfg.Blacklist)
+		}
+
 		// Snapshot live panes once; build sessionID → pane ID index.
 		panes, _ := l.Tmux.ListPanesAll(ctx) // degrade on error: no live status
 		liveBySession := buildLiveIndex(panes)
@@ -105,6 +113,16 @@ func (l loader) load() tea.Cmd {
 		}
 
 		items := assembleItems(pts, claudeByDir, ocByTree, liveBySession, l.Now)
+
+		// sort_order: apply the configured priority list (running, frecency).
+		// Unknown tokens (e.g. "pinned") are skipped silently.
+		// When cfg is nil or SortOrder is empty, use the default ["running","frecency"].
+		sortTokens := defaultLoaderSortOrder
+		if l.GlobalCfg != nil && len(l.GlobalCfg.SortOrder) > 0 {
+			sortTokens = l.GlobalCfg.SortOrder
+		}
+		items = applySortOrder(items, sortTokens)
+
 		return itemsLoadedMsg{items: items}
 	}
 }
@@ -226,6 +244,96 @@ func buildItemFromSession(
 		liveTarget:    liveTarget,
 		isMain:        isMain,
 	}
+}
+
+// defaultLoaderSortOrder is the fallback token list used when cfg is nil or
+// SortOrder is empty. Mirrors config.defaultSortOrder (which is unexported).
+var defaultLoaderSortOrder = []string{"running", "frecency"}
+
+// filterBlacklist removes any project whose path matches any of the patterns,
+// and removes matching trees from projects that are themselves kept.
+// Projects with no remaining trees are also removed.
+// A nil or empty patterns slice is a no-op.
+func filterBlacklist(pts []*discover.ProjectTrees, patterns []string) []*discover.ProjectTrees {
+	if len(patterns) == 0 {
+		return pts
+	}
+	out := pts[:0:len(pts)]
+	for _, pt := range pts {
+		// Drop the whole project if its root path matches.
+		if match.MatchAny(patterns, pt.Project.Path) {
+			continue
+		}
+		// Filter individual trees within the project.
+		kept := pt.Trees[:0:len(pt.Trees)]
+		for i := range pt.Trees {
+			if !match.MatchAny(patterns, pt.Trees[i].Path) {
+				kept = append(kept, pt.Trees[i])
+			}
+		}
+		if len(kept) == 0 {
+			// All trees were blacklisted — drop the project too.
+			continue
+		}
+		out = append(out, &discover.ProjectTrees{
+			Project: pt.Project,
+			Trees:   kept,
+		})
+	}
+	return out
+}
+
+// orderedItem wraps a list.Item with its original assembly index, preserving
+// discover's frecency+alphabetical order as the "frecency" sort key.
+type orderedItem struct {
+	it   list.Item
+	ord  int  // original index in the assembled slice (frecency rank)
+	live bool // true when the item is a live session row
+}
+
+// applySortOrder stably re-orders items according to the priority token list.
+// Supported tokens: "running" (live rows first), "frecency" (original index order).
+// Unknown tokens (e.g. "pinned") are skipped silently.
+// The original index is always the final tiebreak, which preserves discover's
+// built-in alphabetical cold-start ordering without recomputing it.
+func applySortOrder(items []list.Item, tokens []string) []list.Item {
+	if len(items) == 0 {
+		return items
+	}
+
+	wrapped := make([]orderedItem, len(items))
+	for i, it := range items {
+		live := false
+		if it, ok := it.(item); ok {
+			live = it.live
+		}
+		wrapped[i] = orderedItem{it: it, ord: i, live: live}
+	}
+
+	sort.SliceStable(wrapped, func(a, b int) bool {
+		wa, wb := wrapped[a], wrapped[b]
+		for _, tok := range tokens {
+			switch tok {
+			case "running":
+				if wa.live != wb.live {
+					return wa.live // live first
+				}
+			case "frecency":
+				if wa.ord != wb.ord {
+					return wa.ord < wb.ord
+				}
+				// unknown tokens (e.g. "pinned") are skipped — no panic
+			}
+		}
+		// Final tiebreak: original index (preserves discover's ordering).
+		return wa.ord < wb.ord
+	})
+
+	out := make([]list.Item, len(items))
+	for i, w := range wrapped {
+		out[i] = w.it
+	}
+	return out
 }
 
 // relativeTime formats the duration between updated (unix seconds) and now as a

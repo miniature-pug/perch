@@ -538,6 +538,203 @@ func writeStateWithProjects(t *testing.T, baseDir string, ranks map[string]float
 	}
 }
 
+// ── filterBlacklist tests ─────────────────────────────────────────────────────
+
+// TestFilterBlacklist_ProjectPathMatched verifies that a project whose root
+// path matches the blacklist is removed entirely from the slice.
+func TestFilterBlacklist_ProjectPathMatched(t *testing.T) {
+	projArchive := model.Project{Path: "/home/u/archive/old-proj", Name: "old-proj"}
+	projKept := model.Project{Path: "/home/u/active/proj", Name: "proj"}
+
+	treeArchive := model.Tree{Path: "/home/u/archive/old-proj", Branch: "main"}
+	treeKept := model.Tree{Path: "/home/u/active/proj", Branch: "main"}
+
+	pts := []*discover.ProjectTrees{
+		{Project: projArchive, Trees: []model.Tree{treeArchive}},
+		{Project: projKept, Trees: []model.Tree{treeKept}},
+	}
+
+	got := filterBlacklist(pts, []string{"**/archive/**"})
+	if len(got) != 1 {
+		t.Fatalf("want 1 project after blacklist, got %d", len(got))
+	}
+	if got[0].Project.Name != "proj" {
+		t.Errorf("remaining project = %q, want proj", got[0].Project.Name)
+	}
+}
+
+// TestFilterBlacklist_TreePathMatched verifies that a tree whose path matches
+// the blacklist is removed from its project, while the project itself is kept
+// when at least one other tree survives.
+func TestFilterBlacklist_TreePathMatched(t *testing.T) {
+	proj := model.Project{Path: "/home/u/myrepo", Name: "myrepo"}
+	treeMain := model.Tree{Path: "/home/u/myrepo", Branch: "main"}
+	treeArchive := model.Tree{Path: "/home/u/myrepo/worktrees/archive/feat", Branch: "feat"}
+
+	pts := []*discover.ProjectTrees{
+		{Project: proj, Trees: []model.Tree{treeMain, treeArchive}},
+	}
+
+	got := filterBlacklist(pts, []string{"**/archive/**"})
+	if len(got) != 1 {
+		t.Fatalf("want 1 project, got %d", len(got))
+	}
+	if len(got[0].Trees) != 1 {
+		t.Fatalf("want 1 tree after blacklist, got %d", len(got[0].Trees))
+	}
+	if got[0].Trees[0].Branch != "main" {
+		t.Errorf("remaining tree branch = %q, want main", got[0].Trees[0].Branch)
+	}
+}
+
+// TestFilterBlacklist_AllTreesMatchedDropsProject verifies that a project is
+// removed entirely when all of its trees are blacklisted.
+func TestFilterBlacklist_AllTreesMatchedDropsProject(t *testing.T) {
+	proj := model.Project{Path: "/home/u/archive/proj", Name: "proj"}
+	tree := model.Tree{Path: "/home/u/archive/proj", Branch: "main"}
+
+	pts := []*discover.ProjectTrees{
+		{Project: proj, Trees: []model.Tree{tree}},
+	}
+
+	got := filterBlacklist(pts, []string{"**/archive/**"})
+	if len(got) != 0 {
+		t.Errorf("want 0 projects when all trees blacklisted, got %d", len(got))
+	}
+}
+
+// TestFilterBlacklist_EmptyPatterns verifies that an empty/nil blacklist
+// returns all projects and trees unchanged.
+func TestFilterBlacklist_EmptyPatterns(t *testing.T) {
+	proj := model.Project{Path: "/home/u/proj", Name: "proj"}
+	tree := model.Tree{Path: "/home/u/proj", Branch: "main"}
+	pts := []*discover.ProjectTrees{
+		{Project: proj, Trees: []model.Tree{tree}},
+	}
+
+	if got := filterBlacklist(pts, nil); len(got) != 1 {
+		t.Errorf("nil patterns: want 1 project, got %d", len(got))
+	}
+	if got := filterBlacklist(pts, []string{}); len(got) != 1 {
+		t.Errorf("empty patterns: want 1 project, got %d", len(got))
+	}
+}
+
+// ── applySortOrder tests ──────────────────────────────────────────────────────
+
+// makeItem builds a minimal list.Item (tui.item) for sort testing.
+func makeItem(id string, live bool) list.Item {
+	return item{id: id, live: live, isSession: true}
+}
+
+// TestApplySortOrder_RunningFrecency verifies that with ["running","frecency"],
+// live rows sort before idle rows; within the same tier, original index order holds.
+func TestApplySortOrder_RunningFrecency(t *testing.T) {
+	// Assembl order: idle-first(freq=0), live-second(freq=1), idle-third(freq=2)
+	items := []list.Item{
+		makeItem("idle-high-freq", false), // index 0 — high frecency, idle
+		makeItem("live-mid-freq", true),   // index 1 — mid frecency, live
+		makeItem("idle-low-freq", false),  // index 2 — low frecency, idle
+	}
+
+	got := applySortOrder(items, []string{"running", "frecency"})
+	if len(got) != 3 {
+		t.Fatalf("want 3 items, got %d", len(got))
+	}
+
+	ids := func(items []list.Item) []string {
+		out := make([]string, len(items))
+		for i, it := range items {
+			out[i] = it.(item).id
+		}
+		return out
+	}
+
+	// live row sorts first, then idle rows in frecency order.
+	wantOrder := []string{"live-mid-freq", "idle-high-freq", "idle-low-freq"}
+	gotOrder := ids(got)
+	for i, want := range wantOrder {
+		if gotOrder[i] != want {
+			t.Errorf("position %d: got %q, want %q (full order: %v)", i, gotOrder[i], want, gotOrder)
+		}
+	}
+}
+
+// TestApplySortOrder_FrecencyOnly verifies that ["frecency"] alone preserves
+// original index order regardless of live status.
+func TestApplySortOrder_FrecencyOnly(t *testing.T) {
+	items := []list.Item{
+		makeItem("idle-a", false), // index 0
+		makeItem("live-b", true),  // index 1
+		makeItem("idle-c", false), // index 2
+	}
+
+	got := applySortOrder(items, []string{"frecency"})
+	wantOrder := []string{"idle-a", "live-b", "idle-c"}
+	for i, want := range wantOrder {
+		if got[i].(item).id != want {
+			t.Errorf("position %d: got %q, want %q", i, got[i].(item).id, want)
+		}
+	}
+}
+
+// TestApplySortOrder_UnknownTokenIgnored verifies that an unknown token like
+// "pinned" is silently skipped — no panic, no effect on ordering.
+func TestApplySortOrder_UnknownTokenIgnored(t *testing.T) {
+	items := []list.Item{
+		makeItem("a", false),
+		makeItem("b", true),
+		makeItem("c", false),
+	}
+
+	// "pinned" is unknown; effective order is ["frecency"] (the final tiebreak).
+	got := applySortOrder(items, []string{"pinned"})
+	// Expect original order preserved (all fell through to the index tiebreak).
+	wantOrder := []string{"a", "b", "c"}
+	for i, want := range wantOrder {
+		if got[i].(item).id != want {
+			t.Errorf("position %d: got %q, want %q", i, got[i].(item).id, want)
+		}
+	}
+}
+
+// TestApplySortOrder_NilCfgUsesDefault verifies loader behavior when GlobalCfg
+// is nil: the default ["running","frecency"] is applied (live rows sort first).
+func TestApplySortOrder_NilCfgUsesDefault(t *testing.T) {
+	items := []list.Item{
+		makeItem("idle-a", false), // index 0
+		makeItem("live-b", true),  // index 1
+	}
+
+	// Nil cfg → defaultLoaderSortOrder = ["running","frecency"]
+	got := applySortOrder(items, defaultLoaderSortOrder)
+	if got[0].(item).id != "live-b" {
+		t.Errorf("position 0: got %q, want live-b (running first)", got[0].(item).id)
+	}
+	if got[1].(item).id != "idle-a" {
+		t.Errorf("position 1: got %q, want idle-a", got[1].(item).id)
+	}
+}
+
+// TestApplySortOrder_WithinTierFrecencyHolds verifies that within the "running"
+// tier, multiple live rows are kept in their original frecency index order.
+func TestApplySortOrder_WithinTierFrecencyHolds(t *testing.T) {
+	items := []list.Item{
+		makeItem("live-first", true), // index 0 — higher frecency, live
+		makeItem("idle-mid", false),  // index 1 — idle
+		makeItem("live-third", true), // index 2 — lower frecency, live
+	}
+
+	got := applySortOrder(items, []string{"running", "frecency"})
+	// Both live rows should come first, in original index order.
+	wantOrder := []string{"live-first", "live-third", "idle-mid"}
+	for i, want := range wantOrder {
+		if got[i].(item).id != want {
+			t.Errorf("position %d: got %q, want %q", i, got[i].(item).id, want)
+		}
+	}
+}
+
 // ── capture-pane cmd dispatch ──────────────────────────────────────────────────
 
 // TestModel_SelectLiveItemDispatchesCapture verifies that after selection of a
