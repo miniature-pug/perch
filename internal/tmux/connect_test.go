@@ -907,6 +907,17 @@ func TestPaneDead_ReturnsFalse_When0(t *testing.T) {
 	}
 }
 
+func TestPaneDead_UnexpectedOutput_ReturnsError(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Stdout: []byte("maybe\n")},
+		"tmux", "display-message", "-t", "%3", "-p", "#{pane_dead}")
+
+	o := Tmux{Runner: r, Bin: "tmux"}
+	if _, err := o.PaneDead(context.Background(), "%3"); err == nil {
+		t.Fatal("expected error for unexpected pane_dead output, got nil")
+	}
+}
+
 func TestPaneDead_RunnerError_ReturnsError(t *testing.T) {
 	execErr := errors.New("exec: tmux not found")
 	r := proc.NewFakeRunner()
