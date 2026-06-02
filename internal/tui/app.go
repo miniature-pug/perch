@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Miniature-Pug/perch/internal/tmux"
 	"github.com/Miniature-Pug/perch/internal/trust"
@@ -603,17 +604,29 @@ func (m Model) View() string {
 	// Modal and help overlays are centred within it so the total never exceeds height.
 	bodyRegionHeight := max(0, m.height-lipgloss.Height(footer)-messageBarHeight)
 
-	if m.showHelp {
-		overlay := styles.helpOverlay.Render(m.help.FullHelpView(m.FullHelp()))
-		overlay = lipgloss.NewStyle().MaxWidth(m.width).MaxHeight(bodyRegionHeight).Render(overlay)
-		centered := lipgloss.Place(m.width, bodyRegionHeight, lipgloss.Center, lipgloss.Center, overlay)
-		return lipgloss.JoinVertical(lipgloss.Left, messageLine, centered, footer)
+	overlayBox := ""
+	switch {
+	case m.showHelp:
+		overlayBox = styles.helpOverlay.Render(m.help.FullHelpView(m.FullHelp()))
+	case m.modal.kind != modalNone:
+		overlayBox = renderModal(m.modal)
 	}
 
-	if m.modal.kind != modalNone {
-		modalBox := lipgloss.NewStyle().MaxWidth(m.width).MaxHeight(bodyRegionHeight).Render(renderModal(m.modal))
-		centered := lipgloss.Place(m.width, bodyRegionHeight, lipgloss.Center, lipgloss.Center, modalBox)
-		return lipgloss.JoinVertical(lipgloss.Left, messageLine, centered, footer)
+	if overlayBox != "" {
+		// Dim the body: strip its own SGR and re-render muted so the overlay box
+		// stands out. (Body colors are intentionally dropped while a modal is up.)
+		dimmed := styles.dimmedBody.Render(ansi.Strip(body))
+		dimmed = lipgloss.NewStyle().MaxWidth(m.width).MaxHeight(bodyRegionHeight).Render(dimmed)
+
+		box := lipgloss.NewStyle().MaxWidth(m.width).MaxHeight(bodyRegionHeight).Render(overlayBox)
+		boxW, boxH := lipgloss.Width(box), lipgloss.Height(box)
+		x := max(0, (m.width-boxW)/2)
+		yOff := max(0, (bodyRegionHeight-boxH)/2)
+
+		// Pad the dimmed body to the full region so composite has rows to write on.
+		region := lipgloss.NewStyle().Width(m.width).Height(bodyRegionHeight).Render(dimmed)
+		composited := composite(region, box, x, yOff)
+		return lipgloss.JoinVertical(lipgloss.Left, messageLine, composited, footer)
 	}
 
 	body = lipgloss.NewStyle().MaxWidth(m.width).Render(body)

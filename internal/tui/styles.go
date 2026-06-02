@@ -34,6 +34,8 @@ var styles = struct {
 	emptyState lipgloss.Style
 	// helpOverlay renders the ? full-help popup box.
 	helpOverlay lipgloss.Style
+	// dimmedBody renders the stripped body behind a modal/help overlay.
+	dimmedBody lipgloss.Style
 }{
 	leftPane: lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -62,6 +64,7 @@ var styles = struct {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorAccent).
 		Padding(1, 2),
+	dimmedBody: lipgloss.NewStyle().Foreground(colorSubtle),
 }
 
 // Status glyphs — kept here so delegate and item are in the same file space.
