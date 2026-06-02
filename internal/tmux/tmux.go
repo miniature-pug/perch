@@ -140,6 +140,9 @@ type Pane struct {
 	PerchStatus  string // @perch_pane_status pane option; empty when unset
 }
 
+// maxSessionIDLen is the maximum byte length of a valid perch session ID.
+const maxSessionIDLen = 128
+
 // validPerchSessionID reports whether s is an acceptable perch session ID.
 //
 // Acceptable characters are [A-Za-z0-9_-]; length must be between 1 and 128.
@@ -152,7 +155,7 @@ type Pane struct {
 // A simple byte scan is used rather than regexp to avoid allocating a compiled
 // pattern on every call.
 func validPerchSessionID(s string) bool {
-	if s == "" || len(s) > 128 {
+	if s == "" || len(s) > maxSessionIDLen {
 		return false
 	}
 	for i := 0; i < len(s); i++ {

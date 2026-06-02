@@ -270,19 +270,42 @@ func RemoveWindow(baseDir, paneKey string) error {
 // maxAge is the ceiling for total frecency weight before aging is applied.
 const maxAge = 10_000.0
 
+// Frecency time-bucket boundaries (seconds). Used by FrecencyScore to classify
+// how recently a project was accessed.
+const (
+	frecencyHour = 3_600
+	frecencyDay  = 86_400
+	frecencyWeek = 604_800
+)
+
+// Frecency score multipliers applied per time bucket.
+const (
+	frecencyMul1h  = 4.0
+	frecencyMul1d  = 2.0
+	frecencyMul1w  = 0.5
+	frecencyMulOld = 0.25
+)
+
+// frecencyAgeFactor is the factor applied to all ranks during aging when total
+// weight exceeds maxAge. Derived from zoxide's algorithm (§6.3).
+const frecencyAgeFactor = 0.9
+
+// rankBumpDelta is the increment added to a project's rank on each access.
+const rankBumpDelta = 1.0
+
 // FrecencyScore computes the frecency score for a project given its rank and
 // last-access time. The score is computed at query time; only rank and
 // last_accessed are persisted (§6.3).
 func FrecencyScore(rank float64, lastAccessed, now int64) float64 {
 	switch d := now - lastAccessed; {
-	case d < 3_600:
-		return rank * 4.0
-	case d < 86_400:
-		return rank * 2.0
-	case d < 604_800:
-		return rank * 0.5
+	case d < frecencyHour:
+		return rank * frecencyMul1h
+	case d < frecencyDay:
+		return rank * frecencyMul1d
+	case d < frecencyWeek:
+		return rank * frecencyMul1w
 	default:
-		return rank * 0.25
+		return rank * frecencyMulOld
 	}
 }
 
@@ -291,7 +314,7 @@ func FrecencyScore(rank float64, lastAccessed, now int64) float64 {
 // Callers should invoke AgeProjects after every bump to bound total weight.
 func BumpProject(projects map[string]ProjectStat, path string, now int64) {
 	cur := projects[path]
-	cur.Rank = max(cur.Rank+1.0, 0.0) // max(...,0) mirrors zoxide's bump (§6.3); floor is defensive against a corrupted negative rank read from disk.
+	cur.Rank = max(cur.Rank+rankBumpDelta, 0.0) // max(...,0) mirrors zoxide's bump (§6.3); floor is defensive against a corrupted negative rank read from disk.
 	cur.LastAccessed = now
 	projects[path] = cur
 }
@@ -307,7 +330,7 @@ func AgeProjects(projects map[string]ProjectStat) {
 	if total <= maxAge {
 		return
 	}
-	factor := 0.9 * maxAge / total
+	factor := frecencyAgeFactor * maxAge / total
 	for k, stat := range projects {
 		stat.Rank *= factor
 		if stat.Rank < 1.0 {

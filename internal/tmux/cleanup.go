@@ -1,10 +1,16 @@
 package tmux
 
 import (
+	"fmt"
 	"path/filepath"
 	"strconv"
 	"strings"
 )
+
+// cleanupDelaySecs is the delay (in seconds) inserted at the start of the
+// cleanup script so the current pane's process can exit cleanly before the
+// window is killed.
+const cleanupDelaySecs = 0.3
 
 // CleanupOpts describes a deferred worktree teardown.
 type CleanupOpts struct {
@@ -56,7 +62,7 @@ func CleanupScript(o CleanupOpts, now int64, trashSuffix string) string {
 
 	// 1. Brief delay so the current pane's process exits cleanly before we kill
 	// the window.
-	steps = append(steps, "sleep 0.3")
+	steps = append(steps, fmt.Sprintf("sleep %g", cleanupDelaySecs))
 
 	// 2. Switch the client away first; must be best-effort (|| true) so a missing
 	// target or no-client-attached error does not abort the kill-window step.

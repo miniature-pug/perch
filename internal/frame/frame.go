@@ -30,6 +30,10 @@ const (
 	// placeholderCmd is the command run in the main (placeholder) pane at bootstrap.
 	// It keeps the pane alive without consuming resources until an agent is swapped in.
 	placeholderCmd = "sleep infinity"
+
+	// defaultPaneHeight is the fallback height (rows) used when PaneSize fails during
+	// frame creation. Matches a standard 24-row terminal.
+	defaultPaneHeight = 24
 )
 
 // Info describes the current state of a perch frame after Ensure returns.
@@ -143,7 +147,7 @@ func createFrame(ctx context.Context, t tmux.Tmux, session, root string, sidebar
 	_, h, err := t.PaneSize(ctx, sidebarPane)
 	if err != nil {
 		// Non-fatal: skip resize rather than aborting the whole bootstrap.
-		h = 24 // safe default
+		h = defaultPaneHeight // safe default
 	}
 	// Best-effort: a headless server may reject resize; the frame is still usable.
 	_ = t.ResizePane(ctx, sidebarPane, sidebarWidth, h)

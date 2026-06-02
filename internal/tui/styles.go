@@ -16,6 +16,12 @@ var (
 	// colorMuted is a readable dim used for secondary TEXT (footer, empty-state).
 	// Distinct from colorSubtle, which is intentionally near-background for BORDERS.
 	colorMuted = lipgloss.AdaptiveColor{Light: "#6C6C6C", Dark: "#999999"}
+
+	// Status indicator colours — single source of truth; referenced by statusStyle.
+	colorStatusWorking = lipgloss.AdaptiveColor{Light: "#0077CC", Dark: "#5FD7FF"}
+	colorStatusWaiting = lipgloss.AdaptiveColor{Light: "#CC8800", Dark: "#FFD75F"}
+	colorStatusDone    = lipgloss.AdaptiveColor{Light: "#007700", Dark: "#5FFF5F"}
+	colorStatusLive    = lipgloss.AdaptiveColor{Light: "#888888", Dark: "#AAAAAA"}
 )
 
 // styles holds the pre-built lipgloss styles used throughout the TUI.
@@ -115,13 +121,13 @@ const (
 func statusStyle(s Status) lipgloss.Style {
 	switch s {
 	case StatusWorking:
-		return lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#0077CC", Dark: "#5FD7FF"})
+		return lipgloss.NewStyle().Foreground(colorStatusWorking)
 	case StatusWaiting:
-		return lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#CC8800", Dark: "#FFD75F"})
+		return lipgloss.NewStyle().Foreground(colorStatusWaiting)
 	case StatusDone:
-		return lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#007700", Dark: "#5FFF5F"})
+		return lipgloss.NewStyle().Foreground(colorStatusDone)
 	case StatusLive:
-		return lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#888888", Dark: "#AAAAAA"})
+		return lipgloss.NewStyle().Foreground(colorStatusLive)
 	default: // StatusIdle
 		return lipgloss.NewStyle().Foreground(colorSubtle)
 	}

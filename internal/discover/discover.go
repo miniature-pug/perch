@@ -15,6 +15,10 @@ import (
 	"strings"
 )
 
+// DefaultMaxDepth is the maximum directory depth Scan descends when Options.MaxDepth <= 0.
+// Root itself is depth 0; a direct child of root is depth 1.
+const DefaultMaxDepth = 8
+
 // DefaultPrune is the set of directory base names skipped during a scan.
 // Heavy build-artifact and dependency directories are excluded by default
 // because they are never top-level git repos and can be enormous.
@@ -62,7 +66,7 @@ func Scan(root string, opts Options) ([]string, error) {
 
 	maxDepth := opts.MaxDepth
 	if maxDepth <= 0 {
-		maxDepth = 8
+		maxDepth = DefaultMaxDepth
 	}
 
 	prune := opts.Prune

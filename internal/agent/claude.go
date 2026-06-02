@@ -409,6 +409,11 @@ type messageField struct {
 	Content json.RawMessage `json:"content"`
 }
 
+// scannerInitBuf is the initial capacity of the bufio.Scanner read buffer.
+// 64 KiB is sufficient for the common case; the buffer grows as needed up to
+// scannerBufMax.
+const scannerInitBuf = 64 * 1024
+
 // scannerBufMax bounds bufio.Scanner's token size. Transcripts can carry very
 // long lines (large tool outputs, base64 images), so the default 64 KiB limit
 // would trip bufio.ErrTooLong; 8 MiB comfortably covers real records.
@@ -422,7 +427,7 @@ const scannerBufMax = 8 * 1024 * 1024
 // skipped, never fatal; only a real I/O/scanner error is returned.
 func parseTranscript(r io.Reader) (title, firstCwd string, hadRecords bool, err error) {
 	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 64*1024), scannerBufMax)
+	sc.Buffer(make([]byte, 0, scannerInitBuf), scannerBufMax)
 
 	var lastAITitle, firstHuman string
 	for sc.Scan() {

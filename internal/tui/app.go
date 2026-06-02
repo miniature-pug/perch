@@ -28,6 +28,12 @@ const (
 	// messageBarHeight is the row reserved above the panes for the transient
 	// toast / load-error message line, so adding a message never overflows height.
 	messageBarHeight = 1
+	// listPanePercent is the percentage of the total width allocated to the list
+	// pane in wide (side-by-side) mode. The preview pane takes the remainder.
+	listPanePercent = 30
+	// cmdBarCharLimit is the maximum number of characters accepted by the command
+	// input bar (textinput CharLimit). Prevents unbounded input accumulation.
+	cmdBarCharLimit = 256
 )
 
 // Model is the root Bubble Tea model for the perch TUI.
@@ -139,7 +145,7 @@ func New(items []list.Item) Model {
 
 	ti := textinput.New()
 	ti.Prompt = ":"
-	ti.CharLimit = 256
+	ti.CharLimit = cmdBarCharLimit
 
 	return Model{
 		list:    l,
@@ -865,7 +871,7 @@ func (m *Model) relayout() {
 		m.preview.Width = max(0, m.width-2*borderSize)
 		m.preview.Height = botH
 	default:
-		listWidth := m.width * 30 / 100
+		listWidth := m.width * listPanePercent / 100
 		m.list.SetWidth(max(0, listWidth-2*borderSize))
 		m.list.SetHeight(paneHeight)
 		m.preview.Width = max(0, m.width-listWidth-2*borderSize)

@@ -81,6 +81,10 @@ func (i item) FilterValue() string {
 	return i.project + " " + i.tree + " " + i.title + " " + i.tool
 }
 
+// rowFmt is the fmt format string for the non-glyph portion of a list row.
+// Column widths: %-9s tool, %-40s title, %s relTime.
+const rowFmt = "%-9s %-40s %s"
+
 // rowTruncStyle truncates a rendered list row to the pane width. MaxWidth returns
 // a copy, so this shared base style is never mutated.
 var rowTruncStyle = lipgloss.NewStyle()
@@ -120,7 +124,7 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 	}
 
 	glyph := statusStyle(it.status).Render(it.status.glyph())
-	rest := fmt.Sprintf("%-9s %-40s %s", it.tool, it.title, it.relTime)
+	rest := fmt.Sprintf(rowFmt, it.tool, it.title, it.relTime)
 
 	var rowStyle lipgloss.Style
 	if index == m.Index() {
