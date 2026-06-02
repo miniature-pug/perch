@@ -7,15 +7,22 @@ package app
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	internalpty "github.com/Miniature-Pug/perch/internal/pty"
-	"github.com/Miniature-Pug/perch/internal/git"
+	"github.com/Miniature-Pug/perch/internal/agent"
+	"github.com/Miniature-Pug/perch/internal/config"
+	gitpkg "github.com/Miniature-Pug/perch/internal/git"
+	"github.com/Miniature-Pug/perch/internal/model"
 	"github.com/Miniature-Pug/perch/internal/proc"
+	"github.com/Miniature-Pug/perch/internal/state"
 	"github.com/Miniature-Pug/perch/internal/tmux"
+	"github.com/Miniature-Pug/perch/internal/worktree"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -279,15 +286,202 @@ func (a *App) Diff(worktreePath string) (DiffResult, error) {
 	if err := validateWorktreeUnderRoots(worktreePath, a.roots); err != nil {
 		return DiffResult{}, err
 	}
-	patch, err := git.Diff(context.Background(), a.run, worktreePath)
+	patch, err := gitpkg.Diff(context.Background(), a.run, worktreePath)
 	if err != nil {
 		return DiffResult{}, err
 	}
-	st, err := git.DiffStat(context.Background(), a.run, worktreePath)
+	st, err := gitpkg.DiffStat(context.Background(), a.run, worktreePath)
 	if err != nil {
 		return DiffResult{}, err
 	}
 	return DiffResult{Patch: patch, Files: st.Files, Added: st.Added, Removed: st.Removed}, nil
+}
+
+// ── CreateAgent helpers ───────────────────────────────────────────────────────
+
+// newSessionID generates a random UUID v4 used as the claude --session-id.
+func newSessionID() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:]), nil
+}
+
+// adapterFor returns the Adapter for a known tool name, or (nil, false) for an
+// unknown tool.
+func adapterFor(tool string) (agent.Adapter, bool) {
+	switch model.Tool(tool) {
+	case model.ToolClaude:
+		return agent.NewClaude(), true
+	case model.ToolOpencode:
+		return agent.NewOpencode(), true
+	default:
+		return nil, false
+	}
+}
+
+// containedUnderRoots reports whether the lexically-cleaned treePath is at or
+// under one of the configured roots (symlink-resolved when the root exists on
+// disk). This is a LEXICAL containment check, intended for paths that do not
+// yet exist (e.g. a to-be-created worktree directory). Because treePath is
+// not yet on disk, filepath.EvalSymlinks cannot be called on it.
+//
+// Security rationale: git.WorktreePath (internal/git/worktree.go:65-88)
+// incorporates a config-supplied worktreeDir. When worktreeDir is absolute
+// (e.g. "/etc") the result is "/etc/<handle>", and when it is relative with
+// ".." components (e.g. "../../escape") the cleaned result can land outside
+// projectPath. In both cases the derived treePath escapes the project root
+// but may still be within a configured root — that is the correct boundary
+// (e.g. the default case produces a sibling directory that IS under the root
+// but not under projectPath). Paths that resolve outside every configured
+// root are rejected.
+func containedUnderRoots(treePath string, roots []string) bool {
+	clean := filepath.Clean(treePath)
+	if !filepath.IsAbs(clean) {
+		return false
+	}
+	for _, root := range roots {
+		rootClean := filepath.Clean(root)
+		// Attempt to resolve the root so that a root containing a symlink
+		// component does not false-reject a real child. Errors (missing root)
+		// fall back to the unresolved clean root.
+		if resolved, err := filepath.EvalSymlinks(rootClean); err == nil {
+			rootClean = resolved
+		}
+		if clean == rootClean || strings.HasPrefix(clean, rootClean+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+// CreateAgent creates a linked worktree for branch under projectPath, seeds it,
+// launches the agent in a detached tmux session, stamps @perch_session, and
+// writes the shadow record. Returns the created session id (UUID for claude,
+// empty for opencode which self-assigns its id). projectPath is validated
+// under roots; branch via git.ValidRef; tool against known adapters; and the
+// derived worktree path is checked to stay under a configured root.
+func (a *App) CreateAgent(tool, projectPath, branch string) (string, error) {
+	// Gate 1: projectPath must exist and be under a configured root.
+	if err := validateWorktreeUnderRoots(projectPath, a.roots); err != nil {
+		return "", err
+	}
+	// Gate 2: branch must be a valid git ref.
+	if err := gitpkg.ValidRef(branch); err != nil {
+		return "", fmt.Errorf("invalid branch: %w", err)
+	}
+	// Gate 3: tool must be a known agent adapter.
+	adapter, ok := adapterFor(tool)
+	if !ok {
+		return "", fmt.Errorf("unknown tool %q", tool)
+	}
+
+	ctx := context.Background()
+
+	// Load config (best-effort; defaults apply on any error).
+	var cfg *config.Config
+	if gp, err := config.DefaultGlobalPath(); err == nil {
+		if c, cerr := config.Load(gp, projectPath); cerr == nil {
+			cfg = c
+		}
+	}
+
+	worktreeDir, base := "", "HEAD"
+	var files config.Files
+	if cfg != nil {
+		worktreeDir = cfg.WorktreeDir
+		files = cfg.Files
+		if cfg.BaseBranch != "" {
+			base = cfg.BaseBranch
+		}
+	}
+
+	handle := gitpkg.SlugifyBranch(branch)
+	treePath, err := gitpkg.WorktreePath(projectPath, handle, worktreeDir)
+	if err != nil {
+		return "", err
+	}
+
+	// CRITICAL #2 — treePath containment guard.
+	//
+	// git.WorktreePath (internal/git/worktree.go:65-88) can return a path
+	// outside projectPath when worktreeDir is set in config:
+	//   - absolute worktreeDir: result is worktreeDir/<handle>, which may be
+	//     completely outside the project (e.g. "/etc/<handle>").
+	//   - relative worktreeDir with "..": Clean(projectPath/worktreeDir/<handle>)
+	//     can escape projectPath (e.g. worktreeDir="../../escape" → sibling dir).
+	//   - default (worktreeDir=""): result is <parent>/<base>__worktrees/<handle>,
+	//     a sibling directory outside projectPath but inside its parent (the root).
+	//
+	// treePath does not exist yet, so EvalSymlinks cannot be used on it.
+	// containedUnderRoots checks lexically that the cleaned path is at/under
+	// one of the configured roots. A root-escaped treePath is rejected here
+	// before any git/filesystem mutation occurs.
+	if !containedUnderRoots(treePath, a.roots) {
+		return "", fmt.Errorf("derived worktree path %q escapes all configured roots; check worktree_dir in config", treePath)
+	}
+
+	// Create the linked worktree.
+	if err := gitpkg.AddWorktree(ctx, a.run, projectPath, branch, treePath, base); err != nil {
+		return "", err
+	}
+	// Seed files into the worktree.
+	if err := worktree.Seed(projectPath, treePath, files); err != nil {
+		return "", fmt.Errorf("seed worktree: %w", err)
+	}
+
+	// Build the argv for the agent launch.
+	bin := adapter.Name()
+	if cfg != nil {
+		bin = cfg.AgentBinary(model.Tool(tool))
+	}
+
+	var sid string
+	var argv []string
+	if model.Tool(tool) == model.ToolClaude {
+		sid, err = newSessionID()
+		if err != nil {
+			return "", err
+		}
+		argv = append([]string{bin}, adapter.NewArgs(agent.NewOpts{SessionID: sid})...)
+	} else {
+		argv = append([]string{bin}, adapter.NewArgs(agent.NewOpts{})...)
+	}
+
+	// Launch the agent in a tmux pane.
+	sessName := tmux.SessionName(projectPath)
+	winName := tmux.WindowName(branch)
+	paneID, err := a.tmux.Launch(ctx, sessName, winName, treePath, argv)
+	if err != nil {
+		return "", err
+	}
+
+	// Stamp @perch_session so the pane is visible to ListSessions.
+	if sid != "" {
+		_ = a.tmux.SetPaneOption(ctx, paneID, tmux.OptionPerchSession, sid)
+	}
+
+	// Write the shadow window record (best-effort; errors are non-fatal).
+	baseDir, _ := state.StateDir()
+	bootID, _ := a.tmux.BootID(ctx)
+	if baseDir != "" {
+		_ = state.SaveWindow(baseDir, model.Window{
+			PaneKey:     paneID,
+			Tool:        model.Tool(tool),
+			SessionID:   sid,
+			Tree:        treePath,
+			TmuxSession: sessName,
+			TmuxWindow:  winName,
+			BootID:      bootID,
+			Updated:     time.Now().Unix(),
+		})
+	}
+
+	a.emit("sessions-changed")
+	return sid, nil
 }
 
 // NewApp builds the production App. emit is a no-op until startup installs the

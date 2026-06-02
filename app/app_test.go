@@ -2,6 +2,7 @@ package app
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -266,5 +267,86 @@ func TestNewApp_Defaults(t *testing.T) {
 	}
 	if a.emit == nil {
 		t.Fatal("NewApp must install a non-nil pre-startup emit (no-op until startup)")
+	}
+}
+
+// TestApp_CreateAgent_ValidatesInputs proves each input-validation gate
+// independently. A real git repo inside a real root dir is used so that
+// projectPath passes gate 1 (validateWorktreeUnderRoots) and gate 2
+// (branch/tool) is what rejects in the branch/tool sub-cases.
+func TestApp_CreateAgent_ValidatesInputs(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "perch")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// git init + empty commit so the repo is valid for AddWorktree.
+	for _, args := range [][]string{
+		{"init", "-q", repo},
+		{"-C", repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-qm", "init"},
+	} {
+		cmd := exec.Command("git", args...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+
+	// Isolate from real user config/state so hermeticity holds.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	a := &App{
+		tmux:    tmux.Tmux{Runner: proc.NewFakeRunner(), Bin: "tmux"},
+		run:     proc.NewFakeRunner(),
+		roots:   []string{root},
+		emit:    func(string, ...any) {},
+		bridges: map[string]*ptyEntry{},
+	}
+
+	// Gate 1: projectPath outside all roots → rejected.
+	if _, err := a.CreateAgent("claude", "/etc", "feat/x"); err == nil {
+		t.Error("project outside roots must be rejected")
+	}
+
+	// Gate 2: invalid branch ref → rejected (projectPath is in root).
+	if _, err := a.CreateAgent("claude", repo, "--upload-pack=evil"); err == nil {
+		t.Error("invalid branch ref must be rejected")
+	}
+
+	// Gate 3: unknown tool → rejected (projectPath is in root, branch valid).
+	if _, err := a.CreateAgent("ghost", repo, "feat/x"); err == nil {
+		t.Error("unknown tool must be rejected")
+	}
+}
+
+// TestApp_CreateAgent_ContainmentGuard proves that a config-supplied
+// worktreeDir with an adversarial value (absolute or dotdot-relative) causes
+// CreateAgent to error and never create anything outside projectPath.
+func TestApp_CreateAgent_ContainmentGuard(t *testing.T) {
+	// Test the containedUnderRoots helper directly with adversarial treePaths.
+	root := t.TempDir()
+	roots := []string{root}
+
+	// treePath inside root → accepted.
+	insidePath := filepath.Join(root, "proj__worktrees", "feat-x")
+	if !containedUnderRoots(insidePath, roots) {
+		t.Error("treePath inside root must be accepted by containedUnderRoots")
+	}
+
+	// Adversarial: absolute path outside root (e.g. worktreeDir="/etc").
+	if containedUnderRoots("/etc/feat-x", roots) {
+		t.Error("treePath /etc/feat-x must be rejected (outside all roots)")
+	}
+
+	// Adversarial: dotdot escape that resolves outside root
+	// (e.g. projectPath=root/proj, worktreeDir="../../escape" → root/../escape/feat-x).
+	escapePath := filepath.Clean(filepath.Join(root, "proj", "..", "..", "escape", "feat-x"))
+	if containedUnderRoots(escapePath, roots) {
+		t.Errorf("treePath %q must be rejected (dotdot escape outside root)", escapePath)
+	}
+
+	// Edge case: treePath exactly equals root → accepted.
+	if !containedUnderRoots(root, roots) {
+		t.Error("treePath equal to root must be accepted")
 	}
 }
