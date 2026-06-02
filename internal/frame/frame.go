@@ -34,6 +34,18 @@ const (
 	// defaultPaneHeight is the fallback height (rows) used when PaneSize fails during
 	// frame creation. Matches a standard 24-row terminal.
 	defaultPaneHeight = 24
+
+	// NavKeyTable is the tmux key-table name for the perch session-scoped navigation
+	// bindings. A non-tmux-user can press FocusListKey to return focus to the sidebar
+	// without learning tmux prefix sequences.
+	NavKeyTable = "perchnav"
+
+	// FocusListKey is the key bound in NavKeyTable to return focus to the sidebar pane.
+	FocusListKey = "F12"
+
+	// StatusLeft is the content shown in the tmux status bar for the perch frame.
+	// It hints at the available key bindings so users know how to navigate.
+	StatusLeft = " perch │ F12/click ▸ list   ↵ ▸ open/resume   esc ▸ close window   q ▸ quit (agents live) "
 )
 
 // Info describes the current state of a perch frame after Ensure returns.
@@ -150,7 +162,19 @@ func createFrame(ctx context.Context, t tmux.Tmux, session, root string, sidebar
 		h = defaultPaneHeight // safe default
 	}
 	// Best-effort: a headless server may reject resize; the frame is still usable.
+	// NOTE: status bar consumes 1 row; agent reflow sizing uses the measured main-pane height (see swapInCmd).
 	_ = t.ResizePane(ctx, sidebarPane, sidebarWidth, h)
+
+	// Apply session-level options: navigation key binding, mouse support, and
+	// status bar. All are best-effort — a cosmetic option failing must not abort
+	// frame creation. Bind the key-table entry BEFORE pointing the session at it.
+	_ = t.BindKey(ctx, NavKeyTable, FocusListKey, "select-pane", "-L")
+	_ = t.SetSessionOption(ctx, session, "key-table", NavKeyTable)
+	_ = t.SetSessionOption(ctx, session, "mouse", "on")
+	_ = t.SetSessionOption(ctx, session, "status", "on")
+	_ = t.SetSessionOption(ctx, session, "status-left-length", "200")
+	_ = t.SetSessionOption(ctx, session, "status-left", StatusLeft)
+	_ = t.SetSessionOption(ctx, session, "status-right", "")
 
 	return Info{
 		Session:     session,

@@ -116,9 +116,91 @@ func TestEnsure_Create_HasExpectedCalls(t *testing.T) {
 		"split-window",    // Ensure: add main/placeholder pane
 		"display-message", // Ensure: PaneSize for resize
 		"resize-pane",     // Ensure: resize sidebar to sidebarWidth
+		"bind-key",        // Ensure: bind F12 in perchnav table
+		"set-option",      // Ensure: set key-table perchnav
+		"set-option",      // Ensure: mouse on
+		"set-option",      // Ensure: status on
+		"set-option",      // Ensure: status-left-length 200
+		"set-option",      // Ensure: status-left <statusLeft>
+		"set-option",      // Ensure: status-right ""
 	}
 	if !reflect.DeepEqual(subCmds, want) {
 		t.Errorf("subcommand sequence mismatch:\ngot  %v\nwant %v", subCmds, want)
+	}
+}
+
+// TestEnsure_Create_SessionOptions verifies that createFrame applies the
+// session-level options (bind-key + set-option calls) after the sidebar resize,
+// in the required order, and that failures are silently swallowed (best-effort).
+func TestEnsure_Create_SessionOptions(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Default = &proc.FakeResult{} // succeed everything by default
+	// has-session fails → session absent
+	r.Respond(proc.FakeResult{Err: proc.FakeExitError{Code: 1}},
+		"tmux", "has-session", "-t", "=perch")
+	// new-session → sidebar pane
+	r.Respond(proc.FakeResult{Stdout: []byte("%1\n")},
+		"tmux", "new-session", "-d", "-s", "perch", "-n", "frame", "-c", "/root", "-P", "-F", "#{pane_id}")
+	// split-window → main pane
+	r.Respond(proc.FakeResult{Stdout: []byte("%2\n")},
+		"tmux", "split-window", "-d", "-h", "-P", "-F", "#{pane_id}", "-t", "=perch:=frame", "-c", "/root", "sleep infinity")
+	// PaneSize
+	r.Respond(proc.FakeResult{Stdout: []byte("120\x1f40\n")},
+		"tmux", "display-message", "-p", "-t", "%1", "#{pane_width}\x1f#{pane_height}")
+
+	tmx := newFakeTmux(r)
+	info, err := frame.Ensure(context.Background(), tmx, "perch", "/root", []string{"perch", "--sidebar"})
+	if err != nil {
+		t.Fatal("unexpected error:", err)
+	}
+	if !info.Created {
+		t.Error("expected Created=true")
+	}
+
+	// Collect calls after resize-pane (which is the last non-option call).
+	// We find the resize-pane call index then check subsequent calls.
+	resizeIdx := -1
+	for i, c := range r.Calls {
+		if len(c.Args) > 0 && c.Args[0] == "resize-pane" {
+			resizeIdx = i
+			break
+		}
+	}
+	if resizeIdx < 0 {
+		t.Fatal("resize-pane call not found")
+	}
+
+	// The calls after resize-pane must match the expected session-option sequence.
+	afterResize := r.Calls[resizeIdx+1:]
+	type wantCall struct {
+		sub  string   // Args[0]
+		rest []string // Args[1:]
+	}
+	wantCalls := []wantCall{
+		{"bind-key", []string{"-T", frame.NavKeyTable, frame.FocusListKey, "select-pane", "-L"}},
+		{"set-option", []string{"-t", "perch", "key-table", frame.NavKeyTable}},
+		{"set-option", []string{"-t", "perch", "mouse", "on"}},
+		{"set-option", []string{"-t", "perch", "status", "on"}},
+		{"set-option", []string{"-t", "perch", "status-left-length", "200"}},
+		{"set-option", []string{"-t", "perch", "status-left", frame.StatusLeft}},
+		{"set-option", []string{"-t", "perch", "status-right", ""}},
+	}
+	if len(afterResize) != len(wantCalls) {
+		t.Fatalf("after resize-pane: got %d calls, want %d:\n%v",
+			len(afterResize), len(wantCalls), afterResize)
+	}
+	for i, w := range wantCalls {
+		c := afterResize[i]
+		if len(c.Args) == 0 {
+			t.Errorf("call[%d]: empty args", i)
+			continue
+		}
+		if c.Args[0] != w.sub {
+			t.Errorf("call[%d]: subcommand=%q, want %q", i, c.Args[0], w.sub)
+		}
+		if !reflect.DeepEqual(c.Args[1:], w.rest) {
+			t.Errorf("call[%d]: args[1:]=%v, want %v", i, c.Args[1:], w.rest)
+		}
 	}
 }
 
