@@ -1,12 +1,11 @@
-// Command perch is a keyboard-first TUI for managing AI coding sessions
-// (claude, opencode) across git worktrees inside tmux. Run without arguments it
-// bootstraps a persistent tmux frame (sidebar + live main pane) and launches the
-// TUI; it also provides the setup, attach, resurrect, status, doctor, and
-// version subcommands. See ARCHITECTURE.md for the full design.
+// Command perch is a keyboard-first GUI for managing AI coding sessions
+// (claude, opencode) across git worktrees. Run without arguments it launches
+// the Wails desktop GUI; it also provides the setup, attach, resurrect,
+// status, doctor, and version subcommands. See ARCHITECTURE.md for the full
+// design.
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -23,14 +22,12 @@ import (
 	"github.com/Miniature-Pug/perch/internal/config"
 	"github.com/Miniature-Pug/perch/internal/discover"
 	"github.com/Miniature-Pug/perch/internal/doctor"
-	"github.com/Miniature-Pug/perch/internal/frame"
 	"github.com/Miniature-Pug/perch/internal/model"
 	"github.com/Miniature-Pug/perch/internal/proc"
 	"github.com/Miniature-Pug/perch/internal/resurrect"
 	"github.com/Miniature-Pug/perch/internal/state"
 	"github.com/Miniature-Pug/perch/internal/status"
 	"github.com/Miniature-Pug/perch/internal/tmux"
-	"github.com/Miniature-Pug/perch/internal/tui"
 )
 
 // version is injected at build time via ldflags:
@@ -48,12 +45,10 @@ func main() {
 // never directly to os.Stdout/os.Stderr. Returns the exit code.
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		return handleBootstrap("", stdout, stderr)
+		return handleLaunch("", stdout, stderr)
 	}
 
 	switch args[0] {
-	case "--sidebar":
-		return handleSidebar(args[1:], stdout, stderr)
 	case "setup":
 		return handleSetup(args[1:], stdout, stderr)
 	case "attach":
@@ -76,8 +71,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
-// handleTUI launches the interactive TUI, blocking until the user quits.
-func handleTUI(root string, stdout, stderr io.Writer) int {
+// handleLaunch is the default entry point: it resolves the project root (cwd
+// when root==""), the discovery roots, and launches the Wails GUI via the
+// launchGUI seam. The GUI owns the interactive shell; there is no terminal TUI.
+func handleLaunch(root string, stdout, stderr io.Writer) int {
+	_ = stdout
 	if root == "" {
 		cwd, err := os.Getwd()
 		if err != nil {
@@ -86,292 +84,8 @@ func handleTUI(root string, stdout, stderr io.Writer) int {
 		}
 		root = cwd
 	}
-	baseDir, err := state.StateDir()
-	if err != nil {
+	if err := launchGUI(guiRoots(root)); err != nil {
 		_, _ = fmt.Fprintf(stderr, "perch: %v\n", err)
-		return 1
-	}
-	// Plain WithCancel: bubbletea installs its own SIGINT/SIGTERM handler;
-	// a second signal handler races it.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel() // cancels in-flight data loads after the program exits
-
-	// Load global config once; degrade gracefully on error (GlobalCfg stays nil → defaults).
-	var loadedCfg *config.Config
-	if globalPath, err := config.DefaultGlobalPath(); err == nil {
-		if c, err := config.Load(globalPath, root); err == nil {
-			loadedCfg = c
-		}
-	}
-	var refreshMs int
-	if loadedCfg != nil {
-		refreshMs = loadedCfg.RefreshMs
-	}
-
-	cfg := tui.Config{
-		GlobalCfg: loadedCfg,
-		Tmux:      tmux.New(),
-		Runner:    proc.ExecRunner{},
-		Claude:    agent.NewClaude(),
-		Root:      root,
-		BaseDir:   baseDir,
-		Now:       time.Now().Unix(),
-		RefreshMs: refreshMs,
-	}
-	if exe, exeErr := os.Executable(); exeErr == nil {
-		cfg.ExecPath = exe
-	}
-	if err := tui.Run(ctx, cfg); err != nil {
-		_, _ = fmt.Fprintf(stderr, "perch: %v\n", err)
-		return 1
-	}
-	return 0
-}
-
-// bootstrapDeps is the injectable dependency bundle for handleBootstrap.
-// In production, bootstrapProduction() fills it from real OS/tmux calls.
-// In tests, fields are replaced with fakes so no real tmux or TUI is needed.
-type bootstrapDeps struct {
-	// tmuxClient is the Tmux instance used to run frame.Ensure.
-	tmuxClient tmux.Tmux
-	// executable returns the path to the running binary (os.Executable).
-	// Used to build the "perch --sidebar" command argv.
-	executable func() (string, error)
-	// fallback is called when frame setup fails. In production this is
-	// handleTUI. In tests it is replaced with a stub.
-	fallback func(root string, stdout, stderr io.Writer) int
-	// attach performs the terminal hand-off after a successful frame bootstrap.
-	// In production: outside tmux → exec tmux attach-session; inside tmux →
-	// switch-client. This is the one path NOT unit-tested (tty-dependent).
-	// In tests it is a no-op that records the call.
-	attach func(ctx context.Context, t tmux.Tmux, frameSession string) int
-	// strandedCount reports how many agent sessions a restart stranded (read-only).
-	// nil in tests that don't exercise the offer → the offer is skipped.
-	strandedCount func(ctx context.Context) (int, error)
-	// confirm prompts the user to restore n stranded sessions. Production gates on
-	// a tty and returns false on a non-tty (never blocks). nil → offer skipped.
-	confirm func(n int) bool
-	// reconcile runs resurrect.Reconcile. nil → offer skipped.
-	reconcile func(ctx context.Context) (resurrect.Report, error)
-}
-
-// resurrectDeps builds resurrect.Deps from the real state dir + global config
-// roots. ok is false when the state dir is unavailable (the caller then skips
-// the offer rather than erroring out the launch).
-func resurrectDeps(t tmux.Tmux) (resurrect.Deps, bool) {
-	baseDir, err := state.StateDir()
-	if err != nil {
-		return resurrect.Deps{}, false
-	}
-	var roots []string
-	if globalPath, gerr := config.DefaultGlobalPath(); gerr == nil {
-		if cfg, cerr := config.Load(globalPath, ""); cerr == nil {
-			roots = cfg.Roots
-		}
-	}
-	return resurrect.Deps{
-		Tmux:    t,
-		Runner:  proc.ExecRunner{},
-		BaseDir: baseDir,
-		Now:     time.Now().Unix(),
-		Roots:   roots,
-	}, true
-}
-
-// confirmRestore is the production confirm seam: it gates on a tty so a
-// non-interactive launch (piped/CI stdin) never blocks on a prompt — it returns
-// false and the offer is skipped. Only an explicit y/yes restores.
-func confirmRestore(n int) bool {
-	stat, err := os.Stdin.Stat()
-	if err != nil || (stat.Mode()&os.ModeCharDevice) == 0 {
-		return false // non-tty: never block on a prompt
-	}
-	_, _ = fmt.Fprintf(os.Stderr,
-		"perch: %d session(s) were stranded by a restart. Restore them? [y/N] ", n)
-	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-	line = strings.ToLower(strings.TrimSpace(line))
-	return line == "y" || line == "yes"
-}
-
-func bootstrapProduction() bootstrapDeps {
-	t := tmux.New()
-	rdeps, rok := resurrectDeps(t)
-	return bootstrapDeps{
-		tmuxClient: t,
-		executable: os.Executable,
-		fallback: func(root string, stdout, stderr io.Writer) int {
-			return handleTUI(root, stdout, stderr)
-		},
-		attach: func(ctx context.Context, t tmux.Tmux, frameSession string) int {
-			argv := t.ExecArgs(t.AttachArgs(frameSession)...)
-			c := exec.Command(argv[0], argv[1:]...) //nolint:gosec // controlled input
-			c.Stdin = os.Stdin
-			c.Stdout = os.Stdout
-			c.Stderr = os.Stderr
-			_ = c.Run()
-			return 0
-		},
-		strandedCount: func(ctx context.Context) (int, error) {
-			if !rok {
-				return 0, nil
-			}
-			return resurrect.StrandedCount(ctx, rdeps)
-		},
-		confirm: confirmRestore,
-		reconcile: func(ctx context.Context) (resurrect.Report, error) {
-			if !rok {
-				return resurrect.Report{}, nil
-			}
-			return resurrect.Reconcile(ctx, rdeps)
-		},
-	}
-}
-
-// handleBootstrap is the new default entry point when perch is run without a
-// subcommand. It bootstraps the persistent perch frame session (M11-0 T4):
-//
-//  1. Resolves the project root (cwd when root=="").
-//  2. Builds the sidebar command string using os.Executable.
-//  3. Calls frame.Ensure to create or reuse the perch frame.
-//  4. Attaches: switch-client when inside tmux, exec tmux attach-session outside.
-//
-// Graceful fallback: any error from frame.Ensure (or a missing tmux binary)
-// prints a warning and falls through to handleTUI so perch always launches
-// something useful.
-func handleBootstrap(root string, stdout, stderr io.Writer) int {
-	return bootstrap(bootstrapProduction(), root, stdout, stderr)
-}
-
-// bootstrap is the testable core of handleBootstrap. deps replaces real tmux
-// and OS calls so tests can drive every branch without a live server or TUI.
-func bootstrap(deps bootstrapDeps, root string, stdout, stderr io.Writer) int {
-	if root == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			_, _ = fmt.Fprintf(stderr, "perch: cannot determine working directory: %v\n", err)
-			return 1
-		}
-		root = cwd
-	}
-
-	// Build the sidebar argv: absolute path to this binary + "--sidebar". argv
-	// (not a joined string) keeps a binary path containing spaces intact.
-	sidebarArgv := []string{"perch", "--sidebar"} // fallback if os.Executable fails
-	if exe, err := deps.executable(); err == nil && exe != "" {
-		sidebarArgv = []string{exe, "--sidebar"}
-	}
-
-	ctx := context.Background()
-
-	// Auto-offer resurrect when a server restart stranded agent sessions. This
-	// runs BEFORE frame.Ensure so reconcile sees normal (non-frame) topology — at
-	// restart time no perch frame exists yet, so restoring is safe here. Seams are
-	// nil in tests that don't exercise the offer.
-	if deps.strandedCount != nil && deps.confirm != nil && deps.reconcile != nil {
-		if n, derr := deps.strandedCount(ctx); derr == nil && n > 0 && deps.confirm(n) {
-			if rep, rerr := deps.reconcile(ctx); rerr != nil {
-				_, _ = fmt.Fprintf(stderr, "perch: resurrect: %v\n", rerr)
-			} else {
-				_, _ = fmt.Fprintf(stdout, "perch: resurrect — %d restored, %d pruned, %d kept\n",
-					len(rep.Restored), len(rep.Pruned), len(rep.Kept))
-			}
-		}
-	}
-
-	info, err := frame.Ensure(ctx, deps.tmuxClient, frame.DefaultFrameSession, root, sidebarArgv)
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "perch: frame setup: %v — falling back to direct TUI\n", err)
-		return deps.fallback(root, stdout, stderr)
-	}
-	_ = info // session/pane ids are only needed by handleSidebar (injected via $TMUX_PANE)
-
-	return deps.attach(ctx, deps.tmuxClient, frame.DefaultFrameSession)
-}
-
-// sidebarDeps is the injectable dependency bundle for handleSidebar. In
-// production, sidebarProduction() fills it. In tests, runTUI is replaced with
-// a stub so no Bubble Tea program is started.
-type sidebarDeps struct {
-	// tmuxClient is used by frame.SidebarContext to discover the frame context.
-	tmuxClient tmux.Tmux
-	// getenv resolves environment variables (e.g. TMUX_PANE).
-	getenv func(string) string
-	// runTUI wraps tui.Run. Tests replace this with a stub that captures the
-	// Config without launching a real terminal program.
-	runTUI func(ctx context.Context, cfg tui.Config) error
-}
-
-func sidebarProduction() sidebarDeps {
-	return sidebarDeps{
-		tmuxClient: tmux.New(),
-		getenv:     os.Getenv,
-		runTUI:     tui.Run,
-	}
-}
-
-// handleSidebar is the inner TUI that runs inside the frame's sidebar pane.
-// It resolves its own pane id from $TMUX_PANE, discovers the sibling placeholder
-// pane via frame.SidebarContext, then launches the TUI with the frame fields set.
-func handleSidebar(args []string, stdout, stderr io.Writer) int {
-	return sidebar(sidebarProduction(), args, stdout, stderr)
-}
-
-// sidebar is the testable core of handleSidebar. deps replaces real tmux and
-// TUI calls so tests can exercise routing without a live server or terminal.
-func sidebar(deps sidebarDeps, args []string, stdout, stderr io.Writer) int {
-	// args currently unused (reserved for future sidebar-specific flags).
-	_ = args
-
-	root, err := os.Getwd()
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "perch: cannot determine working directory: %v\n", err)
-		return 1
-	}
-	baseDir, err := state.StateDir()
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "perch: %v\n", err)
-		return 1
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	frameSession, placeholderPane, err := frame.SidebarContext(ctx, deps.tmuxClient, deps.getenv)
-	if err != nil {
-		// Not inside a frame (e.g. invoked directly for testing) — run without
-		// frame context (direct-TUI mode) so the sidebar is still useful.
-		_, _ = fmt.Fprintf(stderr, "perch: sidebar context: %v — running without frame\n", err)
-	}
-
-	// Load global config once; degrade gracefully on error (GlobalCfg stays nil → defaults).
-	var loadedCfg *config.Config
-	if globalPath, gerr := config.DefaultGlobalPath(); gerr == nil {
-		if c, cerr := config.Load(globalPath, root); cerr == nil {
-			loadedCfg = c
-		}
-	}
-	var refreshMs int
-	if loadedCfg != nil {
-		refreshMs = loadedCfg.RefreshMs
-	}
-
-	cfg := tui.Config{
-		GlobalCfg:       loadedCfg,
-		Tmux:            deps.tmuxClient,
-		Runner:          proc.ExecRunner{},
-		Claude:          agent.NewClaude(),
-		Root:            root,
-		BaseDir:         baseDir,
-		Now:             time.Now().Unix(),
-		RefreshMs:       refreshMs,
-		FrameSession:    frameSession,
-		PlaceholderPane: placeholderPane,
-	}
-	if exe, exeErr := os.Executable(); exeErr == nil {
-		cfg.ExecPath = exe
-	}
-	if runErr := deps.runTUI(ctx, cfg); runErr != nil {
-		_, _ = fmt.Fprintf(stderr, "perch: %v\n", runErr)
 		return 1
 	}
 	return 0
@@ -702,9 +416,8 @@ func handleVersion(stdout io.Writer) int {
 	return 0
 }
 
-// handlePathArg validates args[0] as an existing directory root and bootstraps
-// the perch frame (or falls back to direct TUI), or prints usage to stderr and
-// returns 2.
+// handlePathArg validates args[0] as an existing directory root and launches
+// the Wails GUI, or prints usage to stderr and returns 2.
 func handlePathArg(arg string, stdout, stderr io.Writer) int {
 	info, err := os.Stat(arg)
 	if err != nil || !info.IsDir() {
@@ -712,7 +425,7 @@ func handlePathArg(arg string, stdout, stderr io.Writer) int {
 		printUsage(stderr)
 		return 2
 	}
-	return handleBootstrap(arg, stdout, stderr)
+	return handleLaunch(arg, stdout, stderr)
 }
 
 // printUsage writes the usage summary to w.
