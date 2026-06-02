@@ -1,18 +1,14 @@
 package main
 
 import (
-	"context"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/Miniature-Pug/perch/internal/attach"
 	"github.com/Miniature-Pug/perch/internal/discover"
 	"github.com/Miniature-Pug/perch/internal/model"
-	"github.com/Miniature-Pug/perch/internal/proc"
-	"github.com/Miniature-Pug/perch/internal/tmux"
 )
 
 // helper executes run and returns stdout, stderr, and the exit code.
@@ -131,72 +127,6 @@ func TestSetupMessage_Opencode(t *testing.T) {
 	}
 }
 
-// ── resurrect (empty state dir → nothing to reconcile) ───────────────────────
-
-func TestRun_Resurrect_Exit0(t *testing.T) {
-	// Point state.StateDir() at a temp dir with no windows/ records so
-	// Reconcile early-returns without touching tmux. The test is fully hermetic.
-	dir := t.TempDir()
-	t.Setenv("XDG_STATE_HOME", dir)
-
-	out, _, code := callRun([]string{"resurrect"})
-	if code != 0 {
-		t.Errorf("expected exit 0 for resurrect with empty state dir, got %d", code)
-	}
-	if !strings.Contains(out, "nothing to reconcile") {
-		t.Errorf("expected 'nothing to reconcile' message; got: %q", out)
-	}
-}
-
-// ── status set (FD4: empty $TMUX_PANE → silent exit 0) ───────────────────────
-
-func TestRun_StatusSetWorking_Exit0(t *testing.T) {
-	// Pin TMUX_PANE to empty so handleStatus takes the FD4 no-op path and never
-	// reaches the real tmux server — keeps the test hermetic even when run from
-	// inside a tmux pane.
-	t.Setenv("TMUX_PANE", "")
-	_, _, code := callRun([]string{"status", "set", "working"})
-	if code != 0 {
-		t.Errorf("expected exit 0 for status set working, got %d", code)
-	}
-}
-
-func TestRun_StatusSetWaiting_Exit0(t *testing.T) {
-	t.Setenv("TMUX_PANE", "")
-	_, _, code := callRun([]string{"status", "set", "waiting"})
-	if code != 0 {
-		t.Errorf("expected exit 0 for status set waiting, got %d", code)
-	}
-}
-
-func TestRun_StatusSetDone_Exit0(t *testing.T) {
-	t.Setenv("TMUX_PANE", "")
-	_, _, code := callRun([]string{"status", "set", "done"})
-	if code != 0 {
-		t.Errorf("expected exit 0 for status set done, got %d", code)
-	}
-}
-
-func TestRun_StatusSetInvalid_Exit2(t *testing.T) {
-	_, errOut, code := callRun([]string{"status", "set", "invalid"})
-	if code != 2 {
-		t.Errorf("expected exit 2 for invalid status value, got %d", code)
-	}
-	if !strings.Contains(errOut, "Usage") {
-		t.Errorf("expected usage on stderr; got: %q", errOut)
-	}
-}
-
-func TestRun_StatusNoArgs_Exit2(t *testing.T) {
-	_, errOut, code := callRun([]string{"status"})
-	if code != 2 {
-		t.Errorf("expected exit 2 for bare status, got %d", code)
-	}
-	if !strings.Contains(errOut, "Usage") {
-		t.Errorf("expected usage on stderr; got: %q", errOut)
-	}
-}
-
 // ── version ───────────────────────────────────────────────────────────────────
 
 func TestRun_Version_Exit0(t *testing.T) {
@@ -310,10 +240,32 @@ func TestRun_DebugNoSubcommand_Exit2(t *testing.T) {
 // ── debug absent from printUsage ─────────────────────────────────────────────
 
 func TestPrintUsage_NoDebug(t *testing.T) {
-	// Trigger a bad verb to capture the usage output that printUsage emits.
 	_, errOut, _ := callRun([]string{"doctr"})
-	if strings.Contains(errOut, "debug") {
-		t.Errorf("printUsage must not mention 'debug' (hidden command); stderr: %q", errOut)
+	for _, hidden := range []string{"debug", "attach", "resurrect", "status"} {
+		if strings.Contains(errOut, hidden) {
+			t.Errorf("printUsage must not mention %q; stderr: %q", hidden, errOut)
+		}
+	}
+	for _, visible := range []string{"setup", "doctor", "version"} {
+		if !strings.Contains(errOut, visible) {
+			t.Errorf("printUsage must mention surviving verb %q; stderr: %q", visible, errOut)
+		}
+	}
+}
+
+// ── removed verbs → exit 2 ────────────────────────────────────────────────────
+
+func TestRun_RemovedVerbs_Exit2(t *testing.T) {
+	for _, verb := range []string{"resurrect", "status"} {
+		t.Run(verb, func(t *testing.T) {
+			_, errOut, code := callRun([]string{verb})
+			if code != 2 {
+				t.Errorf("removed verb %q: want exit 2, got %d", verb, code)
+			}
+			if !strings.Contains(errOut, "Usage") {
+				t.Errorf("removed verb %q: want Usage on stderr; got %q", verb, errOut)
+			}
+		})
 	}
 }
 
@@ -410,303 +362,5 @@ func TestRun_ValidPath_LaunchesGUI(t *testing.T) {
 	}
 	if len(gotRoots) == 0 {
 		t.Error("expected guiRoots to supply at least one root")
-	}
-}
-
-// ── attach ────────────────────────────────────────────────────────────────────
-
-// TestAttach_NoQuery_Exit2 verifies that `perch attach` with no query exits 2.
-func TestAttach_NoQuery_Exit2(t *testing.T) {
-	_, errOut, code := callRun([]string{"attach"})
-	if code != 2 {
-		t.Errorf("expected exit 2 for bare attach, got %d", code)
-	}
-	if !strings.Contains(errOut, "Usage") {
-		t.Errorf("expected usage on stderr; got: %q", errOut)
-	}
-}
-
-// TestAttach_WhitespaceOnlyQuery_Exit2 verifies that a whitespace-only query exits 2.
-func TestAttach_WhitespaceOnlyQuery_Exit2(t *testing.T) {
-	_, errOut, code := callRun([]string{"attach", "   "})
-	if code != 2 {
-		t.Errorf("expected exit 2 for whitespace-only query, got %d", code)
-	}
-	if !strings.Contains(errOut, "Usage") {
-		t.Errorf("expected usage on stderr; got: %q", errOut)
-	}
-}
-
-// makeAttachDeps builds an attachDeps with a stubbed gather and FakeRunner-backed
-// tmuxClient, plus an execProcess seam that captures the argv.
-//
-// r is shared so callers can assert r.Calls after the attach call.
-// execArgv will hold the argv passed to execProcess (outside-tmux path).
-func makeAttachDeps(
-	r *proc.FakeRunner,
-	cands []attach.Candidate,
-	tmuxEnv string,
-	execArgv *[]string,
-) attachDeps {
-	// Wire Getenv into the tmux client so AttachArgs/AttachTargetArgs reads the
-	// same injected TMUX value as attachCore. Without this, tmux.Tmux.Getenv
-	// falls back to os.Getenv and the outside-tmux path becomes non-hermetic:
-	// AttachArgs would return switch-client args if the test runner is inside tmux.
-	getenv := func(k string) string {
-		if k == "TMUX" {
-			return tmuxEnv
-		}
-		return ""
-	}
-	return attachDeps{
-		gather: func(_ context.Context) ([]attach.Candidate, error) {
-			return cands, nil
-		},
-		tmuxClient: tmux.Tmux{Runner: r, Bin: "tmux", Getenv: getenv},
-		getenv:     getenv,
-		execProcess: func(argv []string) int {
-			if execArgv != nil {
-				*execArgv = argv
-			}
-			return 0
-		},
-	}
-}
-
-// TestAttachCore_ZeroMatches_Exit1 verifies that 0 matches → exit 1 + error message.
-func TestAttachCore_ZeroMatches_Exit1(t *testing.T) {
-	r := proc.NewFakeRunner()
-	deps := makeAttachDeps(r, []attach.Candidate{
-		{Project: "myproject", Branch: "main", Tool: "claude", TmuxSession: "myproject", TmuxWindow: "main", IsLive: true},
-	}, "", nil)
-
-	var out, errBuf strings.Builder
-	code := attachCore(deps, "zzz-no-match-zzz", &out, &errBuf)
-	if code != 1 {
-		t.Errorf("expected exit 1 for 0 matches, got %d", code)
-	}
-	if !strings.Contains(errBuf.String(), "no session matches") {
-		t.Errorf("expected 'no session matches' on stderr; got: %q", errBuf.String())
-	}
-	// No tmux calls should have been made.
-	if len(r.Calls) != 0 {
-		t.Errorf("expected 0 tmux calls for 0 matches, got %d: %v", len(r.Calls), r.Calls)
-	}
-}
-
-// TestAttachCore_OneMatch_OutsideTmux_Exit0 verifies that 1 match outside tmux
-// (TMUX unset) issues attach-session argv via execProcess and exits 0.
-// The argv must contain "attach-session" and the session target, not the raw query.
-func TestAttachCore_OneMatch_OutsideTmux_Exit0(t *testing.T) {
-	var capturedArgv []string
-	r := proc.NewFakeRunner()
-
-	cands := []attach.Candidate{
-		{Project: "myproject", Branch: "main", Tool: "claude",
-			TmuxSession: "myproject", TmuxWindow: "main",
-			LiveTarget: "=myproject:=main", IsLive: true},
-		{Project: "otherrepo", Branch: "develop", Tool: "opencode",
-			TmuxSession: "otherrepo", TmuxWindow: "develop",
-			LiveTarget: "=otherrepo:=develop", IsLive: true},
-	}
-	deps := makeAttachDeps(r, cands, "", &capturedArgv) // TMUX="" → outside tmux
-
-	var out, errBuf strings.Builder
-	code := attachCore(deps, "myproject", &out, &errBuf)
-	if code != 0 {
-		t.Errorf("expected exit 0 for 1 match outside tmux, got %d (stderr: %q)", code, errBuf.String())
-	}
-	// execProcess must have been called with attach-session argv.
-	if len(capturedArgv) == 0 {
-		t.Fatal("execProcess must be called for outside-tmux path")
-	}
-	// The argv must contain "attach-session" and the session target (not the raw query).
-	argvStr := strings.Join(capturedArgv, " ")
-	if !strings.Contains(argvStr, "attach-session") {
-		t.Errorf("expected 'attach-session' in argv; got: %v", capturedArgv)
-	}
-	if !strings.Contains(argvStr, "=myproject") {
-		t.Errorf("expected session target '=myproject' in argv; got: %v", capturedArgv)
-	}
-	// Flag-like args in the argv indicate a query leak.
-	for _, arg := range capturedArgv {
-		if strings.Contains(arg, "--") && arg != "--" {
-			t.Errorf("flag-like arg %q appeared in attach argv; possible query leak", arg)
-		}
-	}
-	// No switch-client call should have been made (we're outside tmux).
-	for _, c := range r.Calls {
-		if c.Name == "tmux" {
-			for _, a := range c.Args {
-				if a == "switch-client" {
-					t.Errorf("switch-client must not be called outside tmux; calls: %v", r.Calls)
-				}
-			}
-		}
-	}
-}
-
-// TestAttachCore_OneMatch_InsideTmux_Exit0 verifies that 1 match inside tmux
-// ($TMUX set) issues switch-client via the runner (FakeRunner.Calls) and exits 0.
-func TestAttachCore_OneMatch_InsideTmux_Exit0(t *testing.T) {
-	r := proc.NewFakeRunner()
-	// switch-client succeeds.
-	r.Default = &proc.FakeResult{Stdout: []byte("")}
-
-	cands := []attach.Candidate{
-		{Project: "myproject", Branch: "main", Tool: "claude",
-			TmuxSession: "myproject", TmuxWindow: "main",
-			LiveTarget: "=myproject:=main", IsLive: true},
-	}
-	deps := makeAttachDeps(r, cands, "/tmp/tmux-1234/default,0,0", nil) // TMUX set
-
-	var out, errBuf strings.Builder
-	code := attachCore(deps, "myproject", &out, &errBuf)
-	if code != 0 {
-		t.Errorf("expected exit 0 for 1 match inside tmux, got %d (stderr: %q)", code, errBuf.String())
-	}
-	// FakeRunner must have recorded a switch-client call.
-	if len(r.Calls) == 0 {
-		t.Fatal("expected tmux switch-client call to be recorded in r.Calls")
-	}
-	found := false
-	for _, c := range r.Calls {
-		if c.Name == "tmux" {
-			for _, a := range c.Args {
-				if a == "switch-client" {
-					found = true
-				}
-			}
-		}
-	}
-	if !found {
-		t.Errorf("expected switch-client in r.Calls; got: %v", r.Calls)
-	}
-	// The switch-client target must be the live window target, not the raw query.
-	for _, c := range r.Calls {
-		if c.Name == "tmux" {
-			for i, a := range c.Args {
-				if a == "-t" && i+1 < len(c.Args) {
-					target := c.Args[i+1]
-					if target == "myproject" {
-						t.Errorf("switch-client target %q must be anchored (start with '='); raw project name leaked", target)
-					}
-					if !strings.HasPrefix(target, "=") {
-						t.Errorf("switch-client target %q must start with '=' (anchored target)", target)
-					}
-				}
-			}
-		}
-	}
-}
-
-// TestAttachCore_AmbiguousMatches_Exit2 verifies that 2+ matches → exit 2,
-// list printed to stderr, no tmux calls made.
-func TestAttachCore_AmbiguousMatches_Exit2(t *testing.T) {
-	r := proc.NewFakeRunner()
-
-	cands := []attach.Candidate{
-		{Project: "myproject", Branch: "main", Tool: "claude",
-			TmuxSession: "myproject", TmuxWindow: "main",
-			LiveTarget: "=myproject:=main", IsLive: true},
-		{Project: "myproject", Branch: "feat/foo", Tool: "claude",
-			TmuxSession: "myproject", TmuxWindow: "feat-foo",
-			LiveTarget: "=myproject:=feat-foo", IsLive: true},
-	}
-	deps := makeAttachDeps(r, cands, "", nil)
-
-	var out, errBuf strings.Builder
-	code := attachCore(deps, "myproject", &out, &errBuf)
-	if code != 2 {
-		t.Errorf("expected exit 2 for ambiguous query, got %d", code)
-	}
-	if !strings.Contains(errBuf.String(), "ambiguous") {
-		t.Errorf("expected 'ambiguous' on stderr; got: %q", errBuf.String())
-	}
-	// At least one candidate should appear in the output.
-	if !strings.Contains(errBuf.String(), "myproject") {
-		t.Errorf("expected candidate list on stderr; got: %q", errBuf.String())
-	}
-	// No tmux calls should have been made.
-	if len(r.Calls) != 0 {
-		t.Errorf("no tmux calls should be made for ambiguous query, got: %v", r.Calls)
-	}
-}
-
-// TestAttachCore_ArgvSafety_QueryNeverBecomesTarget verifies that a query like
-// "--foo" or "-X" only fuzzy-matches against candidates but the issued tmux argv
-// contains only validated session targets (starting with '='), never the raw query.
-// This covers both the inside-tmux (switch-client) and outside-tmux (attach-session)
-// paths.
-func TestAttachCore_ArgvSafety_QueryNeverBecomesTarget(t *testing.T) {
-	tests := []struct {
-		name    string
-		query   string
-		tmuxEnv string
-	}{
-		{"outside-tmux dash-dash flag", "--foo", ""},
-		{"outside-tmux dash flag", "-X", ""},
-		{"inside-tmux dash-dash flag", "--foo", "/tmp/tmux-1234/default,0,0"},
-		{"inside-tmux dash flag", "-X", "/tmp/tmux-1234/default,0,0"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			r := proc.NewFakeRunner()
-			r.Default = &proc.FakeResult{Stdout: []byte("")} // switch-client succeeds
-
-			var capturedArgv []string
-			// Candidate whose MatchString may fuzzy-match the query.
-			cands := []attach.Candidate{
-				{Project: "foo", Branch: "main", Tool: "claude",
-					TmuxSession: "foo", TmuxWindow: "main",
-					LiveTarget: "=foo:=main", IsLive: true},
-			}
-			deps := makeAttachDeps(r, cands, tt.tmuxEnv, &capturedArgv)
-
-			var out, errBuf strings.Builder
-			attachCore(deps, tt.query, &out, &errBuf)
-
-			// Verify no tmux argv element equals the raw query.
-			for _, c := range r.Calls {
-				if c.Name == "tmux" {
-					for _, a := range c.Args {
-						if a == tt.query {
-							t.Errorf("raw query %q appeared verbatim in tmux argv %v", tt.query, c.Args)
-						}
-					}
-				}
-			}
-			// Verify execProcess argv (outside-tmux) doesn't contain the raw query.
-			for _, a := range capturedArgv {
-				if a == tt.query {
-					t.Errorf("raw query %q appeared verbatim in execProcess argv %v", tt.query, capturedArgv)
-				}
-			}
-		})
-	}
-}
-
-// TestAttach_Routes verifies that `perch attach <query>` dispatches to the
-// attach handler (not the path-arg handler). Exit code 1 means "no matches" —
-// valid routing. Exit code 2 for "Usage" may indicate a query-not-provided path;
-// exit code 2 for an unrecognized path would be routing failure.
-func TestAttach_Routes(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("CLAUDE_CONFIG_DIR", "")
-	// Use a known non-existing path as query so no real discovery happens.
-	// Real attach does discovery with the real cwd; any result is fine for routing.
-	_, _, code := callRun([]string{"attach", "zzz-unlikely-match-perch-test"})
-	// exit 2 from path-arg handler means routing failed ("not an existing directory")
-	// but exit 2 from attach can also mean "Usage" — we disambiguate via message check.
-	_ = code // routing is confirmed by not panicking and reaching the attach handler
-}
-
-// TestPrintUsage_ContainsAttach verifies that printUsage mentions "attach".
-func TestPrintUsage_ContainsAttach(t *testing.T) {
-	_, errOut, _ := callRun([]string{"doctr"}) // trigger bad verb → printUsage
-	if !strings.Contains(errOut, "attach") {
-		t.Errorf("printUsage must mention 'attach'; stderr: %q", errOut)
 	}
 }

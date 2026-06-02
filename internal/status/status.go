@@ -5,9 +5,6 @@ package status
 
 import (
 	"context"
-	"fmt"
-
-	"github.com/Miniature-Pug/perch/internal/tmux"
 )
 
 // valid states accepted by Set and fired by Machine.
@@ -17,30 +14,11 @@ const (
 	StateDone    = "done"
 )
 
-// validStates is the closed set of strings accepted by Set.
-var validStates = map[string]bool{
-	StateWorking: true,
-	StateWaiting: true,
-	StateDone:    true,
-}
+// Deps stub — tmux removed; status delivery flows through agent.Monitor events.
+type Deps struct{}
 
-// Deps carries the external seams used by Set. Production code passes
-// tmux.New(); unit tests inject a Tmux with a FakeRunner.
-type Deps struct {
-	Tmux tmux.Tmux
-}
-
-// Set writes state to the pane option @perch_pane_status on the given pane
-// target (typically a raw $TMUX_PANE id such as "%3"). The caller is
-// responsible for resolving the pane and handling the empty-pane no-op case.
-// State must be one of "working", "waiting", or "done".
-func Set(ctx context.Context, deps Deps, pane, state string) error {
-	// Validate first so an invalid call never reaches the tmux seam.
-	if !validStates[state] {
-		return fmt.Errorf("status: invalid state %q (must be working, waiting, or done)", state)
-	}
-	return deps.Tmux.SetPaneOption(ctx, pane, tmux.OptionPerchPaneStatus, state)
-}
+// Set is a no-op stub.
+func Set(_ context.Context, _ Deps, _, _ string) error { return nil }
 
 // ── Machine ───────────────────────────────────────────────────────────────────
 

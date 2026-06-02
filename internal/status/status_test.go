@@ -1,12 +1,9 @@
 package status_test
 
 import (
-	"context"
 	"testing"
 
-	"github.com/Miniature-Pug/perch/internal/proc"
 	"github.com/Miniature-Pug/perch/internal/status"
-	"github.com/Miniature-Pug/perch/internal/tmux"
 )
 
 // ── Machine tests (§20.3 table) ───────────────────────────────────────────────
@@ -178,58 +175,3 @@ func TestMachine_Aliases(t *testing.T) {
 	})
 }
 
-// ── Set tests via FakeRunner ───────────────────────────────────────────────────
-
-// makeTestDeps returns a status.Deps with a FakeRunner injected. The fake has
-// a permissive Default so any set-option call succeeds without explicit canning.
-func makeTestDeps() (status.Deps, *proc.FakeRunner) {
-	fake := proc.NewFakeRunner()
-	fake.Default = &proc.FakeResult{}
-	deps := status.Deps{
-		Tmux: tmux.Tmux{Runner: fake},
-	}
-	return deps, fake
-}
-
-func TestSet_Valid(t *testing.T) {
-	for _, state := range []string{"working", "waiting", "done"} {
-		state := state
-		t.Run(state, func(t *testing.T) {
-			deps, fake := makeTestDeps()
-			err := status.Set(context.Background(), deps, "%3", state)
-			if err != nil {
-				t.Fatalf("Set(%q): unexpected error: %v", state, err)
-			}
-			if len(fake.Calls) != 1 {
-				t.Fatalf("expected 1 call, got %d", len(fake.Calls))
-			}
-			call := fake.Calls[0]
-			wantArgs := []string{"set-option", "-p", "-t", "%3", "@perch_pane_status", state}
-			assertArgs(t, wantArgs, call.Args)
-		})
-	}
-}
-
-func TestSet_InvalidState(t *testing.T) {
-	deps, fake := makeTestDeps()
-	err := status.Set(context.Background(), deps, "%3", "bogus")
-	if err == nil {
-		t.Fatal("expected error for invalid state, got nil")
-	}
-	// Validation must happen before any subprocess call.
-	if len(fake.Calls) != 0 {
-		t.Errorf("invalid state should not reach runner; got %d calls", len(fake.Calls))
-	}
-}
-
-func assertArgs(t *testing.T, want, got []string) {
-	t.Helper()
-	if len(want) != len(got) {
-		t.Fatalf("args: want %v, got %v", want, got)
-	}
-	for i := range want {
-		if want[i] != got[i] {
-			t.Errorf("args[%d]: want %q, got %q", i, want[i], got[i])
-		}
-	}
-}

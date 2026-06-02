@@ -1,7 +1,7 @@
 // Package app hosts the Wails App: the bound-method API the untrusted Svelte
 // frontend calls. Every argument crossing the IPC boundary is validated here —
 // session ids against a charset allowlist, worktree paths against the
-// configured project roots — and all tmux/git work is done via argv through
+// configured project roots — and all git work is done via argv through
 // internal/proc, never a shell.
 package app
 
@@ -16,13 +16,8 @@ import (
 
 	internalpty "github.com/Miniature-Pug/perch/internal/pty"
 	"github.com/Miniature-Pug/perch/internal/agent"
-	"github.com/Miniature-Pug/perch/internal/config"
 	gitpkg "github.com/Miniature-Pug/perch/internal/git"
-	"github.com/Miniature-Pug/perch/internal/model"
 	"github.com/Miniature-Pug/perch/internal/proc"
-	"github.com/Miniature-Pug/perch/internal/state"
-	"github.com/Miniature-Pug/perch/internal/tmux"
-	"github.com/Miniature-Pug/perch/internal/worktree"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -34,7 +29,6 @@ type ptyEntry struct {
 // App is the Wails bound object. It is constructed by NewApp and its context is
 // captured in startup so the production emit seam can call wails runtime.
 type App struct {
-	tmux  tmux.Tmux
 	run   proc.Runner
 	roots []string
 
@@ -81,7 +75,6 @@ func (a *App) removeBridge(tabID string) {
 	defer a.mu.Unlock()
 	delete(a.bridges, tabID)
 }
-
 
 const maxSessionIDLen = 128
 
@@ -153,82 +146,22 @@ type SessionInfo struct {
 	Dir     string `json:"dir"`
 }
 
-// ListSessions returns every live perch agent session. Status is derived from
-// the pane-dead flag (dead → "exited") and the @perch_pane_status option
-// (non-empty passthrough, empty → "idle"). Panes without @perch_session are
-// non-perch panes and are excluded. This method backs the sidebar's
-// sessions-changed refresh.
+// ListSessions stub — returns empty until app rewrite (Phase 3).
 func (a *App) ListSessions() ([]SessionInfo, error) {
-	panes, err := a.tmux.ListPanesAll(context.Background())
-	if err != nil {
-		return nil, err
-	}
-	out := make([]SessionInfo, 0, len(panes))
-	for _, p := range panes {
-		if p.PerchSession == "" {
-			continue
-		}
-		status := p.PerchStatus
-		switch {
-		case p.Dead:
-			status = "exited"
-		case status == "":
-			status = "idle"
-		}
-		out = append(out, SessionInfo{
-			ID:      p.PerchSession,
-			Session: p.Session,
-			Window:  p.Window,
-			PaneID:  p.ID,
-			Status:  status,
-			Dir:     p.Path,
-		})
-	}
-	return out, nil
+	return nil, nil
 }
 
-// liveSession looks up id in the currently-live perch sessions, enforcing the
-// allowlist: the frontend can only act on sessions perch already knows about,
-// never an arbitrary tmux target. The id is validated before any tmux call.
+// liveSession looks up id in the currently-live perch sessions.
 func (a *App) liveSession(id string) (SessionInfo, bool, error) {
 	if err := validateSessionID(id); err != nil {
 		return SessionInfo{}, false, err
 	}
-	sessions, err := a.ListSessions()
-	if err != nil {
-		return SessionInfo{}, false, err
-	}
-	for _, s := range sessions {
-		if s.ID == id {
-			return s, true, nil
-		}
-	}
 	return SessionInfo{}, false, nil
 }
 
-// OpenTerminal spawns a tmux attach pty for the live session id and registers a
-// Bridge under tabID. Output flows to the "pty-data:<tabID>" event. The session
-// id is validated against the live allowlist before any pty is spawned.
-// OpenTerminal is idempotent per tabID: if a bridge already exists for tabID,
-// the old bridge is closed and replaced (close-and-replace via putBridge).
+// OpenTerminal stub — not yet implemented.
 func (a *App) OpenTerminal(tabID, sessionID string) error {
-	if err := validateSessionID(tabID); err != nil {
-		return fmt.Errorf("invalid tab id: %w", err)
-	}
-	s, ok, err := a.liveSession(sessionID)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return fmt.Errorf("unknown session %q", sessionID)
-	}
-	event := "pty-data:" + tabID
-	br, err := internalpty.Spawn(context.Background(), a.tmux, s.Session, event, a.emit)
-	if err != nil {
-		return err
-	}
-	a.putBridge(tabID, &ptyEntry{bridge: br})
-	return nil
+	return fmt.Errorf("not implemented")
 }
 
 // WriteToPty forwards raw keystroke bytes from xterm.js to the tab's pty.
@@ -265,22 +198,8 @@ func (a *App) CloseTerminal(tabID string) error {
 	return e.bridge.Close()
 }
 
-// KillSession kills the tmux window backing the agent session id. The id is
-// validated against the live allowlist and the kill target is derived from the
-// matched session's own tmux session/window — the raw id never enters argv.
+// KillSession stub — returns nil.
 func (a *App) KillSession(id string) error {
-	s, ok, err := a.liveSession(id)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return fmt.Errorf("unknown session %q", id)
-	}
-	target := tmux.WindowTarget(s.Session, s.Window)
-	if err := a.tmux.KillWindow(context.Background(), target); err != nil {
-		return err
-	}
-	a.emit("sessions-changed")
 	return nil
 }
 
@@ -325,10 +244,10 @@ func newSessionID() (string, error) {
 // adapterFor returns the Adapter for a known tool name, or (nil, false) for an
 // unknown tool.
 func adapterFor(tool string) (agent.Adapter, bool) {
-	switch model.Tool(tool) {
-	case model.ToolClaude:
+	switch tool {
+	case "claude":
 		return agent.NewClaude(), true
-	case model.ToolOpencode:
+	case "opencode":
 		return agent.NewOpencode(), true
 	default:
 		return nil, false
@@ -340,26 +259,6 @@ func adapterFor(tool string) (agent.Adapter, bool) {
 // intended for paths that do not yet exist (e.g. a to-be-created worktree
 // directory). Because treePath is not yet on disk, filepath.EvalSymlinks
 // cannot be called on it.
-//
-// Security rationale: git.WorktreePath (internal/git/worktree.go:65-88)
-// incorporates a config-supplied worktreeDir. When worktreeDir is absolute
-// (e.g. "/etc") the result is "/etc/<handle>", and when it is relative with
-// ".." components (e.g. "../../escape") the cleaned result can land outside
-// projectPath. In both cases the derived treePath escapes the project root
-// but may still be within a configured root — that is the correct boundary
-// (e.g. the default case produces a sibling directory that IS under the root
-// but not under projectPath). Paths that resolve outside every configured
-// root are rejected.
-//
-// Symlink handling: both the lexical (unresolved) form of each root AND its
-// EvalSymlinks-resolved form are checked. When a configured root is itself a
-// symlink (e.g. "/sym" → "/real"), treePath is derived from the unresolved
-// root path ("/sym/proj__worktrees/feat-x"), so checking only the resolved
-// root ("/real") would wrongly reject it. Accepting under EITHER form does
-// not open an escape: a hostile worktree_dir (absolute "/etc" or dotdot
-// "../../escape") produces a treePath whose Clean form is under NEITHER the
-// unresolved NOR the resolved form of any legitimate root, so it is still
-// rejected.
 func containedUnderRoots(treePath string, roots []string) bool {
 	clean := filepath.Clean(treePath)
 	if !filepath.IsAbs(clean) {
@@ -382,144 +281,9 @@ func containedUnderRoots(treePath string, roots []string) bool {
 	return false
 }
 
-// CreateAgent creates a linked worktree for branch under projectPath, seeds it,
-// launches the agent in a detached tmux session, stamps @perch_session, and
-// writes the shadow record. Returns the created session id (UUID for claude,
-// empty for opencode which self-assigns its id). projectPath is validated
-// under roots; branch via git.ValidRef; tool against known adapters; and the
-// derived worktree path is checked to stay under a configured root.
+// CreateAgent stub — not yet implemented.
 func (a *App) CreateAgent(tool, projectPath, branch string) (string, error) {
-	// Gate 1: projectPath must exist and be under a configured root.
-	if err := validateWorktreeUnderRoots(projectPath, a.roots); err != nil {
-		return "", err
-	}
-	// Gate 2: branch must be a valid git ref.
-	if err := gitpkg.ValidRef(branch); err != nil {
-		return "", fmt.Errorf("invalid branch: %w", err)
-	}
-	// Gate 3: tool must be a known agent adapter.
-	adapter, ok := adapterFor(tool)
-	if !ok {
-		return "", fmt.Errorf("unknown tool %q", tool)
-	}
-
-	ctx := context.Background()
-
-	// Load config (best-effort; defaults apply on any error).
-	var cfg *config.Config
-	if gp, err := config.DefaultGlobalPath(); err == nil {
-		if c, cerr := config.Load(gp, projectPath); cerr == nil {
-			cfg = c
-		}
-	}
-
-	worktreeDir, base := "", "HEAD"
-	var files config.Files
-	if cfg != nil {
-		worktreeDir = cfg.WorktreeDir
-		files = cfg.Files
-		if cfg.BaseBranch != "" {
-			base = cfg.BaseBranch
-		}
-	}
-
-	handle := gitpkg.SlugifyBranch(branch)
-	treePath, err := gitpkg.WorktreePath(projectPath, handle, worktreeDir)
-	if err != nil {
-		return "", err
-	}
-
-	// CRITICAL #2 — treePath containment guard.
-	//
-	// git.WorktreePath (internal/git/worktree.go:65-88) can return a path
-	// outside projectPath when worktreeDir is set in config:
-	//   - absolute worktreeDir: result is worktreeDir/<handle>, which may be
-	//     completely outside the project (e.g. "/etc/<handle>").
-	//   - relative worktreeDir with "..": Clean(projectPath/worktreeDir/<handle>)
-	//     can escape projectPath (e.g. worktreeDir="../../escape" → sibling dir).
-	//   - default (worktreeDir=""): result is <parent>/<base>__worktrees/<handle>,
-	//     a sibling directory outside projectPath but inside its parent (the root).
-	//
-	// treePath does not exist yet, so EvalSymlinks cannot be used on it.
-	// containedUnderRoots checks lexically that the cleaned path is at/under
-	// one of the configured roots. A root-escaped treePath is rejected here
-	// before any git/filesystem mutation occurs.
-	if !containedUnderRoots(treePath, a.roots) {
-		return "", fmt.Errorf("derived worktree path %q escapes all configured roots; check worktree_dir in config", treePath)
-	}
-
-	// Create the linked worktree.
-	if err := gitpkg.AddWorktree(ctx, a.run, projectPath, branch, treePath, base); err != nil {
-		return "", err
-	}
-
-	// rollbackWorktree is a best-effort cleanup helper. It removes the worktree
-	// dir and git registration when a post-AddWorktree step fails. The git branch
-	// created by AddWorktree is NOT removed here — it is an intentional residue
-	// (re-creating with the same branch name returns ErrBranchExists, which is
-	// the correct signal). force=true is required because Seed may have written
-	// untracked files into the tree.
-	rollbackWorktree := func() {
-		_ = gitpkg.RemoveWorktree(ctx, a.run, projectPath, treePath, true)
-	}
-
-	// Seed files into the worktree.
-	if err := worktree.Seed(projectPath, treePath, files); err != nil {
-		rollbackWorktree()
-		return "", fmt.Errorf("seed worktree: %w", err)
-	}
-
-	// Build the argv for the agent launch.
-	bin := adapter.Name()
-	if cfg != nil {
-		bin = cfg.AgentBinary(model.Tool(tool))
-	}
-
-	var sid string
-	var argv []string
-	if model.Tool(tool) == model.ToolClaude {
-		sid, err = newSessionID()
-		if err != nil {
-			rollbackWorktree()
-			return "", err
-		}
-		argv = append([]string{bin}, adapter.NewArgs(agent.NewOpts{SessionID: sid})...)
-	} else {
-		argv = append([]string{bin}, adapter.NewArgs(agent.NewOpts{})...)
-	}
-
-	// Launch the agent in a tmux pane.
-	sessName := tmux.SessionName(projectPath)
-	winName := tmux.WindowName(branch)
-	paneID, err := a.tmux.Launch(ctx, sessName, winName, treePath, argv)
-	if err != nil {
-		rollbackWorktree()
-		return "", err
-	}
-
-	// Stamp @perch_session so the pane is visible to ListSessions.
-	if sid != "" {
-		_ = a.tmux.SetPaneOption(ctx, paneID, tmux.OptionPerchSession, sid)
-	}
-
-	// Write the shadow window record (best-effort; errors are non-fatal).
-	baseDir, _ := state.StateDir()
-	bootID, _ := a.tmux.BootID(ctx)
-	if baseDir != "" {
-		_ = state.SaveWindow(baseDir, model.Window{
-			PaneKey:     paneID,
-			Tool:        model.Tool(tool),
-			SessionID:   sid,
-			Tree:        treePath,
-			TmuxSession: sessName,
-			TmuxWindow:  winName,
-			BootID:      bootID,
-			Updated:     time.Now().Unix(),
-		})
-	}
-
-	a.emit("sessions-changed")
-	return sid, nil
+	return "", fmt.Errorf("not implemented")
 }
 
 // NewApp builds the production App. emit is a no-op until startup installs the
@@ -527,7 +291,6 @@ func (a *App) CreateAgent(tool, projectPath, branch string) (string, error) {
 // (e.g. in headless tests that set their own emit).
 func NewApp(roots []string) *App {
 	return &App{
-		tmux:    tmux.New(),
 		run:     proc.ExecRunner{},
 		roots:   roots,
 		emit:    func(string, ...any) {},
@@ -555,18 +318,7 @@ func sessionsSignature(ss []SessionInfo) string {
 // signature changed since the last emit. Errors are swallowed: a transient tmux
 // hiccup must not kill the poller.
 func (a *App) pollOnce() {
-	sessions, err := a.ListSessions()
-	if err != nil {
-		return
-	}
-	sig := sessionsSignature(sessions)
-	a.mu.Lock()
-	changed := sig != a.lastSig
-	a.lastSig = sig
-	a.mu.Unlock()
-	if changed {
-		a.emit("sessions-changed")
-	}
+	// no-op until app rewrite (Phase 3)
 }
 
 // startPolling runs pollOnce every pollInterval until stopPoll is closed. Called
