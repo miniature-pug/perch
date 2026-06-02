@@ -7,23 +7,23 @@ import (
 	"github.com/Miniature-Pug/perch/internal/config"
 )
 
-// TestConfig_CfgField verifies that tui.Config.Cfg threads the loaded
+// TestConfig_CfgField verifies that tui.Config.GlobalCfg threads the loaded
 // *config.Config through to m.cfg on the Model, and that RefreshMs still
 // drives the status tick interval (the two fields are independent paths, as
 // in production main.go both are set from the loaded config).
 func TestConfig_CfgField(t *testing.T) {
 	c := &config.Config{RefreshMs: 250}
 	cfg := Config{
-		Cfg:       c,
+		GlobalCfg: c,
 		RefreshMs: 250, // mirrors main.go: set both fields from the loaded config
 	}
 
 	// Replicate Run's wiring without starting the Bubble Tea program.
-	ldr := loader{Cfg: cfg.Cfg}
+	ldr := loader{GlobalCfg: cfg.GlobalCfg}
 	m := New(nil).WithLoader(ldr).WithRefresh(time.Duration(cfg.RefreshMs) * time.Millisecond)
 
 	if m.cfg == nil {
-		t.Error("m.cfg should be non-nil when tui.Config.Cfg is set")
+		t.Error("m.cfg should be non-nil when tui.Config.GlobalCfg is set")
 	}
 	want := 250 * time.Millisecond
 	if m.refresh != want {
@@ -31,12 +31,12 @@ func TestConfig_CfgField(t *testing.T) {
 	}
 }
 
-// TestConfig_NilCfg verifies that a tui.Config with no Cfg set leaves m.cfg
+// TestConfig_NilCfg verifies that a tui.Config with no GlobalCfg set leaves m.cfg
 // nil (test / scaffold mode) without panicking.
 func TestConfig_NilCfg(t *testing.T) {
-	m := New(nil).WithLoader(loader{}) // no Cfg set
+	m := New(nil).WithLoader(loader{}) // no GlobalCfg set
 	if m.cfg != nil {
-		t.Errorf("m.cfg should be nil when loader.Cfg is not set; got %v", m.cfg)
+		t.Errorf("m.cfg should be nil when loader.GlobalCfg is not set; got %v", m.cfg)
 	}
 	// refresh should still default to 1 s (WithRefresh not called explicitly)
 	if m.refresh != time.Second {

@@ -49,11 +49,11 @@ type loader struct {
 	Root    string       // discover scan root
 	BaseDir string       // state base dir for frecency
 	Now     int64        // injected clock (no time.Now in logic)
-	// Cfg is the globally-loaded *config.Config, threaded from tui.Config.Cfg
+	// GlobalCfg is the globally-loaded *config.Config, threaded from tui.Config.GlobalCfg
 	// through Run. nil in test/scaffold mode — callers nil-guard before use.
 	// Distinct from Config (below), which is a per-project test override used by
 	// worktree_actions.go's projectConfig helper.
-	Cfg *config.Config
+	GlobalCfg *config.Config
 	// Config is an optional test override for per-project config loading.
 	// nil → load per-project on demand via config.Load in action Cmds.
 	Config *config.Config

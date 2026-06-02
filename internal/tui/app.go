@@ -43,8 +43,8 @@ type Model struct {
 	// loader is optional; when set, Init returns its load Cmd.
 	loader *loader
 
-	// cfg is the globally-loaded config, threaded from loader.Cfg in WithLoader.
-	// nil in test/scaffold mode (New with no loader, or loader.Cfg == nil).
+	// cfg is the globally-loaded config, threaded from loader.GlobalCfg in WithLoader.
+	// nil in test/scaffold mode (New with no loader, or loader.GlobalCfg == nil).
 	// Every read site must nil-guard so the zero-value fallback is preserved.
 	cfg *config.Config
 
@@ -163,11 +163,11 @@ func (m Model) WithExecPath(p string) Model {
 
 // WithLoader returns a copy of m with the given loader wired in.
 // Init will then return the load Cmd automatically.
-// m.cfg is set from l.Cfg; it remains nil when l.Cfg is nil (test/scaffold mode).
+// m.cfg is set from l.GlobalCfg; it remains nil when l.GlobalCfg is nil (test/scaffold mode).
 func (m Model) WithLoader(l loader) Model {
 	m.loader = &l
 	m.root = l.Root
-	m.cfg = l.Cfg
+	m.cfg = l.GlobalCfg
 	return m
 }
 
