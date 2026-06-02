@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/Miniature-Pug/perch/internal/config"
 	"github.com/Miniature-Pug/perch/internal/tmux"
 	"github.com/Miniature-Pug/perch/internal/trust"
 )
@@ -41,6 +42,11 @@ type Model struct {
 
 	// loader is optional; when set, Init returns its load Cmd.
 	loader *loader
+
+	// cfg is the globally-loaded config, threaded from loader.Cfg in WithLoader.
+	// nil in test/scaffold mode (New with no loader, or loader.Cfg == nil).
+	// Every read site must nil-guard so the zero-value fallback is preserved.
+	cfg *config.Config
 
 	// root is the discovery scan root, captured from the loader for the
 	// empty-state message. Empty in test/scaffold mode.
@@ -157,9 +163,11 @@ func (m Model) WithExecPath(p string) Model {
 
 // WithLoader returns a copy of m with the given loader wired in.
 // Init will then return the load Cmd automatically.
+// m.cfg is set from l.Cfg; it remains nil when l.Cfg is nil (test/scaffold mode).
 func (m Model) WithLoader(l loader) Model {
 	m.loader = &l
 	m.root = l.Root
+	m.cfg = l.Cfg
 	return m
 }
 

@@ -46,8 +46,8 @@
 `internal/worktree/hooks.go:32` runs each hook string verbatim: `r.RunInDir(ctx, treePath, "sh", "-c", script)`.
 `post_create` (`tui/worktree_actions.go:257`) and `pre_remove` (`:106`) fire on the user's normal
 worktree create/remove (`w`/`d`) against whatever `.perch.toml` `config.Load` finds by walking up
-from the project dir. No trust gate, allowlist, or opt-in exists. `pre_merge` is parsed but has no
-caller (latent — would become a third RCE path if wired without a gate).
+from the project dir. No trust gate, allowlist, or opt-in exists. (`pre_merge` was parsed but never
+called; it has been removed from the config structs in M14-1 — §7.3 merge is plan-deferred.)
 
 **Fix — trust-on-first-use (TOFU).** New `internal/trust` package backed by a JSON file in the
 **global** state dir (never in-repo): `{ configPath → sha256(content) }`. Keyed on the **resolved

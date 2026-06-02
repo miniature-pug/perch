@@ -91,15 +91,20 @@ func handleTUI(root string, stdout, stderr io.Writer) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel() // cancels in-flight data loads after the program exits
 
-	// Load global config for RefreshMs (and future settings); degrade on error.
-	var refreshMs int
+	// Load global config once; degrade gracefully on error (Cfg stays nil → defaults).
+	var loadedCfg *config.Config
 	if globalPath, err := config.DefaultGlobalPath(); err == nil {
-		if cfg, err := config.Load(globalPath, root); err == nil {
-			refreshMs = cfg.RefreshMs
+		if c, err := config.Load(globalPath, root); err == nil {
+			loadedCfg = c
 		}
+	}
+	var refreshMs int
+	if loadedCfg != nil {
+		refreshMs = loadedCfg.RefreshMs
 	}
 
 	cfg := tui.Config{
+		Cfg:       loadedCfg,
 		Tmux:      tmux.New(),
 		Runner:    proc.ExecRunner{},
 		Claude:    agent.NewClaude(),
@@ -333,14 +338,20 @@ func sidebar(deps sidebarDeps, args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stderr, "perch: sidebar context: %v — running without frame\n", err)
 	}
 
-	var refreshMs int
+	// Load global config once; degrade gracefully on error (Cfg stays nil → defaults).
+	var loadedCfg *config.Config
 	if globalPath, gerr := config.DefaultGlobalPath(); gerr == nil {
-		if cfg, cerr := config.Load(globalPath, root); cerr == nil {
-			refreshMs = cfg.RefreshMs
+		if c, cerr := config.Load(globalPath, root); cerr == nil {
+			loadedCfg = c
 		}
+	}
+	var refreshMs int
+	if loadedCfg != nil {
+		refreshMs = loadedCfg.RefreshMs
 	}
 
 	cfg := tui.Config{
+		Cfg:             loadedCfg,
 		Tmux:            deps.tmuxClient,
 		Runner:          proc.ExecRunner{},
 		Claude:          agent.NewClaude(),

@@ -71,7 +71,6 @@ type projectConfig struct {
 	Agent       *string  `toml:"agent"`
 	PostCreate  []string `toml:"post_create"`
 	PreRemove   []string `toml:"pre_remove"`
-	PreMerge    []string `toml:"pre_merge"`
 
 	Files     projectFiles   `toml:"files"`
 	Wildcards []wildcardRule `toml:"wildcard"`
@@ -130,7 +129,6 @@ type Config struct {
 	Files       Files
 	PostCreate  []string
 	PreRemove   []string
-	PreMerge    []string
 	Wildcards   []WildcardRule
 
 	// ProjectConfigPath is the absolute path of the .perch.toml that was loaded,
@@ -472,9 +470,6 @@ func merge(gc *globalConfig, pc *projectConfig, startDir string, configPath stri
 		}
 		if len(pc.PreRemove) > 0 {
 			cfg.PreRemove = pc.PreRemove
-		}
-		if len(pc.PreMerge) > 0 {
-			cfg.PreMerge = pc.PreMerge
 		}
 		if len(pc.Wildcards) > 0 {
 			cfg.Wildcards = make([]WildcardRule, len(pc.Wildcards))
