@@ -1,7 +1,6 @@
 flowchart TD
     subgraph Config["global config.toml"]
         roots["roots []string\n(scan root directories)"]
-        blacklist["blacklist []string\n(glob patterns to exclude)"]
         sort_order["sort_order []string"]
     end
 
@@ -31,7 +30,6 @@ flowchart TD
     end
 
     roots --> scan
-    blacklist -->|"applied during walk\n(prune set)"| scan
     scan --> dedup
     dedup --> worktrees
     worktrees --> frecency_sort
