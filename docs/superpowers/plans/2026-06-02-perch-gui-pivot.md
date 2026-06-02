@@ -2871,6 +2871,13 @@ Performed AFTER the rewire (Task 15) so the build stayed green throughout. With 
   Expected: version/doctor print; `status set working` exits 0 (silent outside tmux).
 - [ ] No code change → no commit. Record the verification results in the implementation log.
 
+> **RESOLUTION (build topology — supersedes the `wails build` step above).** The `wails` CLI (`wails build`/`wails dev`) does NOT work for this repo: Wails v2 compiles+execs the package in the `wails.json` directory (the repo root) to generate bindings, but the root is `package perch` (a LIBRARY — it embeds `frontend/dist` AND `.tool-versions`, and `internal/doctor` imports `perch.ToolVersions`), not `package main` (which lives at `cmd/perch`). Collapsing the binary to root was rejected (it would force `ToolVersions` out of `doctor`'s import and rewrite ~12 doctor tests, for a CLI command we don't need). **The production GUI binary is built with plain `go build` + the REQUIRED `-tags production`:**
+> ```
+> npm --prefix frontend run build
+> go build -tags production -trimpath -ldflags '$(LDFLAGS)' -o build/bin/perch ./cmd/perch
+> ```
+> `-tags production` is MANDATORY: without it, `internal/app/app_default_unix.go` (`//go:build !dev && !production && !bindings`) compiles a stub `CreateApp` that returns "Wails applications will not build without the correct build tags." — the CLI subcommands still work but the GUI launch errors. WebKit 4.0 is the no-tag cgo default (matches the installed `libwebkit2gtk-4.0-dev`); no `desktop`/`webkit2_41` tag is needed. This works because the frontend reads the runtime `window.go`/`window.runtime` globals (Task 13), so `wails build`'s binding generation is NOT load-bearing. **Verified:** 13 MB ELF, embedded SPA assets present, no listening port, `version`/`doctor` smoke pass. **IPC seam verified against vendored binding source** (`binding/reflect.go`, `generate.go`): runtime path is `window.go.app.App.<Method>` (package `app`, struct `App`, no casing change) and all 8 `wails.ts` methods match `app.App` exactly in name/arity/type — closing the one IPC-contract check no test can exercise.
+
 ---
 
 ### Task 18: Documentation update (only docs that already exist)
@@ -2909,15 +2916,17 @@ Performed AFTER the rewire (Task 15) so the build stayed green throughout. With 
 
 - [ ] **Step 1: add GUI make targets**
 
-  Append to `Makefile` (match existing target+comment style):
+  The `wails` CLI does NOT work here (root is a library package, not `package main` — see Task 17 RESOLUTION). The production GUI binary is built with `go build -tags production`. Append to `Makefile` (match existing target+comment style):
   ```make
-  wails-build:   ## build the production GUI binary (requires apt webkit/gtk pkgs + node)
-  	npm --prefix frontend install --frozen-lockfile
-  	wails build -clean
+  gui-build:     ## build the production GUI binary (frontend + go build -tags production)
+  	npm --prefix frontend install
+  	npm --prefix frontend run build
+  	@go build -tags production -trimpath -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/$(BIN) ./cmd/perch
 
-  wails-dev:     ## start the hot-reload GUI dev server
-  	wails dev
+  gui-run: gui-build  ## build then launch the GUI (needs a display)
+  	@$(BIN_DIR)/$(BIN)
   ```
+  ALSO update the existing `build` and `install` targets to add `-tags production` so the shipped binary's GUI launch path is real (not the stub). The unit/integration `test` targets must NOT add `-tags production` (they exercise app logic with the launch seam stubbed; adding it is unnecessary and would not change results). The `cross` target: perch is Linux-only and links cgo/WebKit, so cross-OS builds are not supported — restrict `cross` to `linux/amd64` (and `linux/arm64` only if a cross-cgo toolchain is available; otherwise drop it and note Linux-only). `wails dev` hot-reload is unavailable due to the layout; the dev loop is `make gui-run` (rebuild + relaunch). Document that tradeoff in CONTRIBUTING.
 
 - [ ] **Step 2: verify the build target**
 
@@ -2962,7 +2971,7 @@ These are flagged per the instruction to surface (not silently resolve) anything
 
 1. **`git.Diff`/`git.DiffStat` placement.** Spec §4's New/Keep map never enumerates a diff function, but §6.1 requires a "visual git diff of the selected worktree" and §4 keeps `internal/git` explicitly "for diffs." I inferred a new `internal/git/diff.go` (Task 5). If the intent was to place diff logic elsewhere (e.g. a method on `App` shelling git directly), redirect — but the kept-package rationale points to `internal/git`.
 
-2. **`app/` import path.** The File Structure and tasks place the Wails package at the module root as `app/` (imported `github.com/Miniature-Pug/perch/app`), matching spec §4's "`app/` (Wails app)". Task 15's `gui.go` note calls this out because Go convention often nests under `internal/`; the spec's literal `app/` is followed. Confirm this is desired over `internal/app/` (the latter would prevent any external import, which is harmless here since only `cmd/perch` imports it).
+2. **`app/` import path + binary topology — RESOLVED (Task 17).** The Wails package stays at `app/` (`github.com/Miniature-Pug/perch/app`, package `app`, struct `App`) and the binary stays at `cmd/perch` (`package main`). The repo ROOT stays `package perch`, a LIBRARY that embeds `frontend/dist` (`Assets`) and `.tool-versions` (`ToolVersions`) and is imported by both `cmd/perch` (for `Assets`) and `internal/doctor` (for `ToolVersions`). Collapsing the binary to root (to make the `wails` CLI happy) was REJECTED: it would force `ToolVersions` out of `doctor`'s import and rewrite ~12 doctor tests, for a CLI command not needed. The production GUI binary is built with `go build -tags production ./cmd/perch` (frontend pre-built via `npm run build`); `wails build`/`wails dev` are not used because the frontend reads runtime `window.go`/`window.runtime` globals (binding generation is not load-bearing) and the root-library layout is incompatible with the `wails` CLI's root-is-`main` assumption. The IPC namespace `window.go.app.App.<Method>` was verified against the vendored binding generator and matches `wails.ts` exactly. See Task 17 RESOLUTION.
 
 3. **Auto-offer-resurrect-on-launch removal.** The current `bootstrap` runs a stranded-session restore offer before launching. That flow is coupled to the frame model and the interactive tty prompt, both removed by this pivot. The plan drops it from the default launch path; `perch resurrect` remains as the explicit CLI. The spec mentions `internal/resurrect` is "surfaced in GUI as recovery" (§4) but does not enumerate a GUI recovery bound method. This is a genuine scope gap — see gap (a) below.
 
