@@ -259,15 +259,17 @@ func TestEnsure_Create_RemainOnExit(t *testing.T) {
 
 // ── Ensure REUSE path ─────────────────────────────────────────────────────────
 
-// TestEnsure_Reuse verifies that when a perch-marked session already exists,
-// Ensure returns Info{Created:false} with the sidebar+main pane ids and fires
-// NO mutation calls (no new-session, split-window, set-option, resize-pane).
+// TestEnsure_Reuse verifies that when a perch-marked session already exists with
+// a healthy 2-pane frame, Ensure returns Info{Created:false} with the correct
+// pane ids and fires no destructive mutation calls (new-session, split-window,
+// respawn-pane, resize-pane). It does allow the defensive remain-on-exit
+// set-option that reuseFrame always stamps.
 func TestEnsure_Reuse(t *testing.T) {
 	r := proc.NewFakeRunner()
 	// has-session → session present
 	r.Respond(proc.FakeResult{},
 		"tmux", "has-session", "-t", "=perch")
-	// list-panes on the perch:frame window → two panes
+	// list-panes on the perch:frame window → two panes (both alive: pane_dead=0)
 	listPanesOut := "%1\x1f123\x1fzsh\x1f0\x1f/root\x1fperch\x1fframe\x1f\x1f\n" +
 		"%2\x1f456\x1fsleep\x1f0\x1f/root\x1fperch\x1fframe\x1f\x1f\n"
 	r.Respond(proc.FakeResult{Stdout: []byte(listPanesOut)},
@@ -279,6 +281,8 @@ func TestEnsure_Reuse(t *testing.T) {
 	// GetPaneOption @perch_frame on %2 → "" (not marked)
 	r.Respond(proc.FakeResult{Stdout: []byte("\n")},
 		"tmux", "show-options", "-p", "-t", "%2", "-v", frame.FrameMarker)
+	// remain-on-exit set-option is best-effort; allow it to succeed
+	r.Default = &proc.FakeResult{}
 
 	tmx := newFakeTmux(r)
 	info, err := frame.Ensure(context.Background(), tmx, "perch", "/root", []string{"perch", "--sidebar"})
@@ -297,14 +301,156 @@ func TestEnsure_Reuse(t *testing.T) {
 	if info.MainPane != "%2" {
 		t.Errorf("Ensure REUSE: MainPane=%q, want %%2", info.MainPane)
 	}
-	// No mutation should have been called.
+	// Destructive mutations must not fire. The defensive remain-on-exit set-option
+	// is allowed (checked below), but no new-session, split-window, respawn-pane
+	// or resize-pane should appear.
 	for _, c := range r.Calls {
 		if len(c.Args) == 0 {
 			continue
 		}
 		switch c.Args[0] {
-		case "new-session", "split-window", "set-option", "resize-pane":
+		case "new-session", "split-window", "respawn-pane", "resize-pane":
 			t.Errorf("REUSE path must not call %q", c.Args[0])
+		}
+	}
+	// Verify the remain-on-exit set-option was issued.
+	found := false
+	for _, c := range r.Calls {
+		if len(c.Args) >= 6 &&
+			c.Args[0] == "set-option" &&
+			c.Args[1] == "-w" &&
+			c.Args[2] == "-t" &&
+			c.Args[3] == "=perch:=frame" &&
+			c.Args[4] == "remain-on-exit" &&
+			c.Args[5] == "on" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("reuseFrame: missing defensive set-option -w remain-on-exit on")
+	}
+}
+
+// TestEnsure_Reuse_Healthy2Pane verifies that a healthy 2-pane frame (one live
+// non-sidebar) returns the live pane as MainPane with NO split and NO respawn.
+func TestEnsure_Reuse_Healthy2Pane(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Default = &proc.FakeResult{}
+	r.Respond(proc.FakeResult{},
+		"tmux", "has-session", "-t", "=perch")
+	// Both panes alive (pane_dead=0).
+	listPanesOut := "%1\x1f1\x1fzsh\x1f0\x1f/root\x1fperch\x1fframe\x1f\x1f\n" +
+		"%2\x1f2\x1fsleep\x1f0\x1f/root\x1fperch\x1fframe\x1f\x1f\n"
+	r.Respond(proc.FakeResult{Stdout: []byte(listPanesOut)},
+		"tmux", "list-panes", "-t", "=perch:=frame", "-F",
+		"#{pane_id}\x1f#{pane_pid}\x1f#{pane_current_command}\x1f#{pane_dead}\x1f#{pane_current_path}\x1f#{session_name}\x1f#{window_name}\x1f#{@perch_session}\x1f#{@perch_pane_status}")
+	r.Respond(proc.FakeResult{Stdout: []byte("1\n")},
+		"tmux", "show-options", "-p", "-t", "%1", "-v", frame.FrameMarker)
+	r.Respond(proc.FakeResult{Stdout: []byte("\n")},
+		"tmux", "show-options", "-p", "-t", "%2", "-v", frame.FrameMarker)
+
+	tmx := newFakeTmux(r)
+	info, err := frame.Ensure(context.Background(), tmx, "perch", "/root", []string{"perch", "--sidebar"})
+	if err != nil {
+		t.Fatal("unexpected error:", err)
+	}
+	if info.MainPane != "%2" {
+		t.Errorf("healthy 2-pane: MainPane=%q, want %%2", info.MainPane)
+	}
+	for _, c := range r.Calls {
+		if len(c.Args) == 0 {
+			continue
+		}
+		if c.Args[0] == "split-window" || c.Args[0] == "respawn-pane" {
+			t.Errorf("healthy 2-pane: unexpected call %q", c.Args[0])
+		}
+	}
+}
+
+// TestEnsure_Reuse_1Pane verifies that a 1-pane frame (only sidebar; no main)
+// triggers a split-window and returns a non-empty MainPane.
+func TestEnsure_Reuse_1Pane(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Default = &proc.FakeResult{}
+	r.Respond(proc.FakeResult{},
+		"tmux", "has-session", "-t", "=perch")
+	// Only the sidebar pane present.
+	listPanesOut := "%1\x1f1\x1fzsh\x1f0\x1f/root\x1fperch\x1fframe\x1f\x1f\n"
+	r.Respond(proc.FakeResult{Stdout: []byte(listPanesOut)},
+		"tmux", "list-panes", "-t", "=perch:=frame", "-F",
+		"#{pane_id}\x1f#{pane_pid}\x1f#{pane_current_command}\x1f#{pane_dead}\x1f#{pane_current_path}\x1f#{session_name}\x1f#{window_name}\x1f#{@perch_session}\x1f#{@perch_pane_status}")
+	r.Respond(proc.FakeResult{Stdout: []byte("1\n")},
+		"tmux", "show-options", "-p", "-t", "%1", "-v", frame.FrameMarker)
+	// split-window to add the missing main pane.
+	r.Respond(proc.FakeResult{Stdout: []byte("%9\n")},
+		"tmux", "split-window", "-d", "-h", "-P", "-F", "#{pane_id}", "-t", "=perch:=frame", "-c", "/root", "sleep infinity")
+
+	tmx := newFakeTmux(r)
+	info, err := frame.Ensure(context.Background(), tmx, "perch", "/root", []string{"perch", "--sidebar"})
+	if err != nil {
+		t.Fatal("unexpected error:", err)
+	}
+	if info.MainPane == "" {
+		t.Error("1-pane repair: MainPane must be non-empty after re-split")
+	}
+	// split-window must have been called.
+	splitFound := false
+	for _, c := range r.Calls {
+		if len(c.Args) > 0 && c.Args[0] == "split-window" {
+			splitFound = true
+			break
+		}
+	}
+	if !splitFound {
+		t.Error("1-pane repair: expected split-window call")
+	}
+}
+
+// TestEnsure_Reuse_DeadMain verifies that a 2-pane frame where the non-sidebar
+// pane is dead triggers a respawn-pane and returns that pane's id as MainPane.
+func TestEnsure_Reuse_DeadMain(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Default = &proc.FakeResult{}
+	r.Respond(proc.FakeResult{},
+		"tmux", "has-session", "-t", "=perch")
+	// %2 is dead (pane_dead=1).
+	listPanesOut := "%1\x1f1\x1fzsh\x1f0\x1f/root\x1fperch\x1fframe\x1f\x1f\n" +
+		"%2\x1f0\x1f\x1f1\x1f/root\x1fperch\x1fframe\x1f\x1f\n"
+	r.Respond(proc.FakeResult{Stdout: []byte(listPanesOut)},
+		"tmux", "list-panes", "-t", "=perch:=frame", "-F",
+		"#{pane_id}\x1f#{pane_pid}\x1f#{pane_current_command}\x1f#{pane_dead}\x1f#{pane_current_path}\x1f#{session_name}\x1f#{window_name}\x1f#{@perch_session}\x1f#{@perch_pane_status}")
+	r.Respond(proc.FakeResult{Stdout: []byte("1\n")},
+		"tmux", "show-options", "-p", "-t", "%1", "-v", frame.FrameMarker)
+	r.Respond(proc.FakeResult{Stdout: []byte("\n")},
+		"tmux", "show-options", "-p", "-t", "%2", "-v", frame.FrameMarker)
+	// respawn-pane for the dead main.
+	r.Respond(proc.FakeResult{},
+		"tmux", "respawn-pane", "-k", "-t", "%2", "sleep infinity")
+
+	tmx := newFakeTmux(r)
+	info, err := frame.Ensure(context.Background(), tmx, "perch", "/root", []string{"perch", "--sidebar"})
+	if err != nil {
+		t.Fatal("unexpected error:", err)
+	}
+	if info.MainPane != "%2" {
+		t.Errorf("dead-main repair: MainPane=%q, want %%2", info.MainPane)
+	}
+	// respawn-pane must have been called.
+	respawnFound := false
+	for _, c := range r.Calls {
+		if len(c.Args) > 0 && c.Args[0] == "respawn-pane" {
+			respawnFound = true
+			break
+		}
+	}
+	if !respawnFound {
+		t.Error("dead-main repair: expected respawn-pane call")
+	}
+	// split-window must NOT have been called.
+	for _, c := range r.Calls {
+		if len(c.Args) > 0 && c.Args[0] == "split-window" {
+			t.Error("dead-main repair: unexpected split-window call")
 		}
 	}
 }

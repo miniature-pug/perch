@@ -87,7 +87,13 @@ func Ensure(ctx context.Context, t tmux.Tmux, session, root string, sidebarArgv 
 }
 
 // reuseFrame verifies that the existing session is a perch frame (FD-03) and
-// returns the sidebar+main pane ids.
+// returns the sidebar+main pane ids. It self-heals a damaged frame:
+//   - 2-pane frame, live main → return as-is (no action).
+//   - 2-pane frame, dead main → respawn-pane in place; id is stable.
+//   - 1-pane frame (only sidebar) → split-window to recreate the main slot.
+//
+// In all paths a defensive SetWindowOption(remain-on-exit=on) is issued so that
+// frames created by an older binary gain the guard retroactively.
 func reuseFrame(ctx context.Context, t tmux.Tmux, session string) (Info, error) {
 	target := tmux.WindowTarget(session, frameWindow)
 	panes, err := t.ListPanes(ctx, target)
@@ -96,7 +102,8 @@ func reuseFrame(ctx context.Context, t tmux.Tmux, session string) (Info, error) 
 	}
 
 	// Find the pane bearing FrameMarker="1"; that's the sidebar.
-	var sidebarID, mainID string
+	var sidebarID string
+	var sidebarPath string
 	for _, p := range panes {
 		val, gerr := t.GetPaneOption(ctx, p.ID, FrameMarker)
 		if gerr != nil {
@@ -104,17 +111,51 @@ func reuseFrame(ctx context.Context, t tmux.Tmux, session string) (Info, error) 
 		}
 		if strings.TrimSpace(val) == "1" {
 			sidebarID = p.ID
+			sidebarPath = p.Path
 		}
 	}
 	if sidebarID == "" {
 		return Info{}, fmt.Errorf("frame.Ensure: a tmux session %q exists and is not a perch frame", session)
 	}
-	// The main/placeholder pane is whichever pane is not the sidebar.
+
+	// Defensive: stamp remain-on-exit on the frame window so older-binary frames
+	// gain the guard retroactively. Best-effort.
+	_ = t.SetWindowOption(ctx, target, "remain-on-exit", "on")
+
+	// Determine mainID, healing the frame if necessary.
+	// Strategy:
+	//   - Use the sidebar pane's current path as dir for any re-split, falling
+	//     back to "." when unavailable. This avoids an extra tmux round-trip
+	//     because pane_current_path is already populated by ListPanes.
+	dir := sidebarPath
+	if dir == "" {
+		dir = "."
+	}
+
+	var mainID string
 	for _, p := range panes {
-		if p.ID != sidebarID {
+		if p.ID == sidebarID {
+			continue
+		}
+		if !p.Dead {
+			// Healthy non-sidebar pane — no repair needed.
 			mainID = p.ID
 			break
 		}
+		// Dead non-sidebar pane — respawn in place; pane id is stable.
+		deadID := p.ID
+		_ = t.RespawnPane(ctx, deadID, placeholderCmd)
+		mainID = deadID
+		break
+	}
+
+	if mainID == "" {
+		// No non-sidebar pane at all (1-pane / legacy-damage): re-split.
+		newID, serr := t.SplitWindow(ctx, target, dir, true, placeholderCmd)
+		if serr != nil {
+			return Info{}, fmt.Errorf("frame.Ensure: re-split main pane: %w", serr)
+		}
+		mainID = newID
 	}
 
 	return Info{
