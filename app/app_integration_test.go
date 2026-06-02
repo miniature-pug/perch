@@ -7,8 +7,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	internalpty "github.com/Miniature-Pug/perch/internal/pty"
 	"github.com/Miniature-Pug/perch/internal/proc"
 	"github.com/Miniature-Pug/perch/internal/tmux"
 )
@@ -16,11 +20,11 @@ import (
 // newTestServer returns a Tmux struct targeting a PRIVATE tmux socket named
 // perch-app-test-<pid>. A cleanup is registered to kill the server after the
 // test completes so no socket leaks.
-func newTestServer(t *testing.T) tmux.Tmux {
-	t.Helper()
+func newTestServer(tb testing.TB) tmux.Tmux {
+	tb.Helper()
 	socket := fmt.Sprintf("perch-app-test-%d", os.Getpid())
 	tmx := tmux.Tmux{Runner: proc.ExecRunner{}, Bin: "tmux", Socket: socket}
-	t.Cleanup(func() {
+	tb.Cleanup(func() {
 		_ = tmx.KillServer(context.Background())
 		dir := os.Getenv("TMUX_TMPDIR")
 		if dir == "" {
@@ -90,5 +94,130 @@ func TestIntegration_App_CreateAgent(t *testing.T) {
 	}
 	if len(panes) == 0 {
 		t.Fatal("expected at least one tmux pane after CreateAgent")
+	}
+}
+
+// fakeAgentCmd stamps a sentinel then idles. A FAKE agent — no real
+// claude/opencode binary or $HOME/auth is touched.
+const fakeAgentCmd = "printf 'PERCH_FAKE_READY\\n'; while :; do sleep 1; done"
+
+func newHeadlessApp(tb testing.TB, tmx tmux.Tmux, emit internalpty.EmitFunc) *App {
+	return &App{
+		tmux:    tmx,
+		run:     proc.ExecRunner{},
+		roots:   []string{tb.TempDir()},
+		emit:    emit,
+		bridges: map[string]*ptyEntry{},
+	}
+}
+
+func TestIntegration_App_ListThenOpenTerminal(t *testing.T) {
+	tmx := newTestServer(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	pane, err := tmx.Launch(ctx, "perch", "feat-x", dir, []string{"sh", "-c", fakeAgentCmd})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if err := tmx.SetPaneOption(ctx, pane, tmux.OptionPerchSession, "ses_fake01"); err != nil {
+		t.Fatalf("SetPaneOption: %v", err)
+	}
+
+	var mu sync.Mutex
+	var sb strings.Builder
+	emit := func(_ string, data ...any) {
+		if len(data) == 1 {
+			if b, ok := data[0].([]int); ok {
+				mu.Lock()
+				for _, v := range b {
+					sb.WriteByte(byte(v))
+				}
+				mu.Unlock()
+			}
+		}
+	}
+	a := newHeadlessApp(t, tmx, emit)
+
+	sessions, err := a.ListSessions()
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	found := false
+	for _, s := range sessions {
+		if s.ID == "ses_fake01" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("ListSessions missing ses_fake01: %+v", sessions)
+	}
+
+	if err := a.OpenTerminal("tab1", "ses_fake01"); err != nil {
+		t.Fatalf("OpenTerminal: %v", err)
+	}
+	defer a.CloseTerminal("tab1")
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		ok := strings.Contains(sb.String(), "PERCH_FAKE_READY")
+		mu.Unlock()
+		if ok {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !strings.Contains(sb.String(), "PERCH_FAKE_READY") {
+		t.Fatalf("no pty bytes emitted via OpenTerminal; got %q", sb.String())
+	}
+}
+
+// BenchmarkPtyThroughput floods the pty with output and asserts the emit path
+// stays bounded: each emitted chunk never exceeds maxChunk (16 KiB), so memory
+// per IPC crossing is capped regardless of flood volume.
+func BenchmarkPtyThroughput(b *testing.B) {
+	tmx := newTestServer(b)
+	ctx := context.Background()
+	dir := b.TempDir()
+
+	pane, err := tmx.Launch(ctx, "flood", "win", dir, []string{"sh", "-c", "yes PERCH_FLOOD"})
+	if err != nil {
+		b.Fatalf("Launch: %v", err)
+	}
+	_ = pane
+
+	var maxSeen int
+	var mu sync.Mutex
+	emit := func(_ string, data ...any) {
+		if len(data) == 1 {
+			if by, ok := data[0].([]int); ok {
+				mu.Lock()
+				if len(by) > maxSeen {
+					maxSeen = len(by)
+				}
+				mu.Unlock()
+			}
+		}
+	}
+	a := newHeadlessApp(b, tmx, emit)
+	if err := tmx.SetPaneOption(ctx, pane, tmux.OptionPerchSession, "ses_flood1"); err != nil {
+		b.Fatalf("SetPaneOption: %v", err)
+	}
+
+	b.ResetTimer()
+	if err := a.OpenTerminal("flood", "ses_flood1"); err != nil {
+		b.Fatalf("OpenTerminal: %v", err)
+	}
+	time.Sleep(500 * time.Millisecond)
+	a.CloseTerminal("flood")
+	b.StopTimer()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if maxSeen > 16*1024 {
+		b.Fatalf("emitted chunk exceeded 16 KiB bound under flood: %d", maxSeen)
 	}
 }
