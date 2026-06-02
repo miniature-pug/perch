@@ -83,6 +83,28 @@ func TestValidateWorktreeUnderRoots(t *testing.T) {
 	}
 }
 
+func TestApp_PtyRegistry_AddGetRemove(t *testing.T) {
+	a := &App{bridges: map[string]*ptyEntry{}}
+
+	a.putBridge("t1", &ptyEntry{})
+	if _, ok := a.getBridge("t1"); !ok {
+		t.Fatal("expected t1 present after put")
+	}
+	a.removeBridge("t1")
+	if _, ok := a.getBridge("t1"); ok {
+		t.Fatal("expected t1 absent after remove")
+	}
+}
+
+func TestApp_Emit_UsesSeam(t *testing.T) {
+	var gotEvent string
+	a := &App{emit: func(event string, _ ...any) { gotEvent = event }}
+	a.emit("sessions-changed")
+	if gotEvent != "sessions-changed" {
+		t.Fatalf("emit seam event = %q, want sessions-changed", gotEvent)
+	}
+}
+
 // TestValidateWorktreeUnderRoots_SymlinkEscape uses REAL on-disk symlinks so the
 // EvalSymlinks containment check is actually exercised (not skipped). The escape
 // link points at a real directory OUTSIDE the root, so EvalSymlinks resolves

@@ -9,7 +9,59 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
+
+	internalpty "github.com/Miniature-Pug/perch/internal/pty"
+	"github.com/Miniature-Pug/perch/internal/proc"
+	"github.com/Miniature-Pug/perch/internal/tmux"
 )
+
+// ptyEntry pairs a live attach Bridge with its frontend tab id.
+type ptyEntry struct {
+	bridge *internalpty.Bridge
+}
+
+// App is the Wails bound object. It is constructed by NewApp and its context is
+// captured in startup so the production emit seam can call wails runtime.
+type App struct {
+	tmux  tmux.Tmux
+	run   proc.Runner
+	roots []string
+
+	// emit delivers events to the frontend. Production wires this to a
+	// runtime.EventsEmit closure in startup; tests inject a capture. This seam is
+	// what makes the App bootable headlessly in `go test`.
+	emit internalpty.EmitFunc
+
+	mu      sync.Mutex
+	bridges map[string]*ptyEntry
+
+	// lastSig + stopPoll are used by the §3.3 poller (Task 10B); declared here so
+	// the struct has one canonical definition. lastSig is the fingerprint of the
+	// last emitted session set; stopPoll is closed by shutdown to stop the ticker.
+	lastSig  string
+	stopPoll chan struct{}
+}
+
+func (a *App) putBridge(tabID string, e *ptyEntry) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.bridges[tabID] = e
+}
+
+func (a *App) getBridge(tabID string) (*ptyEntry, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	e, ok := a.bridges[tabID]
+	return e, ok
+}
+
+func (a *App) removeBridge(tabID string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.bridges, tabID)
+}
+
 
 const maxSessionIDLen = 128
 
