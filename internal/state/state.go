@@ -22,6 +22,12 @@ import (
 	"github.com/Miniature-Pug/perch/internal/model"
 )
 
+// stateFile is the filename for the session→worktree mapping store.
+const stateFile = "state.json"
+
+// WindowsDirName is the subdirectory that holds per-window JSON records.
+const WindowsDirName = "windows"
+
 // maxStateFileSize is the maximum number of bytes readLimited will read from
 // any state or window file. Files larger than this cap are rejected to prevent
 // a malicious or corrupt file from exhausting available memory (V7b).
@@ -111,7 +117,7 @@ func LoadState(baseDir string) (State, error) {
 		Projects: make(map[string]ProjectStat),
 	}
 
-	path := filepath.Join(baseDir, "state.json")
+	path := filepath.Join(baseDir, stateFile)
 	data, err := readLimited(path, maxStateFileSize)
 	if errors.Is(err, os.ErrNotExist) {
 		return empty, nil
@@ -147,7 +153,7 @@ func SaveState(baseDir string, s State) error {
 	if err != nil {
 		return fmt.Errorf("state: marshal state: %w", err)
 	}
-	target := filepath.Join(baseDir, "state.json")
+	target := filepath.Join(baseDir, stateFile)
 	return writeFileAtomic(target, data)
 }
 
@@ -192,7 +198,7 @@ func DecodePaneKey(name string) (string, error) {
 
 // windowsDir returns the windows/ subdirectory under baseDir.
 func windowsDir(baseDir string) string {
-	return filepath.Join(baseDir, "windows")
+	return filepath.Join(baseDir, WindowsDirName)
 }
 
 // SaveWindow atomically writes w to windows/<encoded paneKey>.json, creating the

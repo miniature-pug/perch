@@ -16,6 +16,10 @@ import (
 	"github.com/Miniature-Pug/perch/internal/proc"
 )
 
+// worktreeDirSuffix is appended to the project name to form the sibling
+// directory that holds all linked worktrees when no custom worktree_dir is set.
+const worktreeDirSuffix = "__worktrees"
+
 // ErrBranchExists is returned (wrapped) by AddWorktree when the requested
 // branch already exists in the repository.
 var ErrBranchExists = errors.New("git: worktree branch already exists")
@@ -75,7 +79,7 @@ func WorktreePath(projectRoot, handle, worktreeDir string) (string, error) {
 
 	switch {
 	case worktreeDir == "":
-		sibling := filepath.Base(projectRoot) + "__worktrees"
+		sibling := filepath.Base(projectRoot) + worktreeDirSuffix
 		return filepath.Join(filepath.Dir(projectRoot), sibling, handle), nil
 	case filepath.IsAbs(worktreeDir):
 		return filepath.Join(worktreeDir, handle), nil

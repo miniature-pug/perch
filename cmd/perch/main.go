@@ -841,7 +841,7 @@ func handleDebugTmux(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	shadowPath := filepath.Join(baseDir, "windows", state.EncodePaneKey(paneID)+".json")
+	shadowPath := filepath.Join(baseDir, state.WindowsDirName, state.EncodePaneKey(paneID)+".json")
 
 	_, _ = fmt.Fprintf(stdout, "tmux session : %s\n", session)
 	_, _ = fmt.Fprintf(stdout, "tmux window  : %s\n", window)

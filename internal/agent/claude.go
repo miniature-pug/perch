@@ -126,6 +126,10 @@ func (c Claude) NewArgs(opts NewOpts) []string {
 
 // ── InstallStatusHook ─────────────────────────────────────────────────────────
 
+// ClaudeSettingsFile is the filename of claude's user settings file.
+// Both InstallStatusHook and doctor.claudeHooksOk must agree on this name.
+const ClaudeSettingsFile = "settings.json"
+
 // InstallStatusHook merges perch's four status hooks into ~/.claude/settings.json.
 // It reads the existing file (treating absence as {}), merges additively and
 // idempotently (replace=false) or replaces any stale perch entries with the
@@ -139,7 +143,7 @@ func (c Claude) InstallStatusHook(replace bool) error {
 		return fmt.Errorf("claude InstallStatusHook: home dir: %w", err)
 	}
 	dir := filepath.Join(home, ".claude")
-	path := filepath.Join(dir, "settings.json")
+	path := filepath.Join(dir, ClaudeSettingsFile)
 
 	existing, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {

@@ -12,6 +12,9 @@ import (
 	"path/filepath"
 )
 
+// TrustFile is the filename of the trust store within the perch state directory.
+const TrustFile = "trust.json"
+
 // Hash returns the hex sha256 of a .perch.toml's raw bytes.
 func Hash(content []byte) string {
 	sum := sha256.Sum256(content)

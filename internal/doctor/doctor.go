@@ -18,6 +18,7 @@ import (
 	"text/tabwriter"
 
 	perch "github.com/Miniature-Pug/perch"
+	"github.com/Miniature-Pug/perch/internal/agent"
 	"github.com/Miniature-Pug/perch/internal/model"
 )
 
@@ -237,7 +238,7 @@ func claudeHooksOk(sys system) (bool, string) {
 	if err != nil {
 		return false, "claude hooks: could not determine home directory"
 	}
-	path := home + "/.claude/settings.json"
+	path := home + "/.claude/" + agent.ClaudeSettingsFile
 	data, err := sys.readFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, "claude hooks not installed — run 'perch setup'"
@@ -287,7 +288,7 @@ func opencodePluginOk(sys system) (bool, string) {
 	if err != nil {
 		return false, "opencode plugin: could not determine home directory"
 	}
-	path := home + "/.config/opencode/plugins/perch-status.ts"
+	path := home + "/.config/opencode/plugins/" + agent.PerchStatusPlugin
 	if err := sys.stat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return false, "perch-status.ts not installed — run 'perch setup'"

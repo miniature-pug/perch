@@ -755,7 +755,7 @@ func (m Model) updateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch {
 		case msg.Type == tea.KeyRunes && string(msg.Runes) == "a":
 			// Approve always: persist to the trust store, then re-dispatch.
-			store, err := trust.Load(filepath.Join(m.loader.BaseDir, "trust.json"))
+			store, err := trust.Load(filepath.Join(m.loader.BaseDir, trust.TrustFile))
 			if err == nil {
 				if serr := store.Approve(req.configPath, req.hash); serr != nil {
 					m.modal = modalState{}

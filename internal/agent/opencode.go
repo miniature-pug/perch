@@ -84,6 +84,10 @@ func (o Opencode) ResumeArgs(sessionID string) []string {
 	return []string{"--session", sessionID}
 }
 
+// PerchStatusPlugin is the filename of the opencode plugin that reports perch
+// status. Both InstallStatusHook and doctor.opencodePluginOk must agree on this name.
+const PerchStatusPlugin = "perch-status.ts"
+
 // ErrForkUnsupported is returned by Opencode.ForkInto. perch v1 deliberately
 // starts a fresh session in the target worktree instead of forking, so callers
 // can errors.Is against this sentinel to take the "start fresh" path. The CLI
@@ -135,7 +139,7 @@ func (o Opencode) InstallStatusHook(replace bool) error {
 		return fmt.Errorf("opencode InstallStatusHook: mkdir: %w", err)
 	}
 
-	path := filepath.Join(dir, "perch-status.ts")
+	path := filepath.Join(dir, PerchStatusPlugin)
 
 	// Atomic write: temp file in the same directory so rename is one syscall.
 	tmp, err := os.CreateTemp(dir, ".perch-status-*.ts")

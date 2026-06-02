@@ -21,6 +21,12 @@ import (
 	"github.com/Miniature-Pug/perch/internal/model"
 )
 
+// configFileName is the name of the global configuration file.
+const configFileName = "config.toml"
+
+// projectConfigName is the name of the per-project configuration file.
+const projectConfigName = ".perch.toml"
+
 // defaultSortOrder is the priority order for the left-panel project list.
 // Supported tokens are "running" (live-session rows first) and "frecency"
 // (preserve discover's frecency-descending order). Unknown tokens (e.g. a
@@ -250,7 +256,7 @@ func DefaultGlobalPath() (string, error) {
 		}
 		base = filepath.Join(home, ".config")
 	}
-	return filepath.Join(base, "perch", "config.toml"), nil
+	return filepath.Join(base, "perch", configFileName), nil
 }
 
 // Load assembles a Config from two sources:
@@ -305,7 +311,7 @@ func findAndLoadProject(startDir string) (*projectConfig, string, []byte, error)
 
 	dir := filepath.Clean(startDir)
 	for {
-		candidate := filepath.Join(dir, ".perch.toml")
+		candidate := filepath.Join(dir, projectConfigName)
 		_, err := os.Stat(candidate)
 		if err == nil {
 			// Found — read and decode it.

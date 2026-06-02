@@ -17,6 +17,10 @@ import (
 	"github.com/Miniature-Pug/perch/internal/worktree"
 )
 
+// worktreeBranchPrefix is the namespace prefix prepended to every perch-managed
+// git branch. Centralised here so all branch-construction sites use the same value.
+const worktreeBranchPrefix = "perch/"
+
 // projectConfig returns the merged config for projectPath. When loader.Config
 // is non-nil (test override) it is returned directly. Otherwise Load is called
 // against the real filesystem.
@@ -105,7 +109,7 @@ func (m Model) removeCmd(spec modalState, force, skipPrep bool, dec *trustDecisi
 				// Trust gate: check whether hooks may run.
 				if dec == nil {
 					// Not yet decided — consult the trust store.
-					store, err := trust.Load(filepath.Join(ldr.BaseDir, "trust.json"))
+					store, err := trust.Load(filepath.Join(ldr.BaseDir, trust.TrustFile))
 					if err == nil && store.Trusted(cfg.ProjectConfigPath, cfg.ProjectConfigHash) {
 						dec = &trustDecision{allow: true, approvedHash: cfg.ProjectConfigHash}
 					} else {
@@ -246,7 +250,7 @@ func (m Model) worktreeCreateCmd(ms modalState, dec *trustDecision) tea.Cmd {
 		if len(cfg.PostCreate) > 0 {
 			if dec == nil {
 				// Not yet decided — consult the trust store.
-				store, err := trust.Load(filepath.Join(ldr.BaseDir, "trust.json"))
+				store, err := trust.Load(filepath.Join(ldr.BaseDir, trust.TrustFile))
 				if err == nil && store.Trusted(cfg.ProjectConfigPath, cfg.ProjectConfigHash) {
 					dec = &trustDecision{allow: true, approvedHash: cfg.ProjectConfigHash}
 				} else {
@@ -271,7 +275,7 @@ func (m Model) worktreeCreateCmd(ms modalState, dec *trustDecision) tea.Cmd {
 		if slug == "" {
 			slug = "worktree"
 		}
-		branch := "perch/" + slug + "-" + short
+		branch := worktreeBranchPrefix + slug + "-" + short
 		handle := git.SlugifyBranch(branch)
 
 		// 5. Resolve the filesystem path.
