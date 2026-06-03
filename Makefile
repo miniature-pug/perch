@@ -43,7 +43,7 @@ gui-run: gui-build    ## build then launch the GUI (needs an X/Wayland display)
 test:                 ## unit tests
 	@go test -race -count=1 $(PKG)
 
-test-integration:     ## integration tests (requires tmux and git)
+test-integration:     ## integration tests (requires git)
 	@go test -race -count=1 -tags=integration $(PKG)
 
 test-all:             ## unit + integration

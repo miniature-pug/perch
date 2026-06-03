@@ -184,15 +184,6 @@ var tools = []toolDescriptor{
 		buildOnly:       true, // go is only needed at build time
 	},
 	{
-		// tmux is the runtime engine for perch. Without it, perch cannot function at all.
-		// Absence is intentionally a hard failure (§21.1).
-		name:            "tmux",
-		pinnedKey:       "tmux",
-		versionArgs:     []string{"-V"},
-		hardRequirement: true,
-		buildOnly:       false,
-	},
-	{
 		name:            "git",
 		pinnedKey:       "", // system-managed, not pinned
 		versionArgs:     []string{"--version"},
@@ -371,20 +362,6 @@ func Run(version string, w io.Writer, sys system) int {
 		hookWarnings++
 	}
 
-	// ── tmux server check (warning only; only if tmux binary is present) ──────
-	if _, err := sys.lookPath("tmux"); err == nil {
-		_, err := sys.output("tmux", "list-sessions")
-		if err != nil {
-			msg := "server not running (will start automatically on first session)"
-			results = append(results, checkResult{
-				name:    "tmux",
-				tag:     "[warn]",
-				version: msg,
-			})
-			warnings++
-		}
-	}
-
 	// ── Render ────────────────────────────────────────────────────────────────
 	_, _ = fmt.Fprintf(w, "\nperch %s\n\n", version)
 
@@ -408,7 +385,7 @@ func Run(version string, w io.Writer, sys system) int {
 			noun = "warning"
 		}
 		// Only mention 'perch setup' when hook warnings are actually present,
-		// since setup won't help with missing agents or go/tmux drift.
+		// since setup won't help with missing agents or go drift.
 		if hookWarnings > 0 {
 			_, _ = fmt.Fprintf(w, "%d %s. Run 'perch setup' to fix hook issues.\n", warnings, noun)
 		} else {
@@ -450,7 +427,6 @@ func checkTool(td toolDescriptor, pinned map[string]string, sys system) checkRes
 		if td.hardRequirement {
 			tag = "[fail]"
 			hard = true
-			// §21.1: tmux absence is a hard failure because perch is a tmux orchestrator.
 		}
 		if td.buildOnly {
 			msg = "not found (build-only; not required to run perch)"

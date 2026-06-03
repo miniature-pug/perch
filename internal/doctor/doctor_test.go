@@ -96,18 +96,15 @@ func fullSystem(home string) *fakeSystem {
 		home: home,
 		paths: map[string]string{
 			"go":       "/usr/local/go/bin/go",
-			"tmux":     "/usr/bin/tmux",
 			"git":      "/usr/bin/git",
 			"claude":   "/home/user/.local/bin/claude",
 			"opencode": "/home/user/.local/bin/opencode",
 		},
 		outputs: map[string]fakeOutput{
 			"go version":         {out: []byte("go version go1.26.4 linux/amd64")},
-			"tmux -V":            {out: []byte("tmux 3.6")},
 			"git --version":      {out: []byte("git version 2.43.0")},
 			"claude --version":   {out: []byte("2.1.158")},
 			"opencode --version": {out: []byte("1.15.12")},
-			"tmux list-sessions": {out: []byte("sess: 1 windows"), err: nil},
 		},
 		statPaths: map[string]bool{
 			claudeSettingsPath: true,
@@ -129,28 +126,28 @@ func TestParseToolVersions(t *testing.T) {
 	}{
 		{
 			name:  "normal input",
-			input: "golang 1.26.2\ntmux 3.6\nclaude 2.1.158\nopencode 1.15.12\n",
+			input: "golang 1.26.2\ngit 2.43.0\nclaude 2.1.158\nopencode 1.15.12\n",
 			want: map[string]string{
 				"golang":   "1.26.2",
-				"tmux":     "3.6",
+				"git":      "2.43.0",
 				"claude":   "2.1.158",
 				"opencode": "1.15.12",
 			},
 		},
 		{
 			name:  "blank lines and comments skipped",
-			input: "golang 1.26.2\n\n# comment\ntmux 3.6\n   \n",
+			input: "golang 1.26.2\n\n# comment\ngit 2.43.0\n   \n",
 			want: map[string]string{
 				"golang": "1.26.2",
-				"tmux":   "3.6",
+				"git":    "2.43.0",
 			},
 		},
 		{
 			name:  "garbage line (no space) skipped",
-			input: "golang 1.26.2\ngarbageline\ntmux 3.6\n",
+			input: "golang 1.26.2\ngarbageline\ngit 2.43.0\n",
 			want: map[string]string{
 				"golang": "1.26.2",
-				"tmux":   "3.6",
+				"git":    "2.43.0",
 			},
 		},
 		{
@@ -160,10 +157,10 @@ func TestParseToolVersions(t *testing.T) {
 		},
 		{
 			name:  "windows line endings",
-			input: "golang 1.26.2\r\ntmux 3.6\r\n",
+			input: "golang 1.26.2\r\ngit 2.43.0\r\n",
 			want: map[string]string{
 				"golang": "1.26.2",
-				"tmux":   "3.6",
+				"git":    "2.43.0",
 			},
 		},
 	}
@@ -224,8 +221,8 @@ func TestExtractVersionToken(t *testing.T) {
 		want string // empty means "not found" → empty string back
 	}{
 		{"go version go1.26.3 linux/amd64", "1.26.3"},
-		{"tmux 3.6", "3.6"},
 		{"git version 2.43.0", "2.43.0"},
+		{"opencode 1.15.12", "1.15.12"},
 		{"2.1.158", "2.1.158"},
 		{"Claude Code 2.1.158 (build abc)", "2.1.158"},
 		{"some tool v1.2.3-beta", "1.2.3"},
@@ -250,15 +247,6 @@ func TestRunExitCode_AllPresent(t *testing.T) {
 	code := Run("v0.1.0-dev", io.Discard, sys)
 	if code != 0 {
 		t.Errorf("expected exit 0 when all deps present, got %d", code)
-	}
-}
-
-func TestRunExitCode_TmuxMissing(t *testing.T) {
-	sys := fullSystem("/home/tester")
-	delete(sys.paths, "tmux")
-	code := Run("v0.1.0-dev", io.Discard, sys)
-	if code != 1 {
-		t.Errorf("expected exit 1 when tmux missing, got %d", code)
 	}
 }
 
@@ -446,51 +434,11 @@ func TestRunHooks_OpencodePluginMissing(t *testing.T) {
 	}
 }
 
-// ── tmux server check ─────────────────────────────────────────────────────────
-
-func TestRunTmuxServer_Down(t *testing.T) {
-	sys := fullSystem("/home/tester")
-	sys.outputs["tmux list-sessions"] = fakeOutput{err: errors.New("no server running")}
-
-	var out strings.Builder
-	Run("v0.1.0-dev", &out, sys)
-	output := out.String()
-	if !strings.Contains(output, "server not running") {
-		t.Errorf("expected tmux server not running warning; got:\n%s", output)
-	}
-}
-
-func TestRunTmuxServer_Up(t *testing.T) {
-	sys := fullSystem("/home/tester")
-	// Already up in fullSystem.
-	var out strings.Builder
-	Run("v0.1.0-dev", &out, sys)
-	output := out.String()
-	// Should not contain "server not running".
-	if strings.Contains(output, "server not running") {
-		t.Errorf("unexpected 'server not running' when tmux is up; got:\n%s", output)
-	}
-}
-
-// ── tmux missing: no server check attempted ───────────────────────────────────
-
-func TestRunTmuxMissing_NoServerCheck(t *testing.T) {
-	sys := fullSystem("/home/tester")
-	delete(sys.paths, "tmux")
-	// If server check were attempted without binary, it would fail with "no output configured".
-	// This test ensures Run doesn't panic or error on that path.
-	var out strings.Builder
-	code := Run("v0.1.0-dev", &out, sys)
-	if code != 1 {
-		t.Errorf("expected exit 1 (hard fail: tmux missing), got %d", code)
-	}
-}
-
 // ── Summary warning count ─────────────────────────────────────────────────────
 
 func TestRunSummary_DynamicWarnCount(t *testing.T) {
 	// Trigger exactly one warning (opencode missing) + none of the hook warnings.
-	// We craft a system where hooks are OK, tmux server is up, but opencode is absent.
+	// We craft a system where hooks are OK but opencode is absent.
 	home := "/home/tester"
 	claudeSettingsPath := home + "/.claude/settings.json"
 	opencodePluginPath := home + "/.config/opencode/plugins/perch-status.ts"
@@ -506,17 +454,14 @@ func TestRunSummary_DynamicWarnCount(t *testing.T) {
 		home: home,
 		paths: map[string]string{
 			"go":     "/usr/local/go/bin/go",
-			"tmux":   "/usr/bin/tmux",
 			"git":    "/usr/bin/git",
 			"claude": "/home/user/.local/bin/claude",
 			// opencode absent
 		},
 		outputs: map[string]fakeOutput{
-			"go version":         {out: []byte("go version go1.26.4 linux/amd64")},
-			"tmux -V":            {out: []byte("tmux 3.6")},
-			"git --version":      {out: []byte("git version 2.43.0")},
-			"claude --version":   {out: []byte("2.1.158")},
-			"tmux list-sessions": {out: []byte("sess: 1 windows")},
+			"go version":       {out: []byte("go version go1.26.4 linux/amd64")},
+			"git --version":    {out: []byte("git version 2.43.0")},
+			"claude --version": {out: []byte("2.1.158")},
 		},
 		statPaths: map[string]bool{
 			claudeSettingsPath: true,
@@ -568,8 +513,8 @@ func TestRunOutput_ContainsPaths(t *testing.T) {
 	var out strings.Builder
 	Run("v0.1.0-dev", &out, sys)
 	output := out.String()
-	if !strings.Contains(output, "/usr/bin/tmux") {
-		t.Errorf("expected tmux path in output; got:\n%s", output)
+	if !strings.Contains(output, "/usr/bin/git") {
+		t.Errorf("expected git path in output; got:\n%s", output)
 	}
 }
 
