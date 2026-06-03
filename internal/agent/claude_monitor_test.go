@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Miniature-Pug/perch/internal/agent"
 	"github.com/Miniature-Pug/perch/internal/hooklistener"
@@ -82,4 +84,40 @@ func TestClaudeMonitorPrepare(t *testing.T) {
 		}
 	}
 	if !foreignStillThere { t.Error("foreign Stop hook missing after Teardown") }
+}
+
+func TestClaudeMonitorEventTranslation(t *testing.T) {
+	m, l, cleanup := newMonitorWithTestListener(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.StartTranslating(ctx)
+
+	post := func(payload string) {
+		req, _ := http.NewRequest(http.MethodPost, "http://"+l.Addr()+"/hook", strings.NewReader(payload))
+		req.Header.Set("Authorization", "Bearer "+l.Token())
+		req.Header.Set("Content-Type", "application/json")
+		resp, _ := http.DefaultClient.Do(req)
+		if resp != nil { _ = resp.Body.Close() }
+	}
+	post(`{"hook_event_name":"SessionStart","session_id":"sid-A","transcript_path":"/t.jsonl","cwd":"/p"}`)
+	post(`{"hook_event_name":"Stop","session_id":"sid-A","transcript_path":"/t.jsonl","cwd":"/p"}`)
+
+	deadline := time.After(3 * time.Second)
+	var got []agent.Event
+	for len(got) < 2 {
+		select {
+		case ev := <-m.Events(): got = append(got, ev)
+		case <-deadline: t.Fatalf("timeout after %d events", len(got))
+		}
+	}
+	if got[0].Kind != "state" || got[0].State != agent.StateRunning { t.Errorf("ev[0]: %+v", got[0]) }
+	if got[1].Kind != "state" || got[1].State != agent.StateIdle { t.Errorf("ev[1]: %+v", got[1]) }
+
+	// State tracking: after the Stop event drained, CurrentState reflects idle.
+	// (translateAndEmit sets m.state BEFORE the channel send, so this is race-free.)
+	if m.CurrentState() != agent.StateIdle {
+		t.Errorf("CurrentState after Stop = %q, want %q", m.CurrentState(), agent.StateIdle)
+	}
 }

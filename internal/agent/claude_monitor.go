@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/Miniature-Pug/perch/internal/hooklistener"
 )
@@ -18,6 +19,10 @@ type ClaudeMonitor struct {
 	ownedLn  bool // true when we created listener; Teardown closes it
 	events   chan Event
 	cwd      string
+
+	mu       sync.Mutex
+	state    State
+	lastTool string
 }
 
 func newClaudeMonitor(a Adapter) *ClaudeMonitor {
@@ -26,11 +31,78 @@ func newClaudeMonitor(a Adapter) *ClaudeMonitor {
 func NewClaudeMonitorWithListener(a Adapter, l *hooklistener.Listener) *ClaudeMonitor {
 	return &ClaudeMonitor{adapter: a, listener: l, events: make(chan Event, 64)}
 }
-func (m *ClaudeMonitor) Events() <-chan Event               { return m.events }
-func (m *ClaudeMonitor) Approve(_ string, _ Decision) error { return nil }
-func (m *ClaudeMonitor) Capabilities() Caps                 { return Caps{Approvals: true, Attention: true, Tokens: true} }
-func (m *ClaudeMonitor) CurrentState() State                { return StateIdle }
-func (m *ClaudeMonitor) LastApprovalTool() string           { return "" }
+func (m *ClaudeMonitor) Events() <-chan Event { return m.events }
+func (m *ClaudeMonitor) Capabilities() Caps  { return Caps{Approvals: true, Attention: true, Tokens: true} }
+
+func (m *ClaudeMonitor) StartTranslating(ctx context.Context) {
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case he, ok := <-m.listener.Events():
+				if !ok {
+					return
+				}
+				m.translateAndEmit(he)
+			}
+		}
+	}()
+}
+
+func (m *ClaudeMonitor) translateAndEmit(he hooklistener.HookEvent) {
+	var ev Event
+	switch he.Type {
+	case "SessionStart":
+		ev = Event{Kind: "state", State: StateRunning}
+	case "Stop":
+		ev = Event{Kind: "state", State: StateIdle}
+	case "StopFailure":
+		ev = Event{Kind: "state", State: StateErrored, Err: he.ErrorType}
+	case "Notification":
+		ev = Event{Kind: "state", State: StateIdle}
+	case "PreToolUse":
+		sum := he.ToolName
+		if len(he.ToolInput) > 0 && len(he.ToolInput) < 120 {
+			sum += ": " + string(he.ToolInput)
+		}
+		ev = Event{Kind: "approval", State: StateAwaitingApproval,
+			Approval: &ApprovalReq{ReqID: he.ReqID, Tool: he.ToolName, Summary: sum}}
+	default:
+		return
+	}
+	// Track state/lastTool (mutex-guarded) BEFORE emitting, so a reader that
+	// observes the event on the channel also observes the updated state.
+	m.mu.Lock()
+	if ev.State != "" {
+		m.state = ev.State
+	}
+	if ev.Approval != nil && ev.Approval.Tool != "" {
+		m.lastTool = ev.Approval.Tool
+	}
+	m.mu.Unlock()
+	m.events <- ev
+}
+
+func (m *ClaudeMonitor) Approve(reqID string, d Decision) error {
+	m.listener.Decide(reqID, hooklistener.Decision{Allow: d.Allow, Always: d.Always})
+	return nil
+}
+
+func (m *ClaudeMonitor) CurrentState() State {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.state == "" {
+		return StateIdle
+	}
+	return m.state
+}
+
+func (m *ClaudeMonitor) LastApprovalTool() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lastTool
+}
 
 const perchMonitorSentinel = "perch-monitor-hook"
 
