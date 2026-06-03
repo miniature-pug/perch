@@ -98,8 +98,35 @@ func (l *Listener) handleHook(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	// PreToolUse handled in Task 2.13
-	http.Error(w, "not implemented", http.StatusNotImplemented)
+	// PreToolUse blocks until Decide() supplies a verdict.
+	reqBytes := make([]byte, 8)
+	_, _ = rand.Read(reqBytes)
+	ev.ReqID = hex.EncodeToString(reqBytes)
+	p := &pending{ch: make(chan Decision, 1)}
+	l.mu.Lock()
+	l.reqs[ev.ReqID] = p
+	l.mu.Unlock()
+	defer func() {
+		l.mu.Lock()
+		delete(l.reqs, ev.ReqID)
+		l.mu.Unlock()
+	}()
+	select {
+	case l.events <- ev:
+	default:
+	}
+	d := <-p.ch
+	perm := "deny"
+	if d.Allow {
+		perm = "allow"
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"hookSpecificOutput": map[string]any{
+			"hookEventName":      "PreToolUse",
+			"permissionDecision": perm,
+		},
+	})
 }
 
 func (l *Listener) Decide(reqID string, d Decision) {

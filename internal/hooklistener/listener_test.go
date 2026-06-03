@@ -2,7 +2,9 @@
 package hooklistener_test
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -59,5 +61,53 @@ func TestStopEventArrives(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout")
+	}
+}
+
+func TestPreToolUseAllowDeny(t *testing.T) {
+	for _, tc := range []struct{ name string; allow bool; want string }{
+		{"allow", true, "allow"}, {"deny", false, "deny"},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			l, err := hooklistener.New()
+			if err != nil { t.Fatalf("New: %v", err) }
+			defer func() { _ = l.Close() }()
+
+			payload := `{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Bash","tool_input":{"command":"ls"}}`
+			req, _ := http.NewRequest(http.MethodPost, "http://"+l.Addr()+"/hook", strings.NewReader(payload))
+			req.Header.Set("Authorization", "Bearer "+l.Token())
+			req.Header.Set("Content-Type", "application/json")
+
+			type result struct{ body string; code int }
+			ch := make(chan result, 1)
+			go func() {
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil { ch <- result{code: -1}; return }
+				defer func() { _ = resp.Body.Close() }()
+				b, _ := io.ReadAll(resp.Body)
+				ch <- result{body: strings.TrimSpace(string(b)), code: resp.StatusCode}
+			}()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			select {
+			case ev := <-l.Events():
+				if ev.Type != "PreToolUse" || ev.ReqID == "" { t.Errorf("bad event: %+v", ev) }
+				l.Decide(ev.ReqID, hooklistener.Decision{Allow: tc.allow})
+			case <-ctx.Done():
+				t.Fatal("timeout waiting for event")
+			}
+
+			select {
+			case r := <-ch:
+				if r.code != http.StatusOK { t.Errorf("want 200, got %d", r.code) }
+				want := `"permissionDecision":"` + tc.want + `"`
+				if !strings.Contains(r.body, want) { t.Errorf("body %q missing %q", r.body, want) }
+			case <-ctx.Done():
+				t.Fatal("timeout waiting for response")
+			}
+		})
 	}
 }
