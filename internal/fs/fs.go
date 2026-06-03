@@ -93,10 +93,20 @@ func matchesAny(name string, patterns []string) bool {
 	return false
 }
 
+// ShouldExclude reports whether a directory base name must not be watched:
+// always ".git", plus anything matching the root .gitignore patterns.
+func ShouldExclude(name string, patterns []string) bool {
+	if name == ".git" {
+		return true
+	}
+	return matchesAny(name, patterns)
+}
+
 // Watcher watches a directory tree for filesystem changes.
 type Watcher struct {
 	fw       *fsnotify.Watcher
 	onChange func(string)
+	patterns []string
 	once     sync.Once
 	done     chan struct{}
 }
@@ -104,16 +114,35 @@ type Watcher struct {
 // Watch creates a Watcher for absRoot. onChange is called with the absolute
 // path of any changed file or directory. Watch returns an error if fsnotify
 // cannot be initialised or the root cannot be added.
+// The watcher is recursive: all subdirectories are watched, excluding .git and
+// any directory matching a pattern in absRoot/.gitignore.
 func Watch(absRoot string, onChange func(absPath string)) (*Watcher, error) {
 	fw, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, err
 	}
+	// Root add is fatal.
 	if err := fw.Add(absRoot); err != nil {
 		_ = fw.Close()
 		return nil, err
 	}
-	w := &Watcher{fw: fw, onChange: onChange, done: make(chan struct{})}
+	patterns := loadGitignorePatterns(filepath.Join(absRoot, ".gitignore"))
+	// Walk subdirectories and add them (best-effort; errors on individual subdirs are skipped).
+	_ = filepath.WalkDir(absRoot, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			return nil
+		}
+		if ShouldExclude(d.Name(), patterns) {
+			return filepath.SkipDir
+		}
+		// Root is already added; re-adding is idempotent.
+		_ = fw.Add(path)
+		return nil
+	})
+	w := &Watcher{fw: fw, onChange: onChange, patterns: patterns, done: make(chan struct{})}
 	go w.loop()
 	return w, nil
 }
@@ -126,6 +155,13 @@ func (w *Watcher) loop() {
 				return
 			}
 			w.onChange(event.Name)
+			// On a create event, watch newly-created subdirectories.
+			if event.Op&fsnotify.Create != 0 {
+				info, statErr := os.Stat(event.Name)
+				if statErr == nil && info.IsDir() && !ShouldExclude(filepath.Base(event.Name), w.patterns) {
+					_ = w.fw.Add(event.Name)
+				}
+			}
 		case _, ok := <-w.fw.Errors:
 			if !ok {
 				return
