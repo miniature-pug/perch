@@ -1,10 +1,16 @@
 package app
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+
+	"github.com/Miniature-Pug/perch/internal/agent"
+	internalpty "github.com/Miniature-Pug/perch/internal/pty"
+	"github.com/Miniature-Pug/perch/internal/registry"
 )
 
 func TestValidateSessionID_AllowlistCharset(t *testing.T) {
@@ -80,59 +86,6 @@ func TestValidateWorktreeUnderRoots(t *testing.T) {
 		if err := validateWorktreeUnderRoots(p, roots); err == nil {
 			t.Errorf("validateWorktreeUnderRoots(%q) = nil, want error", p)
 		}
-	}
-}
-
-func TestApp_PtyRegistry_AddGetRemove(t *testing.T) {
-	a := &App{bridges: map[string]*ptyEntry{}}
-
-	a.putBridge("t1", &ptyEntry{})
-	if _, ok := a.getBridge("t1"); !ok {
-		t.Fatal("expected t1 present after put")
-	}
-	a.removeBridge("t1")
-	if _, ok := a.getBridge("t1"); ok {
-		t.Fatal("expected t1 absent after remove")
-	}
-}
-
-func TestApp_Emit_UsesSeam(t *testing.T) {
-	var gotEvent string
-	a := &App{emit: func(event string, _ ...any) { gotEvent = event }}
-	a.emit("sessions-changed")
-	if gotEvent != "sessions-changed" {
-		t.Fatalf("emit seam event = %q, want sessions-changed", gotEvent)
-	}
-}
-
-func TestApp_WriteToPty_UnknownTab(t *testing.T) {
-	a := &App{bridges: map[string]*ptyEntry{}}
-	if err := a.WriteToPty("nope", []byte("x")); err == nil {
-		t.Fatal("WriteToPty on unknown tab should error")
-	}
-	if err := a.ResizePty("nope", 80, 24); err == nil {
-		t.Fatal("ResizePty on unknown tab should error")
-	}
-}
-
-func TestApp_CloseTerminal_RemovesEntry(t *testing.T) {
-	a := &App{bridges: map[string]*ptyEntry{}}
-	a.putBridge("t1", &ptyEntry{bridge: nil}) // nil bridge: Close is a no-op guard
-	if err := a.CloseTerminal("t1"); err != nil {
-		t.Fatalf("CloseTerminal: %v", err)
-	}
-	if _, ok := a.getBridge("t1"); ok {
-		t.Fatal("CloseTerminal should remove the registry entry")
-	}
-}
-
-func TestNewApp_Defaults(t *testing.T) {
-	a := NewApp([]string{"/home/u/code"})
-	if a.bridges == nil {
-		t.Fatal("NewApp must initialise the bridge registry")
-	}
-	if a.emit == nil {
-		t.Fatal("NewApp must install a non-nil pre-startup emit (no-op until startup)")
 	}
 }
 
@@ -230,37 +183,79 @@ func TestApp_CreateAgent_ContainmentGuard(t *testing.T) {
 	}
 }
 
-// TestApp_PutBridge_ClosesDisplaced verifies that putBridge with a non-nil
-// displaced entry (nil bridge inside) does not panic and that the new entry
-// wins.
-func TestApp_PutBridge_ClosesDisplaced(t *testing.T) {
-	a := &App{bridges: map[string]*ptyEntry{}}
-
-	// First put: entry with a nil bridge (CloseTerminal-style entry).
-	a.putBridge("t1", &ptyEntry{bridge: nil})
-	// Second put: displaces the first. Must not panic even with nil bridge inside.
-	a.putBridge("t1", &ptyEntry{bridge: nil})
-	// Only one entry must exist.
-	if _, ok := a.getBridge("t1"); !ok {
-		t.Fatal("expected t1 present after second putBridge")
-	}
-	a.mu.Lock()
-	if len(a.bridges) != 1 {
-		t.Fatalf("expected 1 bridge entry, got %d", len(a.bridges))
-	}
-	a.mu.Unlock()
+// fakeBridge is an observable closer for makeBridgeWithCloser.
+type fakeBridge struct {
+	closed int
+	mu     sync.Mutex
 }
 
-// TestApp_Shutdown_DoubleClose verifies that calling shutdown twice does not
-// panic. Without the sync.Once guard the second close(stopPoll) would panic.
-func TestApp_Shutdown_DoubleClose(t *testing.T) {
-	a := &App{
-		bridges:  map[string]*ptyEntry{},
-		emit:     func(string, ...any) {},
-		stopPoll: make(chan struct{}),
+func (f *fakeBridge) Close() error { f.mu.Lock(); defer f.mu.Unlock(); f.closed++; return nil }
+
+func makeBridgeWithCloser(f *fakeBridge) *internalpty.Bridge {
+	return internalpty.NewBridgeForTest(f.Close)
+}
+
+func TestNewApp_Fields(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, err := registry.Load(cfgDir)
+	if err != nil {
+		t.Fatalf("registry.Load: %v", err)
 	}
-	ctx := t.Context()
-	// First shutdown closes the channel; second must not panic.
-	a.shutdown(ctx)
-	a.shutdown(ctx) // must not panic
+	a := NewApp(store, []string{"/tmp/root"})
+	if a == nil {
+		t.Fatal("NewApp returned nil")
+	}
+	if a.bridges == nil {
+		t.Fatal("bridges map not initialised")
+	}
+	if a.monitors == nil {
+		t.Fatal("monitors map not initialised")
+	}
+	if a.emit == nil {
+		t.Fatal("emit seam must be non-nil before startup")
+	}
+}
+
+func TestApp_Shutdown_ClosesBridgesAndTearsDownMonitors(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+
+	fb := &fakeBridge{}
+	fm := agent.NewFakeMonitor(nil)
+
+	a := &App{
+		store:    store,
+		roots:    []string{"/tmp"},
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+	}
+	a.bridges["pane-1"] = makeBridgeWithCloser(fb)
+	a.monitors["ws1"] = fm
+
+	a.shutdown(context.Background())
+
+	if fb.closed == 0 {
+		t.Fatal("shutdown must close all Bridges")
+	}
+	if !fm.TornDown() {
+		t.Fatal("shutdown must call Monitor.Teardown on all monitors")
+	}
+}
+
+func TestApp_Shutdown_Idempotent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	a := &App{
+		store:    store,
+		roots:    []string{"/tmp"},
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+	}
+	a.shutdown(context.Background())
+	a.shutdown(context.Background()) // must not panic
 }

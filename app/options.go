@@ -3,6 +3,7 @@ package app
 import (
 	"embed"
 
+	"github.com/Miniature-Pug/perch/internal/registry"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -15,7 +16,11 @@ import (
 // in ONLY under `-tags dev` (Wails injects it behind its own build tag), so
 // release builds have no network surface.
 func Run(assets embed.FS, roots []string) error {
-	app := NewApp(roots)
+	store, err := registry.Load(registry.DefaultConfigDir())
+	if err != nil {
+		return err
+	}
+	app := NewApp(store, roots)
 	return wails.Run(&options.App{
 		Title:  "perch",
 		Width:  1280,

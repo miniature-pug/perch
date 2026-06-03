@@ -99,6 +99,12 @@ func Spawn(ctx context.Context, cwd string, argv []string, event string, emit Em
 	return b, nil
 }
 
+// NewBridgeForTest returns a Bridge whose only behaviour is to call closer on
+// Close. Used by app tests that need an observable Bridge without a real pty.
+func NewBridgeForTest(closer func() error) *Bridge {
+	return &Bridge{closer: closer}
+}
+
 func pumpReader(r io.Reader, event string, emit EmitFunc, maxChunk int) {
 	buf := make([]byte, maxChunk)
 	for {

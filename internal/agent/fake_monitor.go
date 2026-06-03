@@ -13,6 +13,7 @@ type FakeMonitor struct {
 	decisions []Decision
 	state     State
 	lastTool  string
+	tornDown  bool
 }
 
 func NewFakeMonitor(seq []Event) *FakeMonitor {
@@ -43,7 +44,19 @@ func (f *FakeMonitor) Approve(_ string, d Decision) error {
 	return nil
 }
 func (f *FakeMonitor) Capabilities() Caps { return Caps{true, true, true} }
-func (f *FakeMonitor) Teardown() error    { return nil }
+func (f *FakeMonitor) Teardown() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.tornDown = true
+	return nil
+}
+
+// TornDown reports whether Teardown has been called. Test-only accessor.
+func (f *FakeMonitor) TornDown() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.tornDown
+}
 func (f *FakeMonitor) Decisions() []Decision {
 	f.mu.Lock()
 	defer f.mu.Unlock()
