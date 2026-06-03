@@ -196,36 +196,86 @@ func parseRange(s string) (int, int) {
 	return start, lines
 }
 
-// reconstructPatch builds a git-apply-compatible unified diff patch from one Hunk.
-// Note: line Text values stored in HunkLine do NOT include the leading sigil (+/-/ ).
-func reconstructPatch(h Hunk) string {
-	var sb strings.Builder
-	sb.WriteString("--- a/" + h.File + "\n")
-	sb.WriteString("+++ b/" + h.File + "\n")
-	sb.WriteString(h.Header + "\n")
-	for _, l := range h.Lines {
-		switch l.Kind {
-		case "add":
-			sb.WriteString("+" + l.Text + "\n")
-		case "del":
-			sb.WriteString("-" + l.Text + "\n")
-		default:
-			sb.WriteString(" " + l.Text + "\n")
+// StageHunk applies hunk `index` (0-based, relative to the CURRENT `git diff`
+// output for file) to the git index via `git apply --cached`. Staging shifts the
+// remaining hunks, so callers MUST re-derive hunks (re-call Hunks) after each
+// StageHunk/DiscardHunk before staging another.
+func StageHunk(ctx context.Context, r proc.Runner, worktree, file string, index int) error {
+	return applyHunkByIndex(ctx, r, worktree, file, index, "--cached")
+}
+
+// DiscardHunk reverses hunk `index` in the worktree via `git apply --reverse`.
+// The same re-derive-after-each-call precondition as StageHunk applies.
+func DiscardHunk(ctx context.Context, r proc.Runner, worktree, file string, index int) error {
+	return applyHunkByIndex(ctx, r, worktree, file, index, "--reverse")
+}
+
+// applyHunkByIndex re-runs `git diff` for file, slices out the index-th hunk's
+// verbatim patch text (file header + that @@ block, preserving newline markers
+// and real ---/+++ headers), and pipes it to `git apply <flag>`.
+func applyHunkByIndex(ctx context.Context, r proc.Runner, worktree, file string, index int, flag string) error {
+	if strings.ContainsAny(file, "\n\r") {
+		return fmt.Errorf("git: invalid file path %q", file)
+	}
+	out, errOut, err := r.Run(ctx, "git", "-C", worktree, "diff", "--unified=3", "--no-color", "--", file)
+	if err != nil {
+		return fmt.Errorf("git diff %s: %w: %s", file, err, strings.TrimSpace(string(errOut)))
+	}
+	patch, err := singleHunkPatch(string(out), index)
+	if err != nil {
+		return err
+	}
+	return gitApplyPatch(ctx, worktree, patch, flag)
+}
+
+// singleHunkPatch builds a self-contained, git-apply-compatible patch for hunk
+// `index` (0-based) from the raw `git diff` output of a single file: the file
+// header (every line before the first "@@ ") plus the index-th "@@…@@" block,
+// copied verbatim so that "\ No newline at end of file" markers and the true
+// ---/+++ headers (including "+++ /dev/null" for deletions) are preserved.
+func singleHunkPatch(raw string, index int) (string, error) {
+	lines := strings.Split(raw, "\n")
+	firstHunk := -1
+	for i, l := range lines {
+		if strings.HasPrefix(l, "@@ ") {
+			firstHunk = i
+			break
 		}
 	}
-	return sb.String()
-}
-
-// StageHunk applies a single hunk to the git index using `git apply --cached`.
-func StageHunk(ctx context.Context, r proc.Runner, worktree string, h Hunk) error {
-	_ = r // git apply needs stdin; use os/exec directly
-	return gitApplyPatch(ctx, worktree, reconstructPatch(h), "--cached")
-}
-
-// DiscardHunk reverts a single hunk in the worktree using `git apply --reverse`.
-func DiscardHunk(ctx context.Context, r proc.Runner, worktree string, h Hunk) error {
-	_ = r
-	return gitApplyPatch(ctx, worktree, reconstructPatch(h), "--reverse")
+	if firstHunk < 0 {
+		return "", fmt.Errorf("git: no hunks in diff (requested hunk %d)", index)
+	}
+	var starts []int
+	for i := firstHunk; i < len(lines); i++ {
+		if strings.HasPrefix(lines[i], "@@ ") {
+			starts = append(starts, i)
+		}
+	}
+	if index < 0 || index >= len(starts) {
+		return "", fmt.Errorf("git: hunk index %d out of range (%d hunks)", index, len(starts))
+	}
+	start := starts[index]
+	end := len(lines)
+	if index+1 < len(starts) {
+		end = starts[index+1]
+	}
+	var sb strings.Builder
+	writeLine := func(s string) {
+		sb.WriteString(s)
+		sb.WriteByte('\n')
+	}
+	for _, h := range lines[:firstHunk] {
+		writeLine(h)
+	}
+	for i := start; i < end; i++ {
+		// strings.Split on a trailing-newline-terminated diff yields a final ""
+		// element; don't emit it as a spurious blank line at EOF.
+		if i == len(lines)-1 && lines[i] == "" {
+			continue
+		}
+		writeLine(lines[i])
+	}
+	return sb.String(), nil
 }
 
 // gitApplyPatch pipes patch into `git apply <flag>` with worktree as cwd.
