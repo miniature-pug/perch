@@ -11,12 +11,14 @@ import (
 	"os"
 	"runtime"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/Miniature-Pug/perch/internal/agent"
 	"github.com/Miniature-Pug/perch/internal/discover"
 	"github.com/Miniature-Pug/perch/internal/doctor"
 	"github.com/Miniature-Pug/perch/internal/proc"
+	"github.com/Miniature-Pug/perch/internal/registry"
 )
 
 // version is injected at build time via ldflags:
@@ -48,6 +50,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// surface, not part of the public CLI contract.
 	case "debug":
 		return handleDebug(args[1:], stdout, stderr)
+	case "attach":
+		return handleAttach(args[1:], stdout, stderr)
 	default:
 		// Treat the first argument as a path to a project root.
 		return handlePathArg(args[0], stdout, stderr)
@@ -180,10 +184,50 @@ func handlePathArg(arg string, stdout, stderr io.Writer) int {
 	return handleLaunch(arg, stdout, stderr)
 }
 
+// handleAttach focuses an existing workspace by fuzzy-matching the query against
+// workspace titles and worktree paths in the registry. The GUI owns actual focus;
+// this is a registry-backed informational command in v1.
+func handleAttach(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 || strings.TrimSpace(strings.Join(args, " ")) == "" {
+		_, _ = fmt.Fprintln(stderr, "Usage: perch attach <query>")
+		return 2
+	}
+	query := strings.Join(args, " ")
+
+	store, err := registry.Load(registry.DefaultConfigDir())
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "perch attach: %v\n", err)
+		return 1
+	}
+	var matched []registry.Workspace
+	for _, w := range store.List() {
+		if strings.Contains(strings.ToLower(w.Title), strings.ToLower(query)) ||
+			strings.Contains(strings.ToLower(w.WorktreePath), strings.ToLower(query)) {
+			matched = append(matched, w)
+		}
+	}
+	switch len(matched) {
+	case 0:
+		_, _ = fmt.Fprintf(stderr, "no workspace matches %q\n", query)
+		return 1
+	case 1:
+		_, _ = fmt.Fprintf(stdout, "workspace: %s (%s)\n", matched[0].Title, matched[0].WorktreePath)
+		_, _ = fmt.Fprintln(stdout, "Open perch GUI to focus this workspace.")
+		return 0
+	default:
+		_, _ = fmt.Fprintf(stderr, "ambiguous query %q; matches:\n", query)
+		for _, w := range matched {
+			_, _ = fmt.Fprintf(stderr, "  %s  %s\n", w.Title, w.WorktreePath)
+		}
+		return 2
+	}
+}
+
 // printUsage writes the usage summary to w.
 // Note: "debug" is intentionally absent — it is a hidden diagnostic surface.
 func printUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "Usage: perch [path]")
+	_, _ = fmt.Fprintln(w, "       perch attach <query>")
 	_, _ = fmt.Fprintln(w, "       perch setup [--replace]")
 	_, _ = fmt.Fprintln(w, "       perch doctor")
 	_, _ = fmt.Fprintln(w, "       perch version")

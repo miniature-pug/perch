@@ -241,12 +241,12 @@ func TestRun_DebugNoSubcommand_Exit2(t *testing.T) {
 
 func TestPrintUsage_NoDebug(t *testing.T) {
 	_, errOut, _ := callRun([]string{"doctr"})
-	for _, hidden := range []string{"debug", "attach", "resurrect", "status"} {
+	for _, hidden := range []string{"debug", "resurrect", "status"} {
 		if strings.Contains(errOut, hidden) {
 			t.Errorf("printUsage must not mention %q; stderr: %q", hidden, errOut)
 		}
 	}
-	for _, visible := range []string{"setup", "doctor", "version"} {
+	for _, visible := range []string{"setup", "doctor", "version", "attach"} {
 		if !strings.Contains(errOut, visible) {
 			t.Errorf("printUsage must mention surviving verb %q; stderr: %q", visible, errOut)
 		}
@@ -256,7 +256,7 @@ func TestPrintUsage_NoDebug(t *testing.T) {
 // ── removed verbs → exit 2 ────────────────────────────────────────────────────
 
 func TestRun_RemovedVerbs_Exit2(t *testing.T) {
-	for _, verb := range []string{"attach", "resurrect", "status"} {
+	for _, verb := range []string{"resurrect", "status"} {
 		t.Run(verb, func(t *testing.T) {
 			_, errOut, code := callRun([]string{verb})
 			if code != 2 {
@@ -266,6 +266,70 @@ func TestRun_RemovedVerbs_Exit2(t *testing.T) {
 				t.Errorf("removed verb %q: want Usage on stderr; got %q", verb, errOut)
 			}
 		})
+	}
+}
+
+// ── attach command ────────────────────────────────────────────────────────────
+
+func TestRun_NoArgs_CallsLaunchGUI(t *testing.T) {
+	launched := false
+	old := launchGUI
+	launchGUI = func(_ []string) error { launched = true; return nil }
+	defer func() { launchGUI = old }()
+
+	code := run([]string{}, io.Discard, io.Discard)
+	if code != 0 {
+		t.Errorf("run() = %d, want 0", code)
+	}
+	if !launched {
+		t.Error("launchGUI must be called with no args")
+	}
+}
+
+func TestRun_Attach_FocusesWorkspace(t *testing.T) {
+	cfgDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfgDir)
+
+	_, stderr, code := callRun([]string{"attach", "my-feature"})
+	if code != 1 {
+		t.Errorf("attach with no match: want exit 1, got %d", code)
+	}
+	if !strings.Contains(stderr, "no workspace") {
+		t.Errorf("attach with no match: want 'no workspace' on stderr; got %q", stderr)
+	}
+}
+
+func TestRun_ResurrectRemoved_Exit2(t *testing.T) {
+	_, errOut, code := callRun([]string{"resurrect"})
+	if code != 2 {
+		t.Errorf("resurrect: want exit 2, got %d", code)
+	}
+	if !strings.Contains(errOut, "Usage") {
+		t.Errorf("resurrect: want Usage on stderr; got %q", errOut)
+	}
+}
+
+func TestRun_StatusRemoved_Exit2(t *testing.T) {
+	_, errOut, code := callRun([]string{"status", "set", "working"})
+	if code != 2 {
+		t.Errorf("status: want exit 2, got %d", code)
+	}
+	if !strings.Contains(errOut, "Usage") {
+		t.Errorf("status: want Usage on stderr; got %q", errOut)
+	}
+}
+
+func TestPrintUsage_ShowsAttach(t *testing.T) {
+	_, errOut, _ := callRun([]string{"doctr"}) // unknown arg → usage
+	for _, must := range []string{"setup", "doctor", "version", "attach"} {
+		if !strings.Contains(errOut, must) {
+			t.Errorf("printUsage must mention %q; stderr: %q", must, errOut)
+		}
+	}
+	for _, hidden := range []string{"resurrect", "status", "debug"} {
+		if strings.Contains(errOut, hidden) {
+			t.Errorf("printUsage must not mention %q; stderr: %q", hidden, errOut)
+		}
 	}
 }
 

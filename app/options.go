@@ -9,6 +9,13 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 )
 
+// disableWebViewDropForSpike4 mitigates WebKitGTK hijacking OS file-drop events
+// before OnFileDrop fires (Wails issue #3686). Spike 4 validated that this flag,
+// combined with frontend preventDefault on dragover/drop, prevents the UI being
+// replaced by the dropped file. If a future Wails release resolves #3686, set to
+// false and remove the corresponding frontend listeners.
+const disableWebViewDropForSpike4 = true
+
 // Run launches the Wails desktop app. assets is the embedded SPA (from the repo
 // root package). Production builds expose NO listening TCP port: IPC travels over
 // the WebKit2GTK script-message channel and assets are served via the wails://
@@ -32,6 +39,9 @@ func Run(assets embed.FS, roots []string) error {
 		OnShutdown: app.shutdown,
 		Bind: []interface{}{
 			app,
+		},
+		DragAndDrop: &options.DragAndDrop{
+			DisableWebViewDrop: disableWebViewDropForSpike4,
 		},
 	})
 }
