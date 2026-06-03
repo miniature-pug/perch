@@ -29,3 +29,15 @@ test("renders image", async () => {
   await waitFor(() => screen.getByRole("img"));
   expect(screen.getByRole("img")).toHaveAttribute("src", "/wt/logo.png");
 });
+
+test("strips dangerous HTML from rendered markdown (no XSS)", async () => {
+  const w = await import("marked");
+  // Force marked to emit a malicious payload as if a markdown file contained raw HTML
+  vi.mocked(w.marked).mockReturnValueOnce('<img src=x onerror="window.__xss=true"><p>safe</p>' as any);
+  const { default: Preview } = await import("./Preview.svelte");
+  render(Preview, { props: { path: "/wt/readme.md", kind: "markdown", content: "irrelevant" } });
+  await waitFor(() => expect(document.querySelector(".preview-body")).toBeInTheDocument());
+  const body = document.querySelector(".preview-body")!;
+  expect(body.querySelector("img[onerror]")).toBeNull();      // onerror stripped
+  expect(body.innerHTML).not.toContain("onerror");
+});
