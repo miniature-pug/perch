@@ -7,8 +7,25 @@
   import { layout }   from "./lib/stores/layout.svelte";
   import { mode }     from "./lib/stores/mode.svelte";
   import { settings } from "./lib/stores/settings.svelte";
+  import { listWorkspaces, openWorkspace } from "./lib/wails";
+  import type { WorkspaceVM } from "./lib/wails";
 
-  onMount(async () => { await Promise.all([settings.load(), layout.restore()]); });
+  let workspaces = $state<WorkspaceVM[]>([]);
+  let activeId   = $state<string | null>(null);
+
+  onMount(async () => {
+    await Promise.all([settings.load(), layout.restore()]);
+    workspaces = await listWorkspaces();
+  });
+
+  async function onSelect(id: string) {
+    activeId = id;
+    await openWorkspace(id);
+  }
+
+  function openNewSession() {
+    // placeholder — NewSessionDialog wired in 4.25.6
+  }
 
   function onKeyDown(e: KeyboardEvent) {
     if (mode.current !== "normal") return;
@@ -44,7 +61,7 @@
 <ThemeProvider theme={settings.theme} density={settings.density}>
   <div class="app-root">
     <aside data-zone="sidebar" class="sidebar-zone" style:width="{layout.sidebarW}px">
-      <Sidebar />
+      <Sidebar {workspaces} activeId={activeId ?? ""} onSelect={onSelect} onNew={openNewSession} />
     </aside>
 
     <div class="divider divider-v" role="separator" aria-label="Resize sidebar"
