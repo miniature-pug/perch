@@ -6,7 +6,7 @@
     workspaces, activeId, onSelect, onNew,
   }: {
     workspaces: WorkspaceVM[];
-    activeId: string;
+    activeId: string | null;
     onSelect: (id: string) => void;
     onNew: () => void;
   } = $props();

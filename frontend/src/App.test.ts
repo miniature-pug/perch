@@ -1,6 +1,6 @@
 // frontend/src/App.test.ts
 import { render, screen, fireEvent, waitFor } from "@testing-library/svelte";
-import { vi, describe, it, expect } from "vitest";
+import { vi, describe, it, expect, beforeEach } from "vitest";
 
 // Stub ShellDrawer (imports xterm which crashes jsdom).
 vi.mock("./lib/ShellDrawer.svelte", async () => ({
@@ -46,6 +46,8 @@ const fakeWorkspaces = [
     caps: { approvals: false, attention: false, tokens: false },
   },
 ];
+
+beforeEach(() => vi.clearAllMocks());
 
 describe("App.svelte skeleton", () => {
   it("renders sidebar, stage, and shell-drawer zones", async () => {
@@ -110,5 +112,6 @@ describe("App.svelte workspace wiring (4.25.1)", () => {
     await waitFor(() =>
       expect(alphaBtn).toHaveAttribute("aria-current", "page")
     );
+    expect(screen.getByRole("button", { name: "Beta" })).not.toHaveAttribute("aria-current");
   });
 });

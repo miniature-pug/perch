@@ -61,7 +61,7 @@
 <ThemeProvider theme={settings.theme} density={settings.density}>
   <div class="app-root">
     <aside data-zone="sidebar" class="sidebar-zone" style:width="{layout.sidebarW}px">
-      <Sidebar {workspaces} activeId={activeId ?? ""} onSelect={onSelect} onNew={openNewSession} />
+      <Sidebar {workspaces} {activeId} onSelect={onSelect} onNew={openNewSession} />
     </aside>
 
     <div class="divider divider-v" role="separator" aria-label="Resize sidebar"
