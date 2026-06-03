@@ -140,19 +140,6 @@ func (a *App) putBridge(paneID string, b *internalpty.Bridge) {
 	}
 }
 
-func (a *App) getBridge(paneID string) (*internalpty.Bridge, bool) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	b, ok := a.bridges[paneID]
-	return b, ok
-}
-
-func (a *App) getMonitor(workspaceID string) (agent.Monitor, bool) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	m, ok := a.monitors[workspaceID]
-	return m, ok
-}
 
 const maxSessionIDLen = 128
 

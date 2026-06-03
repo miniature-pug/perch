@@ -23,7 +23,7 @@ func TestWatcher_FileCreateFiresOnChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	newFile := filepath.Join(root, "created.txt")
 	if err := os.WriteFile(newFile, []byte("hello"), 0o644); err != nil {
@@ -75,7 +75,7 @@ func TestWatcher_NestedFileFiresOnChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	subDir := filepath.Join(root, "sub")
 	if err := os.Mkdir(subDir, 0o755); err != nil {
@@ -120,7 +120,7 @@ func TestWatcher_GitDirExcluded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	// Write into .git — should not be watched.
 	if err := os.WriteFile(filepath.Join(gitDir, "x"), []byte("data"), 0o644); err != nil {

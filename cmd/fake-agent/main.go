@@ -72,7 +72,7 @@ func postHook(baseURL, token string, payload map[string]any) []byte {
 	if err != nil {
 		die("POST: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	b, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
 		die("server %d: %s", resp.StatusCode, b)
