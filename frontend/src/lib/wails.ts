@@ -1,33 +1,54 @@
-// Typed seam over the Wails-injected globals. Wails populates window.runtime
-// (events) and window.go.app.App.* (bound methods) at app launch. Components
-// import ONLY from here, so Vitest stubs a single surface.
+// Typed seam over Wails-injected globals. Components import ONLY from here.
+// Event names: colon-separated per the frozen Wails event table.
 
-export interface SessionInfo {
-  id: string;
-  session: string;
-  window: string;
-  paneId: string;
-  status: string;
-  dir: string;
+export interface WorkspaceVM {
+  id: string; worktreePath: string; agent: string; title: string; branch: string;
+  state: AgentState; caps: AgentCaps; paneId: string; lastActive: string;
 }
-
-export interface DiffResult {
-  patch: string;
-  files: number;
-  added: number;
-  removed: number;
+export type AgentState = "running"|"idle"|"awaiting-approval"|"done"|"errored";
+export interface AgentCaps { approvals: boolean; attention: boolean; tokens: boolean; }
+export interface AgentEvent {
+  workspaceId: string; kind: "state"|"usage"|"approval"|"tool";
+  state?: AgentState; tokens?: number; cost?: number; approval?: ApprovalReq; err?: string;
 }
+export interface ApprovalReq { reqId: string; tool: string; summary: string; }
+export interface FileDiff { path: string; added: number; removed: number; status: "M"|"A"|"D"|"R"|"?"; }
+export interface HunkLine { kind: "ctx"|"add"|"del"; text: string; }
+export interface Hunk {
+  file: string; index: number; header: string;
+  oldStart: number; oldLines: number; newStart: number; newLines: number; lines: HunkLine[];
+}
+export interface FsNode { name: string; path: string; isDir: boolean; }
+export interface AlwaysRule { agent: string; tool: string; pattern: string; }
+export interface AppSettings {
+  theme: string; density: string; font: string; dnd: boolean; alwaysRules: AlwaysRule[];
+}
+export interface WorktreeInfo { path: string; branch: string; head: string; }
 
-// App is the bound-method surface mirroring app/App's exported Go methods.
 interface App {
-  ListSessions(): Promise<SessionInfo[]>;
-  KillSession(id: string): Promise<void>;
-  CreateAgent(tool: string, projectPath: string, branch: string): Promise<string>;
-  OpenTerminal(tabID: string, sessionID: string): Promise<void>;
-  WriteToPty(tabID: string, data: number[]): Promise<void>;
-  ResizePty(tabID: string, cols: number, rows: number): Promise<void>;
-  CloseTerminal(tabID: string): Promise<void>;
-  Diff(worktreePath: string): Promise<DiffResult>;
+  ListWorkspaces(): Promise<WorkspaceVM[]>;
+  CreateWorkspace(agent: string, repoPath: string, branch: string, model: string): Promise<WorkspaceVM>;
+  OpenWorkspace(id: string): Promise<void>;
+  CloseWorkspace(id: string): Promise<void>;
+  RemoveWorkspace(id: string): Promise<void>;
+  WriteToPty(paneId: string, data: number[]): Promise<void>;
+  ResizePty(paneId: string, cols: number, rows: number): Promise<void>;
+  OpenShell(paneId: string, cwd: string): Promise<void>;
+  Approve(reqId: string, decision: string): Promise<void>;
+  DiffStat(worktree: string): Promise<FileDiff[]>;
+  Hunks(worktree: string, file: string): Promise<Hunk[]>;
+  StageHunk(worktree: string, file: string, index: number): Promise<void>;
+  DiscardHunk(worktree: string, file: string, index: number): Promise<void>;
+  ListDir(absDir: string): Promise<FsNode[]>;
+  ReadFile(absPath: string): Promise<string>;
+  WriteFile(absPath: string, content: string): Promise<void>;
+  RevealInFiles(absPath: string): Promise<void>;
+  Branches(repo: string): Promise<string[]>;
+  Worktrees(repo: string): Promise<WorktreeInfo[]>;
+  GetLayout(): Promise<string>;
+  SaveLayout(layoutJSON: string): Promise<void>;
+  GetSettings(): Promise<AppSettings>;
+  SaveSettings(s: AppSettings): Promise<void>;
 }
 
 declare global {
@@ -39,38 +60,51 @@ declare global {
 
 const app = (): App => window.go.app.App;
 
-/** listSessions returns every live perch agent session. */
-export const listSessions = () => app().ListSessions();
-/** killSession kills the tmux window backing the agent session id. */
-export const killSession = (id: string) => app().KillSession(id);
-/** createAgent creates a worktree + launches an agent; returns the session id. */
-export const createAgent = (tool: string, projectPath: string, branch: string) =>
-  app().CreateAgent(tool, projectPath, branch);
-/** openTerminal spawns an attach pty for sessionID, bound to tabID. */
-export const openTerminal = (tabID: string, sessionID: string) =>
-  app().OpenTerminal(tabID, sessionID);
-/** writeToPty forwards keystroke bytes (as number[]) to the tab's pty. */
-export const writeToPty = (tabID: string, data: number[]) => app().WriteToPty(tabID, data);
-/** resizePty applies terminal dimensions to the tab's pty. */
-export const resizePty = (tabID: string, cols: number, rows: number) =>
-  app().ResizePty(tabID, cols, rows);
-/** closeTerminal tears down the tab's attach pty (the agent session survives). */
-export const closeTerminal = (tabID: string) => app().CloseTerminal(tabID);
-/** diff returns the uncommitted diff + stat for a validated worktree path. */
-export const diff = (worktreePath: string) => app().Diff(worktreePath);
+// Workspace
+export const listWorkspaces  = ()                                                 => app().ListWorkspaces();
+export const createWorkspace = (agent: string, repoPath: string, branch: string, model: string) => app().CreateWorkspace(agent, repoPath, branch, model);
+export const openWorkspace   = (id: string)                                       => app().OpenWorkspace(id);
+export const closeWorkspace  = (id: string)                                       => app().CloseWorkspace(id);
+export const removeWorkspace = (id: string)                                       => app().RemoveWorkspace(id);
+// PTY
+export const writeToPty = (paneId: string, data: number[])                        => app().WriteToPty(paneId, data);
+export const resizePty  = (paneId: string, cols: number, rows: number)            => app().ResizePty(paneId, cols, rows);
+export const openShell  = (paneId: string, cwd: string)                           => app().OpenShell(paneId, cwd);
+// Approvals
+export const approve = (reqId: string, decision: "allow"|"deny"|"always")         => app().Approve(reqId, decision);
+// Git
+export const diffStat    = (worktree: string)                                     => app().DiffStat(worktree);
+export const hunks       = (worktree: string, file: string)                       => app().Hunks(worktree, file);
+export const stageHunk   = (worktree: string, file: string, index: number)       => app().StageHunk(worktree, file, index);
+export const discardHunk = (worktree: string, file: string, index: number)       => app().DiscardHunk(worktree, file, index);
+export const branches    = (repo: string)                                         => app().Branches(repo);
+export const worktrees   = (repo: string)                                         => app().Worktrees(repo);
+// FS
+export const listDir      = (absDir: string)                                      => app().ListDir(absDir);
+export const readFile     = (absPath: string)                                     => app().ReadFile(absPath);
+export const writeFile    = (absPath: string, content: string)                    => app().WriteFile(absPath, content);
+export const revealInFiles = (absPath: string)                                    => app().RevealInFiles(absPath);
+// Layout & Settings
+export const getLayout    = ()                                                    => app().GetLayout();
+export const saveLayout   = (layoutJSON: string)                                  => app().SaveLayout(layoutJSON);
+export const getSettings  = ()                                                    => app().GetSettings();
+export const saveSettings = (s: AppSettings)                                      => app().SaveSettings(s);
 
-/** onSessionsChanged subscribes to the backend's sessions-changed event; returns an unsubscribe fn. */
-export function onSessionsChanged(cb: () => void): () => void {
-  return window.runtime.EventsOn("sessions-changed", cb);
+// Event helpers — colon-separated names match the frozen Wails event table.
+export function onPtyData(paneId: string, cb: (bytes: Uint8Array) => void): () => void {
+  return window.runtime.EventsOn("pty:data:" + paneId, (data: number[]) => cb(Uint8Array.from(data)));
 }
-
-/**
- * onPtyData subscribes to the tab-scoped pty-data event and reconstructs the
- * byte stream. The backend emits a number[] (NOT a []byte — that would arrive
- * base64; see internal/pty pumpReader), so we rebuild a Uint8Array directly.
- */
-export function onPtyData(tabID: string, cb: (bytes: Uint8Array) => void): () => void {
-  return window.runtime.EventsOn("pty-data:" + tabID, (data: number[]) =>
-    cb(Uint8Array.from(data)),
-  );
+export function onPtyExit(paneId: string, cb: (code: number) => void): () => void {
+  return window.runtime.EventsOn("pty:exit:" + paneId, (p: { code: number }) => cb(p.code));
+}
+export function onAgentEvent(cb: (ev: AgentEvent) => void): () => void {
+  return window.runtime.EventsOn("agent:event", (ev: AgentEvent) => cb(ev));
+}
+export function onFsChanged(cb: (p: { workspaceId: string; path: string }) => void): () => void {
+  return window.runtime.EventsOn("fs:changed", cb);
+}
+export function onNotify(
+  cb: (p: { tier: "blocking"|"ambient"|"routine"; title: string; body: string; workspaceId: string }) => void,
+): () => void {
+  return window.runtime.EventsOn("notify", cb);
 }
