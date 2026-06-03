@@ -6,7 +6,7 @@
 |------|-----------------|
 | Go directive | `1.25.0` (see `go.mod`) |
 | Go toolchain | `go1.26.4` (see `go.mod` `toolchain` directive) |
-| tmux | `3.6` (pinned in `.tool-versions`, verified by `perch doctor`) |
+| git | any recent version (worktree + diff operations) |
 | Node.js | `v22.x` (for building the Svelte frontend; checked by `node --version`) |
 | npm | bundled with Node v22 |
 
@@ -36,7 +36,7 @@ Run targets from the repo root. All targets respect the vendored build.
 | `make gui-build` | `npm install` + `npm run build` in `frontend/`, then `go build -tags production` |
 | `make gui-run` | `gui-build` then launch the binary (needs an X/Wayland display) |
 | `make test` | Unit tests (`go test -race -count=1 ./...`) |
-| `make test-integration` | Integration tests (`-tags=integration`; requires tmux and git on PATH) |
+| `make test-integration` | Integration tests (`-tags=integration`; requires git on PATH) |
 | `make test-all` | Unit + integration in one pass |
 | `make coverage` | Coverage report for `internal/` packages only |
 | `make lint` | golangci-lint v2.11.4 (fetched via `go run`, never a floating install) |
@@ -78,10 +78,10 @@ non-negotiable architectural rule.
   recorded command argv slices) and never spawn a real process. If you write a
   new handler or internal package that runs an external command, inject a
   `proc.Runner` and add a unit test using `FakeRunner`.
-- **Integration tests** are tagged `//go:build integration` and use a **private
-  tmux socket** (e.g. `/tmp/perch-test-<random>.sock`) so they never touch the
-  developer's default tmux server. Never create integration tests that write to
-  the real `$TMUX_TMPDIR` socket or assume a live user session.
+- **Integration tests** are tagged `//go:build integration` and exercise real
+  worktree, pty, and git behaviour against **throwaway git repos and temp
+  directories** created per test. They never touch the developer's real `$HOME`
+  config or working repos.
 
 ## Dev safety
 
@@ -93,9 +93,10 @@ config during development or testing.**
 - When a test must exercise config loading, use `t.Setenv("HOME", t.TempDir())`
   and/or `t.Setenv("XDG_CONFIG_HOME", t.TempDir())` to redirect all writes to a
   throwaway directory that is cleaned up automatically.
-- The same applies to `XDG_STATE_HOME` / the perch state dir. Test helpers that
-  call `state.StateDir()` must redirect it via environment variables before the
-  call.
+- The same applies to the perch config dir (`registry.DefaultConfigDir()`,
+  which honours `XDG_CONFIG_HOME`). Test helpers must redirect it via
+  `t.Setenv("XDG_CONFIG_HOME", t.TempDir())` before any load so the registry,
+  settings, and layout writes land in a throwaway directory.
 
 ## Coverage
 
@@ -118,8 +119,8 @@ below 80% will block the review gate.
   test(scope): short imperative description
   ```
 
-  The scope is the affected subsystem (e.g. `gui`, `frontend`, `attach`,
-  `state`, `config`, `trust`, `worktree`, `proc`).
+  The scope is the affected subsystem (e.g. `gui`, `frontend`, `agent`,
+  `pty`, `hooklistener`, `registry`, `config`, `worktree`, `proc`).
 
 - **No co-author trailers.** Do not add `Co-authored-by:` lines to commits.
 

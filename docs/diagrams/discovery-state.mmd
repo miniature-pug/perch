@@ -1,49 +1,36 @@
 flowchart TD
     subgraph Config["global config.toml"]
         roots["roots []string\n(scan root directories)"]
-        sort_order["sort_order []string"]
+        blacklist["blacklist []string\n(**-glob hide filter)"]
     end
 
     subgraph DiscoveryPipeline["Discovery pipeline — internal/discover"]
-        scan["Scan each root\n(WalkDir, depth ≤ 8)\nfind dirs with .git entry"]
-        dedup["deduplicate by\nmain worktree path"]
+        scan["Scan each root\n(WalkDir, bounded depth)\nfind dirs with .git entry\nprune node_modules / vendor / .git"]
         worktrees["git worktree list\nper candidate repo\n(internal/git)"]
-        frecency_sort["sort by FrecencyScore\n(zoxide algorithm)\ncold start → alphabetical"]
-        candidates["ProjectTrees slice\n(Project + Trees[])"]
+        filter["blacklist filter\n(post-walk, hide from GUI)"]
+        candidates["project + worktree list"]
     end
 
-    subgraph StateStores["State — $XDG_STATE_HOME/perch/"]
-        statejson["state.json\nmappings: sessionID → {tool, tree, choice}\nprojects: path → {rank, last_accessed}"]
-        windowsdir["windows/&lt;paneKey&gt;.json\none file per live tmux window\nconcurrent-safe (atomic write)"]
+    subgraph Registry["Workspace registry — ~/.config/perch/ (XDG)"]
+        workspacesjson["workspaces.json\nWorkspace[]: id, worktreePath,\nagent, branch, title,\nlastSessionID, lastActive"]
+        settingsjson["settings.json\n(AlwaysRules, prefs)"]
+        layoutjson["layout.json\n(saved UI layout)"]
     end
 
-    subgraph WindowRecord["Window record fields"]
-        bootid["BootID\n(tmux server start_time)"]
-        sessid["SessionID\n(@perch_session stamp)"]
-        treetool["Tree, TmuxSession,\nTmuxWindow, Tool,\nUpdated"]
-    end
-
-    subgraph Resurrect["Resurrect — classify()"]
-        keep["KEEP\npane live + boot matches"]
-        prune["PRUNE\npane gone, same boot,\nhome session alive\n(intentional close)"]
-        restore["RESTORE\nboot mismatch or cold server\n→ re-launch agent"]
+    subgraph Open["Open workspace — app.OpenWorkspace"]
+        ptyspawn["spawn direct pty\n+ login shell in worktree"]
+        monstart["start agent Monitor\n(ClaudeMonitor / OpencodeMonitor)"]
     end
 
     roots --> scan
-    scan --> dedup
-    dedup --> worktrees
-    worktrees --> frecency_sort
-    statejson -->|"ProjectStat rank + last_accessed"| frecency_sort
-    frecency_sort --> candidates
-    candidates -->|"feeds GUI sidebar"| tui_list["GUI session list"]
+    scan --> worktrees
+    worktrees --> filter
+    blacklist --> filter
+    filter --> candidates
+    candidates -->|"feeds GUI sidebar"| gui_list["GUI workspace list"]
 
-    windowsdir --> bootid
-    windowsdir --> sessid
-    windowsdir --> treetool
-
-    bootid -->|"currentBoot == w.BootID?"| Resurrect
-    sessid -->|"pane live?"| Resurrect
-
-    keep -->|"no action"| done_k["record kept as-is"]
-    prune -->|"remove record"| done_p["window pruned"]
-    restore -->|"re-launch +\nupdate record"| done_r["agent restored"]
+    workspacesjson -->|"List() known workspaces"| gui_list
+    gui_list -->|"select → OpenWorkspace(id)"| Open
+    workspacesjson -->|"lastSessionID → resume"| monstart
+    ptyspawn --> monstart
+    monstart -->|"Approve(always) appends AlwaysRule"| settingsjson

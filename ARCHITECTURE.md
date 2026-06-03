@@ -7,29 +7,29 @@
 
 ## Overview
 
-perch is a desktop GUI for managing AI coding sessions (`claude`, `opencode`)
-across git worktrees. The default invocation (`perch` or `perch <path>`)
-launches a **Wails v2 desktop window**: a Go backend embedded in a WebKit2GTK
-webview driving a Svelte 5 SPA. Six CLI subcommands (`setup`, `attach`,
-`resurrect`, `status`, `doctor`, `version`) are available for scripting and
-hook integration.
+perch is a worktree-native AI-agent **cockpit**: a desktop GUI for running and
+supervising AI coding agents (`claude`, `opencode`) across git worktrees. The
+default invocation (`perch` or `perch <path>`) launches a **Wails v2 desktop
+window**: a Go backend embedded in a WebKit2GTK webview driving a Svelte 5
+(runes) SPA. A small set of CLI subcommands (`setup`, `attach`, `doctor`,
+`version`) supports scripting and agent-hook integration.
 
 Key properties:
 
-- **Single static binary** — no daemon, no server process. Everything is driven
-  by invoking tmux sub-commands through the `proc.Runner` seam.
-- **Two plain-JSON state stores** — no database dependency (see
-  [State & discovery](#state--discovery)).
-- **No listening TCP port in production** — IPC between the Svelte frontend
-  and the Go backend travels over the WebKit2GTK script-message channel;
-  assets are served via the `wails://` custom scheme. The
-  `ws://localhost:34115` reload socket is `//go:build dev` only.
+- **Single static binary** — no tmux, no daemon, no server process.
+- **One direct pty per pane** — each terminal is backed by a pseudo-terminal
+  (`creack/pty`) the Go app spawns with a login shell. No multiplexer.
+- **No listening TCP port for IPC** — the Svelte frontend calls the Go backend
+  over Wails bindings (`window.go.app.App.<Method>`) and receives Wails events.
+  The only production local network surface is the per-agent hook listener (see
+  [Security model](#security-model)).
+- **Plain-JSON workspace registry** — no database dependency (see
+  [Workspace registry](#workspace-registry--discovery)).
 - **Module:** `github.com/Miniature-Pug/perch`
-- **Go directive:** `1.25.0` / **toolchain:** `go1.26.4`
-- **Wails:** v2.12.0 / **Frontend:** Svelte 5 + Vite (in `frontend/`)
-- **tmux pin:** 3.6 (checked by `perch doctor`)
-- **Key deps:** `bmatcuk/doublestar/v4` (glob), `sahilm/fuzzy` (fuzzy match),
-  `BurntSushi/toml` (config), `creack/pty` (attach-pty bridge)
+- **Go toolchain:** `go1.26.4`
+- **Wails:** v2 / **Frontend:** Svelte 5 (runes) + Vite (in `frontend/`)
+- **Key deps:** `creack/pty` (direct pty bridge), `bmatcuk/doublestar/v4`
+  (glob), `sahilm/fuzzy` (fuzzy match), `BurntSushi/toml` (config)
 - **Linux only** — requires WebKit2GTK + GTK3 system libraries.
 
 ---
@@ -39,26 +39,33 @@ Key properties:
 ### Process model
 
 `perch` runs as a single OS process. The Wails runtime embeds a WebKit2GTK
-webview inside a GTK window. The Svelte SPA is compiled into the binary at
-build time (`-tags production` embeds the `frontend/dist/` assets). There is
-no separate frontend process and no HTTP server in production.
+webview inside a GTK window. The Svelte SPA is compiled into the binary at build
+time (`-tags production` embeds the `frontend/dist/` assets). There is no
+separate frontend process and no HTTP server for IPC in production.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  perch process                                           │
-│  ┌────────────────┐  Wails events + bound methods        │
+│  ┌────────────────┐  Wails bindings + events             │
 │  │  Go backend    │ ◄──────────────────────────────────► │
 │  │  (app.App)     │         WebKit2GTK webview            │
 │  └────────────────┘         (Svelte 5 SPA)               │
 │        │                                                  │
-│        │ tmux commands via proc.Runner                    │
-│        ▼                                                  │
-│  tmux server (default socket)                            │
-│    agent session A (detached)                            │
-│    agent session B (detached)                            │
-│    …                                                     │
+│        ├── Bridge ──► login shell in a direct pty (per pane)
+│        ├── ClaudeMonitor ──► hooklistener (127.0.0.1:ephemeral)
+│        └── OpencodeMonitor ──► opencode serve + SSE        │
 └─────────────────────────────────────────────────────────┘
 ```
+
+The three downstream seams are:
+
+- **App → Bridge → Shell** — `OpenWorkspace` spawns a direct pty running a login
+  shell in the worktree; raw bytes stream to the frontend as Wails events and
+  keystrokes flow back via `WriteToPty`.
+- **App → ClaudeMonitor → hooklistener** — for claude workspaces, lifecycle and
+  tool-call events arrive over the per-workspace hook listener.
+- **App → OpencodeMonitor → serve/SSE** — for opencode workspaces, events
+  arrive over the agent's `opencode serve` Server-Sent-Events stream.
 
 ### Bound-method API
 
@@ -67,36 +74,65 @@ API the Svelte frontend calls over the IPC bridge:
 
 | Method | Purpose |
 |--------|---------|
-| `ListSessions()` | Return all known sessions with live-status info |
-| `OpenTerminal(tabID, sessionID)` | Spawn an attach-pty bridge for a session; start streaming output |
-| `WriteToPty(tabID, data)` | Forward keystrokes from the terminal tab to the pty |
-| `ResizePty(tabID, cols, rows)` | Propagate terminal resize to the pty |
-| `CloseTerminal(tabID)` | Tear down the attach-pty bridge for a tab |
-| `KillSession(id)` | Kill the agent's tmux session and remove the shadow record |
-| `Diff(worktreePath)` | Return a `git diff` summary for the given worktree |
-| `CreateAgent(tool, projectPath, branch)` | Create a new worktree + agent session |
+| `ListWorkspaces()` | Return all known workspaces with live state + caps |
+| `CreateWorkspace(agent, repoPath, branch, model)` | Create a new git worktree + register an agent workspace |
+| `OpenWorkspace(id)` | Spawn a direct pty + start the agent's Monitor; begin streaming |
+| `WriteToPty(paneID, data)` | Forward keystrokes from the terminal tab to the pty |
+| `ResizePty(paneID, cols, rows)` | Propagate terminal resize to the pty |
+| `CloseWorkspace(id)` | Tear down the pty bridge + Monitor for a workspace |
+| `RemoveWorkspace(id)` | Remove the worktree + registry entry |
+| `OpenShell(paneID, cwd)` | Spawn an auxiliary login-shell pty |
+| `Approve(reqID, decision)` | Resolve a pending `PreToolUse` approval (allow / always / deny) |
+| `DiffStat / Hunks / StageHunk / DiscardHunk` | git diff view + staging per worktree |
+| `Branches / Worktrees` | git metadata for a repo |
+| `ListDir / ReadFile / WriteFile / RevealInFiles / CopyPath` | file-tree operations |
+| `GetSettings / SaveSettings / GetLayout / SaveLayout` | persisted UI state |
 
 Every argument crossing the IPC boundary is validated inside `app.App`:
-session IDs are checked against a `[A-Za-z0-9_-]` charset allowlist;
+workspace / pane IDs are checked against a `[A-Za-z0-9_-]` charset allowlist;
 worktree paths are resolved and verified to lie under the configured `roots`.
-All tmux/git work is done via argv through `internal/proc`, never a shell.
+All git work is done via argv through `internal/proc`, never a shell.
 
-### Attach-pty rendering bridge
+### Direct-pty rendering bridge
 
-Opening a terminal tab calls `OpenTerminal`, which spawns `tmux attach-session`
-inside a pseudo-terminal via `creack/pty` (`internal/pty.Bridge`). The pty
-captures raw byte output and forwards it to the frontend as Wails events;
-the Svelte component feeds the bytes to an **xterm.js** terminal. Keystrokes
-typed in xterm.js are sent back through `WriteToPty`; terminal resize events
-flow through `ResizePty`. This gives every session tab a full interactive
-terminal rendered by xterm.js inside the webview.
+Opening a workspace calls `OpenWorkspace`, which spawns a **login shell inside a
+pseudo-terminal** via `creack/pty` (`internal/pty.Bridge`) in the worktree
+directory. The pty captures raw byte output and forwards it to the frontend as
+Wails events; the Svelte component feeds the bytes to an **xterm.js** terminal.
+Keystrokes typed in xterm.js are sent back through `WriteToPty`; resize events
+flow through `ResizePty`. The agent's launch command (produced by the Monitor's
+`Prepare`) is written into the shell so the agent starts inside the same pty.
+Closing the bridge kills the whole process group, so the shell's children die
+with it.
+
+### Agent Monitor seam
+
+Each agent integration implements the `agent.Monitor` interface
+(`internal/agent/monitor.go`):
+
+```
+Prepare(ctx, workspaceID, cwd, resumeID) (launchCmd, err)
+Start(ctx)                 // launch the event pump bound to ctx
+Events() <-chan Event
+Approve(reqID, Decision) error
+Capabilities() Caps        // {approvals, attention, tokens}
+Teardown() error
+CurrentState() State
+LastApprovalTool() string
+```
+
+`agent.NewMonitor(tool, adapter)` returns `ClaudeMonitor` or `OpencodeMonitor`.
+`OpenWorkspace` calls `Prepare` (which provisions the listener / serve command),
+`Start` (which begins translating agent events into the unified `Event` channel),
+and forwards each event to the frontend as an `agent:event` Wails event after
+stamping the workspace id and a routable approval `reqID`.
 
 ### State sync
 
-A ~1 s poller calls `ListSessions` internally and emits a `sessions-changed`
-event to the frontend whenever the session set changes. The frontend reacts
-with an optimistic refresh after each mutating action (create, kill) so the
-sidebar stays responsive without waiting for the next poll cycle.
+`app.App` forwards Monitor events to the frontend in real time and emits
+`fs:changed` events from a per-workspace filesystem watcher (debounced). The
+frontend reacts to mutating actions (create / open / close / remove) optimistically
+so the sidebar stays responsive.
 
 ---
 
@@ -107,31 +143,30 @@ See `docs/diagrams/architecture.mmd` for the component dependency graph.
 | Package | Responsibility |
 |---------|----------------|
 | `cmd/perch` | CLI entry-point; dispatches subcommands, wires production dependencies, launches the Wails GUI via `app.Run`. |
-| `app/` | Wails `App` struct — bound-method API, input validation (session-id charset allowlist, worktree path containment), attach-pty lifecycle management, ~1 s state-sync poller. |
-| `internal/pty` | Attach-pty bridge (`Bridge`): wraps `creack/pty`, runs `tmux attach-session`, batches and forwards pty output as Wails events, routes keystrokes and resize back to the pty. |
-| `internal/agent` | `Adapter` interface for AI coding tools; concrete adapters for `claude` and `opencode`. Adapters never panic; partial results degrade gracefully. |
-| `internal/attach` | `perch attach <query>`: fuzzy-matches a live/known session name and hands the terminal off to it. `Gather`/`Resolve` are separated for testability. |
+| `app/` | Wails `App` struct — bound-method API, input validation (id charset allowlist, worktree path containment), pty + Monitor lifecycle, event forwarding, fs-watcher debounce. |
+| `internal/pty` | Direct pty bridge (`Bridge`): wraps `creack/pty`, runs a login shell, forwards pty output as Wails events, routes keystrokes and resize back to the pty. **No tmux.** |
+| `internal/agent` | `Monitor` seam + `Adapter` interface; concrete `ClaudeMonitor` (hook listener) and `OpencodeMonitor` (serve + SSE), plus per-tool adapters for `claude`/`opencode`. |
+| `internal/hooklistener` | Per-workspace loopback HTTP listener (`127.0.0.1:0`) protected by a random Bearer token; receives Claude hook POSTs and blocks `PreToolUse` until `Decide()`. |
+| `internal/registry` | Workspace registry persisted at `~/.config/perch/workspaces.json` (XDG). `Store` with `Load`/`List`/`Get`/`Upsert`/`Remove`. |
 | `internal/config` | Two-layer TOML config load: global `config.toml` overlaid by project `.perch.toml`. Houses the **agent-binary security boundary** (see [Security model](#security-model)). |
-| `internal/discover` | Filesystem scanner: walks `roots` for `.git` entries up to `DefaultMaxDepth` (8), pruning `DefaultPrune` directories (`node_modules`, `vendor`, `.git`). Returns paths containing a `.git` entry. |
-| `internal/doctor` | `perch doctor` health check — read-only, no side effects; all OS calls injected for testability. Checks tmux version, agent binaries, config validity. |
-| `internal/git` | git subprocess wrappers behind `proc.Runner`; includes `ValidRef` for ref-name validation before any git worktree operation. |
-| `internal/match` | `**`-aware glob matching backed by `doublestar`; used for `blacklist` hide-filtering and `[[wildcard]]` agent assignment. Malformed patterns are skipped, never panic. |
-| `internal/model` | Shared domain vocabulary (`Window`, `Session`, `Tool`, …) — pure data, no I/O. |
-| `internal/proc` | `Runner` interface + `ExecRunner` (production) + `FakeRunner` (tests). All shell-outs in perch must go through this seam. |
-| `internal/resurrect` | Boot-id reconcile engine for `perch resurrect` — KEEP / PRUNE / RESTORE classifier, shared `classify()`, `StrandedCount` detector. |
-| `internal/state` | Two plain-JSON stores and frecency ranking (zoxide algorithm). Concurrent-safe per-window files; 16 MiB read cap. |
-| `internal/status` | `perch status set` writer; writes `@perch_pane_status` on the target pane. |
-| `internal/tmux` | tmux command wrappers behind `proc.Runner`; includes `list-panes`, `new-session`, `send-keys`, and session-management helpers. |
-| `internal/trust` | TOFU trust store — records `(config-path → content-hash)` approvals in `trust.json` (mode 0600). |
-| `internal/worktree` | File seeding (copy/symlink) and lifecycle-hook execution for freshly created git linked worktrees. Deferred remove dispatches a backgrounded cleanup script. |
-| `frontend/` | Svelte 5 SPA (Vite build); communicates with Go via Wails events and bound methods; renders agent terminals via xterm.js. |
+| `internal/discover` | Filesystem scanner: walks `roots` for `.git` entries up to `DefaultMaxDepth`, pruning `node_modules`/`vendor`/`.git`. |
+| `internal/doctor` | `perch doctor` health check — read-only, all OS calls injected for testability. |
+| `internal/git` | git subprocess wrappers behind `proc.Runner`; includes `ValidRef` for ref-name validation, worktree management, and diff/hunk staging. |
+| `internal/fs` | Worktree filesystem helpers: directory listing for the file tree and a change watcher. |
+| `internal/match` | `**`-aware glob matching backed by `doublestar`; used for blacklist filtering and `[[wildcard]]` agent assignment. |
+| `internal/model` | Shared domain vocabulary (`Tool`, …) — pure data, no I/O. |
+| `internal/notify` | Notification tiering (blocking / ambient) for agent lifecycle events. |
+| `internal/proc` | `Runner` interface + `ExecRunner` (production) + `FakeRunner` (tests). All shell-outs go through this seam. |
+| `internal/status` | Status-hook helper used by `perch setup` for agent state reporting. |
+| `internal/worktree` | File seeding (copy/symlink) and lifecycle-hook execution for freshly created git linked worktrees. |
+| `frontend/` | Svelte 5 (runes) SPA (Vite build); communicates with Go via Wails bindings and events; renders agent terminals via xterm.js. |
 
 ---
 
 ## The Runner Seam (§20.1)
 
-Every shell-out in perch — tmux commands, git operations, hook execution — goes
-through the `proc.Runner` interface declared in `internal/proc`:
+Every shell-out in perch — git operations, hook execution — goes through the
+`proc.Runner` interface declared in `internal/proc`:
 
 ```
 type Runner interface {
@@ -142,75 +177,77 @@ type Runner interface {
 Production code uses `ExecRunner` (wraps `os/exec`). Unit tests inject
 `FakeRunner`, which records calls in a `.Calls` slice and never spawns a real
 process. This makes the entire non-frontend surface area unit-testable without a
-live tmux server or git repo.
+live git repo.
 
-Integration tests (`//go:build integration`) use a **private tmux socket** so
-they never touch the user's default tmux server. They are run with
-`make test-integration` (requires tmux and git).
+Integration tests (`//go:build integration`) exercise real worktree and pty
+behaviour against throwaway git repos and temp directories. They are run with
+`make test-integration` (requires git).
 
 Coverage target: **≥80% per package**. `frontend/` is exempt (browser-rendered
 Svelte components require a headless browser for unit coverage).
 
 ---
 
-## State & Discovery
+## Workspace Registry & Discovery
 
 See `docs/diagrams/discovery-state.mmd` for the full data-flow diagram.
 
-### State stores
+### The registry
 
-Both stores live under `$XDG_STATE_HOME/perch/` (fallback
-`~/.local/state/perch/`):
+Workspaces are persisted as a single JSON store at
+`~/.config/perch/workspaces.json` (XDG: `$XDG_CONFIG_HOME/perch`). Each
+`Workspace` record carries:
 
-| File | Contents |
-|------|----------|
-| `state.json` | `mappings` (session → worktree choice) + `projects` (frecency `rank`/`last_accessed` per project root). |
-| `windows/<k>.json` | One JSON file per live tmux window. Isolated files mean concurrent perch instances never clobber each other on launch or kill. Each record carries a **`boot_id`** (`#{start_time}` of the tmux server at window-creation time). |
+| Field | Contents |
+|-------|----------|
+| `id` | Stable workspace identifier (charset-validated). |
+| `worktreePath` | Absolute path to the git worktree. |
+| `agent` | `claude` or `opencode`. |
+| `branch` | Worktree branch. |
+| `title` | Display label. |
+| `lastSessionID` | Resume id for the agent (passed to `Monitor.Prepare`). |
+| `lastActive` | Timestamp for ordering. |
 
-Both files are read through `readLimited` (capped at 16 MiB) to prevent
-resource exhaustion from malformed or maliciously large files.
-
-### Frecency ranking
-
-Projects are ordered by a zoxide-style frecency score (rank × recency
-multiplier). The rank decays (`×0.9`) when total weight exceeds a ceiling.
-`sort_order` (default `["running","frecency"]`) is applied after frecency
-scoring: rows with a live agent session sort first, then frecency order within
-each tier.
+Settings (`settings.json`, including persisted `AlwaysRules`) and saved layout
+(`layout.json`) live in the same config directory.
 
 ### Discovery pipeline
 
-1. **Roots** — directories listed in the global `config.toml` `roots` field.
-2. **Scan** — `internal/discover.Scan` walks each root up to depth 8, pruning
-   `node_modules`, `vendor`, and `.git`. Returns paths containing a `.git`
-   entry.
-3. **Frecency sort** — `internal/discover.Projects` (catalog layer) merges scan
-   output with frecency stats and returns projects ordered by score.
-4. **Blacklist filter** — the `blacklist` config field contains `**`-glob
-   patterns. Matching paths are **hidden from the GUI sidebar** after discovery;
-   they are not excluded from the walk itself.
+1. **Roots** — directories perch scans for git repos (launch cwd by default,
+   plus any configured roots).
+2. **Scan** — `internal/discover.Scan` walks each root up to the max depth,
+   pruning `node_modules`, `vendor`, and `.git`; returns paths containing a
+   `.git` entry.
+3. **Blacklist filter** — `**`-glob patterns hide matching project/tree paths
+   from the GUI after discovery (a post-walk filter, not a prune).
 
 ---
 
-## Status Pipeline
+## Status / Approval Pipeline
 
 See `docs/diagrams/status-sequence.mmd` for the sequence diagram.
 
+For **claude**, the flow is the hook-listener approval loop:
+
 ```
-Agent hook
-  → perch status set <working|waiting|done>
-    → tmux set-option @perch_pane_status <state> (on agent pane)
-      → backend poller (every refresh_ms, default 1000 ms)
-        → sessions-changed event → GUI sidebar glyph update
+claude agent
+  → hooklistener (PreToolUse POST, blocks)
+    → app.App emits "agent:event" (approval)
+      → Svelte ApprovalCard
+        → user clicks Allow / Always / Deny
+          → App.Approve → Monitor.Approve → hooklistener.Decide
+            → claude agent continues (response unblocks the POST)
+              → App emits state-update event → frontend re-renders
 ```
 
-Glyphs: `🤖` working / `💬` waiting / `✓` done / `●` live (no status set) / `○` idle (session exists, pane not live).
+Non-`PreToolUse` hook events (`SessionStart`, `Stop`, `StopFailure`,
+`Notification`) are translated by `ClaudeMonitor` into lifecycle `Event`s
+(`running` / `idle` / `errored`) and forwarded the same way; token usage is
+read from the transcript. For **opencode**, the equivalent events arrive over
+the `opencode serve` SSE stream.
 
-Opening a terminal tab (swap-in equivalent) **auto-clears** `@perch_pane_status`
-on the focused pane so the badge resets after the user engages.
-
-The `perch setup [--replace]` command installs the agent hooks (claude /
-opencode) that call `perch status set`.
+`perch setup [--replace]` installs the agent status hooks/plugins
+(`~/.claude/settings.json`, `~/.config/opencode/plugins/perch-status.ts`).
 
 ---
 
@@ -222,38 +259,54 @@ See `docs/diagrams/worktree-lifecycle.mmd` for the full flowchart.
 
 1. Preflight checks (branch name validation via `git.ValidRef`).
 2. **Trust gate** — if `.perch.toml` defines `post_create` hooks, a modal
-   prompts `(a) trust always / (o) once / (d) deny`. Deny skips hooks; proceed
-   continues.
+   prompts `(a) trust always / (o) once / (d) deny`.
 3. `git worktree add` in the configured `worktree_dir`.
 4. File seeding — `[files].copy` and `[files].symlink` entries copied/linked
    into the new worktree.
 5. `post_create` hooks executed (trust-gated, TOCTOU re-hash before exec).
-6. Agent launched in a new tmux session; window record written to
-   `windows/<k>.json`.
+6. Workspace recorded in `workspaces.json`. When opened, a direct pty is
+   spawned and the agent's Monitor is started.
 
 ### Remove
 
 1. Confirm modal.
 2. `pre_remove` hooks executed (trust-gated, TOCTOU re-hash before exec).
-3. `git worktree remove` (force if worktree is dirty).
-4. Cleanup script dispatched as a backgrounded tmux `run-shell` (kills the
-   window, optionally deletes the branch, removes the tree).
-5. Shadow window record removed from `windows/<k>.json`.
+3. The pty bridge and Monitor are torn down (Monitor `Teardown` removes the
+   per-workspace hook entries from `.claude/settings.json` and closes the
+   listener).
+4. `git worktree remove` (force if the worktree is dirty).
+5. The workspace record is removed from `workspaces.json`.
 
 ---
 
 ## Security Model
 
-Full details: [`docs/security-audit.md`](docs/security-audit.md).
+### IPC has no listening port
 
-### No listening port
+Frontend ↔ backend IPC uses Wails bindings (`window.go.app.App.<Method>`) and
+Wails events; it opens **no TCP or Unix socket**. The `ws://localhost:34115`
+hot-reload socket is `//go:build dev` only and is stripped from production
+builds.
 
-perch opens no TCP or Unix socket in production. The Wails webview and Go
-backend communicate over the WebKit2GTK script-message channel; the frontend
-is served from the embedded binary via the `wails://` custom scheme. The
-`ws://localhost:34115` hot-reload socket is `//go:build dev` only and is
-stripped from production builds. This eliminates an entire class of
-network-based attack surface.
+### Agent hook listener (the only production local network surface)
+
+Each Claude monitor creates its **own** hook listener bound to **`127.0.0.1`**
+on an **ephemeral** port, protected by a **per-listener random Bearer token**
+(32 random bytes, hex-encoded). It writes the hook config (URL + token) into
+`<worktree>/.claude/settings.json`. The Claude agent's hooks POST tool/lifecycle
+events back to it; **`PreToolUse` blocks synchronously until the user approves.**
+
+Hardening details:
+
+| Constraint | Detail |
+|------------|--------|
+| Bind address | `127.0.0.1:0` — loopback only, never a routable interface. |
+| Port | Ephemeral (kernel-assigned per listener). |
+| Auth | Random per-listener Bearer token, compared in **constant time** (`subtle.ConstantTimeCompare`). |
+| Blocking approval | `PreToolUse` POSTs block in the handler until `Decide()` supplies a verdict; client-disconnect / shutdown cancels cleanly. |
+| Lifetime | One listener per active Claude workspace; `Teardown` closes it and strips its hook entries from `settings.json`. |
+
+This is the entire production local network surface.
 
 ### Trust (TOFU on `.perch.toml`)
 
@@ -264,32 +317,28 @@ Opening a repo whose `.perch.toml` defines shell hooks (`post_create` or
 - `(o)` once — runs hooks this time, does not persist the approval.
 - `(d)` deny — hooks are skipped; the worktree operation continues without them.
 
-Approvals are stored in `<state-dir>/trust.json` (mode 0600), keyed on the
-**resolved config path** and the **SHA-256 hash of the file's bytes**. Editing
-the file changes the hash, requiring re-approval.
-
-Before each hook execution, perch **re-hashes the file** and compares it to the
-approved hash (TOCTOU guard). A mismatch aborts the hooks.
+Approvals are keyed on the **resolved config path** and the **SHA-256 hash of
+the file's bytes**. Before each hook execution, perch **re-hashes the file** and
+compares it to the approved hash (TOCTOU guard). A mismatch aborts the hooks.
 
 ### Global-only agent binary boundary
 
 `[agents].<name>` (absolute binary paths) and
 `[default_session].startup_command` live **only** in the global config
-(`~/.config/perch/config.toml`). The `projectConfig` struct has no
-corresponding fields; unknown TOML keys are silently dropped by
-`BurntSushi/toml`. This is a structural guarantee — a malicious `.perch.toml`
-cannot influence which binary is executed, and `startup_command` runs without a
-trust prompt precisely because it is sourced from the user's own global config.
+(`~/.config/perch/config.toml`). The project-config struct has no corresponding
+fields; unknown TOML keys are silently dropped by `BurntSushi/toml`. This is a
+structural guarantee — a malicious `.perch.toml` cannot influence which binary
+is executed.
 
 ### Bound-method input validation
 
 Every argument the Svelte frontend sends over the IPC bridge is validated in
-`app.App` before any tmux or git operation:
+`app.App` before any pty or git operation:
 
 | Constraint | Detail |
 |------------|--------|
-| Session IDs | Validated against `[A-Za-z0-9_-]` charset allowlist; length-capped. Only sessions perch already knows about are accepted (`liveSession` allowlist check). |
-| Worktree paths | Resolved to absolute paths and verified to lie under the configured `roots` (`validateWorktreeUnderRoots`). |
+| Workspace / pane IDs | Validated against `[A-Za-z0-9_-]` charset allowlist; only known workspaces are accepted. |
+| Worktree paths | Resolved to absolute paths and verified to lie under the configured `roots`. |
 
 ### Other hardening
 
@@ -297,81 +346,22 @@ Every argument the Svelte frontend sends over the IPC bridge is validated in
 |------------|--------|
 | `worktree_dir` in project config | Must be a **relative path** (absolute rejected at load time). |
 | Git ref validation | `git.ValidRef` rejects empty strings, leading `-`, `..` sequences, control characters, and other chars forbidden by `git check-ref-format`. |
-| State file size cap | `readLimited` caps reads at **16 MiB**; a file exceeding the cap is an error. |
-| `capture-pane` flags | Preview uses `capture-pane -p` only — the `-e` (raw escape passthrough) flag is **never passed**, enforced by a locked unit test. |
+| Process group teardown | Closing a pty bridge kills the shell's whole process group, so agent children cannot outlive the workspace. |
 
 ---
 
-## Resurrect
+## Capabilities & Degradation
 
-See `docs/diagrams/discovery-state.mmd` for how `boot_id` flows through the
-state stores.
-
-### Boot-id reconcile
-
-Each `windows/<k>.json` record carries the tmux server's `#{start_time}` at
-the moment the window was created (`BootID`). After a tmux server restart the
-`start_time` changes, so live pane IDs from before the restart are gone.
-
-`resurrect.Reconcile` (and the read-only `StrandedCount`) share a single
-`classify(w, livePanes, currentBoot)` function that assigns one of three
-actions to each recorded window:
-
-| Action | Condition | Effect |
-|--------|-----------|--------|
-| **KEEP** | Pane is live **and** `BootID` matches the current server | No-op |
-| **PRUNE** | Pane is gone, same boot, home session is still alive | Remove the stale record |
-| **RESTORE** | Boot mismatch or server is cold (no current boot) | Re-launch the agent |
-
-The shared `classify()` ensures `StrandedCount` (the pre-launch read-only
-detector) cannot drift from `Reconcile`'s actual decision logic.
-
-`perch resurrect` (the subcommand) runs `Reconcile` directly.
-
----
-
-## Configuration Reference
-
-Two config files; both TOML.
-
-**Global:** `$XDG_CONFIG_HOME/perch/config.toml` (default
-`~/.config/perch/config.toml`)
-
-| Field | Effect |
-|-------|--------|
-| `roots` | Directories scanned for git repos. |
-| `blacklist` | `**`-glob patterns — matching paths are hidden from the GUI sidebar (post-discovery filter, not a walk prune). |
-| `sort_order` | Priority list for the project selector (e.g. `["running","frecency"]`). |
-| `refresh_ms` | Status-poll interval in milliseconds (default 1000). |
-| `worktree_dir` | Default worktree parent directory (absolute allowed in global config). |
-| `[default_session].agent` | Default AI tool (`claude` or `opencode`). |
-| `[default_session].startup_command` | Command sent to the agent via `send-keys` after launch. Global-only (never trust-prompted). |
-| `[theme].accent` | UI accent colour. |
-| `[agents].<name>` | Absolute binary path for the named tool. **Global-only security boundary.** |
-
-**Project:** `.perch.toml` (walked up from the project root)
-
-| Field | Effect |
-|-------|--------|
-| `base_branch` | Branch used as the base for new worktrees. |
-| `worktree_dir` | Relative-only worktree parent directory. |
-| `agent` | Per-project default tool. |
-| `post_create` | Shell hooks run after worktree creation (trust-gated). |
-| `pre_remove` | Shell hooks run before worktree removal (trust-gated). |
-| `[files].copy` / `[files].symlink` | Files seeded into each new worktree. |
-| `[[wildcard]]` | Path-glob → agent assignment rules (matched against worktree path). |
-
-**Tool resolution priority for new sessions:**
-1. Existing session metadata (tool already known) — always wins.
-2. First `[[wildcard]]` rule whose pattern matches the worktree path.
-3. `[default_session].agent` / project `agent`.
-4. `"claude"` — unconditional final fallback.
+Each Monitor advertises `Caps {approvals, attention, tokens}` via
+`Capabilities()`. The frontend reads these and surfaces only the controls the
+agent supports — an agent that omits a cap has that surface hidden rather than
+showing a dead control. Both `ClaudeMonitor` and `OpencodeMonitor` currently
+advertise all three.
 
 ---
 
 ## Debug Aids
 
-`perch debug discover` and `perch debug tmux` are hidden subcommands (not
-advertised in help output) useful for inspecting the discovery pipeline and
-tmux state during development. They are intentionally omitted from user-facing
-documentation.
+`perch debug discover` is a hidden subcommand (not advertised in help output)
+useful for inspecting the discovery pipeline during development. It is
+intentionally omitted from user-facing documentation.

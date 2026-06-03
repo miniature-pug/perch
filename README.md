@@ -1,17 +1,34 @@
 # perch
 
-perch is a desktop GUI for managing AI coding sessions (`claude` and
-`opencode`) across git worktrees. `perch` (no arguments) opens a **Wails v2
-desktop window** — a Go backend embedded in a WebKit2GTK webview running a
-Svelte 5 SPA. The left sidebar lists agent sessions; clicking a session opens a
-full terminal (xterm.js) backed by a live tmux pane. There is no terminal TUI,
-no persistent tmux frame, and **no listening TCP port** in production —
-all IPC travels over the WebKit2GTK script-message channel and the `wails://`
-custom asset scheme.
+perch is a worktree-native AI-agent **cockpit** — a desktop GUI for running and
+supervising AI coding agents (`claude` and `opencode`) across git worktrees.
+`perch` (no arguments) opens a **Wails v2 desktop window**: a Go backend embedded
+in a WebKit2GTK webview running a Svelte 5 (runes) SPA. The left sidebar lists
+your workspaces; selecting one opens a full interactive terminal (xterm.js)
+backed by a **direct pseudo-terminal** that the Go app spawns. Each workspace is
+a git worktree off a base branch paired with an agent.
 
-It is a single static binary with no background daemon and no database. Status
-is polled from tmux pane options roughly every second, and recovery after a
-server restart is a one-shot `perch resurrect`.
+There is **no tmux**, **no daemon**, and **no background server process**.
+perch is a single static binary. Frontend ↔ backend communication is Wails
+bindings (`window.go.app.App.<Method>`) plus Wails events — not HTTP. The only
+local network surface in production is the per-agent hook listener (see
+[Security model](#security--trust-model)).
+
+---
+
+## What it is
+
+- A **cockpit** for AI coding agents: one window, many workspaces, each with a
+  live terminal, diff view, file tree, and (where the agent supports it) inline
+  tool-call approvals.
+- **Worktree-native** — every workspace is a real `git worktree` off a base
+  branch, so agents work in isolation without disturbing your main checkout.
+- **Agent-agnostic via a Monitor seam** — two integrations ship today
+  (`claude`, `opencode`); the UI degrades to exactly what each agent supports
+  (see [Capabilities](#capabilities--degradation)).
+- **Mouse-first, keyboard-accelerated** — the GUI is fully operable with the
+  mouse; a vim-style modal layer (NORMAL / TERMINAL / COMMAND) is an
+  accelerator, never a requirement.
 
 ---
 
@@ -19,10 +36,10 @@ server restart is a one-shot `perch resurrect`.
 
 ### Runtime
 
-| Tool | Version |
-|------|---------|
-| tmux | 3.6 |
-| WebKit2GTK + GTK3 | (system libraries — Linux only) |
+| Tool | Version / note |
+|------|----------------|
+| WebKit2GTK + GTK3 | system libraries — **Linux only** |
+| git | any recent version |
 
 At least one of **claude** or **opencode** must be installed and on `$PATH`.
 
@@ -45,25 +62,26 @@ sudo apt install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.0-de
 
 ---
 
-## Install
-
-### Build from source
+## Build & run
 
 ```sh
 git clone https://github.com/Miniature-Pug/perch
 cd perch
 make gui-build
+./bin/perch
 ```
 
-`make gui-build` runs `npm --prefix frontend install && npm --prefix frontend run build`
-(builds the Svelte SPA into `frontend/dist/`) and then
-`go build -tags production -o bin/perch ./cmd/perch`.
+`make gui-build` runs `npm --prefix frontend run build` (builds the Svelte SPA
+into `frontend/dist/`) and then `go build -tags production -o bin/perch
+./cmd/perch`.
 
 The `-tags production` build tag is **required** — it embeds the compiled
-frontend assets into the binary. Omitting it produces a binary that cannot
-serve the webview.
+frontend assets into the binary. Without it the app uses a stub that errors at
+launch; that is expected.
 
-Produces `./bin/perch`. The build is hermetic (vendored deps, `-trimpath`).
+> The `wails` CLI is **not** used. The repo root is a library package that
+> embeds `frontend/dist`; `main` lives in `cmd/perch`. Build with
+> `make gui-build`, never `wails build`.
 
 To install to `GOBIN` / `~/go/bin`:
 
@@ -81,20 +99,20 @@ Module path: `github.com/Miniature-Pug/perch`
 ## Quick start
 
 ```sh
-# Open the GUI; root = current directory
+# Open the cockpit; project root = current directory
 perch
 
 # Same, but with an explicit project root
 perch /path/to/projects
 
-# One-time setup: install status hooks for detected agents (claude / opencode)
+# One-time setup: install status hooks/plugins for detected agents
 perch setup
 ```
 
-`perch` (no arguments) opens the desktop GUI window. The sidebar lists all
-agent sessions discovered under the configured `roots`. Click any session to
-open an embedded terminal tab. Multiple tabs can be open simultaneously; each
-tab streams output from the underlying tmux pane in real time.
+`perch` (no arguments) opens the desktop GUI. The sidebar lists your workspaces
+from the registry; create a new one to spin up a git worktree plus an agent.
+Select a workspace to open its embedded terminal. Each terminal streams output
+from a direct pty the Go app spawned for that pane.
 
 ---
 
@@ -102,175 +120,143 @@ tab streams output from the underlying tmux pane in real time.
 
 | Command | Purpose |
 |---------|---------|
-| `perch` | Open the Wails GUI; root = cwd |
-| `perch <path>` | Open the Wails GUI; root = given directory |
-| `perch setup [--replace]` | Detect installed agents; install status hooks/plugins. `--replace` overwrites stale perch-owned hook entries |
-| `perch attach <query>` | Fuzzy-attach the terminal to a live agent session matching the query |
-| `perch resurrect` | Reconcile shadow records against live tmux panes (run after a server restart) |
-| `perch status set <state>` | Write agent status to the current tmux pane (`working`, `waiting`, or `done`) — used by installed hooks |
+| `perch` | Open the cockpit GUI; project root = cwd |
+| `perch <path>` | Open the cockpit GUI; project root = given directory |
+| `perch attach <query>` | Fuzzy-match a workspace (by title or worktree path) in the registry and print it; the GUI owns actual focus |
+| `perch setup [--replace]` | Detect installed agents; install status hooks/plugins. `--replace` overwrites stale perch-owned entries |
 | `perch doctor` | Check runtime dependencies and configuration |
 | `perch version` | Print version and build info |
+
+`perch attach` is registry-backed and informational — it locates a workspace in
+`workspaces.json`; it does not attach to any background session.
+
+---
+
+## Agent setup
+
+Each agent integration plugs in behind a **Monitor** seam (`internal/agent`).
+
+### claude — hooks
+
+When a claude workspace is opened, its `ClaudeMonitor` writes the hook
+configuration (listener URL + bearer token) into `<worktree>/.claude/settings.json`.
+The claude agent's hooks then POST tool/lifecycle events back to the listener,
+and `PreToolUse` blocks until you approve (see [Security model](#security--trust-model)).
+
+`perch setup` additionally installs the global status hooks into
+`~/.claude/settings.json` for agent state reporting.
+
+### opencode — serve + SSE
+
+An opencode workspace launches `opencode serve` and the `OpencodeMonitor`
+consumes its Server-Sent-Events stream (`/event`) over an authenticated HTTP
+connection to surface lifecycle, token, and approval events.
+
+`perch setup` installs the opencode status plugin at
+`~/.config/opencode/plugins/perch-status.ts`.
+
+---
+
+## Capabilities & degradation
+
+Every agent advertises a `Caps` set; the UI surfaces only what the agent
+supports.
+
+| Cap | Meaning | claude | opencode |
+|-----|---------|:------:|:--------:|
+| `approvals` | Inline tool-call approval (Allow / Always / Deny) | ✅ | ✅ |
+| `attention` | Lifecycle / attention state (running, idle, awaiting, done, errored) | ✅ | ✅ |
+| `tokens` | Token / cost usage reporting | ✅ | ✅ |
+
+An agent that did not advertise a cap simply has that surface hidden — the
+cockpit degrades rather than showing dead controls.
+
+---
+
+## Interaction model
+
+The GUI is **mouse-first**: everything is clickable. A vim-style **modal**
+keyboard layer accelerates power use but is never required.
+
+| Mode | Entered by | What it does |
+|------|-----------|--------------|
+| **NORMAL** | default / `Esc` | Navigation and command keys; keystrokes drive the UI, not the pty |
+| **TERMINAL** | `i` | All keys pass straight to the focused pane's pty |
+| **COMMAND** | `:` | Command palette / command line |
 
 ---
 
 ## Configuration
 
-Config is optional — perch runs on sensible defaults. Files are TOML. Config is
-discovered in three tiers (global → project walk-up → project wins per field).
+The workspace registry is persisted at `~/.config/perch/workspaces.json`
+(XDG: `$XDG_CONFIG_HOME/perch/workspaces.json`). Each entry records the
+worktree path, agent, branch, title, and last session id. Settings and saved
+layout live alongside it (`settings.json`, `layout.json`).
 
-### Discovery
-
-1. **Global:** `$XDG_CONFIG_HOME/perch/config.toml` (default `~/.config/perch/config.toml`)
-2. **Per-project:** walk up from the launch directory to the nearest `.git`
-   boundary, looking for `.perch.toml`. Linked worktrees fall back to the main
-   worktree root.
-3. Project config overrides global per-field; all fields have defaults.
-
-### Global config (`~/.config/perch/config.toml`)
-
-```toml
-roots        = ["~/projects"]       # directories perch scans for git repos (default: launch cwd)
-sort_order   = ["running","frecency"] # live sessions first, then frecency; unknown tokens ignored
-blacklist    = ["**/archive/**"]    # doublestar globs that hide matching project/tree paths
-refresh_ms   = 1000                 # status-tick interval in milliseconds
-
-[default_session]
-agent           = "claude"          # default tool for new sessions
-startup_command = ""                # command sent to the agent after launch
-
-[theme]
-accent = "#EE6FF8"                  # UI accent colour
-
-[agents]
-claude   = "/usr/local/bin/claude"  # absolute binary path (global-only security boundary)
-opencode = "/usr/local/bin/opencode"
-```
-
-### Per-project config (`.perch.toml`)
-
-```toml
-base_branch  = "main"
-worktree_dir = "../wt"          # relative paths only; absolute paths are rejected
-agent        = "opencode"       # overrides [default_session].agent for this project
-
-post_create = ["direnv allow", "pnpm install"]   # hooks run after worktree creation
-pre_remove  = ["pnpm run cleanup"]               # hooks run before worktree removal
-
-[files]
-copy    = [".env", ".env.local"]    # files copied into each new worktree
-symlink = ["node_modules"]          # files symlinked into each new worktree
-
-[[wildcard]]
-pattern = "**/experiments/**"   # path-glob rule to auto-pick an agent for matching trees
-agent   = "claude"
-```
-
-**New-session tool resolution order:**
-1. Existing session metadata (the tool already stored for that session)
-2. First matching `[[wildcard]]` rule
-3. `[default_session].agent` / project `agent`
-4. `"claude"` as unconditional fallback
+Per-project `.perch.toml` (walked up from the launch directory to the nearest
+`.git` boundary) configures the base branch, worktree directory, default agent,
+lifecycle hooks, and file seeding for new worktrees. Project config may only set
+a **relative** `worktree_dir`; absolute agent-binary paths come from the global
+config only.
 
 ---
 
 ## Security / trust model
 
-### No listening port
+### IPC has no listening port
 
-perch opens **no TCP or Unix socket** in production. The Wails webview
-communicates with the Go backend exclusively over the WebKit2GTK
-script-message channel; static assets are served via the `wails://` custom
-scheme. The `ws://localhost:34115` reload socket is a `//go:build dev` only
-artifact and is never compiled into a production binary.
+Frontend ↔ backend IPC uses **Wails bindings** (`window.go.app.App.<Method>`)
+and Wails events — it does **not** open a TCP or Unix socket. The
+`ws://localhost:34115` reload socket is a `//go:build dev` artifact and is never
+compiled into a production binary. Every argument crossing the IPC boundary is
+validated in `app.App` (workspace-id charset allowlist, worktree-path
+containment under the configured roots).
+
+### The agent hook listener (the only local network surface)
+
+Each Claude monitor creates its **own** hook listener bound to `127.0.0.1` on an
+**ephemeral** port, protected by a **per-listener random Bearer token**. It
+writes the hook config (URL + token) into `<worktree>/.claude/settings.json`.
+The Claude agent's hooks POST tool/lifecycle events back to it; `PreToolUse`
+**blocks synchronously** until the user approves. The token is compared in
+constant time, and the listener is torn down (with its hook entries removed)
+when the workspace closes.
+
+This is the entire production local network surface — one short-lived,
+loopback-only, token-gated listener per active Claude workspace.
 
 ### Trust prompt for `.perch.toml` hooks
 
 When a repo's `.perch.toml` defines shell hooks (`post_create` or `pre_remove`)
-and perch needs to run them, it displays a trust modal:
-
-```
-.perch.toml in <dir> defines shell hooks (<phase>). Run them?
-(a) trust always  (o) once  (d) deny
-```
-
-- `a` — trust always: stores approval keyed on the config path + content hash
-  in `<state-dir>/trust.json` (mode 0600); re-prompts if the file changes.
-- `o` — once: runs the hooks this time only.
-- `d` — deny: skips the hooks.
-
-The file is re-hashed immediately before hook execution to close the TOCTOU
-window.
+and perch needs to run them, it displays a trust modal: `(a)` trust always /
+`(o)` once / `(d)` deny. Approvals are keyed on the config path + content hash;
+the file is re-hashed immediately before execution to close the TOCTOU window.
 
 ### Global-only agent binary boundary
 
 `[agents]` binary paths and `startup_command` come **only** from the global
-config. A project `.perch.toml` has no `[agents]` field — the struct
-intentionally lacks it, so any such key in a project file is silently dropped by
-the TOML decoder. A malicious repo cannot point perch at an arbitrary binary.
+config. A project `.perch.toml` has no `[agents]` field — any such key is
+silently dropped by the TOML decoder. A malicious repo cannot point perch at an
+arbitrary binary.
 
-`startup_command` is trusted without a prompt because it comes from your own
-global config, not from a project file.
-
-### Relative-only project `worktree_dir`
-
-Project `.perch.toml` may only set a relative `worktree_dir`. Absolute paths
-are accepted only from the global config.
-
-See [docs/security-audit.md](docs/security-audit.md) and
-[ARCHITECTURE.md](ARCHITECTURE.md) for the full security model.
-
----
-
-## Status pipeline
-
-`perch setup` installs hooks into each detected agent:
-
-- **claude:** writes `~/.claude/settings.json` hooks
-- **opencode:** writes `~/.config/opencode/plugins/perch-status.ts`
-
-When an agent changes state, its hook calls `perch status set <working|waiting|done>`,
-which resolves the current pane from `$TMUX_PANE` and writes `@perch_pane_status`
-as a tmux pane option. The backend polls those options on a ~1 s interval
-(configurable via `refresh_ms`) and pushes a `sessions-changed` event to the
-GUI sidebar, which re-renders the status glyph.
-
-Glyphs: `🤖` working / `💬` waiting / `✓` done / `●` live (no status set) / `○` idle.
-
-There is no daemon — perch never parses agent internals and does not need a
-running background process.
-
----
-
-## Resurrect
-
-`perch resurrect` runs the `Reconcile` engine, which classifies each shadow
-record as:
-
-- **KEEP** — the pane is still live and the boot ID matches: do nothing.
-- **PRUNE** — the pane is gone but the boot ID matches (clean shutdown): remove
-  the record.
-- **RESTORE** — the boot ID differs or the server is cold: re-launch the agent
-  in a new window.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system-level breakdown.
 
 ---
 
 ## Non-goals
 
-- No background daemon or long-running helper
-- No SQLite or embedded database (two small JSON stores only)
-- No filesystem watchers (no fsnotify in v1)
+- No tmux, no daemon, no long-running background process
+- No SQLite or embedded database (small JSON stores only)
 - No remote, SSH, or multi-machine orchestration
 - No CI/CD pipeline integration
-- No GitHub or PR integration
 - No sandboxing or containers
 - No macOS / Windows support (WebKit2GTK is Linux-only)
-- No tools beyond claude and opencode (adapter interface keeps the door open)
+- No agents beyond claude and opencode (the Monitor seam keeps the door open)
 
 ---
 
 ## Diagrams
 
-Architecture, status-sequence, worktree-lifecycle, and
-discovery-state diagrams live in [`docs/diagrams/`](docs/diagrams/). They
-render in any Mermaid viewer or directly in GitHub (`.mmd` files in fenced
-blocks).
+Architecture, status-sequence, worktree-lifecycle, and discovery-state diagrams
+live in [`docs/diagrams/`](docs/diagrams/). They render in any Mermaid viewer or
+directly in GitHub.

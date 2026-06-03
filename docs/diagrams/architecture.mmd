@@ -4,71 +4,75 @@ flowchart TD
     end
 
     subgraph GUILayer["GUI layer"]
-        apppkg["app/\nWails App + bound methods\ninput validation + state-sync poller"]
-        pty["internal/pty\nattach-pty bridge\n(creack/pty + xterm.js events)"]
-        frontend["frontend/\nSvelte 5 SPA\nWails events + bound methods"]
+        apppkg["app/\nWails App + bound methods\ninput validation + event forwarding"]
+        pty["internal/pty\ndirect pty Bridge\n(creack/pty + login shell)\nxterm.js events — no tmux"]
+        frontend["frontend/\nSvelte 5 SPA\nWails bindings + events"]
+    end
+
+    subgraph Agents["Agent Monitor seam — internal/agent"]
+        monitor["Monitor seam\nPrepare / Start / Events\nApprove / Caps / Teardown"]
+        claudemon["ClaudeMonitor"]
+        opencodemon["OpencodeMonitor"]
+        hooklistener["internal/hooklistener\n127.0.0.1:ephemeral\nrandom Bearer token\nPreToolUse blocks"]
     end
 
     subgraph CLIFlows["CLI sub-commands"]
-        attach["internal/attach\nperch attach &lt;query&gt;"]
-        resurrect["internal/resurrect\nKEEP / PRUNE / RESTORE\nreconciler"]
-        status["internal/status\nperch status set\n@perch_pane_status writer"]
-        doctor["internal/doctor\nperch doctor\nhealth check"]
+        setup["perch setup\ninstall agent hooks/plugins"]
+        attach["perch attach &lt;query&gt;\nregistry lookup (no tmux)"]
+        doctor["internal/doctor\nperch doctor"]
     end
 
-    subgraph DataLayer["Data &amp; config"]
-        state["internal/state\nstate.json (mappings + frecency)\nwindows/&lt;k&gt;.json (per-window)"]
+    subgraph DataLayer["Data & config"]
+        registry["internal/registry\nworkspaces.json (XDG)\n~/.config/perch/"]
         config["internal/config\nglobal config.toml\n+ project .perch.toml"]
-        trust["internal/trust\nTOFU trust store\ntrust.json (mode 0600)"]
-        model["internal/model\nshared domain types\nWindow, Session, Tool…"]
+        model["internal/model\nshared domain types"]
     end
 
     subgraph Discovery["Discovery"]
         discover["internal/discover\ngit repo scanner"]
     end
 
-    subgraph Agents["Agent adapters"]
-        agent["internal/agent\nAdapter interface\nclaude / opencode"]
-        worktree["internal/worktree\nfile seed + lifecycle\nhooks (post_create, pre_remove…)"]
+    subgraph Worktrees["Worktrees"]
+        worktree["internal/worktree\nfile seed + lifecycle hooks"]
+        fs["internal/fs\nfile tree + change watcher"]
     end
 
     subgraph ShellSeam["Shell-out seam (§20.1)"]
         proc["internal/proc\nRunner interface\nFakeRunner in tests"]
-        tmuxpkg["internal/tmux\ntmux command wrappers"]
-        git["internal/git\ngit command wrappers"]
+        git["internal/git\ngit command wrappers + diff/hunks"]
     end
 
-    subgraph External["External — tmux server"]
-        tmuxsrv[("tmux server\n(default socket)")]
-        agentsess["agent sessions\n(detached, one per agent)"]
+    subgraph External["External"]
+        shell[("login shell\n(direct pty, per pane)")]
+        claudeagent["claude agent\n(hooks POST events)"]
+        opencodeagent["opencode serve\n(SSE /event stream)"]
     end
 
     main -->|"launch GUI"| apppkg
-    main -->|"sub-cmds"| attach
-    main -->|"sub-cmds"| resurrect
-    main -->|"sub-cmds"| status
-    main -->|"sub-cmds"| doctor
+    main -->|"sub-cmd"| setup
+    main -->|"sub-cmd"| attach
+    main -->|"sub-cmd"| doctor
 
-    frontend <-->|"Wails events + bound methods\n(WebKit2GTK IPC, no TCP port)"| apppkg
-    apppkg -->|"open terminal tab"| pty
-    apppkg -->|"read/write"| state
+    frontend <-->|"Wails bindings + events\n(no TCP port)"| apppkg
+    apppkg -->|"App → Bridge → Shell"| pty
+    apppkg -->|"new Monitor"| monitor
+    apppkg -->|"read/write"| registry
     apppkg -->|"load config"| config
-    apppkg -->|"agent argv"| agent
     apppkg -->|"worktree create/remove"| worktree
+    apppkg -->|"file tree / watch"| fs
     apppkg -->|"project scan"| discover
-    apppkg -->|"orchestration"| tmuxpkg
+    apppkg -->|"diff / staging"| git
 
-    pty -->|"tmux attach via"| tmuxpkg
+    pty -->|"exec"| shell
 
-    attach -->|"read"| state
-    resurrect -->|"read/write"| state
-    resurrect -->|"shell-out"| tmuxpkg
-    status -->|"shell-out"| tmuxpkg
+    monitor --> claudemon
+    monitor --> opencodemon
+    claudemon -->|"App → ClaudeMonitor → hooklistener"| hooklistener
+    hooklistener <-->|"PreToolUse blocks; Decide()"| claudeagent
+    opencodemon -->|"App → OpencodeMonitor → serve/SSE"| opencodeagent
 
-    agent -->|"uses"| model
+    attach -->|"read"| registry
+
     worktree -->|"hooks via"| proc
     git -->|"uses"| proc
-    tmuxpkg -->|"uses"| proc
-
-    proc -->|"exec"| tmuxsrv
-    tmuxsrv --- agentsess
+    monitor -->|"uses"| model

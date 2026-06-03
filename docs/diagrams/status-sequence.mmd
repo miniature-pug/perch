@@ -1,22 +1,26 @@
 sequenceDiagram
-    participant Agent as Agent process
-    participant Hook as Agent hook / plugin
-    participant CLI as perch status set
-    participant Tmux as tmux (@perch_pane_status)
-    participant Poll as backend poller (app.App)
-    participant GUI as GUI sidebar glyph
+    participant Agent as claude agent
+    participant HL as hooklistener (127.0.0.1:ephemeral)
+    participant App as app.App (backend)
+    participant FE as Frontend (Svelte)
+    participant User as User
 
-    Agent->>Hook: state change event<br/>(busy / idle / permission / user-msg)
-    Hook->>CLI: exec perch status set &lt;working|waiting|done&gt;
-    Note over Hook,CLI: hook shipped by perch setup;<br/>runs inside the agent session pane
-    CLI->>Tmux: SetPaneOption $TMUX_PANE<br/>@perch_pane_status = &lt;state&gt;
-    Tmux-->>CLI: ok
+    Note over Agent,HL: hook config (URL + Bearer token) written to .claude/settings.json by ClaudeMonitor
 
-    loop every refresh_ms (default 1 s)
-        Poll->>Tmux: ListPanesAll → read PerchStatus per pane
-        Tmux-->>Poll: pane list with @perch_pane_status values
-        Poll->>GUI: sessions-changed event (when set differs)
-        GUI->>GUI: render glyph<br/>working → 🤖<br/>waiting → 💬<br/>done → ✓<br/>live (no status) → ●<br/>idle → ○
-    end
+    Agent->>HL: POST PreToolUse (Bearer token) — blocks until a verdict
+    HL->>App: agent:event (approval, reqID)
+    App->>FE: agent:event (ApprovalCard)
+    FE->>User: show Allow / Always / Deny
 
-    Note over Poll,GUI: On terminal tab open:<br/>SetPaneOption @perch_pane_status=""<br/>badge auto-cleared when user focuses agent
+    User->>FE: click Allow
+    FE->>App: App.Approve(reqID, "allow")
+    App->>HL: Monitor.Approve → hooklistener.Decide(reqID, allow)
+    HL-->>Agent: permissionDecision allow (unblocks the POST)
+    Agent->>Agent: continues the tool call
+
+    Note over Agent,HL: lifecycle hooks (SessionStart / Stop / StopFailure / Notification) POST non-blocking
+    Agent->>HL: POST lifecycle event
+    HL->>App: agent:event (state)
+    App->>FE: agent:event → re-render state glyph
+
+    Note over App,FE: opencode is equivalent — events arrive over the opencode serve SSE /event stream instead
