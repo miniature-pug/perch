@@ -1,5 +1,6 @@
 // frontend/src/App.test.ts
 import { render, screen, fireEvent, waitFor } from "@testing-library/svelte";
+import { tick } from "svelte";
 import { vi, describe, it, expect, beforeEach } from "vitest";
 
 // Stub ShellDrawer (imports xterm which crashes jsdom).
@@ -31,16 +32,8 @@ vi.mock("./lib/wails", () => ({
   saveSettings:   vi.fn(async () => {}),
 }));
 
-vi.mock("./lib/stores/layout.svelte", () => ({
-  layout: {
-    sidebarW: 240, shellH: 200, view: "agent", split: false, collapsed: {},
-    restore:     vi.fn(async () => {}),
-    setView:     vi.fn(),
-    toggleSplit: vi.fn(),
-    setSidebarW: vi.fn(),
-    setShellH:   vi.fn(),
-  },
-}));
+// NOTE: layout store is NOT mocked — we use the real $state runes store.
+// restore() calls getLayout() which is mocked to return "{}", so onMount is safe.
 vi.mock("./lib/stores/mode.svelte", () => ({
   mode: { current: "normal", enterTerminal: vi.fn(), enterCommand: vi.fn(), leaveCommand: vi.fn() },
 }));
@@ -63,10 +56,13 @@ const fakeWorkspaces = [
 
 beforeEach(async () => {
   vi.clearAllMocks();
-  // Reset layout view/split to defaults (clearAllMocks doesn't reset plain properties).
+  // Reset the real layout singleton to default values before each test.
   const { layout } = await import("./lib/stores/layout.svelte");
-  (layout as any).view = "agent";
-  (layout as any).split = false;
+  layout.setView("agent");
+  layout.split = false as any;
+  (layout as any).sidebarW  = 240;
+  (layout as any).shellH    = 200;
+  (layout as any).collapsed = {};
 });
 
 describe("App.svelte skeleton", () => {
@@ -78,35 +74,39 @@ describe("App.svelte skeleton", () => {
     expect(document.querySelector("[data-zone='shell-drawer']")).toBeInTheDocument();
   });
   it("pressing '1' in NORMAL calls layout.setView('agent')", async () => {
-    const { default: App } = await import("./App.svelte");
     const { layout } = await import("./lib/stores/layout.svelte");
+    const spy = vi.spyOn(layout, "setView");
+    const { default: App } = await import("./App.svelte");
     render(App);
     await fireEvent.keyDown(document.body, { key: "1" });
-    expect(layout.setView).toHaveBeenCalledWith("agent");
+    expect(spy).toHaveBeenCalledWith("agent");
   });
   it("pressing '2' in NORMAL calls layout.setView('code')", async () => {
-    const { default: App } = await import("./App.svelte");
     const { layout } = await import("./lib/stores/layout.svelte");
+    const spy = vi.spyOn(layout, "setView");
+    const { default: App } = await import("./App.svelte");
     render(App);
     await fireEvent.keyDown(document.body, { key: "2" });
-    expect(layout.setView).toHaveBeenCalledWith("code");
+    expect(spy).toHaveBeenCalledWith("code");
   });
   it("pressing '\\' in NORMAL calls layout.toggleSplit", async () => {
-    const { default: App } = await import("./App.svelte");
     const { layout } = await import("./lib/stores/layout.svelte");
+    const spy = vi.spyOn(layout, "toggleSplit");
+    const { default: App } = await import("./App.svelte");
     render(App);
     await fireEvent.keyDown(document.body, { key: "\\" });
-    expect(layout.toggleSplit).toHaveBeenCalled();
+    expect(spy).toHaveBeenCalled();
   });
   it("dragging sidebar divider calls layout.setSidebarW", async () => {
-    const { default: App } = await import("./App.svelte");
     const { layout } = await import("./lib/stores/layout.svelte");
+    const spy = vi.spyOn(layout, "setSidebarW");
+    const { default: App } = await import("./App.svelte");
     render(App);
     const divider = document.querySelector(".divider-v")!;
     await fireEvent.mouseDown(divider, { clientX: 240 });
     await fireEvent.mouseMove(window,  { clientX: 280 });
     await fireEvent.mouseUp(window);
-    expect(layout.setSidebarW).toHaveBeenCalled();
+    expect(spy).toHaveBeenCalled();
   });
 });
 
@@ -141,11 +141,13 @@ describe("App.svelte Stage content routing (4.25.2)", () => {
     const { listWorkspaces } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
     const { layout } = await import("./lib/stores/layout.svelte");
-    (layout as any).view = "agent";
     const { default: App } = await import("./App.svelte");
     render(App);
-    // Select workspace ws-1 (Alpha)
+    // Wait for workspaces to load (post-mount, so restore() has already run)
     const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    // Ensure we're in agent view (real store; restore() defaults view to "agent")
+    layout.setView("agent");
+    await tick();
     await fireEvent.click(alphaBtn);
     const terminal = await screen.findByTestId("terminal");
     expect(terminal).toBeInTheDocument();
@@ -157,12 +159,13 @@ describe("App.svelte Stage content routing (4.25.2)", () => {
     const { listWorkspaces } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
     const { layout } = await import("./lib/stores/layout.svelte");
-    (layout as any).view = "code";
     const { default: App } = await import("./App.svelte");
     render(App);
-    // Select workspace ws-1 (Alpha)
+    // Wait for workspaces to load (post-mount), then switch view reactively
     const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
     await fireEvent.click(alphaBtn);
+    layout.setView("code");
+    await tick();
     const filetree = await screen.findByTestId("filetree");
     expect(filetree).toBeInTheDocument();
     expect(filetree.dataset.root).toBe("/tmp/alpha");
@@ -183,12 +186,13 @@ describe("App.svelte Stage content routing (4.25.2)", () => {
     const { listWorkspaces } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
     const { layout } = await import("./lib/stores/layout.svelte");
-    (layout as any).view = "diff";
     const { default: App } = await import("./App.svelte");
     render(App);
-    // Select workspace ws-1 (Alpha)
+    // Wait for workspaces to load (post-mount), then switch view reactively
     const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
     await fireEvent.click(alphaBtn);
+    layout.setView("diff");
+    await tick();
     const diff = await screen.findByTestId("diff");
     expect(diff).toBeInTheDocument();
     expect(diff.dataset.worktree).toBe("/tmp/alpha");
@@ -205,5 +209,50 @@ describe("App.svelte Stage content routing (4.25.2)", () => {
     expect(screen.queryByTestId("terminal")).not.toBeInTheDocument();
     expect(screen.queryByTestId("editor")).not.toBeInTheDocument();
     expect(screen.queryByTestId("diff")).not.toBeInTheDocument();
+  });
+
+  it("reactive re-route: switching from 'agent' to 'code' swaps probes without re-render", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    // Wait for workspaces to load (restore() has run by now)
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    // Start in agent view
+    layout.setView("agent");
+    await tick();
+    expect(await screen.findByTestId("terminal")).toBeInTheDocument();
+    expect(screen.queryByTestId("editor")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("filetree")).not.toBeInTheDocument();
+    // Reactively switch to code view
+    layout.setView("code");
+    await tick();
+    await waitFor(() => {
+      expect(screen.queryByTestId("terminal")).not.toBeInTheDocument();
+      expect(screen.getByTestId("editor")).toBeInTheDocument();
+      expect(screen.getByTestId("filetree")).toBeInTheDocument();
+    });
+  });
+
+  it("split mode: view='agent' + split=true → two TerminalProbes rendered", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    // Wait for workspaces to load (restore() has run by now)
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    // Set agent view and enable split
+    layout.setView("agent");
+    layout.toggleSplit(); // false → true
+    await tick();
+    // Both primary and secondary slots should have a TerminalProbe
+    await waitFor(() => {
+      const terminals = screen.getAllByTestId("terminal");
+      expect(terminals).toHaveLength(2);
+    });
   });
 });
