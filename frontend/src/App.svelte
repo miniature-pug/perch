@@ -30,11 +30,24 @@
   let fsVersion  = $state<Record<string, number>>({});
   let usage      = $state<Record<string, { tokens: number; cost: number }>>({});
 
+  // Keymap state machine helpers
+  let pendingG     = $state(false);
+  let pendingLeave = $state(false);
+  let filtering    = $state(false);
+  let filterQuery  = $state("");
+
   // Dialog state
   let newSessionOpen  = $state(false);
   let confirmRemove   = $state<WorkspaceVM | null>(null);
 
   const active = $derived(workspaces.find(w => w.id === activeId) ?? null);
+
+  // Filtered workspace list for Sidebar (j/k also operate on this list when filtering).
+  const shownWorkspaces = $derived(
+    filtering && filterQuery
+      ? workspaces.filter(w => w.title.toLowerCase().includes(filterQuery.toLowerCase()))
+      : workspaces
+  );
 
   // Derived repo list for NewSessionDialog — uses distinct worktreePaths from known workspaces.
   // branches() from the wails seam resolves all repo branches from any worktree path.
@@ -143,17 +156,96 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Keymap
+  // Keymap — full state machine
   // ---------------------------------------------------------------------------
   function onKeyDown(e: KeyboardEvent) {
-    if (mode.current !== "normal") return;
+    // COMMAND mode: let the CommandPalette handle everything.
+    if (mode.current === "command") return;
+
+    // TERMINAL mode: only intercept the Ctrl-\ Ctrl-n leave sequence.
+    if (mode.current === "terminal") {
+      if (e.ctrlKey && e.key === "\\") {
+        pendingLeave = true;
+        e.preventDefault();
+        return;
+      }
+      if (pendingLeave && e.ctrlKey && e.key === "n") {
+        mode.leaveTerminal();
+        pendingLeave = false;
+        e.preventDefault();
+        return;
+      }
+      // Any other key cancels the pending leave prefix; do NOT prevent default
+      // so the key reaches the pty.
+      pendingLeave = false;
+      return;
+    }
+
+    // NORMAL mode ---------------------------------------------------------------
+
+    // g-prefix resolution must come first so gd/ge work correctly.
+    if (pendingG) {
+      pendingG = false;
+      if (e.key === "d") { e.preventDefault(); layout.setView("diff"); }
+      else if (e.key === "e") { e.preventDefault(); layout.setView("code"); }
+      // any other key: cancel prefix silently (no action)
+      return;
+    }
+
     switch (e.key) {
+      case "j": {
+        e.preventDefault();
+        const list = shownWorkspaces;
+        const idx  = list.findIndex(w => w.id === activeId);
+        if (idx === -1) {
+          // nothing active → select first
+          if (list.length > 0) activeId = list[0].id;
+        } else {
+          // clamp at end
+          activeId = list[Math.min(idx + 1, list.length - 1)].id;
+        }
+        break;
+      }
+      case "k": {
+        e.preventDefault();
+        const list = shownWorkspaces;
+        const idx  = list.findIndex(w => w.id === activeId);
+        if (idx === -1) {
+          if (list.length > 0) activeId = list[0].id;
+        } else {
+          activeId = list[Math.max(idx - 1, 0)].id;
+        }
+        break;
+      }
       case "1": e.preventDefault(); layout.setView("agent"); break;
       case "2": e.preventDefault(); layout.setView("code");  break;
       case "3": e.preventDefault(); layout.setView("diff");  break;
-      case "\\": e.preventDefault(); layout.toggleSplit();   break;
-      case "i": e.preventDefault(); mode.enterTerminal();    break;
-      case ":": e.preventDefault(); mode.enterCommand();     break;
+      case "g": {
+        e.preventDefault();
+        pendingG = true;
+        return;
+      }
+      case "\\": e.preventDefault(); layout.toggleSplit(); break;
+      case "`": {
+        if (e.ctrlKey) {
+          e.preventDefault();
+          layout.setCollapsed("shell", !layout.collapsed["shell"]);
+        }
+        break;
+      }
+      case "/": {
+        e.preventDefault();
+        filtering    = true;
+        filterQuery  = "";
+        break;
+      }
+      case "Enter": {
+        e.preventDefault();
+        if (activeId) openWorkspace(activeId);
+        break;
+      }
+      case "i": e.preventDefault(); mode.enterTerminal(); break;
+      case ":": e.preventDefault(); mode.enterCommand();  break;
     }
   }
 
@@ -196,7 +288,20 @@
 
     <div class="main-area">
       <aside data-zone="sidebar" class="sidebar-zone" style:width="{layout.sidebarW}px">
-        <Sidebar {workspaces} {activeId} onSelect={onSelect} onNew={openNewSession} />
+        {#if filtering}
+          <input
+            class="filter-input"
+            type="text"
+            aria-label="filter sessions"
+            value={filterQuery}
+            oninput={(e) => { filterQuery = (e.currentTarget as HTMLInputElement).value; }}
+            onkeydown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Escape") { filtering = false; filterQuery = ""; }
+            }}
+          />
+        {/if}
+        <Sidebar workspaces={shownWorkspaces} {activeId} onSelect={onSelect} onNew={openNewSession} />
       </aside>
 
       <div class="divider divider-v" role="separator" aria-label="Resize sidebar"
@@ -249,7 +354,9 @@
         <div class="divider divider-h" role="separator" aria-label="Resize shell drawer"
              onmousedown={startResizeShell}></div>
 
-        <div data-zone="shell-drawer" class="shell-drawer-zone" style:height="{layout.shellH}px">
+        <div data-zone="shell-drawer" class="shell-drawer-zone"
+             style:height="{layout.shellH}px"
+             style:display={layout.collapsed["shell"] ? "none" : undefined}>
           <ShellDrawer />
         </div>
       </div>
@@ -324,6 +431,11 @@
   .center-column    { display: flex; flex-direction: column; flex: 1; min-width: 0; }
   .stage-zone       { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .shell-drawer-zone { flex-shrink: 0; overflow: hidden; border-top: 1px solid var(--perch-border); }
+  .filter-input      { display: block; width: 100%; box-sizing: border-box;
+                       padding: 0.25rem 0.5rem; border: none; border-bottom: 1px solid var(--perch-border);
+                       background: var(--perch-bg); color: var(--perch-text);
+                       font-family: var(--perch-font-sans); font-size: var(--perch-fs-body); }
+  .filter-input:focus { outline: 1px solid var(--perch-accent); }
   .approval-dock     { position: absolute; bottom: 2rem; left: 50%; transform: translateX(-50%);
                        z-index: 100; min-width: 320px; max-width: 560px; }
   .notification-hub-dock { position: absolute; top: 2.5rem; right: 0; z-index: 90;

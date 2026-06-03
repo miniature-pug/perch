@@ -858,3 +858,289 @@ describe("App.svelte DragDrop (4.25.6a)", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// 4.25.6b: Full NORMAL keymap + mode state machine
+// ---------------------------------------------------------------------------
+
+describe("App.svelte keymap: j/k navigation (4.25.6b)", () => {
+  it("j moves activeId DOWN through the workspace list (clamp at end); k moves UP (clamp at start)", async () => {
+    const { listWorkspaces, openWorkspace } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await screen.findByRole("button", { name: "Alpha" });
+    await tick();
+
+    // Initially no active — j selects first
+    await fireEvent.keyDown(document.body, { key: "j" });
+    await tick();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Alpha" })).toHaveAttribute("aria-current", "page")
+    );
+
+    // j again → Beta
+    await fireEvent.keyDown(document.body, { key: "j" });
+    await tick();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Beta" })).toHaveAttribute("aria-current", "page")
+    );
+
+    // j again at end → stays Beta (clamp)
+    await fireEvent.keyDown(document.body, { key: "j" });
+    await tick();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Beta" })).toHaveAttribute("aria-current", "page")
+    );
+
+    // k → Alpha
+    await fireEvent.keyDown(document.body, { key: "k" });
+    await tick();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Alpha" })).toHaveAttribute("aria-current", "page")
+    );
+
+    // k at start → stays Alpha (clamp)
+    await fireEvent.keyDown(document.body, { key: "k" });
+    await tick();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Alpha" })).toHaveAttribute("aria-current", "page")
+    );
+
+    // j/k must NEVER call openWorkspace
+    expect(openWorkspace).not.toHaveBeenCalled();
+  });
+});
+
+describe("App.svelte keymap: Enter opens focused session (4.25.6b)", () => {
+  it("Enter with activeId calls openWorkspace(activeId)", async () => {
+    const { listWorkspaces, openWorkspace } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await screen.findByRole("button", { name: "Alpha" });
+    await tick();
+
+    // Select Alpha via j
+    await fireEvent.keyDown(document.body, { key: "j" });
+    await tick();
+    // Reset mock call count (might have been called by click in other tests — not here)
+    vi.mocked(openWorkspace).mockClear();
+
+    // Enter → open
+    await fireEvent.keyDown(document.body, { key: "Enter" });
+    await tick();
+    expect(openWorkspace).toHaveBeenCalledWith("ws-1");
+  });
+});
+
+describe("App.svelte keymap: g-prefix sequences (4.25.6b)", () => {
+  it("gd sets view to 'diff'", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await tick();
+
+    layout.setView("agent");
+    await fireEvent.keyDown(document.body, { key: "g" });
+    await tick();
+    await fireEvent.keyDown(document.body, { key: "d" });
+    await tick();
+    expect(layout.view).toBe("diff");
+  });
+
+  it("ge sets view to 'code'", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await tick();
+
+    layout.setView("agent");
+    await fireEvent.keyDown(document.body, { key: "g" });
+    await tick();
+    await fireEvent.keyDown(document.body, { key: "e" });
+    await tick();
+    expect(layout.view).toBe("code");
+  });
+
+  it("lone g followed by unrelated key does NOT change the view", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await tick();
+
+    layout.setView("agent");
+    await fireEvent.keyDown(document.body, { key: "g" });
+    await tick();
+    await fireEvent.keyDown(document.body, { key: "x" });
+    await tick();
+    expect(layout.view).toBe("agent");
+  });
+});
+
+describe("App.svelte keymap: Ctrl-` toggles shell (4.25.6b)", () => {
+  it("Ctrl-` flips layout.collapsed['shell']", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await tick();
+
+    expect(layout.collapsed["shell"]).toBeFalsy();
+
+    await fireEvent.keyDown(document.body, { key: "`", ctrlKey: true });
+    await tick();
+    expect(layout.collapsed["shell"]).toBe(true);
+
+    await fireEvent.keyDown(document.body, { key: "`", ctrlKey: true });
+    await tick();
+    expect(layout.collapsed["shell"]).toBe(false);
+  });
+});
+
+describe("App.svelte keymap: filter UI (4.25.6b)", () => {
+  it("'/' shows filter input; typing filters Sidebar items; Esc hides it and restores full list", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await screen.findByRole("button", { name: "Alpha" });
+    await tick();
+
+    // Filter input not visible initially
+    expect(screen.queryByRole("textbox", { name: "filter sessions" })).not.toBeInTheDocument();
+
+    // Press '/' to open filter
+    await fireEvent.keyDown(document.body, { key: "/" });
+    await tick();
+    const filterInput = await screen.findByRole("textbox", { name: "filter sessions" });
+    expect(filterInput).toBeInTheDocument();
+
+    // Both workspaces visible initially
+    expect(screen.getByRole("button", { name: "Alpha" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Beta" })).toBeInTheDocument();
+
+    // Type "alph" — only Alpha should remain
+    await fireEvent.input(filterInput, { target: { value: "alph" } });
+    await tick();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Alpha" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Beta" })).not.toBeInTheDocument();
+    });
+
+    // Esc hides filter and restores full list
+    await fireEvent.keyDown(filterInput, { key: "Escape" });
+    await tick();
+    await waitFor(() => {
+      expect(screen.queryByRole("textbox", { name: "filter sessions" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Alpha" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Beta" })).toBeInTheDocument();
+    });
+  });
+});
+
+describe("App.svelte keymap: mode transitions (4.25.6b)", () => {
+  it("'i' in NORMAL → mode becomes 'terminal'", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    const { mode } = await import("./lib/stores/mode.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await tick();
+
+    await fireEvent.keyDown(document.body, { key: "i" });
+    await tick();
+    expect(mode.current).toBe("terminal");
+  });
+
+  it("':' in NORMAL → mode becomes 'command'", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    const { mode } = await import("./lib/stores/mode.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await tick();
+
+    await fireEvent.keyDown(document.body, { key: ":" });
+    await tick();
+    expect(mode.current).toBe("command");
+  });
+});
+
+describe("App.svelte keymap: TERMINAL leave sequence (4.25.6b)", () => {
+  it("Ctrl-\\ then Ctrl-n returns mode to 'normal'", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    const { mode } = await import("./lib/stores/mode.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await tick();
+
+    mode.enterTerminal();
+    expect(mode.current).toBe("terminal");
+
+    await fireEvent.keyDown(document.body, { key: "\\", ctrlKey: true });
+    await tick();
+    // Still terminal — pendingLeave set but not left yet
+    expect(mode.current).toBe("terminal");
+
+    await fireEvent.keyDown(document.body, { key: "n", ctrlKey: true });
+    await tick();
+    expect(mode.current).toBe("normal");
+  });
+
+  it("Ctrl-\\ followed by non-Ctrl-n does NOT leave terminal; resets prefix", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    const { mode } = await import("./lib/stores/mode.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await tick();
+
+    mode.enterTerminal();
+    await fireEvent.keyDown(document.body, { key: "\\", ctrlKey: true });
+    await tick();
+    // Non-n key (plain 'a') cancels prefix
+    await fireEvent.keyDown(document.body, { key: "a" });
+    await tick();
+    expect(mode.current).toBe("terminal");
+
+    // A second Ctrl-\ + non-n should also not leave
+    await fireEvent.keyDown(document.body, { key: "\\", ctrlKey: true });
+    await tick();
+    await fireEvent.keyDown(document.body, { key: "x" });
+    await tick();
+    expect(mode.current).toBe("terminal");
+  });
+
+  it("in TERMINAL mode a normal key (j) does NOT change view or selection", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { mode } = await import("./lib/stores/mode.svelte");
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await screen.findByRole("button", { name: "Alpha" });
+    await tick();
+
+    layout.setView("agent");
+    mode.enterTerminal();
+
+    const activeIdBefore = null; // activeId starts null
+
+    await fireEvent.keyDown(document.body, { key: "j" });
+    await tick();
+
+    // View must be unchanged
+    expect(layout.view).toBe("agent");
+    // No workspace became active
+    expect(screen.queryByRole("button", { name: "Alpha" })?.getAttribute("aria-current")).toBeNull();
+  });
+});
