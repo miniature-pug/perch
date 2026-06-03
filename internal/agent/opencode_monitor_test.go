@@ -40,7 +40,7 @@ func TestOpencodeMonitorSSEParser(t *testing.T) {
 	om := agent.NewOpencodeMonitorWithServer(agent.NewOpencode(), srv.URL, "test-pw")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	om.StartSSE(ctx)
+	om.Start(ctx)
 
 	deadline := time.After(3 * time.Second)
 	var got []agent.Event

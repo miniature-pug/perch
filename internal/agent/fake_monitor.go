@@ -14,10 +14,11 @@ type FakeMonitor struct {
 	state     State
 	lastTool  string
 	tornDown  bool
+	launchCmd string
 }
 
 func NewFakeMonitor(seq []Event) *FakeMonitor {
-	return &FakeMonitor{sequence: seq, events: make(chan Event, len(seq)+4)}
+	return &FakeMonitor{sequence: seq, events: make(chan Event, len(seq)+4), launchCmd: "claude --fake"}
 }
 func (f *FakeMonitor) Prepare(_ context.Context, workspaceID, _, _ string) (string, error) {
 	go func() {
@@ -34,7 +35,10 @@ func (f *FakeMonitor) Prepare(_ context.Context, workspaceID, _, _ string) (stri
 			f.events <- ev
 		}
 	}()
-	return "claude --fake", nil
+	f.mu.Lock()
+	cmd := f.launchCmd
+	f.mu.Unlock()
+	return cmd, nil
 }
 func (f *FakeMonitor) Events() <-chan Event { return f.events }
 func (f *FakeMonitor) Approve(_ string, d Decision) error {
@@ -74,4 +78,27 @@ func (f *FakeMonitor) LastApprovalTool() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.lastTool
+}
+
+// Start is a no-op for the fake — events are emitted by Prepare's goroutine.
+func (f *FakeMonitor) Start(_ context.Context) {}
+
+// SetState overrides the state CurrentState() reports. Test-only.
+func (f *FakeMonitor) SetState(s State) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.state = s
+}
+
+// SetLaunchCmd overrides the launch command Prepare returns. Test-only.
+func (f *FakeMonitor) SetLaunchCmd(cmd string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.launchCmd = cmd
+}
+
+// Replay pushes ev onto the events channel so app-level pump tests can observe
+// forwarding. Test-only.
+func (f *FakeMonitor) Replay(ev Event) {
+	f.events <- ev
 }

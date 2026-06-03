@@ -32,6 +32,10 @@ type Event struct {
 
 type Monitor interface {
 	Prepare(ctx context.Context, workspaceID, cwd, resumeID string) (launchCmd string, err error)
+	// Start launches the monitor's event pump (hook-event translation for claude,
+	// SSE consumption for opencode) bound to ctx. The pump runs until ctx is
+	// cancelled. Must be called after Prepare or no events ever flow.
+	Start(ctx context.Context)
 	Events() <-chan Event
 	Approve(reqID string, d Decision) error
 	Capabilities() Caps

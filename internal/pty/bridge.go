@@ -20,15 +20,25 @@ type Bridge struct {
 	ptyFile io.WriteCloser
 	closer  func() error
 	setsize func(cols, rows uint16) error
+	writeFn func([]byte) (int, error)
 }
 
 func (b *Bridge) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.writeFn != nil {
+		return b.writeFn(p)
+	}
 	if b.ptyFile == nil {
 		return 0, os.ErrClosed
 	}
 	return b.ptyFile.Write(p)
+}
+
+// OverrideWriteForTest replaces the pty write target with fn. Test-only; used by
+// app tests that capture what OpenWorkspace writes to the shell without a real pty.
+func (b *Bridge) OverrideWriteForTest(fn func([]byte) (int, error)) {
+	b.writeFn = fn
 }
 
 func (b *Bridge) Resize(cols, rows uint16) error {

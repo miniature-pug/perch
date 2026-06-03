@@ -131,7 +131,7 @@ func TestClaudeMonitorEventTranslation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	m.StartTranslating(ctx)
+	m.Start(ctx)
 
 	post := func(payload string) {
 		req, _ := http.NewRequest(http.MethodPost, "http://"+l.Addr()+"/hook", strings.NewReader(payload))

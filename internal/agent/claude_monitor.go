@@ -36,7 +36,7 @@ func NewClaudeMonitorWithListener(a Adapter, l *hooklistener.Listener) *ClaudeMo
 func (m *ClaudeMonitor) Events() <-chan Event { return m.events }
 func (m *ClaudeMonitor) Capabilities() Caps  { return Caps{Approvals: true, Attention: true, Tokens: true} }
 
-func (m *ClaudeMonitor) StartTranslating(ctx context.Context) {
+func (m *ClaudeMonitor) Start(ctx context.Context) {
 	go func() {
 		for {
 			select {

@@ -42,7 +42,7 @@ func (m *OpencodeMonitor) Prepare(_ context.Context, _, cwd, _ string) (string, 
 
 func (m *OpencodeMonitor) Teardown() error { return nil }
 
-func (m *OpencodeMonitor) StartSSE(ctx context.Context) {
+func (m *OpencodeMonitor) Start(ctx context.Context) {
 	go func() {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, m.serverURL+"/event", nil)
 		if err != nil {
