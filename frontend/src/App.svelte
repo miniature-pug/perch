@@ -1,22 +1,26 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import ThemeProvider   from "./lib/ThemeProvider.svelte";
-  import Sidebar         from "./lib/Sidebar.svelte";
-  import Stage           from "./lib/Stage.svelte";
-  import ShellDrawer     from "./lib/ShellDrawer.svelte";
-  import Terminal        from "./lib/Terminal.svelte";
-  import Editor          from "./lib/Editor.svelte";
-  import FileTree        from "./lib/FileTree.svelte";
-  import DiffView        from "./lib/DiffView.svelte";
-  import MenuBar         from "./lib/MenuBar.svelte";
-  import CommandPalette  from "./lib/CommandPalette.svelte";
-  import { layout }      from "./lib/stores/layout.svelte";
-  import { mode }        from "./lib/stores/mode.svelte";
-  import { settings }    from "./lib/stores/settings.svelte";
-  import ApprovalCard    from "./lib/ApprovalCard.svelte";
-  import NotificationHub from "./lib/NotificationHub.svelte";
+  import ThemeProvider      from "./lib/ThemeProvider.svelte";
+  import Sidebar            from "./lib/Sidebar.svelte";
+  import Stage              from "./lib/Stage.svelte";
+  import ShellDrawer        from "./lib/ShellDrawer.svelte";
+  import Terminal           from "./lib/Terminal.svelte";
+  import Editor             from "./lib/Editor.svelte";
+  import FileTree           from "./lib/FileTree.svelte";
+  import DiffView           from "./lib/DiffView.svelte";
+  import MenuBar            from "./lib/MenuBar.svelte";
+  import CommandPalette     from "./lib/CommandPalette.svelte";
+  import NewSessionDialog   from "./lib/NewSessionDialog.svelte";
+  import ConfirmDialog      from "./lib/ConfirmDialog.svelte";
+  import TokenMeter         from "./lib/TokenMeter.svelte";
+  import DragDrop           from "./lib/DragDrop.svelte";
+  import { layout }         from "./lib/stores/layout.svelte";
+  import { mode }           from "./lib/stores/mode.svelte";
+  import { settings }       from "./lib/stores/settings.svelte";
+  import ApprovalCard       from "./lib/ApprovalCard.svelte";
+  import NotificationHub    from "./lib/NotificationHub.svelte";
   import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead } from "./lib/stores/notifications.svelte";
-  import { listWorkspaces, openWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, approve } from "./lib/wails";
+  import { listWorkspaces, createWorkspace, removeWorkspace, openWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, approve } from "./lib/wails";
   import type { WorkspaceVM, ApprovalReq } from "./lib/wails";
 
   let workspaces = $state<WorkspaceVM[]>([]);
@@ -24,8 +28,18 @@
   let codePath   = $state<string | null>(null);
   let approvals  = $state<Record<string, ApprovalReq>>({});
   let fsVersion  = $state<Record<string, number>>({});
+  let usage      = $state<Record<string, { tokens: number; cost: number }>>({});
+
+  // Dialog state
+  let newSessionOpen  = $state(false);
+  let confirmRemove   = $state<WorkspaceVM | null>(null);
 
   const active = $derived(workspaces.find(w => w.id === activeId) ?? null);
+
+  // Derived lists for NewSessionDialog dropdowns — placeholder source until a backend list call exists.
+  // Uses worktreePaths from loaded workspaces as a stand-in for repo roots (semantically approximate).
+  const repos    = $derived([...new Set(workspaces.map(w => w.worktreePath))]);
+  const branches = $derived([...new Set(workspaces.map(w => w.branch))]);
 
   // Off-functions captured from wails event subscriptions (subscribed synchronously in onMount).
   let offAgentEvent: (() => void) | null = null;
@@ -39,6 +53,9 @@
       if (!ws) return;
       if (ev.state) ws.state = ev.state;
       if (ev.approval) approvals[ev.workspaceId] = ev.approval;
+      if (ev.kind === "usage") {
+        usage[ev.workspaceId] = { tokens: ev.tokens ?? 0, cost: ev.cost ?? 0 };
+      }
     });
 
     offNotify = onNotify((n) => {
@@ -67,7 +84,31 @@
   }
 
   function openNewSession() {
-    // placeholder — NewSessionDialog wired in 4.25.6
+    newSessionOpen = true;
+  }
+
+  async function handleCreate(agent: string, repo: string, branch: string, model: string) {
+    const vm = await createWorkspace(agent, repo, branch, model);
+    workspaces = await listWorkspaces();
+    newSessionOpen = false;
+    activeId = vm.id;
+  }
+
+  function requestRemove(ws: WorkspaceVM) {
+    confirmRemove = ws;
+  }
+
+  async function handleConfirmRemove() {
+    if (!confirmRemove) return;
+    const id = confirmRemove.id;
+    confirmRemove = null;
+    await removeWorkspace(id);
+    workspaces = await listWorkspaces();
+    if (activeId === id) activeId = workspaces[0]?.id ?? null;
+  }
+
+  function handleCancelRemove() {
+    confirmRemove = null;
   }
 
   // ---------------------------------------------------------------------------
@@ -80,6 +121,7 @@
   const commands: Command[] = [
     // Session
     { id: "session:new",    group: "Session", label: "New session",        run: () => openNewSession() },
+    { id: "session:remove", group: "Session", label: "Remove session",     run: () => { if (active) requestRemove(active); } },
     // Worktree
     { id: "worktree:reveal", group: "Worktree", label: "Reveal in Files",  run: () => { if (active) revealInFiles(active.worktreePath); } },
     // View
@@ -169,7 +211,9 @@
             <div slot="primary">
               {#if active}
                 {#if layout.view === "agent"}
-                  <Terminal paneId={active.paneId} cwd={active.worktreePath} />
+                  <DragDrop paneId={active.paneId} fileDrop={true}>
+                    <Terminal paneId={active.paneId} cwd={active.worktreePath} />
+                  </DragDrop>
                 {:else if layout.view === "code"}
                   {#key fsVersion[active.id] ?? 0}
                     <FileTree root={active.worktreePath} onOpen={(p) => { codePath = p; }} />
@@ -239,6 +283,33 @@
         onClearRead={clearRead}
       />
     </div>
+
+    {#if active}
+      <div data-zone="token-meter" class="token-meter-dock">
+        <TokenMeter
+          tokens={usage[active.id]?.tokens ?? 0}
+          cost={usage[active.id]?.cost ?? 0}
+          capsTokens={active.caps.tokens}
+        />
+      </div>
+    {/if}
+
+    <NewSessionDialog
+      open={newSessionOpen}
+      {repos}
+      {branches}
+      onCreate={handleCreate}
+      onClose={() => { newSessionOpen = false; }}
+    />
+
+    <ConfirmDialog
+      open={confirmRemove !== null}
+      message={confirmRemove ? `Remove workspace "${confirmRemove.title}"?` : ""}
+      confirmLabel="Remove"
+      destructive={true}
+      onConfirm={handleConfirmRemove}
+      onCancel={handleCancelRemove}
+    />
   </div>
 </ThemeProvider>
 
@@ -259,4 +330,6 @@
                             width: 320px; max-height: 60vh; overflow-y: auto;
                             border-left: 1px solid var(--perch-border);
                             background: var(--perch-bg); }
+  .token-meter-dock      { position: absolute; bottom: 0; right: 0; z-index: 80;
+                            padding: 0.25rem 0.5rem; }
 </style>

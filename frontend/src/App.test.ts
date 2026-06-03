@@ -39,6 +39,13 @@ vi.mock("./lib/wails", () => ({
   saveSettings:    vi.fn(async () => {}),
   revealInFiles:   vi.fn(async () => {}),
   approve:         vi.fn(async () => {}),
+  createWorkspace: vi.fn(async (_agent: string, _repo: string, _branch: string, _model: string) => ({
+    id: "ws-new", title: "New", branch: "main", state: "idle",
+    worktreePath: "/tmp/new", agent: "claude", paneId: "p-new", lastActive: "",
+    caps: { approvals: false, attention: false, tokens: false },
+  })),
+  removeWorkspace: vi.fn(async () => {}),
+  writeToPty:      vi.fn(async () => {}),
   onAgentEvent:    vi.fn((cb) => { captured.agent.push(cb);     return () => {}; }),
   onNotify:        vi.fn((cb) => { captured.notify.push(cb);    return () => {}; }),
   onFsChanged:     vi.fn((cb) => { captured.fsChanged.push(cb); return () => {}; }),
@@ -630,5 +637,208 @@ describe("App.svelte approval card + notification hub (4.25.5)", () => {
     await waitFor(() =>
       expect(screen.getByText("Hub test notification")).toBeInTheDocument()
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 4.25.6a: Dialogs + DragDrop + TokenMeter + usage storage
+// ---------------------------------------------------------------------------
+
+describe("App.svelte TokenMeter + usage storage (4.25.6a)", () => {
+  const tokenWorkspaces = [
+    {
+      id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
+      worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
+      caps: { approvals: false, attention: false, tokens: true }, // caps.tokens=true → meter visible
+    },
+  ];
+
+  it("usage agent event for active workspace makes TokenMeter show those tokens", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(tokenWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    // Select ws-1 to make it active
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    await tick();
+
+    // Fire a usage event
+    const cb = captured.agent.at(-1)!;
+    cb({ workspaceId: "ws-1", kind: "usage", tokens: 12345, cost: 0.07 });
+    await tick();
+
+    // TokenMeter (caps.tokens=true) should render and show the token count
+    await waitFor(() => {
+      const meter = screen.getByRole("status", { name: "token usage" });
+      expect(meter).toBeInTheDocument();
+      expect(meter.textContent).toContain("12,345");
+    });
+  });
+});
+
+describe("App.svelte NewSessionDialog (4.25.6a)", () => {
+  it("Sidebar onNew / openNewSession opens the dialog; submitting calls createWorkspace and refreshes", async () => {
+    const { listWorkspaces, createWorkspace } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce([
+        {
+          id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
+          worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
+          caps: { approvals: false, attention: false, tokens: false },
+        },
+      ])
+      .mockResolvedValue([]); // subsequent listWorkspaces after create
+
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    // Workspaces loaded
+    await screen.findByRole("button", { name: "Alpha" });
+
+    // Dialog must not be visible yet
+    expect(screen.queryByRole("dialog", { name: "new session" })).not.toBeInTheDocument();
+
+    // Click the Sidebar "New session" CTA — triggers onNew → openNewSession → newSessionOpen=true
+    const newBtn = screen.getByRole("button", { name: "New session" });
+    await fireEvent.click(newBtn);
+    await tick();
+
+    // Dialog should now be visible
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "new session" })).toBeInTheDocument()
+    );
+
+    // Hit the "Create" button inside the dialog
+    const createBtn = screen.getByRole("button", { name: "Create" });
+    await fireEvent.click(createBtn);
+    await tick();
+
+    // createWorkspace must have been called
+    expect(createWorkspace).toHaveBeenCalled();
+
+    // Dialog must close
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "new session" })).not.toBeInTheDocument()
+    );
+  });
+
+  it("session:new command also opens NewSessionDialog", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    const { mode } = await import("./lib/stores/mode.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await tick();
+
+    // Open palette and run session:new
+    await fireEvent.keyDown(document.body, { key: ":" });
+    await tick();
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "command palette" })).toBeInTheDocument()
+    );
+    const newItem = screen.getByRole("option", { name: /new session/i });
+    await fireEvent.click(newItem);
+    await tick();
+
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "new session" })).toBeInTheDocument()
+    );
+  });
+});
+
+describe("App.svelte ConfirmDialog (workspace remove) (4.25.6a)", () => {
+  it("session:remove command shows ConfirmDialog; confirming calls removeWorkspace(id)", async () => {
+    const { listWorkspaces, removeWorkspace } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
+        worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
+        caps: { approvals: false, attention: false, tokens: false },
+      },
+    ]);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    // Select ws-1 to make it active (required for session:remove to find active)
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    await tick();
+
+    // No confirm dialog yet
+    expect(screen.queryByRole("dialog", { name: "confirm" })).not.toBeInTheDocument();
+
+    // Open palette and run session:remove
+    await fireEvent.keyDown(document.body, { key: ":" });
+    await tick();
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "command palette" })).toBeInTheDocument()
+    );
+    const removeItem = screen.getByRole("option", { name: /remove session/i });
+    await fireEvent.click(removeItem);
+    await tick();
+
+    // ConfirmDialog must appear
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "confirm" })).toBeInTheDocument()
+    );
+
+    // Click the "Remove" confirm button
+    const confirmBtn = screen.getByRole("button", { name: "Remove" });
+    await fireEvent.click(confirmBtn);
+    await tick();
+
+    // removeWorkspace called with the active workspace id
+    expect(removeWorkspace).toHaveBeenCalledWith("ws-1");
+
+    // Dialog closes
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "confirm" })).not.toBeInTheDocument()
+    );
+  });
+});
+
+describe("App.svelte DragDrop (4.25.6a)", () => {
+  it("dropping a file onto the agent terminal writes @path bytes via writeToPty", async () => {
+    const { listWorkspaces, writeToPty } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
+        worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
+        caps: { approvals: false, attention: false, tokens: false },
+      },
+    ]);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    // Select ws-1 and go to agent view
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    layout.setView("agent");
+    await tick();
+
+    // Get the DragDrop drop-zone
+    const dropZone = await screen.findByRole("region", { name: "drop zone" });
+    expect(dropZone).toBeInTheDocument();
+
+    // Create a File with a .path property (Wails/Electron-style)
+    const file = Object.assign(new File(["content"], "foo.ts"), { path: "/tmp/alpha/foo.ts" });
+
+    // Fire the drop event
+    await fireEvent.drop(dropZone, {
+      dataTransfer: { files: [file] },
+    });
+    await tick();
+
+    // writeToPty should have been called with the paneId and bytes encoding "@/tmp/alpha/foo.ts "
+    await waitFor(() => {
+      expect(writeToPty).toHaveBeenCalled();
+      const [calledPaneId, calledBytes] = (writeToPty as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(calledPaneId).toBe("p1");
+      const decoded = new TextDecoder().decode(new Uint8Array(calledBytes));
+      expect(decoded).toBe("@/tmp/alpha/foo.ts ");
+    });
   });
 });
