@@ -90,11 +90,11 @@ test("pty:exit event writes exit message", async ({ page }) => {
     { channel: `pty:exit:${PANE_ID}` }
   );
 
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(800);
 
-  // We can't reliably assert xterm DOM in headless, but we can assert the terminal
-  // container is still present (no crash/unmount from exit event).
-  await expect(page.locator('[data-pane="primary"] .terminal:not(.xterm)')).toBeVisible();
+  // Terminal.svelte writes `[process exited: ${code}]` into xterm on the exit event.
+  // Assert the literal substring appears in .xterm-rows (ANSI codes are stripped by xterm's DOM renderer).
+  await expect(page.locator('[data-pane="primary"] .xterm-rows')).toContainText("process exited", { timeout: 5000 });
 
   await page.screenshot({ path: path.join(SCREENSHOT_DIR, "terminal-after-exit.png"), fullPage: true });
 });

@@ -13,17 +13,17 @@ test("onCreate fires with agent, repo, branch, model", async () => {
     onCreate, onClose: () => {},
   }});
   await waitFor(() => screen.getByRole("dialog", { name: /new session/i }));
-  // Wait for branches to load asynchronously
+  // Wait for branches to load asynchronously — assert the specific mocked values are present.
   await waitFor(() => expect(screen.getByLabelText(/branch/i)).toBeInTheDocument());
   await waitFor(() => {
-    const branchSelect = screen.getByLabelText(/branch/i) as HTMLSelectElement;
-    expect(branchSelect.options.length).toBeGreaterThan(0);
+    expect(screen.getByRole("option", { name: "main" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "feat/x" })).toBeInTheDocument();
   });
   await fireEvent.change(screen.getByLabelText(/repo/i),   { target: { value: "/home/user/proj" } });
-  // After repo change, wait for branch options to reload
+  // After repo change, wait for branch options to reload with specific values.
   await waitFor(() => {
-    const branchSelect = screen.getByLabelText(/branch/i) as HTMLSelectElement;
-    expect(branchSelect.options.length).toBeGreaterThan(0);
+    expect(screen.getByRole("option", { name: "main" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "feat/x" })).toBeInTheDocument();
   });
   await fireEvent.change(screen.getByLabelText(/branch/i), { target: { value: "feat/x" } });
   await fireEvent.change(screen.getByLabelText(/model/i),  { target: { value: "claude-opus-4-5" } });

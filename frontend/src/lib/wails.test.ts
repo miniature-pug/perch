@@ -51,10 +51,13 @@ test("onFsChanged subscribes to fs:changed", async () => {
   expect(eventsOn).toHaveBeenCalledWith("fs:changed", expect.any(Function));
 });
 
-test("listWorkspaces dispatches to ListWorkspaces", async () => {
-  const ListWorkspaces = vi.fn(async () => []);
+test("listWorkspaces dispatches to ListWorkspaces and propagates return value", async () => {
+  const KNOWN_WORKSPACES = [{ id: "ws-1", title: "my session" }, { id: "ws-2", title: "other" }];
+  const ListWorkspaces = vi.fn(async () => KNOWN_WORKSPACES);
   (globalThis as any).go = { app: { App: { ListWorkspaces } } };
   const mod = await import("./wails");
-  await mod.listWorkspaces();
+  const result = await mod.listWorkspaces();
   expect(ListWorkspaces).toHaveBeenCalled();
+  // Assert the wrapper propagates the IPC return value to the caller — not just that it was called.
+  expect(result).toEqual(KNOWN_WORKSPACES);
 });
