@@ -19,7 +19,7 @@ ifeq (, $(shell command -v go))
 $(error 'go' not found on PATH)
 endif
 
-.PHONY: build install run gui-build gui-run test test-integration test-all coverage lint fmt vet tidy vendor verify vulncheck doctor clean cross
+.PHONY: build install run gui-build gui-run test test-integration test-all coverage lint fmt vet tidy vendor verify vulncheck verify-all doctor clean cross
 
 build:                ## build the binary into ./bin (vendored, reproducible); -tags production required for GUI
 	@mkdir -p $(BIN_DIR)
@@ -73,6 +73,10 @@ verify:               ## verify every module checksum matches go.sum
 
 vulncheck:            ## scan deps for known CVEs (pinned govulncheck)
 	@GOFLAGS= go run golang.org/x/vuln/cmd/govulncheck@$(GOVULN) ./...
+
+verify-all: vet lint vulncheck ## quality gates: vet + lint + govulncheck + tsc
+	npm --prefix frontend run check
+	@echo "==> All quality gates PASSED."
 
 doctor: build         ## run perch's own dependency check
 	@$(BIN_DIR)/$(BIN) doctor
