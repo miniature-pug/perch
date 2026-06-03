@@ -4,6 +4,7 @@ package fs
 import (
 	"bufio"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -148,6 +149,47 @@ func (w *Watcher) Close() error {
 // ReadFile reads and returns the contents of absPath.
 func ReadFile(absPath string) ([]byte, error) {
 	return os.ReadFile(absPath)
+}
+
+// RevealRunner is the seam for RevealInFiles so tests can inject a fake
+// without launching xdg-open.
+type RevealRunner interface {
+	Run(name string, args ...string) error
+}
+
+// execRevealRunner uses os/exec to run the command.
+type execRevealRunner struct{}
+
+func (execRevealRunner) Run(name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	return cmd.Run()
+}
+
+// revealRunner is the active runner; nil means use the default exec runner.
+var revealRunner RevealRunner
+
+// SetRevealRunner replaces the runner used by RevealInFiles. Pass nil to
+// restore the default (xdg-open via os/exec). For tests only.
+func SetRevealRunner(r RevealRunner) {
+	revealRunner = r
+}
+
+// RevealInFiles opens the directory containing absPath in the OS file manager
+// via xdg-open. The injectable runner seam allows tests to assert the command
+// without launching anything.
+func RevealInFiles(absPath string) error {
+	dir := filepath.Dir(absPath)
+	r := revealRunner
+	if r == nil {
+		r = execRevealRunner{}
+	}
+	return r.Run("xdg-open", dir)
+}
+
+// CopyPath returns absPath. The actual clipboard write is performed frontend-side;
+// this function exists so the app's bound method has a Go implementation to call.
+func CopyPath(absPath string) string {
+	return absPath
 }
 
 // WriteFile writes data to absPath atomically using a temp file + rename.
