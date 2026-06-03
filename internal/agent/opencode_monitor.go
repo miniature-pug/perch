@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 )
 
 type OpencodeMonitor struct {
@@ -59,7 +60,7 @@ func (m *OpencodeMonitor) StartSSE(ctx context.Context) {
 			if !strings.HasPrefix(line, "data: ") {
 				continue
 			}
-			m.translateSSE([]byte(strings.TrimPrefix(line, "data: ")))
+			m.translateSSE(ctx, []byte(strings.TrimPrefix(line, "data: ")))
 		}
 	}()
 }
@@ -79,7 +80,7 @@ type sseFrame struct {
 	Input json.RawMessage `json:"input"`
 }
 
-func (m *OpencodeMonitor) translateSSE(data []byte) {
+func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
 	var f sseFrame
 	if json.Unmarshal(data, &f) != nil {
 		return
@@ -113,7 +114,10 @@ func (m *OpencodeMonitor) translateSSE(data []byte) {
 		m.lastTool = ev.Approval.Tool
 	}
 	m.mu.Unlock()
-	m.events <- ev
+	select {
+	case m.events <- ev:
+	case <-ctx.Done():
+	}
 }
 
 func (m *OpencodeMonitor) Approve(reqID string, d Decision) error {
@@ -124,7 +128,9 @@ func (m *OpencodeMonitor) Approve(reqID string, d Decision) error {
 		decision = "once"
 	}
 	body, _ := json.Marshal(map[string]string{"permissionId": reqID, "decision": decision})
-	req, _ := http.NewRequest(http.MethodPost, m.serverURL+"/permission", bytes.NewReader(body))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, m.serverURL+"/permission", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+m.password)
 	resp, err := m.httpClient.Do(req)

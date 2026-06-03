@@ -111,11 +111,22 @@ func (l *Listener) handleHook(w http.ResponseWriter, r *http.Request) {
 		delete(l.reqs, ev.ReqID)
 		l.mu.Unlock()
 	}()
+	// Deliver the approval event — a blocking approval must not be dropped.
 	select {
 	case l.events <- ev:
-	default:
+	case <-r.Context().Done():
+		http.Error(w, "client gone", http.StatusServiceUnavailable)
+		return
 	}
-	d := <-p.ch
+	// Wait for the verdict, staying cancellable so client-disconnect or
+	// server shutdown never leaks this handler goroutine.
+	var d Decision
+	select {
+	case d = <-p.ch:
+	case <-r.Context().Done():
+		http.Error(w, "client gone", http.StatusServiceUnavailable)
+		return
+	}
 	perm := "deny"
 	if d.Allow {
 		perm = "allow"

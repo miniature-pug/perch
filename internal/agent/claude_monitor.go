@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -45,7 +46,7 @@ func (m *ClaudeMonitor) StartTranslating(ctx context.Context) {
 				if !ok {
 					return
 				}
-				m.translateAndEmit(he)
+				m.translateAndEmit(ctx, he)
 			}
 		}
 	}()
@@ -83,13 +84,17 @@ func (m *ClaudeMonitor) TailTranscript(ctx context.Context, transcriptPath strin
 			}
 			total := rec.Message.Usage.Input + rec.Message.Usage.Output
 			if total > 0 {
-				m.events <- Event{Kind: "usage", Tokens: total}
+				select {
+				case m.events <- Event{Kind: "usage", Tokens: total}:
+				case <-ctx.Done():
+					return
+				}
 			}
 		}
 	}()
 }
 
-func (m *ClaudeMonitor) translateAndEmit(he hooklistener.HookEvent) {
+func (m *ClaudeMonitor) translateAndEmit(ctx context.Context, he hooklistener.HookEvent) {
 	var ev Event
 	switch he.Type {
 	case "SessionStart":
@@ -120,7 +125,10 @@ func (m *ClaudeMonitor) translateAndEmit(he hooklistener.HookEvent) {
 		m.lastTool = ev.Approval.Tool
 	}
 	m.mu.Unlock()
-	m.events <- ev
+	select {
+	case m.events <- ev:
+	case <-ctx.Done():
+	}
 }
 
 func (m *ClaudeMonitor) Approve(reqID string, d Decision) error {
@@ -248,16 +256,18 @@ func isPerchMonitorGroup(g map[string]any) bool {
 }
 
 func (m *ClaudeMonitor) Teardown() error {
+	var rmErr error
 	if m.cwd != "" {
 		path := filepath.Join(m.cwd, ".claude", "settings.json")
 		if data, err := os.ReadFile(path); err == nil {
-			_ = removeMonitorHooks(path, data)
+			rmErr = removeMonitorHooks(path, data)
 		}
 	}
+	var closeErr error
 	if m.ownedLn && m.listener != nil {
-		return m.listener.Close()
+		closeErr = m.listener.Close()
 	}
-	return nil
+	return errors.Join(rmErr, closeErr)
 }
 
 func removeMonitorHooks(path string, data []byte) error {
@@ -303,7 +313,7 @@ func atomicWrite(path string, data []byte) error {
 		_ = os.Remove(name)
 		return err
 	}
-	mode := os.FileMode(0o644)
+	mode := os.FileMode(0o600)
 	if fi, err := os.Stat(path); err == nil {
 		mode = fi.Mode().Perm()
 	}

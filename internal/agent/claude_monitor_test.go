@@ -86,6 +86,22 @@ func TestClaudeMonitorPrepare(t *testing.T) {
 	if !foreignStillThere { t.Error("foreign Stop hook missing after Teardown") }
 }
 
+func TestClaudeMonitorSettingsFileMode(t *testing.T) {
+	m, _, cleanup := newMonitorWithTestListener(t)
+	defer cleanup()
+	worktree := filepath.Join(os.Getenv("HOME"), "repo-mode")
+	if err := os.MkdirAll(worktree, 0o755); err != nil { t.Fatal(err) }
+	// No pre-existing .claude/settings.json → Prepare creates it fresh.
+	if _, err := m.Prepare(context.Background(), "wsM", worktree, ""); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	fi, err := os.Stat(filepath.Join(worktree, ".claude", "settings.json"))
+	if err != nil { t.Fatalf("stat: %v", err) }
+	if perm := fi.Mode().Perm(); perm != 0o600 {
+		t.Errorf("settings.json mode = %o, want 600 (carries bearer token)", perm)
+	}
+}
+
 func TestClaudeMonitorTranscriptTail(t *testing.T) {
 	m, _, cleanup := newMonitorWithTestListener(t)
 	defer cleanup()
