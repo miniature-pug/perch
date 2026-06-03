@@ -222,12 +222,6 @@ func RevealInFiles(absPath string) error {
 	return r.Run("xdg-open", dir)
 }
 
-// CopyPath returns absPath. The actual clipboard write is performed frontend-side;
-// this function exists so the app's bound method has a Go implementation to call.
-func CopyPath(absPath string) string {
-	return absPath
-}
-
 // WriteFile writes data to absPath atomically using a temp file + rename.
 // If absPath already exists its permission bits are preserved; new files
 // get mode 0o644.

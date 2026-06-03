@@ -33,10 +33,17 @@ type spawnPtyFunc func(ctx context.Context, cwd string, argv []string, dataEvent
 
 type newMonitorFunc func(tool string, adapter agent.Adapter) (agent.Monitor, error)
 
+// newWatcherFunc is an injectable seam for the fs watcher (real fspkg.Watch in
+// NewApp, replaced with a fake in tests for headless execution).
+type newWatcherFunc func(absRoot string, onChange func(string)) (*fspkg.Watcher, error)
+
 // App is the Wails bound object.
 type App struct {
 	store *registry.Store
 	roots []string
+
+	// ctx is set by startup; used by CopyPath and other host-side runtime calls.
+	ctx context.Context
 
 	// run is the process runner for git invocations; nil falls back to a real
 	// ExecRunner via runner(). Tests may inject a fake.
@@ -54,6 +61,10 @@ type App struct {
 
 	spawnPty   spawnPtyFunc
 	newMonitor newMonitorFunc
+	newWatcher newWatcherFunc
+
+	// debounce is the coalescing window for fs:changed events.
+	debounce time.Duration
 
 	settingsPath string
 	layoutPath   string
@@ -71,6 +82,8 @@ func NewApp(store *registry.Store, roots []string) *App {
 		cancels:      map[string]context.CancelFunc{},
 		spawnPty:     internalpty.Spawn,
 		newMonitor:   agent.NewMonitor,
+		newWatcher:   fspkg.Watch,
+		debounce:     150 * time.Millisecond,
 		settingsPath: filepath.Join(registry.DefaultConfigDir(), "settings.json"),
 		layoutPath:   filepath.Join(registry.DefaultConfigDir(), "layout.json"),
 	}
@@ -87,6 +100,7 @@ func (a *App) runner() proc.Runner {
 
 // startup is the Wails OnStartup hook.
 func (a *App) startup(ctx context.Context) {
+	a.ctx = ctx
 	a.emit = func(event string, data ...any) {
 		wailsruntime.EventsEmit(ctx, event, data...)
 	}
@@ -386,13 +400,60 @@ func (a *App) OpenWorkspace(id string) error {
 	// REQUIRED: start the monitor's event pump (translation/SSE), bound to wctx.
 	mon.Start(wctx)
 
+	// Wire the fs watcher with a wctx-bound debounce goroutine. The watcher is
+	// started non-fatally: a failure degrades gracefully (no watcher) but never
+	// fails OpenWorkspace.
+	var watcher *fspkg.Watcher
+	if a.newWatcher != nil {
+		changes := make(chan string, 64)
+
+		// Debounce goroutine: coalesces raw onChange signals into a single
+		// fs:changed emit per debounce window, bound to wctx lifetime.
+		go func() {
+			var timer *time.Timer
+			var timerC <-chan time.Time
+			for {
+				select {
+				case <-wctx.Done():
+					if timer != nil {
+						timer.Stop()
+					}
+					return
+				case <-changes:
+					if timer == nil {
+						timer = time.NewTimer(a.debounce)
+						timerC = timer.C
+					}
+					// else: within window — coalesce (do nothing)
+				case <-timerC:
+					a.emit("fs:changed", map[string]any{"workspaceId": id, "path": w.WorktreePath})
+					timer = nil
+					timerC = nil
+				}
+			}
+		}()
+
+		onChange := func(_ string) {
+			select {
+			case changes <- "":
+			default:
+			}
+		}
+		// best-effort: a watcher failure must not fail OpenWorkspace
+		if wch, werr := a.newWatcher(w.WorktreePath, onChange); werr == nil {
+			watcher = wch
+		}
+	}
+
 	a.mu.Lock()
 	oldBr := a.bridges[paneID]
 	oldMon := a.monitors[id]
 	oldCancel := a.cancels[id]
 	a.bridges[paneID] = br
 	a.monitors[id] = mon
-	a.cancels[id] = cancel
+	// Composite cancel: cancels the wctx (stopping all goroutines) and closes
+	// the watcher. Rides CloseWorkspace, re-open displacement, and shutdown.
+	a.cancels[id] = func() { cancel(); if watcher != nil { _ = watcher.Close() } }
 	a.mu.Unlock()
 
 	if oldCancel != nil {
@@ -648,6 +709,15 @@ func (a *App) RevealInFiles(absPath string) error {
 		return err
 	}
 	return fspkg.RevealInFiles(absPath)
+}
+
+// CopyPath copies absPath to the system clipboard via the Wails runtime.
+// WebKit2GTK's navigator.clipboard is unreliable, so the copy happens host-side.
+func (a *App) CopyPath(absPath string) error {
+	if a.ctx == nil {
+		return nil
+	}
+	return wailsruntime.ClipboardSetText(a.ctx, absPath)
 }
 
 // Branches returns git branch names for the repo at repo.

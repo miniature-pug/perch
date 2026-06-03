@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Miniature-Pug/perch/internal/agent"
+	fspkg "github.com/Miniature-Pug/perch/internal/fs"
 	internalpty "github.com/Miniature-Pug/perch/internal/pty"
 	"github.com/Miniature-Pug/perch/internal/registry"
 )
@@ -1020,5 +1021,193 @@ func TestApp_Approve_AlwaysUsesWorkspaceAgent(t *testing.T) {
 	s, _ := a.GetSettings()
 	if len(s.AlwaysRules) == 0 || s.AlwaysRules[0].Agent != "opencode" {
 		t.Errorf("AlwaysRule agent = %v, want opencode", s.AlwaysRules)
+	}
+}
+
+// makeWatcherSeam returns a newWatcherFunc that captures the registered onChange
+// closure into *capturedOnChange and returns an inert real watcher on a temp dir.
+func makeWatcherSeam(t *testing.T, capturedOnChange *func(string)) newWatcherFunc {
+	t.Helper()
+	return func(absRoot string, onChange func(string)) (*fspkg.Watcher, error) {
+		*capturedOnChange = onChange
+		// Return a real watcher on a temp dir so Close() works correctly.
+		return fspkg.Watch(t.TempDir(), func(string) {})
+	}
+}
+
+// newWatcherTestApp builds a minimal App wired for watcher tests: fake spawnPty,
+// fake newMonitor, fake newWatcher, tiny debounce, and an emit capture seam.
+func newWatcherTestApp(t *testing.T, wt string, capturedOnChange *func(string)) (*App, func() []struct {
+	event string
+	data  []any
+}) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	_ = store.Upsert(registry.Workspace{ID: "ws-watch", WorktreePath: wt, Agent: "claude", Title: "t"})
+
+	var mu sync.Mutex
+	var emitted []struct {
+		event string
+		data  []any
+	}
+	emit := func(event string, data ...any) {
+		mu.Lock()
+		emitted = append(emitted, struct {
+			event string
+			data  []any
+		}{event, data})
+		mu.Unlock()
+	}
+
+	a := &App{
+		store:    store,
+		roots:    []string{wt},
+		emit:     emit,
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+		cancels:  map[string]context.CancelFunc{},
+		debounce: time.Millisecond,
+		spawnPty: func(_ context.Context, _ string, _ []string, _, _ string,
+			_ internalpty.EmitFunc, _, _ uint16) (*internalpty.Bridge, error) {
+			return internalpty.NewBridgeForTest(func() error { return nil }), nil
+		},
+		newMonitor: func(_ string, _ agent.Adapter) (agent.Monitor, error) {
+			return agent.NewFakeMonitor(nil), nil
+		},
+		newWatcher: makeWatcherSeam(t, capturedOnChange),
+	}
+
+	snapshot := func() []struct {
+		event string
+		data  []any
+	} {
+		mu.Lock()
+		defer mu.Unlock()
+		out := make([]struct {
+			event string
+			data  []any
+		}, len(emitted))
+		copy(out, emitted)
+		return out
+	}
+	return a, snapshot
+}
+
+// countFsChanged counts emitted events with event == "fs:changed".
+func countFsChanged(events []struct {
+	event string
+	data  []any
+}) int {
+	n := 0
+	for _, e := range events {
+		if e.event == "fs:changed" {
+			n++
+		}
+	}
+	return n
+}
+
+// TestApp_Watcher_RegisteredOnOpen asserts that opening a workspace registers
+// an onChange closure (Test A).
+func TestApp_Watcher_RegisteredOnOpen(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	wt := t.TempDir()
+	var capturedOnChange func(string)
+	a, _ := newWatcherTestApp(t, wt, &capturedOnChange)
+
+	if err := a.OpenWorkspace("ws-watch"); err != nil {
+		t.Fatalf("OpenWorkspace: %v", err)
+	}
+	if capturedOnChange == nil {
+		t.Fatal("newWatcher was not called with an onChange closure")
+	}
+}
+
+// TestApp_Watcher_EmitsFsChanged asserts that invoking onChange once results
+// in exactly one fs:changed event (after the debounce window) with the correct
+// payload (Test B).
+func TestApp_Watcher_EmitsFsChanged(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	wt := t.TempDir()
+	var capturedOnChange func(string)
+	a, snapshot := newWatcherTestApp(t, wt, &capturedOnChange)
+
+	if err := a.OpenWorkspace("ws-watch"); err != nil {
+		t.Fatalf("OpenWorkspace: %v", err)
+	}
+	if capturedOnChange == nil {
+		t.Fatal("onChange not captured")
+	}
+
+	// Fire one raw change.
+	capturedOnChange("somefile.go")
+
+	// Wait long enough for the debounce timer (1ms) to fire; 50ms is ample.
+	time.Sleep(50 * time.Millisecond)
+
+	events := snapshot()
+	if n := countFsChanged(events); n != 1 {
+		t.Errorf("fs:changed emit count = %d, want 1", n)
+	}
+	// Verify payload.
+	for _, e := range events {
+		if e.event != "fs:changed" {
+			continue
+		}
+		if len(e.data) == 0 {
+			t.Fatal("fs:changed emitted with no data")
+		}
+		payload, ok := e.data[0].(map[string]any)
+		if !ok {
+			t.Fatalf("fs:changed data[0] type = %T, want map[string]any", e.data[0])
+		}
+		if payload["workspaceId"] != "ws-watch" {
+			t.Errorf("workspaceId = %v, want ws-watch", payload["workspaceId"])
+		}
+		if payload["path"] != wt {
+			t.Errorf("path = %v, want %s", payload["path"], wt)
+		}
+	}
+}
+
+// TestApp_Watcher_NoEmitAfterClose asserts that after CloseWorkspace the debounce
+// goroutine has exited: additional onChange calls must not produce new fs:changed
+// events. This proves the goroutine exits on wctx cancellation (Test C — no leak).
+func TestApp_Watcher_NoEmitAfterClose(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	wt := t.TempDir()
+	var capturedOnChange func(string)
+	a, snapshot := newWatcherTestApp(t, wt, &capturedOnChange)
+
+	if err := a.OpenWorkspace("ws-watch"); err != nil {
+		t.Fatalf("OpenWorkspace: %v", err)
+	}
+	if capturedOnChange == nil {
+		t.Fatal("onChange not captured")
+	}
+
+	// Close the workspace — this cancels wctx and closes the watcher.
+	if err := a.CloseWorkspace("ws-watch"); err != nil {
+		t.Fatalf("CloseWorkspace: %v", err)
+	}
+
+	// Give the goroutine time to observe the cancellation.
+	time.Sleep(20 * time.Millisecond)
+
+	// Record the fs:changed count before any additional onChange calls.
+	before := countFsChanged(snapshot())
+
+	// Fire additional raw changes — the goroutine must be dead, so no new emits.
+	capturedOnChange("after-close.go")
+	capturedOnChange("after-close2.go")
+
+	// Wait long enough that any spurious timer would have fired.
+	time.Sleep(50 * time.Millisecond)
+
+	after := countFsChanged(snapshot())
+	if after != before {
+		t.Errorf("fs:changed emitted after CloseWorkspace: before=%d after=%d — goroutine leak", before, after)
 	}
 }

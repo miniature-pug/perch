@@ -38,11 +38,3 @@ func TestRevealInFiles_CallsXdgOpen(t *testing.T) {
 	}
 }
 
-func TestCopyPath_ReturnsPath(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	const absPath = "/some/abs/path/to/file.go"
-	got := fs.CopyPath(absPath)
-	if got != absPath {
-		t.Errorf("CopyPath(%q) = %q, want %q", absPath, got, absPath)
-	}
-}
