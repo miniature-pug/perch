@@ -115,6 +115,12 @@ func NewBridgeForTest(closer func() error) *Bridge {
 	return &Bridge{closer: closer}
 }
 
+// NewBridgeForTestWithResize returns a Bridge whose closer and resize are the
+// supplied funcs. For app tests that assert Resize routing without a real pty.
+func NewBridgeForTestWithResize(closer func() error, resize func(cols, rows uint16) error) *Bridge {
+	return &Bridge{closer: closer, setsize: resize}
+}
+
 func pumpReader(r io.Reader, event string, emit EmitFunc, maxChunk int) {
 	buf := make([]byte, maxChunk)
 	for {

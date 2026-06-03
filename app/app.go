@@ -435,6 +435,69 @@ func (a *App) dispatchNotify(evt agent.Event) {
 	}
 }
 
+// WriteToPty forwards keystrokes (a JSON number array from xterm.js) to the
+// pane's pty. The []int→[]byte conversion is the inverse of the data pump.
+func (a *App) WriteToPty(paneID string, data []int) error {
+	a.mu.Lock()
+	br, ok := a.bridges[paneID]
+	a.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("unknown pane %q", paneID)
+	}
+	b := make([]byte, len(data))
+	for i, v := range data {
+		b[i] = byte(v)
+	}
+	_, err := br.Write(b)
+	return err
+}
+
+// ResizePty applies new dimensions to the pane's pty.
+func (a *App) ResizePty(paneID string, cols, rows uint16) error {
+	a.mu.Lock()
+	br, ok := a.bridges[paneID]
+	a.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("unknown pane %q", paneID)
+	}
+	return br.Resize(cols, rows)
+}
+
+// CloseWorkspace cancels the workspace pump, tears down the monitor, and closes
+// the pty — but keeps the workspace record in the registry (it can be reopened).
+func (a *App) CloseWorkspace(id string) error {
+	paneID := "pane-" + id
+	a.mu.Lock()
+	br := a.bridges[paneID]
+	delete(a.bridges, paneID)
+	mon := a.monitors[id]
+	delete(a.monitors, id)
+	var cancel context.CancelFunc
+	if a.cancels != nil {
+		cancel = a.cancels[id]
+		delete(a.cancels, id)
+	}
+	a.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	if mon != nil {
+		_ = mon.Teardown()
+	}
+	if br != nil {
+		_ = br.Close()
+	}
+	return nil
+}
+
+// RemoveWorkspace closes the workspace (pump + monitor + pty) and removes it
+// from the registry permanently.
+func (a *App) RemoveWorkspace(id string) error {
+	_ = a.CloseWorkspace(id)
+	return a.store.Remove(id)
+}
+
 // agentAdapter returns the Adapter for a known tool name, or nil for unknown.
 func agentAdapter(tool string) agent.Adapter {
 	switch tool {

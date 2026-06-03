@@ -518,3 +518,114 @@ func TestApp_OpenWorkspace_UnknownID(t *testing.T) {
 		t.Fatal("must error on unknown workspace ID")
 	}
 }
+
+func TestApp_WriteToPty_RoutesToBridge(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	var written []byte
+	var mu sync.Mutex
+	br := internalpty.NewBridgeForTest(func() error { return nil })
+	br.OverrideWriteForTest(func(p []byte) (int, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		written = append(written, p...)
+		return len(p), nil
+	})
+
+	a := &App{
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{"pane-ws1": br},
+		monitors: map[string]agent.Monitor{},
+	}
+	if err := a.WriteToPty("pane-ws1", []int{104, 101, 108, 108, 111}); err != nil {
+		t.Fatalf("WriteToPty: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if string(written) != "hello" {
+		t.Errorf("pty received %q, want hello", written)
+	}
+}
+
+func TestApp_WriteToPty_UnknownPane(t *testing.T) {
+	a := &App{
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+	}
+	if err := a.WriteToPty("no-pane", []int{65}); err == nil {
+		t.Fatal("must error for unknown pane")
+	}
+}
+
+func TestApp_ResizePty_Succeeds(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	var resized bool
+	br := internalpty.NewBridgeForTestWithResize(func() error { return nil },
+		func(_, _ uint16) error { resized = true; return nil })
+	a := &App{
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{"pane-ws2": br},
+		monitors: map[string]agent.Monitor{},
+	}
+	if err := a.ResizePty("pane-ws2", 120, 40); err != nil {
+		t.Fatalf("ResizePty: %v", err)
+	}
+	if !resized {
+		t.Error("Resize was not called on the bridge")
+	}
+}
+
+func TestApp_CloseWorkspace_ClosesAndKeepsInRegistry(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	wt := t.TempDir()
+	_ = store.Upsert(registry.Workspace{ID: "ws-close", WorktreePath: wt, Agent: "claude", Title: "t"})
+
+	closed := false
+	br := internalpty.NewBridgeForTest(func() error { closed = true; return nil })
+	fm := agent.NewFakeMonitor(nil)
+
+	a := &App{
+		store:    store,
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{"pane-ws-close": br},
+		monitors: map[string]agent.Monitor{"ws-close": fm},
+	}
+
+	if err := a.CloseWorkspace("ws-close"); err != nil {
+		t.Fatalf("CloseWorkspace: %v", err)
+	}
+	if !closed {
+		t.Error("Bridge must be closed")
+	}
+	if !fm.TornDown() {
+		t.Error("Monitor must be torn down")
+	}
+	if _, ok := store.Get("ws-close"); !ok {
+		t.Error("CloseWorkspace must NOT remove workspace from registry")
+	}
+}
+
+func TestApp_RemoveWorkspace_RemovesFromRegistry(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	wt := t.TempDir()
+	_ = store.Upsert(registry.Workspace{ID: "ws-rm", WorktreePath: wt, Agent: "claude", Title: "t"})
+
+	fm := agent.NewFakeMonitor(nil)
+	a := &App{
+		store:    store,
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{"ws-rm": fm},
+	}
+
+	if err := a.RemoveWorkspace("ws-rm"); err != nil {
+		t.Fatalf("RemoveWorkspace: %v", err)
+	}
+	if _, ok := store.Get("ws-rm"); ok {
+		t.Error("RemoveWorkspace must remove workspace from registry")
+	}
+}
