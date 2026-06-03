@@ -32,6 +32,7 @@ const captured = {
 vi.mock("./lib/wails", () => ({
   listWorkspaces:  vi.fn(async () => []),
   openWorkspace:   vi.fn(async () => {}),
+  closeWorkspace:  vi.fn(async () => {}),
   openShell:       vi.fn(async () => {}),
   getLayout:       vi.fn(async () => "{}"),
   saveLayout:      vi.fn(async () => {}),
@@ -618,7 +619,7 @@ describe("App.svelte approval card + notification hub (4.25.5)", () => {
     );
   });
 
-  it("NotificationHub renders and shows notifications from the store", async () => {
+  it("NotificationHub renders and shows notifications from the store (hub opened via bell)", async () => {
     const { listWorkspaces } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(approvalWorkspaces);
     const { default: App } = await import("./App.svelte");
@@ -631,7 +632,12 @@ describe("App.svelte approval card + notification hub (4.25.5)", () => {
     cb({ tier: "blocking", title: "Hub test notification", body: "Hub body", workspaceId: "ws-1" });
     await tick();
 
-    // NotificationHub is always rendered; "notification hub" section must be present
+    // NotificationHub is now behind {#if notifOpen} — open it first via the bell
+    const bellBtn = screen.getByRole("button", { name: "notifications" });
+    await fireEvent.click(bellBtn);
+    await tick();
+
+    // Hub must now be visible
     expect(screen.getByRole("region", { name: "notification hub" })).toBeInTheDocument();
 
     // The notification title should appear in the hub
@@ -1145,5 +1151,221 @@ describe("App.svelte keymap: TERMINAL leave sequence (4.25.6b)", () => {
     expect(layout.view).toBe("agent");
     // No workspace became active
     expect(screen.queryByRole("button", { name: "Alpha" })?.getAttribute("aria-current")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 4.25.6c: New command-registry entries + bell-opens-hub + unread badge
+// ---------------------------------------------------------------------------
+
+describe("App.svelte 4.25.6c: session:close command", () => {
+  it("dispatching session:close calls closeWorkspace(active.id) but does NOT remove the workspace from the list", async () => {
+    const { listWorkspaces, closeWorkspace } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
+        worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
+        caps: { approvals: false, attention: false, tokens: false },
+      },
+    ]);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    await tick();
+
+    // Dispatch session:close via MenuBar: Session menu → Close session
+    const sessionMenu = screen.getByRole("menuitem", { name: "Session" });
+    await fireEvent.click(sessionMenu);
+    await tick();
+    const closeItem = screen.getByRole("menuitem", { name: "Close session" });
+    await fireEvent.click(closeItem);
+    await tick();
+
+    expect(closeWorkspace).toHaveBeenCalledWith("ws-1");
+    // Workspace must still be in the sidebar list
+    expect(screen.getByRole("button", { name: "Alpha" })).toBeInTheDocument();
+  });
+});
+
+describe("App.svelte 4.25.6c: worktree:open command", () => {
+  it("dispatching worktree:open calls openWorkspace(active.id)", async () => {
+    const { listWorkspaces, openWorkspace } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
+        worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
+        caps: { approvals: false, attention: false, tokens: false },
+      },
+    ]);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    await tick();
+    vi.mocked(openWorkspace).mockClear();
+
+    // Dispatch via Worktree menu → Open worktree
+    const worktreeMenu = screen.getByRole("menuitem", { name: "Worktree" });
+    await fireEvent.click(worktreeMenu);
+    await tick();
+    const openItem = screen.getByRole("menuitem", { name: "Open worktree" });
+    await fireEvent.click(openItem);
+    await tick();
+
+    expect(openWorkspace).toHaveBeenCalledWith("ws-1");
+  });
+});
+
+describe("App.svelte 4.25.6c: agent:approve-all / deny-all", () => {
+  const twoApprovalWorkspaces = [
+    {
+      id: "ws-1", title: "Alpha", branch: "main", state: "awaiting-approval" as const,
+      worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
+      caps: { approvals: true, attention: false, tokens: false },
+    },
+    {
+      id: "ws-2", title: "Beta", branch: "feat/beta", state: "awaiting-approval" as const,
+      worktreePath: "/tmp/beta", agent: "claude", paneId: "p2", lastActive: "",
+      caps: { approvals: true, attention: false, tokens: false },
+    },
+  ];
+
+  it("agent:approve-all calls approve(reqId,'allow') for every pending approval and clears them", async () => {
+    const { listWorkspaces, approve } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(twoApprovalWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    await screen.findByRole("button", { name: "Alpha" });
+
+    // Inject approval events for both workspaces
+    const cb = captured.agent.at(-1)!;
+    cb({ workspaceId: "ws-1", kind: "approval", state: "awaiting-approval",
+         approval: { reqId: "req-a1", tool: "bash", summary: "Alpha approval" } });
+    cb({ workspaceId: "ws-2", kind: "approval", state: "awaiting-approval",
+         approval: { reqId: "req-b1", tool: "bash", summary: "Beta approval" } });
+    await tick();
+
+    // Dispatch agent:approve-all via Agent menu
+    const agentMenu = screen.getByRole("menuitem", { name: "Agent" });
+    await fireEvent.click(agentMenu);
+    await tick();
+    const approveAllItem = screen.getByRole("menuitem", { name: "Approve all pending" });
+    await fireEvent.click(approveAllItem);
+
+    await waitFor(() => {
+      expect(approve).toHaveBeenCalledWith("req-a1", "allow");
+      expect(approve).toHaveBeenCalledWith("req-b1", "allow");
+    });
+
+    // After settling, make ws-1 active and confirm its approval card is gone
+    await fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Allow" })).not.toBeInTheDocument()
+    );
+  });
+
+  it("agent:approve-all partial failure: failed approval stays; a blocking notification added", async () => {
+    const { listWorkspaces, approve } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(twoApprovalWorkspaces);
+    // First call rejects (ws-1), second succeeds (ws-2)
+    vi.mocked(approve).mockRejectedValueOnce(new Error("network error"));
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    await screen.findByRole("button", { name: "Alpha" });
+
+    const { getItems } = await import("./lib/stores/notifications.svelte");
+    const notifBefore = getItems().length;
+
+    const cb = captured.agent.at(-1)!;
+    cb({ workspaceId: "ws-1", kind: "approval", state: "awaiting-approval",
+         approval: { reqId: "req-fail", tool: "bash", summary: "Will fail" } });
+    cb({ workspaceId: "ws-2", kind: "approval", state: "awaiting-approval",
+         approval: { reqId: "req-ok", tool: "bash", summary: "Will pass" } });
+    await tick();
+
+    // Dispatch approve-all
+    const agentMenu = screen.getByRole("menuitem", { name: "Agent" });
+    await fireEvent.click(agentMenu);
+    await tick();
+    const approveAllItem = screen.getByRole("menuitem", { name: "Approve all pending" });
+    await fireEvent.click(approveAllItem);
+
+    // Wait for the async command to settle
+    await waitFor(() => {
+      const items = getItems();
+      expect(items.some(n => n.title === "Approval failed")).toBe(true);
+    });
+
+    // A blocking notification was added for the failure
+    const items = getItems();
+    expect(items.length).toBeGreaterThan(notifBefore);
+    expect(items.some(n => n.title === "Approval failed")).toBe(true);
+
+    // ws-1's approval was NOT cleared (ws-1 still has a pending entry)
+    // Select ws-1 and check the card
+    await fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument()
+    );
+  });
+});
+
+describe("App.svelte 4.25.6c: notifications:open toggles hub", () => {
+  it("hub not in DOM initially; clicking bell shows it; clicking again hides it", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await tick();
+
+    // Hub must NOT be in DOM initially
+    expect(screen.queryByRole("region", { name: "notification hub" })).not.toBeInTheDocument();
+
+    // Click the bell → hub opens
+    const bell = screen.getByRole("button", { name: "notifications" });
+    await fireEvent.click(bell);
+    await tick();
+    await waitFor(() =>
+      expect(screen.getByRole("region", { name: "notification hub" })).toBeInTheDocument()
+    );
+
+    // Click again → hub closes
+    await fireEvent.click(bell);
+    await tick();
+    await waitFor(() =>
+      expect(screen.queryByRole("region", { name: "notification hub" })).not.toBeInTheDocument()
+    );
+  });
+});
+
+describe("App.svelte 4.25.6c: unread badge on MenuBar bell", () => {
+  it("MenuBar badge reflects the count of unread notifications from the store", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await tick();
+
+    // Capture current rendered badge count (store may have items from earlier tests)
+    const { getItems } = await import("./lib/stores/notifications.svelte");
+    const unreadBefore = getItems().filter(n => !n.read).length;
+
+    // Inject a blocking notification via the notify callback (unread by default)
+    const cb = captured.notify.at(-1)!;
+    cb({ tier: "blocking", title: "Badge test", body: "body", workspaceId: "ws-1" });
+    await tick();
+
+    // The badge must now show unreadBefore+1
+    const expectedCount = unreadBefore + 1;
+    await waitFor(() => {
+      const badge = document.querySelector(".badge");
+      expect(badge).toBeInTheDocument();
+      expect(badge!.textContent).toBe(String(expectedCount));
+    });
   });
 });

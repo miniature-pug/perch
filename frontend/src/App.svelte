@@ -20,7 +20,7 @@
   import ApprovalCard       from "./lib/ApprovalCard.svelte";
   import NotificationHub    from "./lib/NotificationHub.svelte";
   import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead } from "./lib/stores/notifications.svelte";
-  import { listWorkspaces, createWorkspace, removeWorkspace, openWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, approve, branches } from "./lib/wails";
+  import { listWorkspaces, createWorkspace, removeWorkspace, openWorkspace, closeWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, approve, branches } from "./lib/wails";
   import type { WorkspaceVM, ApprovalReq } from "./lib/wails";
 
   let workspaces = $state<WorkspaceVM[]>([]);
@@ -39,11 +39,13 @@
   // Svelte action: focus the node immediately on mount (avoids a11y warning from autofocus attr).
   function focusOnMount(node: HTMLElement) { node.focus(); }
 
-  // Dialog state
+  // Dialog / overlay state
   let newSessionOpen  = $state(false);
   let confirmRemove   = $state<WorkspaceVM | null>(null);
+  let notifOpen       = $state(false);
 
-  const active = $derived(workspaces.find(w => w.id === activeId) ?? null);
+  const active       = $derived(workspaces.find(w => w.id === activeId) ?? null);
+  const unreadCount  = $derived(getItems().filter(n => !n.read).length);
 
   // Filtered workspace list for Sidebar (j/k also operate on this list when filtering).
   const shownWorkspaces = $derived(
@@ -131,13 +133,15 @@
   // ---------------------------------------------------------------------------
   const THEMES = ["gruvbox", "tokyo-night", "catppuccin", "dracula", "nord", "rose-pine", "one-dark", "perch-cyan", "light"];
 
-  type Command = { id: string; group: string; label: string; keybinding?: string; run: () => void };
+  type Command = { id: string; group: string; label: string; keybinding?: string; run: () => void | Promise<void> };
 
   const commands: Command[] = [
     // Session
     { id: "session:new",    group: "Session", label: "New session",        run: () => openNewSession() },
+    { id: "session:close",  group: "Session", label: "Close session",      run: () => { if (active) closeWorkspace(active.id); } },
     { id: "session:remove", group: "Session", label: "Remove session",     run: () => { if (active) requestRemove(active); } },
     // Worktree
+    { id: "worktree:open",   group: "Worktree", label: "Open worktree",    run: () => { if (active) openWorkspace(active.id); } },
     { id: "worktree:reveal", group: "Worktree", label: "Reveal in Files",  run: () => { if (active) revealInFiles(active.worktreePath); } },
     // View
     { id: "view:agent", group: "View", label: "Agent view",  keybinding: "1", run: () => layout.setView("agent") },
@@ -149,8 +153,34 @@
         settings.setTheme(THEMES[(idx + 1) % THEMES.length]);
       },
     },
+    // Agent bulk actions
+    { id: "agent:approve-all", group: "Agent", label: "Approve all pending", run: async () => {
+        const entries = Object.entries(approvals);
+        const results = await Promise.allSettled(entries.map(([, req]) => approve(req.reqId, "allow")));
+        const next = { ...approvals };
+        results.forEach((res, i) => {
+          const [wsId] = entries[i];
+          if (res.status === "fulfilled") { delete next[wsId]; }
+          else { addBlocking(wsId, "Approval failed", String(res.reason)); }
+        });
+        approvals = next;
+      },
+    },
+    { id: "agent:deny-all", group: "Agent", label: "Deny all pending", run: async () => {
+        const entries = Object.entries(approvals);
+        const results = await Promise.allSettled(entries.map(([, req]) => approve(req.reqId, "deny")));
+        const next = { ...approvals };
+        results.forEach((res, i) => {
+          const [wsId] = entries[i];
+          if (res.status === "fulfilled") { delete next[wsId]; }
+          else { addBlocking(wsId, "Approval failed", String(res.reason)); }
+        });
+        approvals = next;
+      },
+    },
     // Notifications
-    { id: "notifications:dnd", group: "Notifications", label: "Toggle Do Not Disturb", run: () => setDnd(!getDnd()) },
+    { id: "notifications:open", group: "Notifications", label: "Open notifications", run: () => { notifOpen = !notifOpen; } },
+    { id: "notifications:dnd",  group: "Notifications", label: "Toggle Do Not Disturb", run: () => setDnd(!getDnd()) },
   ];
 
   function runCommand(id: string) {
@@ -287,7 +317,7 @@
 
 <ThemeProvider theme={settings.theme} density={settings.density}>
   <div class="app-root">
-    <MenuBar onCommand={(id) => runCommand(id)} />
+    <MenuBar onCommand={(id) => runCommand(id)} {unreadCount} />
 
     <div class="main-area">
       <aside data-zone="sidebar" class="sidebar-zone" style:width="{layout.sidebarW}px">
@@ -384,15 +414,17 @@
       </div>
     {/if}
 
-    <div data-zone="notification-hub" class="notification-hub-dock">
-      <NotificationHub
-        items={getItems()}
-        dnd={getDnd()}
-        onDismiss={(id) => markRead(id)}
-        onToggleDnd={() => setDnd(!getDnd())}
-        onClearRead={clearRead}
-      />
-    </div>
+    {#if notifOpen}
+      <div data-zone="notification-hub" class="notification-hub-dock">
+        <NotificationHub
+          items={getItems()}
+          dnd={getDnd()}
+          onDismiss={(id) => markRead(id)}
+          onToggleDnd={() => setDnd(!getDnd())}
+          onClearRead={clearRead}
+        />
+      </div>
+    {/if}
 
     {#if active}
       <div data-zone="token-meter" class="token-meter-dock">
