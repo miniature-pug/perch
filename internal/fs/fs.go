@@ -89,3 +89,43 @@ func matchesAny(name string, patterns []string) bool {
 	}
 	return false
 }
+
+// ReadFile reads and returns the contents of absPath.
+func ReadFile(absPath string) ([]byte, error) {
+	return os.ReadFile(absPath)
+}
+
+// WriteFile writes data to absPath atomically using a temp file + rename.
+// If absPath already exists its permission bits are preserved; new files
+// get mode 0o644.
+func WriteFile(absPath string, data []byte) error {
+	mode := os.FileMode(0o644)
+	if info, err := os.Stat(absPath); err == nil {
+		mode = info.Mode().Perm()
+	}
+	dir := filepath.Dir(absPath)
+	tmp, err := os.CreateTemp(dir, ".write-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, absPath); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	return nil
+}
