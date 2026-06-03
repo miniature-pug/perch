@@ -21,6 +21,9 @@ vi.mock("./lib/DiffView.svelte", async () => ({
 vi.mock("./lib/FileTree.svelte", async () => ({
   default: (await import("./lib/__stubs__/FileTreeProbe.svelte")).default,
 }));
+vi.mock("./lib/Preview.svelte", async () => ({
+  default: (await import("./lib/__stubs__/PreviewProbe.svelte")).default,
+}));
 
 // Captured callbacks for the wails event helpers — reset in beforeEach.
 const captured = {
@@ -39,6 +42,7 @@ vi.mock("./lib/wails", () => ({
   getSettings:     vi.fn(async () => ({})),
   saveSettings:    vi.fn(async () => {}),
   revealInFiles:   vi.fn(async () => {}),
+  readFile:        vi.fn(async () => "# mock content"),
   approve:         vi.fn(async () => {}),
   createWorkspace: vi.fn(async (_agent: string, _repo: string, _branch: string, _model: string) => ({
     id: "ws-new", title: "New", branch: "main", state: "idle",
@@ -214,6 +218,35 @@ describe("App.svelte Stage content routing (4.25.2)", () => {
     await waitFor(() =>
       expect(screen.getByTestId("editor").dataset.path).toBe("/some/file.ts")
     );
+  });
+
+  it("code view: .md path → PreviewProbe mounts (NOT Editor); .go path → Editor mounts (NOT Preview)", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    layout.setView("code");
+    await tick();
+
+    // Open a .md file via the FileTreeProbe "open markdown" button
+    const openMdBtn = screen.getByRole("button", { name: "open markdown" });
+    await fireEvent.click(openMdBtn);
+    await waitFor(() => {
+      expect(screen.getByTestId("preview")).toBeInTheDocument();
+      expect(screen.getByTestId("preview").dataset.path).toBe("/some/file.md");
+      expect(screen.queryByTestId("editor")).not.toBeInTheDocument();
+    });
+
+    // Open a .ts file via the FileTreeProbe "open file" button → Editor mounts, Preview gone
+    const openTsBtn = screen.getByRole("button", { name: "open file" });
+    await fireEvent.click(openTsBtn);
+    await waitFor(() => {
+      expect(screen.getByTestId("editor")).toBeInTheDocument();
+      expect(screen.queryByTestId("preview")).not.toBeInTheDocument();
+    });
   });
 
   it("view='diff' → DiffProbe mounted with active worktree", async () => {
@@ -572,7 +605,7 @@ describe("App.svelte approval card + notification hub (4.25.5)", () => {
     );
 
     // But must NOT be inside the stage zone
-    const stageEl = document.querySelector("[data-zone='stage']")!;
+    const stageEl = document.querySelector<HTMLElement>("[data-zone='stage']")!;
     expect(stageEl).toBeInTheDocument();
     expect(within(stageEl).queryByText("Unique docking summary text")).toBeNull();
   });

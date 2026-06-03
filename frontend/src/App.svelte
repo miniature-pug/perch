@@ -6,7 +6,9 @@
   import ShellDrawer        from "./lib/ShellDrawer.svelte";
   import Terminal           from "./lib/Terminal.svelte";
   import Editor             from "./lib/Editor.svelte";
+  import Preview            from "./lib/Preview.svelte";
   import FileTree           from "./lib/FileTree.svelte";
+  import { isPreviewable, previewKind } from "./lib/preview";
   import DiffView           from "./lib/DiffView.svelte";
   import MenuBar            from "./lib/MenuBar.svelte";
   import CommandPalette     from "./lib/CommandPalette.svelte";
@@ -21,13 +23,14 @@
   import ApprovalCard       from "./lib/ApprovalCard.svelte";
   import NotificationHub    from "./lib/NotificationHub.svelte";
   import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead } from "./lib/stores/notifications.svelte";
-  import { listWorkspaces, createWorkspace, removeWorkspace, openWorkspace, closeWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, approve, branches } from "./lib/wails";
+  import { listWorkspaces, createWorkspace, removeWorkspace, openWorkspace, closeWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, approve, branches, readFile } from "./lib/wails";
   import type { WorkspaceVM, ApprovalReq } from "./lib/wails";
 
-  let workspaces = $state<WorkspaceVM[]>([]);
-  let activeId   = $state<string | null>(null);
-  let codePath   = $state<string | null>(null);
-  let approvals  = $state<Record<string, ApprovalReq>>({});
+  let workspaces      = $state<WorkspaceVM[]>([]);
+  let activeId        = $state<string | null>(null);
+  let codePath        = $state<string | null>(null);
+  let previewContent  = $state<string>("");
+  let approvals       = $state<Record<string, ApprovalReq>>({});
   let fsVersion  = $state<Record<string, number>>({});
   let usage      = $state<Record<string, { tokens: number; cost: number }>>({});
 
@@ -36,6 +39,15 @@
   let pendingLeave = $state(false);
   let filtering    = $state(false);
   let filterQuery  = $state("");
+
+  // Load file content when codePath changes to a previewable (non-image) file.
+  $effect(() => {
+    if (codePath && isPreviewable(codePath) && previewKind(codePath) !== "image") {
+      readFile(codePath).then((c) => { previewContent = c; }).catch(() => { previewContent = ""; });
+    } else {
+      previewContent = "";
+    }
+  });
 
   // Svelte action: focus the node immediately on mount (avoids a11y warning from autofocus attr).
   function focusOnMount(node: HTMLElement) { node.focus(); }
@@ -356,7 +368,11 @@
                 {:else if layout.view === "code"}
                   {#key fsVersion[active.id] ?? 0}
                     <FileTree root={active.worktreePath} onOpen={(p) => { codePath = p; }} />
-                    <Editor path={codePath} worktree={active.worktreePath} />
+                    {#if isPreviewable(codePath)}
+                      <Preview path={codePath ?? ""} kind={previewKind(codePath ?? "")} content={previewContent} />
+                    {:else}
+                      <Editor path={codePath} worktree={active.worktreePath} />
+                    {/if}
                   {/key}
                 {:else if layout.view === "diff"}
                   {#key fsVersion[active.id] ?? 0}
@@ -374,7 +390,11 @@
                 {:else if layout.view === "code"}
                   {#key fsVersion[active.id] ?? 0}
                     <FileTree root={active.worktreePath} onOpen={(p) => { codePath = p; }} />
-                    <Editor path={codePath} worktree={active.worktreePath} />
+                    {#if isPreviewable(codePath)}
+                      <Preview path={codePath ?? ""} kind={previewKind(codePath ?? "")} content={previewContent} />
+                    {:else}
+                      <Editor path={codePath} worktree={active.worktreePath} />
+                    {/if}
                   {/key}
                 {:else if layout.view === "diff"}
                   {#key fsVersion[active.id] ?? 0}

@@ -10,7 +10,7 @@ test("onPtyData subscribes with colon-separated event name and decodes bytes", a
   let received: Uint8Array | undefined;
   mod.onPtyData("pane1", (b) => (received = b));
   expect(eventsOn).toHaveBeenCalledWith("pty:data:pane1", expect.any(Function));
-  const [, cb] = eventsOn.mock.calls[0] as [string, (d: number[]) => void];
+  const [, cb] = eventsOn.mock.calls[0] as unknown as [string, (d: number[]) => void];
   cb([104, 105]);
   expect(received).toEqual(Uint8Array.from([104, 105]));
 });
@@ -38,7 +38,7 @@ test("onAgentEvent subscribes to agent:event", async () => {
   const received: any[] = [];
   mod.onAgentEvent((ev) => received.push(ev));
   expect(eventsOn).toHaveBeenCalledWith("agent:event", expect.any(Function));
-  const [, cb] = eventsOn.mock.calls[eventsOn.mock.calls.length - 1] as [string, Function];
+  const [, cb] = eventsOn.mock.calls[eventsOn.mock.calls.length - 1] as unknown as [string, Function];
   cb({ workspaceId: "ws1", kind: "state", state: "running" });
   expect(received[0]).toMatchObject({ workspaceId: "ws1", kind: "state" });
 });
