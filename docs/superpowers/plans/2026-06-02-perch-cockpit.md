@@ -8355,7 +8355,75 @@ git commit -m "feat(pty): emit pty:exit:<paneID> {code} on process exit (reaper 
 
 ### Task B2 (backend backfill): emit `fs:changed` `{workspaceId,path}` — MUST land before Task 4.15
 
-**Why inserted:** frozen event table mandates `fs:changed` → `{ workspaceId, path }` (emitter: fs.Watcher), but Phase 3 never wired the watcher into `OpenWorkspace`. Task 4.7's `onFsChanged` subscribes to a dead event; FileTree (4.15) / DiffView refresh on it. Frozen-contract gap. **Design must be finalized after reading `internal/fs/fs.go`** — the existing Watcher's recursion, `.git`/gitignore filtering, debounce, and close-semantics decide the wiring (see properties 1–4 below). Slot a `newWatcherFunc` seam (like `spawnPty`/`newMonitor`) so the app-level test is deterministic; test the real Watcher separately in `internal/fs`. Lifecycle: start in `OpenWorkspace` bound to `wctx`, so the existing `cancels` map closes it on CloseWorkspace / re-open displacement / shutdown — no new bookkeeping. Must `select` on `wctx.Done()` and `defer watcher.Close()` (mirror the monitor-pump invariant; never block solely on the events channel). MUST exclude `.git` (an agent's git ops churn it constantly → IPC flood) and coalesce editor temp-write bursts. (Full TDD spec authored at implementation time against the real fs.go API.)
+**Why inserted:** frozen event table mandates `fs:changed` → `{ workspaceId, path }` (emitter: fs.Watcher), but Phase 3 never wired a watcher into `OpenWorkspace`. Task 4.7's `onFsChanged` subscribes to a dead event; FileTree (4.15, lazy `listDir` per dir) and DiffView (re-`diffStat`) refresh on it. Frozen-contract gap. (Advisor-vetted design below, finalized against the real `internal/fs/fs.go`.)
+
+**fs.go reality (decides the design):** the existing `Watch`/`Watcher` is single-level (`fw.Add(absRoot)` only — fsnotify is non-recursive), has NO `.git`/gitignore filter, and NO debounce. `loadGitignorePatterns`/`matchesAny` already exist in fs.go. `Watch` is unused in prod (only `watcher_test.go` references it). FileTree shows nested dirs, so root-only watch is useless for agent edits → make the worktree watch RECURSIVE.
+
+**This task batches in `copyPath`** (the only other backend backfill the 4.15–4.24 reconciliation found): 4.15 imports `copyPath` but app.go has no `CopyPath` bind and wails.ts no export; `internal/fs.CopyPath` is a no-op stub returning its input (called only by its own test). Per advisor: don't ship the round-trip-that-returns-its-input.
+
+#### Part 1 — recursive watcher (`internal/fs/fs.go` + `internal/fs/watcher_test.go`)
+
+Make `Watch` recursive (keep the same `Watch(absRoot, onChange) (*Watcher, error)` signature):
+- Load root `.gitignore` patterns via existing `loadGitignorePatterns(filepath.Join(absRoot, ".gitignore"))`.
+- Extract a PURE predicate (unit-tested deterministically — that's where the bugs live):
+  ```go
+  // shouldExclude reports whether a directory base name must not be watched:
+  // always ".git", plus anything matching the root .gitignore patterns.
+  func shouldExclude(name string, patterns []string) bool {
+      if name == ".git" { return true }
+      return matchesAny(name, patterns)
+  }
+  ```
+- Walk with `filepath.WalkDir(absRoot, ...)`: for each DIR, if `shouldExclude(d.Name(), patterns)` return `filepath.SkipDir`; else `fw.Add(path)`. Adding individual subdirs is best-effort — a failed `Add` (perms/ENOSPC) is skipped, not fatal, so a partial tree still watches. The root `Add` failing IS fatal (return error, like today).
+- In `loop()`: keep calling `onChange(event.Name)` RAW (no debounce — the app layer coalesces, keeping this test deterministic). ADDITIONALLY, on a create event for a new directory, watch it: if `event.Op&fsnotify.Create != 0`, `os.Stat(event.Name)`; if it's a dir and `!shouldExclude(filepath.Base(event.Name), patterns)`, `_ = w.fw.Add(event.Name)` (best-effort) so newly-created subtrees stay covered.
+
+Tests (`watcher_test.go`): keep the existing `TestWatcher_FileCreateFiresOnChange` (root-level create still fires) + `TestWatcher_Close`. Add:
+- `TestShouldExclude` — pure: `.git`→true; a gitignored name (e.g. pattern `node_modules`)→true; an ordinary name→false. (No fsnotify; fully deterministic.)
+- `TestWatcher_NestedFileFiresOnChange` — create `absRoot/sub/`, then after a short settle create `absRoot/sub/f.txt`; assert onChange fires for the nested file (proves recursion + dynamic add). Use a buffered chan + a generous `select`/timeout; `t.TempDir()` for the root; no real agents.
+- `TestWatcher_GitDirExcluded` — create `absRoot/.git/`, write `absRoot/.git/x`; assert NO onChange fires for the `.git` path within a short window (best-effort: assert the .git path is never delivered).
+
+#### Part 2 — app wiring (`app/app.go` + `app/app_test.go`)
+
+- Add a `ctx context.Context` field to `App`; set it in `startup` (`a.ctx = ctx`) — needed by `CopyPath` (and harmless for emit, which already captures ctx in its closure).
+- Add the seam: `type newWatcherFunc func(absRoot string, onChange func(string)) (*fspkg.Watcher, error)`; field `newWatcher newWatcherFunc`; in `NewApp` set `newWatcher: fspkg.Watch`. Add a `debounce time.Duration` field defaulting (in `NewApp`) to `150 * time.Millisecond` (tests inject a tiny value, e.g. `1ms`, for determinism).
+- In `OpenWorkspace`, after the monitor pump goroutine is started: start the watcher NON-FATALLY:
+  ```go
+  var watcher *fspkg.Watcher
+  if w2, werr := a.newWatcher(w.WorktreePath, nil); werr == nil { // see note: onChange wiring below
+      watcher = w2
+  } // a watcher error is logged-and-degraded, never fails OpenWorkspace
+  ```
+  Wire `onChange` to feed a debounce goroutine bound to `wctx`. The watcher's raw `onChange` pushes the changed path onto a buffered channel; a `wctx`-bound goroutine coalesces: on first event start a `debounce` timer, drop intermediate events, and on timer fire `a.emit("fs:changed", map[string]any{"workspaceId": id, "path": w.WorktreePath})`. (Consumers refresh-all — DiffView re-`diffStat`, FileTree re-`listDir`s — so emitting the worktree root as `path` is sufficient and avoids per-path bookkeeping.) The goroutine `select`s on `wctx.Done()` and returns on cancel (mirror the monitor-pump invariant; never block solely on the events channel).
+  Practical wiring order: build the debounce channel + goroutine first, then pass an `onChange` closure that does a non-blocking send to that channel into `a.newWatcher(w.WorktreePath, onChange)`.
+- **Composite cancel**: replace `a.cancels[id] = cancel` with a composite that also closes the watcher:
+  ```go
+  a.cancels[id] = func() { cancel(); if watcher != nil { _ = watcher.Close() } }
+  ```
+  This rides CloseWorkspace, re-open displacement (`oldCancel`), and `shutdown` for free — no new map.
+- `app_test.go`: inject a fake `newWatcher` that captures the registered `onChange` and returns a `*fspkg.Watcher` you can drive (or returns a real watcher on a `t.TempDir()`). Assert: (a) opening a workspace registers a watcher; (b) firing `onChange` results (after the tiny injected debounce) in exactly one `fs:changed` emit with `{workspaceId, path}`; (c) `CloseWorkspace` closes the watcher (no goroutine leak — verify the emit goroutine exits on cancel). Drop `t.Parallel()` from any test using `t.Setenv`.
+
+#### Part 3 — copyPath via clipboard (`app/app.go`, `frontend/src/lib/wails.ts`, `internal/fs/fs.go`)
+
+- Add bound method using the stored ctx + Wails runtime clipboard:
+  ```go
+  // CopyPath copies absPath to the system clipboard. WebKit2GTK's navigator.clipboard
+  // is unreliable, so the copy happens host-side via the Wails runtime.
+  func (a *App) CopyPath(absPath string) error {
+      if a.ctx == nil { return nil }
+      _, err := wailsruntime.ClipboardSetText(a.ctx, absPath)
+      return err
+  }
+  ```
+  (Optionally validate `absPath` is under roots for consistency — but it's a non-destructive clipboard write of a string; validation is nice-to-have, not required. Match the surrounding methods: a lightweight `containedUnderRoots` check is fine.)
+- `wails.ts`: add `export const copyPath = (absPath: string) => app().CopyPath(absPath);` and `CopyPath(absPath: string): Promise<void>;` to the `App` interface.
+- DELETE the dead stub: remove `CopyPath` from `internal/fs/fs.go` and `TestCopyPath_ReturnsPath` from `internal/fs/reveal_test.go`.
+
+**Commit (Parts 1–3 may be two commits — fs watcher, then app wiring+copyPath):**
+```bash
+git commit -m "feat(fs): recursive .git/gitignore-excluding watcher (shouldExclude pure-tested)"
+git commit -m "feat(app): emit debounced fs:changed per workspace; CopyPath via clipboard; drop fs.CopyPath stub"
+```
+Run after: `go test -race ./internal/fs/ ./app/` green; `go build ./... && go vet ./...` clean.
 
 ---
 
