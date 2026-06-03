@@ -1,0 +1,18 @@
+/* perch design tokens — structure, type, spacing, motion. Palette lives in themes.css. */
+:root {
+  --perch-font-sans: "Geist", "IBM Plex Sans", "Inter", system-ui, sans-serif;
+  --perch-font-mono: "Geist Mono", "IBM Plex Mono", "Fira Code", ui-monospace, monospace;
+  --perch-fs-code: 14px;    --perch-lh-code: 1.55;
+  --perch-fs-shell: 13px;   --perch-lh-shell: 1.5;
+  --perch-fs-body: 13px;    --perch-fs-caption: 12px;   --perch-fs-label: 11px;
+  /* 8pt spacing grid; multiplied by --perch-density-scale at point-of-use */
+  --perch-density-scale: 1;
+  --perch-sp-1: 8px;  --perch-sp-2: 16px; --perch-sp-3: 24px; --perch-sp-4: 32px;
+  --perch-sp-5: 40px; --perch-sp-6: 48px; --perch-sp-7: 56px; --perch-sp-8: 64px;
+  /* Motion */
+  --perch-dur: 120ms;
+  --perch-ease: cubic-bezier(.4,0,.2,1);
+}
+[data-density="dense"]       { --perch-density-scale: 0.75; }
+[data-density="comfortable"] { --perch-density-scale: 1; }
+[data-density="ultra"]       { --perch-density-scale: 1.25; }
