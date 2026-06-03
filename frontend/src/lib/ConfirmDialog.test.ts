@@ -51,3 +51,13 @@ test("does not render when closed", async () => {
   });
   expect(screen.queryByRole("dialog")).toBeNull();
 });
+
+test("undo affordance shown for destructive ops", async () => {
+  const { default: ConfirmDialog } = await import("./ConfirmDialog.svelte");
+  render(ConfirmDialog, { props: {
+    open: true, message: "Remove workspace?", destructive: true,
+    onConfirm: () => {}, onCancel: () => {},
+  }});
+  await waitFor(() => screen.getByRole("dialog", { name: /confirm/i }));
+  expect(screen.getByText(/undo/i)).toBeInTheDocument();
+});
