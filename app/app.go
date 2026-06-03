@@ -8,6 +8,7 @@ package app
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Miniature-Pug/perch/internal/agent"
+	gitpkg "github.com/Miniature-Pug/perch/internal/git"
 	internalpty "github.com/Miniature-Pug/perch/internal/pty"
 	"github.com/Miniature-Pug/perch/internal/proc"
 	"github.com/Miniature-Pug/perch/internal/registry"
@@ -235,4 +237,64 @@ type AlwaysRule struct {
 	Agent   string `json:"agent"`
 	Tool    string `json:"tool"`
 	Pattern string `json:"pattern"`
+}
+
+// CreateWorkspace validates inputs, resolves/creates the worktree, persists the
+// workspace to the registry, and returns its WorkspaceVM. It does NOT start the
+// agent — call OpenWorkspace for that. The model arg is reserved for launch-time
+// configuration and is not yet plumbed to the agent.
+func (a *App) CreateWorkspace(agentName, repoPath, branch, model string) (WorkspaceVM, error) {
+	// Gate 1: repoPath must exist under a configured root.
+	if err := validateWorktreeUnderRoots(repoPath, a.roots); err != nil {
+		return WorkspaceVM{}, err
+	}
+	// Gate 2: branch must be a valid git ref.
+	if err := gitpkg.ValidRef(branch); err != nil {
+		return WorkspaceVM{}, fmt.Errorf("invalid branch: %w", err)
+	}
+	// Gate 3: agent must be known.
+	if agentName != "claude" && agentName != "opencode" {
+		return WorkspaceVM{}, fmt.Errorf("unknown agent %q", agentName)
+	}
+
+	handle := gitpkg.SlugifyBranch(branch)
+	treePath, err := gitpkg.WorktreePath(repoPath, handle, "")
+	if err != nil {
+		return WorkspaceVM{}, err
+	}
+	if !containedUnderRoots(treePath, a.roots) {
+		return WorkspaceVM{}, fmt.Errorf("derived worktree path %q escapes all configured roots", treePath)
+	}
+
+	ctx := context.Background()
+	// Create the linked worktree; an already-existing branch is not fatal.
+	if err := gitpkg.AddWorktree(ctx, a.runner(), repoPath, branch, treePath, "HEAD"); err != nil {
+		if !errors.Is(err, gitpkg.ErrBranchExists) {
+			return WorkspaceVM{}, fmt.Errorf("create worktree: %w", err)
+		}
+	}
+
+	id, err := newWorkspaceID()
+	if err != nil {
+		return WorkspaceVM{}, err
+	}
+
+	w := registry.Workspace{
+		ID:           id,
+		WorktreePath: treePath,
+		Agent:        agentName,
+		Title:        handle,
+		LastActive:   time.Now(),
+	}
+	if err := a.store.Upsert(w); err != nil {
+		return WorkspaceVM{}, fmt.Errorf("persist workspace: %w", err)
+	}
+
+	return WorkspaceVM{
+		ID:           id,
+		WorktreePath: treePath,
+		Agent:        agentName,
+		Title:        handle,
+		State:        agent.StateIdle,
+	}, nil
 }

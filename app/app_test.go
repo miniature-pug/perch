@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -320,5 +321,88 @@ func TestApp_ListWorkspaces_LiveMonitorStatePropagated(t *testing.T) {
 	}
 	if vms[0].Caps != fm.Capabilities() {
 		t.Errorf("Caps not propagated from monitor")
+	}
+}
+
+func TestApp_CreateWorkspace_HappyPath(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	repo := filepath.Join(root, "proj")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"init", "-q", repo},
+		{"-C", repo, "-c", "user.email=t@t", "-c", "user.name=t",
+			"commit", "--allow-empty", "-qm", "init"},
+	} {
+		cmd := exec.Command("git", args...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+
+	a := &App{
+		store:    store,
+		roots:    []string{root},
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+	}
+
+	vm, err := a.CreateWorkspace("claude", repo, "feat/hello", "claude-opus-4-5")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+	if vm.ID == "" {
+		t.Fatal("ID must be non-empty")
+	}
+	if vm.Agent != "claude" {
+		t.Errorf("Agent = %q, want claude", vm.Agent)
+	}
+	if _, ok := store.Get(vm.ID); !ok {
+		t.Fatal("workspace must be persisted to registry")
+	}
+}
+
+func TestApp_CreateWorkspace_RejectsOutsideRoot(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+
+	a := &App{
+		store:    store,
+		roots:    []string{t.TempDir()},
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+	}
+
+	if _, err := a.CreateWorkspace("claude", "/etc", "feat/x", ""); err == nil {
+		t.Fatal("must reject path outside roots")
+	}
+}
+
+func TestApp_CreateWorkspace_RejectsInvalidAgent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	sub := filepath.Join(root, "proj")
+	_ = os.MkdirAll(sub, 0o755)
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+
+	a := &App{
+		store:    store,
+		roots:    []string{root},
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+	}
+	if _, err := a.CreateWorkspace("ghost", sub, "feat/x", ""); err == nil {
+		t.Fatal("must reject unknown agent")
 	}
 }
