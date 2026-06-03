@@ -5,8 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/Miniature-Pug/perch/internal/proc"
 )
 
 func TestValidateSessionID_AllowlistCharset(t *testing.T) {
@@ -125,13 +123,6 @@ func TestApp_CloseTerminal_RemovesEntry(t *testing.T) {
 	}
 	if _, ok := a.getBridge("t1"); ok {
 		t.Fatal("CloseTerminal should remove the registry entry")
-	}
-}
-
-func TestApp_Diff_RejectsOutsideRoots(t *testing.T) {
-	a := &App{run: proc.NewFakeRunner(), roots: []string{"/home/u/code"}}
-	if _, err := a.Diff("/etc"); err == nil {
-		t.Fatal("Diff outside roots should error")
 	}
 }
 

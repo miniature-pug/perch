@@ -16,7 +16,6 @@ import (
 
 	internalpty "github.com/Miniature-Pug/perch/internal/pty"
 	"github.com/Miniature-Pug/perch/internal/agent"
-	gitpkg "github.com/Miniature-Pug/perch/internal/git"
 	"github.com/Miniature-Pug/perch/internal/proc"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -201,31 +200,6 @@ func (a *App) CloseTerminal(tabID string) error {
 // KillSession stub — returns nil.
 func (a *App) KillSession(id string) error {
 	return nil
-}
-
-// DiffResult is the frontend view of a worktree's uncommitted diff.
-type DiffResult struct {
-	Patch   string `json:"patch"`
-	Files   int    `json:"files"`
-	Added   int    `json:"added"`
-	Removed int    `json:"removed"`
-}
-
-// Diff returns the uncommitted diff + stat for worktreePath. The path is
-// validated to live under a configured root before git is invoked via argv.
-func (a *App) Diff(worktreePath string) (DiffResult, error) {
-	if err := validateWorktreeUnderRoots(worktreePath, a.roots); err != nil {
-		return DiffResult{}, err
-	}
-	patch, err := gitpkg.Diff(context.Background(), a.run, worktreePath)
-	if err != nil {
-		return DiffResult{}, err
-	}
-	st, err := gitpkg.DiffStat(context.Background(), a.run, worktreePath)
-	if err != nil {
-		return DiffResult{}, err
-	}
-	return DiffResult{Patch: patch, Files: st.Files, Added: st.Added, Removed: st.Removed}, nil
 }
 
 // ── CreateAgent helpers ───────────────────────────────────────────────────────
