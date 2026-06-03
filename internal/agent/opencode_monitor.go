@@ -34,7 +34,12 @@ func NewOpencodeMonitorWithServer(a Adapter, serverURL, pw string) *OpencodeMoni
 func (m *OpencodeMonitor) Events() <-chan Event { return m.events }
 func (m *OpencodeMonitor) Capabilities() Caps  { return Caps{Approvals: true, Attention: true, Tokens: true} }
 
-func (m *OpencodeMonitor) Prepare(_ context.Context, _, cwd, _ string) (string, error) {
+// Prepare returns the opencode serve+attach launch command. The resumeID and
+// model params are accepted for interface conformance but are not yet wired:
+// opencode launches via serve+attach rather than per-session argv, so threading
+// model (--model) and session resume (--session) requires reshaping the attach
+// command and surfacing a session id from the SSE stream — a separate task.
+func (m *OpencodeMonitor) Prepare(_ context.Context, _, cwd, _, _ string) (string, error) {
 	return fmt.Sprintf(
 		"OPENCODE_SERVER_PASSWORD=%s opencode serve & opencode attach $OPENCODE_URL",
 		m.password), nil

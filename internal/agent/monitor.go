@@ -38,10 +38,13 @@ type Event struct {
 	Cost        float64      `json:"cost"`
 	Approval    *ApprovalReq `json:"approval,omitempty"`
 	Err         string       `json:"err,omitempty"`
+	// SessionID is populated on SessionStart events so the app layer can
+	// persist the active session id for resume on the next OpenWorkspace.
+	SessionID string `json:"sessionId,omitempty"`
 }
 
 type Monitor interface {
-	Prepare(ctx context.Context, workspaceID, cwd, resumeID string) (launchCmd string, err error)
+	Prepare(ctx context.Context, workspaceID, cwd, resumeID, model string) (launchCmd string, err error)
 	// Start launches the monitor's event pump (hook-event translation for claude,
 	// SSE consumption for opencode) bound to ctx. The pump runs until ctx is
 	// cancelled. Must be called after Prepare or no events ever flow.

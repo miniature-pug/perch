@@ -19,7 +19,7 @@ func TestFakeMonitorEventSequence(t *testing.T) {
 	}
 	f := agent.NewFakeMonitor(seq)
 
-	cmd, err := f.Prepare(context.Background(), "ws1", "/repo", "")
+	cmd, err := f.Prepare(context.Background(), "ws1", "/repo", "", "")
 	if err != nil || cmd == "" { t.Fatalf("Prepare: err=%v cmd=%q", err, cmd) }
 	caps := f.Capabilities()
 	if !caps.Approvals || !caps.Attention || !caps.Tokens {

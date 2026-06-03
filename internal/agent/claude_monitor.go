@@ -98,7 +98,7 @@ func (m *ClaudeMonitor) translateAndEmit(ctx context.Context, he hooklistener.Ho
 	var ev Event
 	switch he.Type {
 	case "SessionStart":
-		ev = Event{Kind: "state", State: StateRunning}
+		ev = Event{Kind: "state", State: StateRunning, SessionID: he.SessionID}
 	case "Stop":
 		ev = Event{Kind: "state", State: StateIdle}
 	case "StopFailure":
@@ -155,7 +155,7 @@ const perchMonitorSentinel = "perch-monitor-hook"
 
 var perchMonitorEvents = []string{"PreToolUse", "Stop", "StopFailure", "SessionStart"}
 
-func (m *ClaudeMonitor) Prepare(ctx context.Context, workspaceID, cwd, resumeID string) (string, error) {
+func (m *ClaudeMonitor) Prepare(ctx context.Context, workspaceID, cwd, resumeID, model string) (string, error) {
 	m.cwd = cwd
 	if m.listener == nil {
 		l, err := hooklistener.New()
@@ -170,9 +170,11 @@ func (m *ClaudeMonitor) Prepare(ctx context.Context, workspaceID, cwd, resumeID 
 	}
 	var args []string
 	if resumeID != "" {
+		// Resume: ignore model — the session already has a model.
 		args = m.adapter.ResumeArgs(resumeID)
 	} else {
-		args = m.adapter.NewArgs(NewOpts{})
+		// Fresh start: thread model through NewOpts so --model <m> is emitted.
+		args = m.adapter.NewArgs(NewOpts{Model: model})
 	}
 	return strings.Join(append([]string{m.adapter.Name()}, args...), " "), nil
 }

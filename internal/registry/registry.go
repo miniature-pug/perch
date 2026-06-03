@@ -13,11 +13,14 @@ import (
 
 // Workspace is the persistent record for one perch workspace.
 // JSON tags are frozen — do not rename. New fields may be added.
+// Missing fields in stored JSON default to the Go zero value on load
+// (e.g. Model=="" for records written before model plumbing was added).
 type Workspace struct {
 	ID            string    `json:"id"`
 	WorktreePath  string    `json:"worktreePath"`
 	Agent         string    `json:"agent"`
 	LastSessionID string    `json:"lastSessionID"`
+	Model         string    `json:"model,omitempty"`
 	Title         string    `json:"title"`
 	Branch        string    `json:"branch"`
 	LastActive    time.Time `json:"lastActive"`

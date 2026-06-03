@@ -1172,6 +1172,260 @@ func TestApp_Watcher_EmitsFsChanged(t *testing.T) {
 	}
 }
 
+// ── Feature 1: model plumbing ─────────────────────────────────────────────────
+
+// TestApp_CreateWorkspace_PersistsModel verifies that the model arg is stored in
+// the registry record when a workspace is created.
+func TestApp_CreateWorkspace_PersistsModel(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	repo := filepath.Join(root, "proj")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"init", "-q", repo},
+		{"-C", repo, "-c", "user.email=t@t", "-c", "user.name=t",
+			"commit", "--allow-empty", "-qm", "init"},
+	} {
+		cmd := exec.Command("git", args...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	a := &App{
+		store:    store,
+		roots:    []string{root},
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+	}
+
+	vm, err := a.CreateWorkspace("claude", repo, "feat/model-test", "claude-opus-4-5")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+	w, ok := store.Get(vm.ID)
+	if !ok {
+		t.Fatal("workspace not found in registry")
+	}
+	if w.Model != "claude-opus-4-5" {
+		t.Errorf("Model = %q, want claude-opus-4-5", w.Model)
+	}
+}
+
+// TestApp_OpenWorkspace_ModelReachesAgent verifies that the Model stored in the
+// registry workspace is passed through to Monitor.Prepare (and thus the agent
+// launch args) on a fresh-start open (no LastSessionID).
+func TestApp_OpenWorkspace_ModelReachesAgent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	wt := t.TempDir()
+	_ = store.Upsert(registry.Workspace{
+		ID:           "ws-model",
+		WorktreePath: wt,
+		Agent:        "claude",
+		Title:        "t",
+		Model:        "claude-sonnet-4-5",
+	})
+
+	var capturedFM *agent.FakeMonitor
+	a := &App{
+		store:    store,
+		roots:    []string{wt},
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+		cancels:  map[string]context.CancelFunc{},
+		spawnPty: func(_ context.Context, _ string, _ []string, _, _ string,
+			_ internalpty.EmitFunc, _, _ uint16) (*internalpty.Bridge, error) {
+			return internalpty.NewBridgeForTest(func() error { return nil }), nil
+		},
+		newMonitor: func(_ string, _ agent.Adapter) (agent.Monitor, error) {
+			fm := agent.NewFakeMonitor(nil)
+			capturedFM = fm
+			return fm, nil
+		},
+	}
+
+	if err := a.OpenWorkspace("ws-model"); err != nil {
+		t.Fatalf("OpenWorkspace: %v", err)
+	}
+	if capturedFM == nil {
+		t.Fatal("FakeMonitor was not created")
+	}
+	if got := capturedFM.CapturedModel(); got != "claude-sonnet-4-5" {
+		t.Errorf("Prepare received model=%q, want claude-sonnet-4-5", got)
+	}
+	// No prior session: resumeID must be empty (fresh start path).
+	if got := capturedFM.CapturedResumeID(); got != "" {
+		t.Errorf("Prepare received resumeID=%q, want empty (fresh start)", got)
+	}
+}
+
+// ── Feature 2: session resume ─────────────────────────────────────────────────
+
+// TestApp_OpenWorkspace_SessionIDPersistedOnSessionStart verifies that when the
+// monitor emits a SessionStart event carrying a session id, the app persists it
+// to LastSessionID in the registry.
+func TestApp_OpenWorkspace_SessionIDPersistedOnSessionStart(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	wt := t.TempDir()
+	_ = store.Upsert(registry.Workspace{
+		ID:           "ws-ses",
+		WorktreePath: wt,
+		Agent:        "claude",
+		Title:        "t",
+	})
+
+	fm := agent.NewFakeMonitor(nil)
+	a := &App{
+		store:    store,
+		roots:    []string{wt},
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+		cancels:  map[string]context.CancelFunc{},
+		spawnPty: func(_ context.Context, _ string, _ []string, _, _ string,
+			_ internalpty.EmitFunc, _, _ uint16) (*internalpty.Bridge, error) {
+			return internalpty.NewBridgeForTest(func() error { return nil }), nil
+		},
+		newMonitor: func(_ string, _ agent.Adapter) (agent.Monitor, error) {
+			return fm, nil
+		},
+	}
+
+	if err := a.OpenWorkspace("ws-ses"); err != nil {
+		t.Fatalf("OpenWorkspace: %v", err)
+	}
+
+	// Simulate a SessionStart event carrying a session id.
+	fm.Replay(agent.Event{Kind: "state", State: agent.StateRunning, SessionID: "ses_abc123"})
+
+	// Poll until the registry is updated (the pump goroutine is async).
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if w, ok := store.Get("ws-ses"); ok && w.LastSessionID == "ses_abc123" {
+			return // pass
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	w, _ := store.Get("ws-ses")
+	t.Errorf("LastSessionID = %q, want ses_abc123", w.LastSessionID)
+}
+
+// TestApp_OpenWorkspace_ResumeUsesLastSessionID verifies that on a second
+// OpenWorkspace call after a session id has been persisted, the stored
+// LastSessionID is passed as resumeID to Monitor.Prepare.
+func TestApp_OpenWorkspace_ResumeUsesLastSessionID(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	wt := t.TempDir()
+	// Pre-seed a workspace that already has a LastSessionID (simulating the
+	// state after a previous open + SessionStart).
+	_ = store.Upsert(registry.Workspace{
+		ID:            "ws-resume",
+		WorktreePath:  wt,
+		Agent:         "claude",
+		Title:         "t",
+		LastSessionID: "ses_resume42",
+	})
+
+	var lastFM *agent.FakeMonitor
+	a := &App{
+		store:    store,
+		roots:    []string{wt},
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+		cancels:  map[string]context.CancelFunc{},
+		spawnPty: func(_ context.Context, _ string, _ []string, _, _ string,
+			_ internalpty.EmitFunc, _, _ uint16) (*internalpty.Bridge, error) {
+			return internalpty.NewBridgeForTest(func() error { return nil }), nil
+		},
+		newMonitor: func(_ string, _ agent.Adapter) (agent.Monitor, error) {
+			fm := agent.NewFakeMonitor(nil)
+			lastFM = fm
+			return fm, nil
+		},
+	}
+
+	if err := a.OpenWorkspace("ws-resume"); err != nil {
+		t.Fatalf("OpenWorkspace: %v", err)
+	}
+	if lastFM == nil {
+		t.Fatal("FakeMonitor was not created")
+	}
+	if got := lastFM.CapturedResumeID(); got != "ses_resume42" {
+		t.Errorf("Prepare received resumeID=%q, want ses_resume42", got)
+	}
+}
+
+// ── Feature 3: gitignore-aware file tree ──────────────────────────────────────
+
+// TestApp_ListDir_HonorsGitignore verifies that App.ListDir excludes entries
+// matching .gitignore patterns (e.g. node_modules/) from its output.
+func TestApp_ListDir_HonorsGitignore(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+
+	// Create a .gitignore that excludes node_modules/ and *.log.
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("node_modules/\n*.log\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Create items that should be included.
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Create items that should be excluded.
+	if err := os.MkdirAll(filepath.Join(dir, "node_modules"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "debug.log"), []byte("log"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	a := &App{
+		store:    store,
+		roots:    []string{dir},
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+	}
+
+	nodes, err := a.ListDir(dir)
+	if err != nil {
+		t.Fatalf("ListDir: %v", err)
+	}
+
+	for _, n := range nodes {
+		if n.Name == "node_modules" {
+			t.Error("node_modules should be excluded by .gitignore")
+		}
+		if n.Name == "debug.log" {
+			t.Error("debug.log should be excluded by .gitignore (*.log pattern)")
+		}
+	}
+	found := false
+	for _, n := range nodes {
+		if n.Name == "main.go" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("main.go should be present (not gitignored)")
+	}
+}
+
 // TestApp_Watcher_NoEmitAfterClose asserts that after CloseWorkspace the debounce
 // goroutine has exited: additional onChange calls must not produce new fs:changed
 // events. This proves the goroutine exits on wctx cancellation (Test C — no leak).

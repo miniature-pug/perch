@@ -294,8 +294,8 @@ type AlwaysRule struct {
 
 // CreateWorkspace validates inputs, resolves/creates the worktree, persists the
 // workspace to the registry, and returns its WorkspaceVM. It does NOT start the
-// agent — call OpenWorkspace for that. The model arg is reserved for launch-time
-// configuration and is not yet plumbed to the agent.
+// agent — call OpenWorkspace for that. The model arg is stored in the workspace
+// record and passed to the agent via Prepare on fresh-start (non-resume) opens.
 func (a *App) CreateWorkspace(agentName, repoPath, branch, model string) (WorkspaceVM, error) {
 	// Gate 1: repoPath must exist under a configured root.
 	if err := validateWorktreeUnderRoots(repoPath, a.roots); err != nil {
@@ -339,6 +339,7 @@ func (a *App) CreateWorkspace(agentName, repoPath, branch, model string) (Worksp
 		Agent:        agentName,
 		Title:        handle,
 		Branch:       branch,
+		Model:        model,
 		LastActive:   now,
 	}
 	if err := a.store.Upsert(w); err != nil {
@@ -390,7 +391,7 @@ func (a *App) OpenWorkspace(id string) error {
 		return fmt.Errorf("new monitor: %w", err)
 	}
 
-	launchCmd, err := mon.Prepare(wctx, id, w.WorktreePath, w.LastSessionID)
+	launchCmd, err := mon.Prepare(wctx, id, w.WorktreePath, w.LastSessionID, w.Model)
 	if err != nil {
 		cancel()
 		_ = br.Close()
@@ -493,6 +494,14 @@ func (a *App) OpenWorkspace(id string) error {
 					a2 := *evt.Approval
 					a2.ReqID = a2.ReqID + ":" + id
 					evt.Approval = &a2
+				}
+				// Session-resume: when the agent reports a new session id, persist
+				// it so the next OpenWorkspace call can pass it as resumeID.
+				if evt.SessionID != "" {
+					if cur, ok := a.store.Get(id); ok && cur.LastSessionID != evt.SessionID {
+						cur.LastSessionID = evt.SessionID
+						_ = a.store.Upsert(cur)
+					}
 				}
 				a.emit("agent:event", evt)
 				a.dispatchNotify(evt)
@@ -687,12 +696,14 @@ func atomicWriteApp(path string, data []byte) error {
 	return os.Rename(tmpName, path)
 }
 
-// ListDir returns directory entries under absDir, gitignore-unaware.
+// ListDir returns directory entries under absDir, honoring .gitignore patterns
+// in that directory (gitignore-aware). Entries matching any pattern in
+// absDir/.gitignore are excluded from the result.
 func (a *App) ListDir(absDir string) ([]fspkg.Node, error) {
 	if err := validateWorktreeUnderRoots(absDir, a.roots); err != nil {
 		return nil, err
 	}
-	return fspkg.ListDir(absDir, false)
+	return fspkg.ListDir(absDir, true)
 }
 
 // ReadFile returns the contents of absPath as a string.

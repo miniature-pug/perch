@@ -39,7 +39,7 @@ func TestClaudeMonitorPrepare(t *testing.T) {
 	foreign := `{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"foreign-tool notify"}]}]}}`
 	_ = os.WriteFile(filepath.Join(claudeDir, "settings.json"), []byte(foreign), 0o644)
 
-	cmd, err := m.Prepare(context.Background(), "ws1", worktree, "")
+	cmd, err := m.Prepare(context.Background(), "ws1", worktree, "", "")
 	if err != nil { t.Fatalf("Prepare: %v", err) }
 	if !strings.HasPrefix(cmd, "claude") { t.Errorf("unexpected cmd: %q", cmd) }
 
@@ -92,7 +92,7 @@ func TestClaudeMonitorSettingsFileMode(t *testing.T) {
 	worktree := filepath.Join(os.Getenv("HOME"), "repo-mode")
 	if err := os.MkdirAll(worktree, 0o755); err != nil { t.Fatal(err) }
 	// No pre-existing .claude/settings.json → Prepare creates it fresh.
-	if _, err := m.Prepare(context.Background(), "wsM", worktree, ""); err != nil {
+	if _, err := m.Prepare(context.Background(), "wsM", worktree, "", ""); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
 	fi, err := os.Stat(filepath.Join(worktree, ".claude", "settings.json"))
@@ -134,7 +134,7 @@ func TestClaudeMonitorSettingsFileModePreExisting(t *testing.T) {
 	}
 
 	// Run Prepare — must force the file down to 0600.
-	if _, err := m.Prepare(context.Background(), "wsMPE", worktree, ""); err != nil {
+	if _, err := m.Prepare(context.Background(), "wsMPE", worktree, "", ""); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
 
