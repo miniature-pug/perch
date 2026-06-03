@@ -31,3 +31,18 @@ test("renders nothing when path is null", async () => {
   render(Editor, { props: { path: null, worktree: "/wt" } });
   expect(screen.queryByRole("region", { name: "editor" })).toBeNull();
 });
+
+test("git gutter markers render for a hunk", async () => {
+  const w = await import("./wails");
+  vi.mocked(w.readFile).mockResolvedValueOnce("line1\nline2\nline3\n");
+  vi.mocked(w.hunks).mockResolvedValueOnce([{
+    file: "/wt/src/main.go", index: 0, header: "@@ -1,1 +1,2 @@",
+    oldStart: 1, oldLines: 1, newStart: 1, newLines: 2,
+    lines: [{ kind: "add", text: "line1a" }, { kind: "ctx", text: "line2" }],
+  }]);
+  const { default: Editor } = await import("./Editor.svelte");
+  render(Editor, { props: { path: "/wt/src/main.go", worktree: "/wt" } });
+  await waitFor(() =>
+    expect(document.querySelector(".cm-gutterElement.perch-changed")).not.toBeNull()
+  );
+});
