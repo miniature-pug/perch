@@ -41,12 +41,15 @@
   let filterQuery  = $state("");
 
   // Load file content when codePath changes to a previewable (non-image) file.
+  // Cancellation guard prevents a stale readFile resolve from clobbering newer content.
   $effect(() => {
-    if (codePath && isPreviewable(codePath) && previewKind(codePath) !== "image") {
-      readFile(codePath).then((c) => { previewContent = c; }).catch(() => { previewContent = ""; });
-    } else {
-      previewContent = "";
-    }
+    const p = codePath;
+    if (!p || !isPreviewable(p) || previewKind(p) === "image") { previewContent = ""; return; }
+    let cancelled = false;
+    readFile(p)
+      .then((c) => { if (!cancelled) previewContent = c; })
+      .catch(() => { if (!cancelled) previewContent = ""; });
+    return () => { cancelled = true; };
   });
 
   // Svelte action: focus the node immediately on mount (avoids a11y warning from autofocus attr).

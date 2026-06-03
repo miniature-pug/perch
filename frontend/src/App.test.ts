@@ -265,6 +265,31 @@ describe("App.svelte Stage content routing (4.25.2)", () => {
     expect(diff.dataset.worktree).toBe("/tmp/alpha");
   });
 
+  it("readFile rejection for a .md path: App does not crash and PreviewProbe still mounts", async () => {
+    const { listWorkspaces, readFile } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    vi.mocked(readFile).mockRejectedValueOnce(new Error("gone"));
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    layout.setView("code");
+    await tick();
+
+    // Open a .md file — readFile will reject
+    const openMdBtn = screen.getByRole("button", { name: "open markdown" });
+    await fireEvent.click(openMdBtn);
+
+    // App must not crash; Preview probe must still mount with the .md path
+    await waitFor(() => {
+      expect(screen.getByTestId("preview")).toBeInTheDocument();
+      expect(screen.getByTestId("preview").dataset.path).toBe("/some/file.md");
+    });
+    // Editor must not be present (Preview routing is correct)
+    expect(screen.queryByTestId("editor")).not.toBeInTheDocument();
+  });
+
   it("activeId null → no child probes, empty-state placeholder shown", async () => {
     const { listWorkspaces } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);

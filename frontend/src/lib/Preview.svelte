@@ -11,16 +11,18 @@
   let html = $state("");
 
   $effect(() => {
+    let cancelled = false;
     if (kind === "markdown" && content) {
       Promise.resolve(marked(content)).then((h) => {
-        html = DOMPurify.sanitize(h as string, { USE_PROFILES: { html: true, svg: true, svgFilters: true } });
+        if (!cancelled) html = DOMPurify.sanitize(h as string, { USE_PROFILES: { html: true, svg: true, svgFilters: true } });
       });
     } else if (kind === "mermaid" && content) {
       mermaid.initialize({ startOnLoad: false, securityLevel: "strict" });
       mermaid.render("preview-mermaid", content).then(({ svg }) => {
-        html = DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true, html: true } });
+        if (!cancelled) html = DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true, html: true } });
       });
     }
+    return () => { cancelled = true; };
   });
 </script>
 

@@ -8,13 +8,16 @@ const IMAGE_EXTS     = new Set([".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp"
 /** Returns true if the path should be rendered by <Preview> rather than <Editor>. */
 export function isPreviewable(path: string | null): boolean {
   if (!path) return false;
-  const ext = path.slice(path.lastIndexOf(".")).toLowerCase();
+  const i = path.lastIndexOf(".");
+  const ext = i === -1 ? "" : path.slice(i).toLowerCase();
+  if (!ext) return false;
   return MARKDOWN_EXTS.has(ext) || MERMAID_EXTS.has(ext) || IMAGE_EXTS.has(ext);
 }
 
 /** Maps a previewable path to its Preview `kind` prop. Assumes isPreviewable(path) is true. */
 export function previewKind(path: string): "markdown" | "mermaid" | "image" {
-  const ext = path.slice(path.lastIndexOf(".")).toLowerCase();
+  const i = path.lastIndexOf(".");
+  const ext = i === -1 ? "" : path.slice(i).toLowerCase();
   if (MARKDOWN_EXTS.has(ext)) return "markdown";
   if (MERMAID_EXTS.has(ext)) return "mermaid";
   return "image";
