@@ -7,6 +7,7 @@
   import { bracketMatching } from "@codemirror/language";
   import { javascript } from "@codemirror/lang-javascript";
   import { readFile, writeFile, hunks as fetchHunks, type Hunk } from "./wails";
+  import { changedLinesFromHunks } from "./gutter";
 
   let { path, worktree }: { path: string | null; worktree: string } = $props();
 
@@ -44,9 +45,7 @@
       readFile(p),
       fetchHunks(worktree, p).catch(() => [] as Hunk[]),
     ]);
-    const changed = new Set<number>();
-    for (const h of hunkList)
-      for (let i = h.newStart; i < h.newStart + h.newLines; i++) changed.add(i);
+    const changed = changedLinesFromHunks(hunkList);
 
     const state = EditorState.create({
       doc: content,
