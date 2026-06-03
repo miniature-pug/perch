@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import ThemeProvider   from "./lib/ThemeProvider.svelte";
   import Sidebar         from "./lib/Sidebar.svelte";
   import Stage           from "./lib/Stage.svelte";
@@ -13,19 +13,50 @@
   import { layout }      from "./lib/stores/layout.svelte";
   import { mode }        from "./lib/stores/mode.svelte";
   import { settings }    from "./lib/stores/settings.svelte";
-  import { getDnd, setDnd } from "./lib/stores/notifications.svelte";
-  import { listWorkspaces, openWorkspace, revealInFiles } from "./lib/wails";
-  import type { WorkspaceVM } from "./lib/wails";
+  import { getDnd, setDnd, addBlocking, addAmbient, addRoutine } from "./lib/stores/notifications.svelte";
+  import { listWorkspaces, openWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged } from "./lib/wails";
+  import type { WorkspaceVM, ApprovalReq } from "./lib/wails";
 
   let workspaces = $state<WorkspaceVM[]>([]);
   let activeId   = $state<string | null>(null);
   let codePath   = $state<string | null>(null);
+  let approvals  = $state<Record<string, ApprovalReq>>({});
+  let fsVersion  = $state<Record<string, number>>({});
 
   const active = $derived(workspaces.find(w => w.id === activeId) ?? null);
 
+  // Off-functions captured from wails event subscriptions (subscribed synchronously in onMount).
+  let offAgentEvent: (() => void) | null = null;
+  let offNotify:     (() => void) | null = null;
+  let offFsChanged:  (() => void) | null = null;
+
   onMount(async () => {
+    // Subscribe synchronously BEFORE any await so off-fns are always captured.
+    offAgentEvent = onAgentEvent((ev) => {
+      const ws = workspaces.find(w => w.id === ev.workspaceId);
+      if (!ws) return;
+      if (ev.state) ws.state = ev.state;
+      if (ev.approval) approvals[ev.workspaceId] = ev.approval;
+    });
+
+    offNotify = onNotify((n) => {
+      if      (n.tier === "blocking") addBlocking(n.workspaceId, n.title, n.body);
+      else if (n.tier === "ambient")  addAmbient (n.workspaceId, n.title, n.body);
+      else                            addRoutine (n.workspaceId, n.title, n.body);
+    });
+
+    offFsChanged = onFsChanged((p) => {
+      fsVersion[p.workspaceId] = (fsVersion[p.workspaceId] ?? 0) + 1;
+    });
+
     await Promise.all([settings.load(), layout.restore()]);
     workspaces = await listWorkspaces();
+  });
+
+  onDestroy(() => {
+    offAgentEvent?.();
+    offNotify?.();
+    offFsChanged?.();
   });
 
   async function onSelect(id: string) {
@@ -124,10 +155,14 @@
                 {#if layout.view === "agent"}
                   <Terminal paneId={active.paneId} cwd={active.worktreePath} />
                 {:else if layout.view === "code"}
-                  <FileTree root={active.worktreePath} onOpen={(p) => { codePath = p; }} />
-                  <Editor path={codePath} worktree={active.worktreePath} />
+                  {#key fsVersion[active.id] ?? 0}
+                    <FileTree root={active.worktreePath} onOpen={(p) => { codePath = p; }} />
+                    <Editor path={codePath} worktree={active.worktreePath} />
+                  {/key}
                 {:else if layout.view === "diff"}
-                  <DiffView worktree={active.worktreePath} />
+                  {#key fsVersion[active.id] ?? 0}
+                    <DiffView worktree={active.worktreePath} />
+                  {/key}
                 {/if}
               {:else}
                 <div class="empty-state">No session selected</div>
@@ -138,10 +173,14 @@
                 {#if layout.view === "agent"}
                   <Terminal paneId={active.paneId} cwd={active.worktreePath} />
                 {:else if layout.view === "code"}
-                  <FileTree root={active.worktreePath} onOpen={(p) => { codePath = p; }} />
-                  <Editor path={codePath} worktree={active.worktreePath} />
+                  {#key fsVersion[active.id] ?? 0}
+                    <FileTree root={active.worktreePath} onOpen={(p) => { codePath = p; }} />
+                    <Editor path={codePath} worktree={active.worktreePath} />
+                  {/key}
                 {:else if layout.view === "diff"}
-                  <DiffView worktree={active.worktreePath} />
+                  {#key fsVersion[active.id] ?? 0}
+                    <DiffView worktree={active.worktreePath} />
+                  {/key}
                 {/if}
               {/if}
             </div>

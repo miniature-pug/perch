@@ -1,7 +1,7 @@
 // frontend/src/App.test.ts
 import { render, screen, fireEvent, waitFor } from "@testing-library/svelte";
 import { tick } from "svelte";
-import { vi, describe, it, expect, beforeEach } from "vitest";
+import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 
 // Stub ShellDrawer (imports xterm which crashes jsdom).
 vi.mock("./lib/ShellDrawer.svelte", async () => ({
@@ -22,6 +22,13 @@ vi.mock("./lib/FileTree.svelte", async () => ({
   default: (await import("./lib/__stubs__/FileTreeProbe.svelte")).default,
 }));
 
+// Captured callbacks for the wails event helpers — reset in beforeEach.
+const captured = {
+  agent:     [] as Array<(ev: any) => void>,
+  notify:    [] as Array<(n: any)  => void>,
+  fsChanged: [] as Array<(p: any)  => void>,
+};
+
 vi.mock("./lib/wails", () => ({
   listWorkspaces:  vi.fn(async () => []),
   openWorkspace:   vi.fn(async () => {}),
@@ -31,6 +38,9 @@ vi.mock("./lib/wails", () => ({
   getSettings:     vi.fn(async () => ({})),
   saveSettings:    vi.fn(async () => {}),
   revealInFiles:   vi.fn(async () => {}),
+  onAgentEvent:    vi.fn((cb) => { captured.agent.push(cb);     return () => {}; }),
+  onNotify:        vi.fn((cb) => { captured.notify.push(cb);    return () => {}; }),
+  onFsChanged:     vi.fn((cb) => { captured.fsChanged.push(cb); return () => {}; }),
 }));
 
 // NOTE: layout and mode stores are NOT mocked — we use the real $state runes stores.
@@ -62,6 +72,10 @@ const fakeWorkspaces = [
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  // Reset captured callback arrays (vi.clearAllMocks does NOT empty them).
+  captured.agent.length     = 0;
+  captured.notify.length    = 0;
+  captured.fsChanged.length = 0;
   // Reset the real layout singleton to default values before each test.
   const { layout } = await import("./lib/stores/layout.svelte");
   layout.setView("agent");
@@ -319,5 +333,129 @@ describe("App.svelte MenuBar + CommandPalette (4.25.3)", () => {
     await fireEvent.click(splitItem);
     await tick();
     expect(layout.split).toBe(true);
+  });
+});
+
+describe("App.svelte live event wiring (4.25.4)", () => {
+  it("onAgentEvent: state flip updates Sidebar status label for that workspace", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    // Wait for workspaces to load
+    await screen.findByRole("button", { name: "Alpha" });
+
+    // Alpha starts as "idle" → Sidebar shows "idle"
+    expect(screen.getByRole("button", { name: "Alpha" })).toHaveTextContent("idle");
+
+    // Fire an agent event that flips Alpha to "awaiting-approval" and carries an approval payload
+    const cb = captured.agent.at(-1)!;
+    cb({
+      workspaceId: "ws-1",
+      kind: "approval",
+      state: "awaiting-approval",
+      approval: { reqId: "req-1", tool: "bash", summary: "Run script" },
+    });
+    await tick();
+
+    // Sidebar maps "awaiting-approval" → "needs you"
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Alpha" })).toHaveTextContent("needs you")
+    );
+  });
+
+  it("onNotify: blocking tier calls addBlocking and appears in notifications store", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await screen.findByRole("button", { name: "Alpha" });
+
+    const { getItems } = await import("./lib/stores/notifications.svelte");
+    const before = getItems().length;
+
+    const cb = captured.notify.at(-1)!;
+    cb({ tier: "blocking", title: "Needs approval", body: "Tool wants to run bash", workspaceId: "ws-1" });
+    await tick();
+
+    const items = getItems();
+    expect(items.length).toBe(before + 1);
+    expect(items[0].title).toBe("Needs approval");
+    expect(items[0].tier).toBe("blocking");
+    expect(items[0].workspaceId).toBe("ws-1");
+  });
+
+  it("onNotify: ambient tier routes to addAmbient in the store", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await screen.findByRole("button", { name: "Alpha" });
+
+    const { getItems, getDnd, setDnd } = await import("./lib/stores/notifications.svelte");
+    // Ensure DND is off so ambient is not filtered
+    setDnd(false);
+    const before = getItems().length;
+
+    const cb = captured.notify.at(-1)!;
+    cb({ tier: "ambient", title: "Build complete", body: "Tests passed", workspaceId: "ws-2" });
+    await tick();
+
+    const items = getItems();
+    expect(items.length).toBe(before + 1);
+    expect(items[0].tier).toBe("ambient");
+    expect(items[0].title).toBe("Build complete");
+  });
+
+  it("onFsChanged: bumps fsVersion → DiffProbe remounts (node identity changes)", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    // Select Alpha and switch to diff view
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    layout.setView("diff");
+    await tick();
+
+    const diffBefore = await screen.findByTestId("diff");
+    expect(diffBefore).toBeInTheDocument();
+
+    // Fire fs:changed for ws-1
+    const cb = captured.fsChanged.at(-1)!;
+    cb({ workspaceId: "ws-1", path: "/tmp/alpha/some-file.ts" });
+    await tick();
+
+    // {#key} remounts → a new DOM node is created
+    await waitFor(() => {
+      const diffAfter = screen.getByTestId("diff");
+      expect(diffAfter).not.toBe(diffBefore);
+    });
+  });
+
+  it("onDestroy: all off-fns are called on unmount (no event leaks)", async () => {
+    const { listWorkspaces, onAgentEvent, onNotify, onFsChanged } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+    const offAgent     = vi.fn();
+    const offNotify    = vi.fn();
+    const offFsChanged = vi.fn();
+    (onAgentEvent as ReturnType<typeof vi.fn>).mockReturnValueOnce(offAgent);
+    (onNotify     as ReturnType<typeof vi.fn>).mockReturnValueOnce(offNotify);
+    (onFsChanged  as ReturnType<typeof vi.fn>).mockReturnValueOnce(offFsChanged);
+
+    const { default: App } = await import("./App.svelte");
+    const { unmount } = render(App);
+    // Give onMount (sync part) a chance to run
+    await tick();
+
+    unmount();
+    await tick();
+
+    expect(offAgent).toHaveBeenCalled();
+    expect(offNotify).toHaveBeenCalled();
+    expect(offFsChanged).toHaveBeenCalled();
   });
 });
