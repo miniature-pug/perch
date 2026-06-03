@@ -449,7 +449,7 @@ func TestApp_OpenWorkspace_WritesLaunchCmdAndEmitsEvents(t *testing.T) {
 		bridges:  map[string]*internalpty.Bridge{},
 		monitors: map[string]agent.Monitor{},
 		cancels:  map[string]context.CancelFunc{},
-		spawnPty: func(ctx context.Context, cwd string, argv []string, event string,
+		spawnPty: func(ctx context.Context, cwd string, argv []string, dataEvent, exitEvent string,
 			ef internalpty.EmitFunc, cols, rows uint16) (*internalpty.Bridge, error) {
 			b := internalpty.NewBridgeForTest(func() error { return nil })
 			b.OverrideWriteForTest(func(p []byte) (int, error) {
@@ -652,11 +652,11 @@ func TestApp_OpenShell_SpawnsAndEmits(t *testing.T) {
 		roots:    []string{shellCwd},
 		bridges:  map[string]*internalpty.Bridge{},
 		monitors: map[string]agent.Monitor{},
-		spawnPty: func(_ context.Context, cwd string, argv []string, event string,
+		spawnPty: func(_ context.Context, cwd string, argv []string, dataEvent, exitEvent string,
 			ef internalpty.EmitFunc, _, _ uint16) (*internalpty.Bridge, error) {
 			spawnCalled = true
-			if event != "pty:data:shell-1" {
-				return nil, fmt.Errorf("wrong event %q", event)
+			if dataEvent != "pty:data:shell-1" {
+				return nil, fmt.Errorf("wrong event %q", dataEvent)
 			}
 			return internalpty.NewBridgeForTest(func() error { return nil }), nil
 		},

@@ -28,7 +28,7 @@ import (
 
 // spawnPtyFunc and newMonitorFunc are injectable seams (real funcs in NewApp,
 // replaced in tests for headless execution).
-type spawnPtyFunc func(ctx context.Context, cwd string, argv []string, event string,
+type spawnPtyFunc func(ctx context.Context, cwd string, argv []string, dataEvent, exitEvent string,
 	emit internalpty.EmitFunc, cols, rows uint16) (*internalpty.Bridge, error)
 
 type newMonitorFunc func(tool string, adapter agent.Adapter) (agent.Monitor, error)
@@ -357,10 +357,11 @@ func (a *App) OpenWorkspace(id string) error {
 
 	paneID := "pane-" + id
 	event := "pty:data:" + paneID
+	exitEvent := "pty:exit:" + paneID
 
 	wctx, cancel := context.WithCancel(context.Background())
 
-	br, err := a.spawnPty(wctx, w.WorktreePath, internalpty.LoginShellArgv(), event, a.emit, 220, 50)
+	br, err := a.spawnPty(wctx, w.WorktreePath, internalpty.LoginShellArgv(), event, exitEvent, a.emit, 220, 50)
 	if err != nil {
 		cancel()
 		return fmt.Errorf("spawn pty: %w", err)
@@ -537,8 +538,9 @@ func (a *App) OpenShell(paneID, cwd string) error {
 		return fmt.Errorf("invalid shell cwd: %w", err)
 	}
 	event := "pty:data:" + paneID
+	exitEvent := "pty:exit:" + paneID
 	ctx := context.Background()
-	br, err := a.spawnPty(ctx, cwd, internalpty.LoginShellArgv(), event, a.emit, 220, 50)
+	br, err := a.spawnPty(ctx, cwd, internalpty.LoginShellArgv(), event, exitEvent, a.emit, 220, 50)
 	if err != nil {
 		return fmt.Errorf("OpenShell spawn: %w", err)
 	}

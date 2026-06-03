@@ -144,7 +144,7 @@ func TestSpawn_RoundTrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	br, err := Spawn(ctx, t.TempDir(), []string{"sh", "-c", "printf hi"}, "test-event", emit, 80, 24)
+	br, err := Spawn(ctx, t.TempDir(), []string{"sh", "-c", "printf hi"}, "test-event", "pty:exit:t1", emit, 80, 24)
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -167,6 +167,42 @@ func TestSpawn_RoundTrip(t *testing.T) {
 	mu.Unlock()
 	if !strings.Contains(got, "hi") {
 		t.Errorf("round-trip bytes = %q, want to contain %q", got, "hi")
+	}
+}
+
+func TestSpawn_EmitsExitEvent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // hermetic: no profile read
+	type ev struct {
+		name string
+		data []any
+	}
+	got := make(chan ev, 8)
+	emit := func(name string, data ...any) { got <- ev{name, data} }
+	// `sh -c 'exit 7'` exits fast and reads no -l profile.
+	b, err := Spawn(context.Background(), t.TempDir(),
+		[]string{"/bin/sh", "-c", "exit 7"}, "pty:data:t1", "pty:exit:t1", emit, 80, 24)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	t.Cleanup(func() { _ = b.Close() })
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case e := <-got:
+			if e.name != "pty:exit:t1" {
+				continue // skip any trailing pty:data
+			}
+			m, ok := e.data[0].(map[string]any)
+			if !ok {
+				t.Fatalf("exit payload not a map: %#v", e.data[0])
+			}
+			if m["code"] != 7 {
+				t.Fatalf("exit code = %v, want 7", m["code"])
+			}
+			return
+		case <-deadline:
+			t.Fatal("no pty:exit emitted within 5s")
+		}
 	}
 }
 
@@ -199,7 +235,7 @@ func TestSpawn_CloseKillsProcessGroup(t *testing.T) {
 	// Only a SIGKILL to the whole process group will work — which is what the
 	// fix sends via syscall.Kill(-pgid, SIGKILL).
 	script := "nohup sleep 30 >/dev/null 2>&1 & echo PGTESTPID=$!; sleep 5"
-	br, err := Spawn(ctx, t.TempDir(), []string{"sh", "-c", script}, "pg", emit, 80, 24)
+	br, err := Spawn(ctx, t.TempDir(), []string{"sh", "-c", script}, "pg", "pty:exit:pg", emit, 80, 24)
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}

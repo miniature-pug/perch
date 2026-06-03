@@ -74,9 +74,12 @@ func LoginShellArgv() []string {
 }
 
 // Spawn starts argv[0] argv[1:] inside a pty in working directory cwd,
-// pumping output to emit on `event` as bounded []int chunks (≤ maxChunk).
-// No tmux. Closing the returned Bridge kills the process group and reaps it.
-func Spawn(ctx context.Context, cwd string, argv []string, event string, emit EmitFunc, cols, rows uint16) (*Bridge, error) {
+// pumping output to emit on dataEvent as bounded []int chunks (≤ maxChunk).
+// When the process exits (naturally or via Close), emit fires exitEvent with
+// a map payload {"code": <int>} where code is the process exit code or -1 on
+// signal death / forced close. No tmux. Closing the returned Bridge kills the
+// process group; the reaper goroutine owns the single cmd.Wait call.
+func Spawn(ctx context.Context, cwd string, argv []string, dataEvent, exitEvent string, emit EmitFunc, cols, rows uint16) (*Bridge, error) {
 	if len(argv) == 0 {
 		return nil, fmt.Errorf("pty Spawn: argv must not be empty")
 	}
@@ -100,12 +103,25 @@ func Spawn(ctx context.Context, cwd string, argv []string, event string, emit Em
 				if perr := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); perr != nil {
 					_ = cmd.Process.Kill()
 				}
-				_, _ = cmd.Process.Wait()
+				// NOTE: cmd.Wait() is NOT called here. The reaper goroutine below is
+				// the single Wait site. Calling Wait in two places yields an incorrect
+				// ProcessState on the second call; we must not do it.
 			}
 			return ferr
 		},
 	}
-	go pumpReader(f, event, emit, maxChunk)
+	go func() {
+		// pumpReader blocks until the pty fd returns EOF (which happens when
+		// f.Close() is called by closer, or when the process closes its side).
+		pumpReader(f, dataEvent, emit, maxChunk)
+		// Pump returned ⇒ pty EOF ⇒ process is ending. Single Wait site (no race).
+		_ = cmd.Wait()
+		code := -1 // signal death (forced Close / ctx kill) reports -1
+		if cmd.ProcessState != nil {
+			code = cmd.ProcessState.ExitCode()
+		}
+		emit(exitEvent, map[string]any{"code": code})
+	}()
 	return b, nil
 }
 
