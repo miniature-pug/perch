@@ -8265,6 +8265,100 @@ git commit -m "feat(wails): expand typed wrappers for all bound methods + colon 
 
 ---
 
+### Task B1 (backend backfill): emit `pty:exit:<paneID>` — MUST land before Task 4.8
+
+**Why inserted:** the frozen Wails event table (this doc, "Wails events" section) mandates `pty:exit:<paneID>` → `{ code:number }`, but Phase 3 never emitted it — `pumpReader` returns on EOF silently and the `closer` reaps with `cmd.Process.Wait()`. Task 4.7's `onPtyExit` helper subscribes to an event nothing fires; Terminal (4.8) consumes it to show "process exited". This is a frozen-contract gap, not optional. (Advisor-vetted design below.)
+
+**Files:**
+- Modify: `internal/pty/bridge.go` — `Spawn` signature + reaper goroutine; `closer` loses its `Wait`.
+- Modify: `app/app.go` — `spawnPtyFunc` type (`:31`), both call sites (`OpenWorkspace :363`, `OpenShell :541`) pass `"pty:exit:"+paneID`.
+- Modify: `app/app_test.go` — the two injected `spawnPty` fakes (`:452`, `:655`) gain the `exitEvent string` param.
+- Test: `internal/pty/bridge_test.go` — new `TestSpawn_EmitsExitEvent`.
+
+**Forced design (natural exit has NO `Close()` call → EOF is the only signal → the reaper goroutine must own the single `cmd.Wait()`):**
+
+1. `Spawn` gains an `exitEvent string` param immediately after the existing `event` (data) param:
+   `func Spawn(ctx, cwd string, argv []string, dataEvent, exitEvent string, emit EmitFunc, cols, rows uint16) (*Bridge, error)`
+   (Rename the existing `event` param to `dataEvent` for clarity, or keep `event` + add `exitEvent` — either is fine, just be consistent.)
+2. Remove `_, _ = cmd.Process.Wait()` from `closer`. The closer now ONLY closes `f` and SIGKILLs the process group. (Keeping Wait in both places = double Wait = wrong/empty `ProcessState`.)
+3. Replace the bare `go pumpReader(...)` with a reaper goroutine that runs the pump, then reaps once and reports exit:
+   ```go
+   go func() {
+       pumpReader(f, dataEvent, emit, maxChunk)
+       // pump returned ⇒ pty EOF ⇒ process is ending. Single Wait site (no race).
+       _ = cmd.Wait()
+       code := -1 // signal death (forced Close / ctx kill) reports -1, a valid number
+       if cmd.ProcessState != nil {
+           code = cmd.ProcessState.ExitCode()
+       }
+       emit(exitEvent, map[string]any{"code": code})
+   }()
+   ```
+   Emit an **object** `{"code": code}` — `onPtyExit` reads `p.code`; a bare int would break it.
+4. Both `OpenWorkspace` and `OpenShell` pass `exitEvent := "pty:exit:" + paneID` (shell drawer wants exit too).
+
+**Notes / invariants:**
+- `f.Close()` unblocks the blocked `Read`, so the reaper proceeds — relied on already for pump termination today; holds on Linux.
+- The reap is now async vs `Close()` (Close sends SIGKILL synchronously but returns before reaping a brief zombie). Verify `TestSpawn_CloseKillsProcessGroup` still passes — it asserts the *child* dies (synchronous kill), not that the parent is reaped. Adapt only if it actually depended on synchronous reaping.
+- Exit fires on forced close too — Terminal (4.8) must tolerate `onPtyExit` arriving during teardown.
+
+**Failing test (`internal/pty/bridge_test.go`):**
+```go
+func TestSpawn_EmitsExitEvent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // hermetic: no profile read
+	type ev struct {
+		name string
+		data []any
+	}
+	got := make(chan ev, 8)
+	emit := func(name string, data ...any) { got <- ev{name, data} }
+	// `sh -c 'exit 7'` exits fast and reads no -l profile.
+	b, err := Spawn(context.Background(), t.TempDir(),
+		[]string{"/bin/sh", "-c", "exit 7"}, "pty:data:t1", "pty:exit:t1", emit, 80, 24)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	t.Cleanup(func() { _ = b.Close() })
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case e := <-got:
+			if e.name != "pty:exit:t1" {
+				continue // skip any trailing pty:data
+			}
+			m, ok := e.data[0].(map[string]any)
+			if !ok {
+				t.Fatalf("exit payload not a map: %#v", e.data[0])
+			}
+			if m["code"] != 7 {
+				t.Fatalf("exit code = %v, want 7", m["code"])
+			}
+			return
+		case <-deadline:
+			t.Fatal("no pty:exit emitted within 5s")
+		}
+	}
+}
+```
+Add imports `context`, `time` to the test file if missing.
+
+**Run-fails:** `go test -race ./internal/pty/ -run TestSpawn_EmitsExitEvent` → FAIL (compile: Spawn arity; then no exit event).
+**Run-passes:** same command → PASS. Then `go test -race ./internal/pty/ ./app/` green; `go build ./... && go vet ./...` clean.
+
+**Commit:**
+```bash
+git add internal/pty/bridge.go internal/pty/bridge_test.go app/app.go app/app_test.go
+git commit -m "feat(pty): emit pty:exit:<paneID> {code} on process exit (reaper owns single Wait)"
+```
+
+---
+
+### Task B2 (backend backfill): emit `fs:changed` `{workspaceId,path}` — MUST land before Task 4.15
+
+**Why inserted:** frozen event table mandates `fs:changed` → `{ workspaceId, path }` (emitter: fs.Watcher), but Phase 3 never wired the watcher into `OpenWorkspace`. Task 4.7's `onFsChanged` subscribes to a dead event; FileTree (4.15) / DiffView refresh on it. Frozen-contract gap. **Design must be finalized after reading `internal/fs/fs.go`** — the existing Watcher's recursion, `.git`/gitignore filtering, debounce, and close-semantics decide the wiring (see properties 1–4 below). Slot a `newWatcherFunc` seam (like `spawnPty`/`newMonitor`) so the app-level test is deterministic; test the real Watcher separately in `internal/fs`. Lifecycle: start in `OpenWorkspace` bound to `wctx`, so the existing `cancels` map closes it on CloseWorkspace / re-open displacement / shutdown — no new bookkeeping. Must `select` on `wctx.Done()` and `defer watcher.Close()` (mirror the monitor-pump invariant; never block solely on the events channel). MUST exclude `.git` (an agent's git ops churn it constantly → IPC flood) and coalesce editor temp-write bursts. (Full TDD spec authored at implementation time against the real fs.go API.)
+
+---
+
 ### Task 4.8: Terminal.svelte rewrite (paneId/cwd props, direct-pty, colon events)
 
 **Files:**
