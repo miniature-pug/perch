@@ -7472,6 +7472,18 @@ Add `declare module "*?raw" { const content: string; export default content; }` 
 
 ---
 
+> ### Phase 4 execution strategy (locked after Phase-3 review — read before dispatching 4.x)
+>
+> **Orphan demolition is folded into Task 4.10, NOT a separate up-front commit.** Pre-pivot orphans `Tabs.svelte`, `DiffPanel.svelte`, `NewAgentDialog.svelte` (+ their `.test.ts`) are superseded by Stage/DiffView/NewSessionDialog. They are referenced only by the old `App.svelte` AND by `smoke.test.ts` (which MOUNTS App.svelte — deleting orphans before 4.10 turns `npm test` red). So delete those 6 files *inside* Task 4.10 when `App.svelte` is rewritten, and rewrite/replace `smoke.test.ts` in the same task. KEEP `ConfirmDialog.svelte`/`.test.ts` — Task 4.23 extends them. (Verified: only App.svelte + own tests + smoke.test.ts reference the orphans.)
+>
+> **Task 4.7 (wails.ts) is a RECONCILIATION, not verbatim transcription.** The plan's wails.ts predates all Phase-3 reconciliations. Bind against the ACTUAL `app.go` surface (`grep 'func (a \*App)' app/app.go`): `ListWorkspaces()`, `CreateWorkspace(agent,repo,branch,model)`, `OpenWorkspace(id)`, `CloseWorkspace(id)`, `RemoveWorkspace(id)`, `WriteToPty(paneID, number[])`, `ResizePty(paneID,cols,rows)`, `OpenShell(paneID,cwd)`, `Approve(reqID,decision)`, `DiffStat(worktree)`, `Hunks(worktree,file)`, `StageHunk(worktree,file,index)`, `DiscardHunk(worktree,file,index)`, `ListDir(absDir)`, `ReadFile(absPath)`, `WriteFile(absPath,content)`, `RevealInFiles(absPath)`, `Branches(repo)`, `Worktrees(repo)`, `GetLayout()/SaveLayout(json)`, `GetSettings()/SaveSettings(s)`. Events: `pty:data:<paneID>` (number[]), `pty:exit:<paneID>` ({code}), `agent:event`, `fs:changed`, `notify` ({tier,title,body,workspaceId}). **CAVEAT: vitest mocks `./wails` in every component test, so a green suite does NOT prove wails.ts↔Go alignment — that is verified only by `wails generate module` / the user's GUI smoke run (flag in Phase 5).**
+>
+> **Per-task notes:** 4.8 Terminal MUST mock `@xterm/xterm` (jsdom has no canvas). 4.11 CodeMirror: registry-verify + exact-pin every `@codemirror/*` version (`npm view <pkg> version`) and confirm install succeeds before 4.12/4.13. Frontend XSS review (the dual of the IPC hardening): `grep -rn "@html\|innerHTML" frontend/src` on DiffView/Editor/ApprovalCard/Preview — Svelte auto-escapes `{...}`, so only raw-HTML sinks need review.
+>
+> **Pacing:** ~22 of 24 tasks are presentational/mechanical against the now-frozen backend — run them solo with per-task TDD (per-file `npm test -- <file>`). Real decision points: orphan/smoke handling at 4.10 (App composition). Phase 5's full `npm run build && npm run check` is the JS compile gate (analog of `go build ./...`) that catches any dead import the per-file runs miss.
+
+---
+
 ### Task 4.1: Design token base stylesheet
 
 **Files:**
