@@ -133,6 +133,24 @@
   // ---------------------------------------------------------------------------
   const THEMES = ["gruvbox", "tokyo-night", "catppuccin", "dracula", "nord", "rose-pine", "one-dark", "perch-cyan", "light"];
 
+  // ---------------------------------------------------------------------------
+  // Shared bulk-approval helper — mid-flight safe.
+  // Snapshots entries pre-await; reads approvals fresh post-await; only removes
+  // the entry at wsId if it still holds the SAME reqId we just acted on.
+  // ---------------------------------------------------------------------------
+  async function decideAll(decision: "allow" | "deny") {
+    const entries = Object.entries(approvals);           // pre-await snapshot
+    const results = await Promise.allSettled(entries.map(([, req]) => approve(req.reqId, decision)));
+    const next = { ...approvals };                        // fresh read post-await
+    results.forEach((res, i) => {
+      const [wsId, req] = entries[i];
+      if (next[wsId]?.reqId !== req.reqId) return;        // replaced mid-flight → leave survivor
+      if (res.status === "fulfilled") delete next[wsId];
+      else addBlocking(wsId, "Approval failed", String(res.reason));
+    });
+    approvals = next;
+  }
+
   type Command = { id: string; group: string; label: string; keybinding?: string; run: () => void | Promise<void> };
 
   const commands: Command[] = [
@@ -154,30 +172,8 @@
       },
     },
     // Agent bulk actions
-    { id: "agent:approve-all", group: "Agent", label: "Approve all pending", run: async () => {
-        const entries = Object.entries(approvals);
-        const results = await Promise.allSettled(entries.map(([, req]) => approve(req.reqId, "allow")));
-        const next = { ...approvals };
-        results.forEach((res, i) => {
-          const [wsId] = entries[i];
-          if (res.status === "fulfilled") { delete next[wsId]; }
-          else { addBlocking(wsId, "Approval failed", String(res.reason)); }
-        });
-        approvals = next;
-      },
-    },
-    { id: "agent:deny-all", group: "Agent", label: "Deny all pending", run: async () => {
-        const entries = Object.entries(approvals);
-        const results = await Promise.allSettled(entries.map(([, req]) => approve(req.reqId, "deny")));
-        const next = { ...approvals };
-        results.forEach((res, i) => {
-          const [wsId] = entries[i];
-          if (res.status === "fulfilled") { delete next[wsId]; }
-          else { addBlocking(wsId, "Approval failed", String(res.reason)); }
-        });
-        approvals = next;
-      },
-    },
+    { id: "agent:approve-all", group: "Agent", label: "Approve all pending", run: () => decideAll("allow") },
+    { id: "agent:deny-all",    group: "Agent", label: "Deny all pending",    run: () => decideAll("deny")  },
     // Notifications
     { id: "notifications:open", group: "Notifications", label: "Open notifications", run: () => { notifOpen = !notifOpen; } },
     { id: "notifications:dnd",  group: "Notifications", label: "Toggle Do Not Disturb", run: () => setDnd(!getDnd()) },

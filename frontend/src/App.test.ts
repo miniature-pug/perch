@@ -1261,10 +1261,16 @@ describe("App.svelte 4.25.6c: agent:approve-all / deny-all", () => {
       expect(approve).toHaveBeenCalledWith("req-b1", "allow");
     });
 
-    // After settling, make ws-1 active and confirm its approval card is gone
+    // Switch to Alpha (ws-1) and verify its approval was cleared (summary absent)
     await fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
     await waitFor(() =>
-      expect(screen.queryByRole("button", { name: "Allow" })).not.toBeInTheDocument()
+      expect(screen.queryByText("Alpha approval")).not.toBeInTheDocument()
+    );
+
+    // Switch to Beta (ws-2) and verify its approval was also cleared
+    await fireEvent.click(screen.getByRole("button", { name: "Beta" }));
+    await waitFor(() =>
+      expect(screen.queryByText("Beta approval")).not.toBeInTheDocument()
     );
   });
 
@@ -1306,11 +1312,16 @@ describe("App.svelte 4.25.6c: agent:approve-all / deny-all", () => {
     expect(items.length).toBeGreaterThan(notifBefore);
     expect(items.some(n => n.title === "Approval failed")).toBe(true);
 
-    // ws-1's approval was NOT cleared (ws-1 still has a pending entry)
-    // Select ws-1 and check the card
+    // ws-1 (req-fail) was NOT cleared — select Alpha and verify "Will fail" summary still present
     await fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument()
+      expect(screen.getByText("Will fail")).toBeInTheDocument()
+    );
+
+    // ws-2 (req-ok) WAS cleared — select Beta and verify "Will pass" summary is absent
+    await fireEvent.click(screen.getByRole("button", { name: "Beta" }));
+    await waitFor(() =>
+      expect(screen.queryByText("Will pass")).not.toBeInTheDocument()
     );
   });
 });
