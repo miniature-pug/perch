@@ -1,0 +1,8 @@
+data: {"type":"session.next.step.started","sessionId":"ses-1","step":{"type":"text"}}
+
+data: {"type":"session.next.step.ended","sessionId":"ses-1","step":{"type":"text","cost":0.0012,"tokens":{"input":100,"output":40}}}
+
+data: {"type":"permission.v2.asked","sessionId":"ses-1","permissionId":"perm-1","tool":"Bash","input":{"command":"ls"}}
+
+data: {"type":"session.next.step.failed","sessionId":"ses-1","error":"timeout"}
+
