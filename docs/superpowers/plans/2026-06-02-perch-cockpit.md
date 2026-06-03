@@ -9108,6 +9108,8 @@ git commit -m "feat(frontend): Editor.svelte — CodeMirror 6 load/edit/save + g
 
 ---
 
+> **Amendment (jsdom reality):** CodeMirror does not lay out per-line `.cm-gutterElement` nodes in jsdom (zero-size viewport), so the plan's `.cm-gutterElement.perch-changed` assertion is infeasible. Fixed in `43e6921`: the changed-line computation was extracted to `frontend/src/lib/gutter.ts` (`changedLinesFromHunks`) and unit-tested in `gutter.test.ts` (deterministic); the Editor DOM test now asserts the gutter *container* `.perch-git-gutter` is mounted. Also note: Task 4.12 "Step 1: Extend wails.ts" was SKIPPED — 4.7 already provides `readFile`/`writeFile`/`hunks`/`Hunk`, and the plan's `CopyPath` has no app.go bound method.
+
 ### Task 4.13: `Editor.svelte` git gutter
 
 **Files:** `frontend/src/lib/Editor.test.ts` (extend)
