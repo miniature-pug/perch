@@ -1,7 +1,7 @@
 <!-- frontend/src/lib/SettingsPanel.svelte -->
 <script lang="ts">
   import { onMount } from "svelte";
-  import { getSettings, saveSettings, type AppSettings } from "./wails";
+  import { getSettings, type AppSettings } from "./wails";
   import { settings as settingsStore } from "./stores/settings.svelte";
   import { setDnd } from "./stores/notifications.svelte";
 
@@ -33,21 +33,18 @@
     const v = (e.currentTarget as HTMLSelectElement).value;
     settings = { ...settings, theme: v };
     await settingsStore.setTheme(v);
-    await saveSettings(settings);
   }
 
   async function onDensityChange(e: Event) {
     const v = (e.currentTarget as HTMLSelectElement).value as "dense" | "comfortable" | "ultra";
     settings = { ...settings, density: v };
     await settingsStore.setDensity(v);
-    await saveSettings(settings);
   }
 
   async function onFontChange(e: Event) {
     const v = (e.currentTarget as HTMLSelectElement).value;
     settings = { ...settings, font: v };
     await settingsStore.setFont(v);
-    await saveSettings(settings);
   }
 
   async function toggleDnd() {
@@ -55,12 +52,12 @@
     settings = { ...settings, dnd: next };
     setDnd(next);
     await settingsStore.setDnd(next);
-    await saveSettings(settings);
   }
 
   async function revokeRule(i: number) {
-    settings = { ...settings, alwaysRules: settings.alwaysRules.filter((_, j) => j !== i) };
-    await saveSettings(settings);
+    const reduced = settings.alwaysRules.filter((_, j) => j !== i);
+    settings = { ...settings, alwaysRules: reduced };
+    await settingsStore.setAlwaysRules(reduced);
   }
 </script>
 

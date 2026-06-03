@@ -23,23 +23,6 @@ vi.mock("./wails", () => ({
   saveSettings: vi.fn(async () => {}),
 }));
 
-// Mock the settings store — live-apply calls go here.
-vi.mock("./stores/settings.svelte", () => ({
-  settings: {
-    theme:      "gruvbox",
-    density:    "dense",
-    font:       "geist",
-    dnd:        false,
-    alwaysRules: [],
-    load:        vi.fn(async () => {}),
-    setTheme:    vi.fn(async () => {}),
-    setDensity:  vi.fn(async () => {}),
-    setFont:     vi.fn(async () => {}),
-    setDnd:      vi.fn(async () => {}),
-    setAlwaysRules: vi.fn(async () => {}),
-  },
-}));
-
 // Mock the notifications store — used for live DND toggle.
 vi.mock("./stores/notifications.svelte", () => ({
   getDnd: vi.fn(() => false),
@@ -80,7 +63,7 @@ describe("SettingsPanel — open, always-rules", () => {
     );
   });
 
-  it("revoking first rule calls saveSettings with one fewer rule", async () => {
+  it("revoking first rule calls saveSettings exactly once with one fewer rule", async () => {
     const w = await import("./wails");
     const { default: SettingsPanel } = await import("./SettingsPanel.svelte");
     render(SettingsPanel, { props: { open: true, onClose: vi.fn() } });
@@ -99,11 +82,12 @@ describe("SettingsPanel — open, always-rules", () => {
         })
       )
     );
+    expect(vi.mocked(w.saveSettings)).toHaveBeenCalledTimes(1);
   });
 });
 
 describe("SettingsPanel — theme change persists", () => {
-  it("changing the Theme select calls saveSettings with the new theme", async () => {
+  it("changing the Theme select calls saveSettings exactly once with the new theme", async () => {
     const w = await import("./wails");
     const { default: SettingsPanel } = await import("./SettingsPanel.svelte");
     render(SettingsPanel, { props: { open: true, onClose: vi.fn() } });
@@ -116,11 +100,12 @@ describe("SettingsPanel — theme change persists", () => {
         expect.objectContaining({ theme: "tokyo-night" })
       )
     );
+    expect(vi.mocked(w.saveSettings)).toHaveBeenCalledTimes(1);
   });
 });
 
 describe("SettingsPanel — DND toggle persists", () => {
-  it("toggling Do Not Disturb calls saveSettings with dnd=true", async () => {
+  it("toggling Do Not Disturb calls saveSettings exactly once with dnd=true", async () => {
     const w = await import("./wails");
     const { default: SettingsPanel } = await import("./SettingsPanel.svelte");
     render(SettingsPanel, { props: { open: true, onClose: vi.fn() } });
@@ -136,6 +121,7 @@ describe("SettingsPanel — DND toggle persists", () => {
         expect.objectContaining({ dnd: true })
       )
     );
+    expect(vi.mocked(w.saveSettings)).toHaveBeenCalledTimes(1);
   });
 });
 
