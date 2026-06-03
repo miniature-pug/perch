@@ -12,6 +12,7 @@
   import CommandPalette     from "./lib/CommandPalette.svelte";
   import NewSessionDialog   from "./lib/NewSessionDialog.svelte";
   import ConfirmDialog      from "./lib/ConfirmDialog.svelte";
+  import HelpDialog         from "./lib/HelpDialog.svelte";
   import TokenMeter         from "./lib/TokenMeter.svelte";
   import DragDrop           from "./lib/DragDrop.svelte";
   import { layout }         from "./lib/stores/layout.svelte";
@@ -43,6 +44,7 @@
   let newSessionOpen  = $state(false);
   let confirmRemove   = $state<WorkspaceVM | null>(null);
   let notifOpen       = $state(false);
+  let helpOpen        = $state(false);
 
   const active       = $derived(workspaces.find(w => w.id === activeId) ?? null);
   const unreadCount  = $derived(getItems().filter(n => !n.read).length);
@@ -177,6 +179,9 @@
     // Notifications
     { id: "notifications:open", group: "Notifications", label: "Open notifications", run: () => { notifOpen = !notifOpen; } },
     { id: "notifications:dnd",  group: "Notifications", label: "Toggle Do Not Disturb", run: () => setDnd(!getDnd()) },
+    // Help
+    { id: "help:shortcuts", group: "Help", label: "Keyboard shortcuts", run: () => { helpOpen = true; } },
+    { id: "help:about",     group: "Help", label: "About perch",        run: () => { helpOpen = true; } },
   ];
 
   function runCommand(id: string) {
@@ -449,6 +454,8 @@
       onConfirm={handleConfirmRemove}
       onCancel={handleCancelRemove}
     />
+
+    <HelpDialog open={helpOpen} onClose={() => { helpOpen = false; }} />
   </div>
 </ThemeProvider>
 

@@ -1380,3 +1380,41 @@ describe("App.svelte 4.25.6c: unread badge on MenuBar bell", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// 4.25.6d: HelpDialog — opened by help:shortcuts / help:about menu commands
+// ---------------------------------------------------------------------------
+
+describe("App.svelte 4.25.6d: HelpDialog opens via help:shortcuts command", () => {
+  it("dispatching help:shortcuts via the Help menu opens HelpDialog; closing it hides it", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await tick();
+
+    // HelpDialog must not be present initially
+    expect(screen.queryByRole("dialog", { name: "help" })).not.toBeInTheDocument();
+
+    // Open the Help menu and click "Keyboard shortcuts"
+    const helpMenu = screen.getByRole("menuitem", { name: "Help" });
+    await fireEvent.click(helpMenu);
+    await tick();
+    const shortcutsItem = screen.getByRole("menuitem", { name: "Keyboard shortcuts" });
+    await fireEvent.click(shortcutsItem);
+    await tick();
+
+    // HelpDialog must now be visible
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "help" })).toBeInTheDocument()
+    );
+
+    // Close via the close button
+    await fireEvent.click(screen.getByRole("button", { name: "close help" }));
+    await tick();
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "help" })).not.toBeInTheDocument()
+    );
+  });
+});
