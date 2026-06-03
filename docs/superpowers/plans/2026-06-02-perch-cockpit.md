@@ -8359,6 +8359,8 @@ git commit -m "feat(pty): emit pty:exit:<paneID> {code} on process exit (reaper 
 
 ---
 
+> **Amendment (post-B1):** Terminal also subscribes `onPtyExit(paneId, …)` → writes a dim `[process exited: <code>]` notice into the xterm buffer and invokes an optional `onExit?:(code)=>void` callback prop (teardown-tolerant via a `disposed` guard). This closes the `pty:exit` contract loop (B1 emits it). Committed in `3065ef9`.
+
 ### Task 4.8: Terminal.svelte rewrite (paneId/cwd props, direct-pty, colon events)
 
 **Files:**
