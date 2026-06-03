@@ -85,7 +85,20 @@ func (l *Listener) handleHook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	// body decoding and routing in Tasks 2.12/2.13
+	var ev HookEvent
+	if err := json.NewDecoder(r.Body).Decode(&ev); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if ev.Type != "PreToolUse" {
+		select {
+		case l.events <- ev:
+		default:
+		}
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	// PreToolUse handled in Task 2.13
 	http.Error(w, "not implemented", http.StatusNotImplemented)
 }
 
