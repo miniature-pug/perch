@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/bmatcuk/doublestar/v4"
+	"github.com/fsnotify/fsnotify"
 )
 
 // Node is one entry in a directory listing.
@@ -88,6 +90,59 @@ func matchesAny(name string, patterns []string) bool {
 		}
 	}
 	return false
+}
+
+// Watcher watches a directory tree for filesystem changes.
+type Watcher struct {
+	fw       *fsnotify.Watcher
+	onChange func(string)
+	once     sync.Once
+	done     chan struct{}
+}
+
+// Watch creates a Watcher for absRoot. onChange is called with the absolute
+// path of any changed file or directory. Watch returns an error if fsnotify
+// cannot be initialised or the root cannot be added.
+func Watch(absRoot string, onChange func(absPath string)) (*Watcher, error) {
+	fw, err := fsnotify.NewWatcher()
+	if err != nil {
+		return nil, err
+	}
+	if err := fw.Add(absRoot); err != nil {
+		_ = fw.Close()
+		return nil, err
+	}
+	w := &Watcher{fw: fw, onChange: onChange, done: make(chan struct{})}
+	go w.loop()
+	return w, nil
+}
+
+func (w *Watcher) loop() {
+	for {
+		select {
+		case event, ok := <-w.fw.Events:
+			if !ok {
+				return
+			}
+			w.onChange(event.Name)
+		case _, ok := <-w.fw.Errors:
+			if !ok {
+				return
+			}
+		case <-w.done:
+			return
+		}
+	}
+}
+
+// Close stops the watcher. Idempotent.
+func (w *Watcher) Close() error {
+	var err error
+	w.once.Do(func() {
+		close(w.done)
+		err = w.fw.Close()
+	})
+	return err
 }
 
 // ReadFile reads and returns the contents of absPath.
