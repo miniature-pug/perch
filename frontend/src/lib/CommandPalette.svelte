@@ -7,6 +7,9 @@
 
   let query = $state("");
 
+  // Svelte action: focus the node immediately on mount (avoids the a11y autofocus warning).
+  function focusOnMount(node: HTMLElement) { node.focus(); }
+
   function fuzzyScore(label: string, q: string): number {
     if (!q) return 1;
     const lbl = label.toLowerCase(); const ql = q.toLowerCase();
@@ -45,12 +48,16 @@
   <div role="dialog" aria-label="command palette" class="palette-overlay">
     <div class="palette">
       <input type="text" role="combobox" aria-autocomplete="list" aria-controls="palette-list"
-        bind:value={query} onkeydown={handleKey} placeholder="Type a command… (⌘K)" autofocus />
+        aria-expanded={open}
+        bind:value={query} onkeydown={handleKey} placeholder="Type a command… (⌘K)"
+        use:focusOnMount />
       <ul id="palette-list" role="listbox" class="palette-list">
         {#each grouped as g}
           <li class="group-header" aria-hidden="true">{g.group}:</li>
           {#each g.items as c (c.id)}
-            <li role="option" aria-selected="false" class="palette-item" onclick={() => onRun(c.id)}>
+            <li role="option" aria-selected="false" class="palette-item"
+              onclick={() => onRun(c.id)}
+              onkeydown={(e) => e.key === "Enter" && onRun(c.id)}>
               <span class="item-label">{c.label}</span>
               {#if c.keybinding}<kbd class="item-kbd">{c.keybinding}</kbd>{/if}
             </li>

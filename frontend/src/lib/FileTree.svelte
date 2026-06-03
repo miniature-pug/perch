@@ -52,9 +52,13 @@
 
 {#if menu}
   <ul role="menu" class="context-menu" style="position:fixed;left:{menu.x}px;top:{menu.y}px">
-    <li role="menuitem" tabindex="0" onclick={menuOpen}>Open</li>
-    <li role="menuitem" tabindex="0" onclick={menuReveal}>Reveal in Files</li>
-    <li role="menuitem" tabindex="0" onclick={menuCopy}>Copy path</li>
-    <li role="menuitem" tabindex="0" onclick={menuSend}>Send to agent</li>
+    <li role="menuitem" tabindex="0" onclick={menuOpen}
+      onkeydown={(e) => e.key === "Enter" && menuOpen()}>Open</li>
+    <li role="menuitem" tabindex="0" onclick={menuReveal}
+      onkeydown={(e) => e.key === "Enter" && menuReveal()}>Reveal in Files</li>
+    <li role="menuitem" tabindex="0" onclick={menuCopy}
+      onkeydown={(e) => e.key === "Enter" && menuCopy()}>Copy path</li>
+    <li role="menuitem" tabindex="0" onclick={menuSend}
+      onkeydown={(e) => e.key === "Enter" && menuSend()}>Send to agent</li>
   </ul>
 {/if}

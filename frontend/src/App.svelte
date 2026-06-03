@@ -310,12 +310,22 @@
     window.addEventListener("mouseup", onUp);
   }
 
+  function keyResizeSidebar(e: KeyboardEvent) {
+    if (e.key === "ArrowRight") { e.preventDefault(); layout.setSidebarW(Math.max(160, layout.sidebarW + 16)); }
+    else if (e.key === "ArrowLeft") { e.preventDefault(); layout.setSidebarW(Math.max(160, layout.sidebarW - 16)); }
+  }
+
   function startResizeShell(e: MouseEvent) {
     const startY = e.clientY, startH = layout.shellH;
     function onMove(mv: MouseEvent) { layout.setShellH(Math.max(80, startH - (mv.clientY - startY))); }
     function onUp() { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); }
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
+  }
+
+  function keyResizeShell(e: KeyboardEvent) {
+    if (e.key === "ArrowUp") { e.preventDefault(); layout.setShellH(Math.max(80, layout.shellH + 16)); }
+    else if (e.key === "ArrowDown") { e.preventDefault(); layout.setShellH(Math.max(80, layout.shellH - 16)); }
   }
 
   // ---------------------------------------------------------------------------
@@ -358,15 +368,18 @@
         <Sidebar workspaces={shownWorkspaces} {activeId} onSelect={onSelect} onNew={openNewSession} />
       </aside>
 
-      <div class="divider divider-v" role="separator" aria-label="Resize sidebar"
-           onmousedown={startResizeSidebar}></div>
+      <div class="divider divider-v" role="slider" aria-label="Resize sidebar"
+           aria-orientation="vertical" aria-valuenow={layout.sidebarW} aria-valuemin={160} aria-valuemax={800}
+           tabindex="0"
+           onmousedown={startResizeSidebar}
+           onkeydown={keyResizeSidebar}></div>
 
       <div class="center-column">
         <div data-zone="stage" class="stage-zone">
           <Stage view={layout.view} split={layout.split}
                  onView={(v) => layout.setView(v)}
                  onSplit={() => layout.toggleSplit()}>
-            <div slot="primary">
+            {#snippet primary()}
               {#if active}
                 {#if layout.view === "agent"}
                   <DragDrop paneId={active.paneId} fileDrop={true}>
@@ -389,8 +402,8 @@
               {:else}
                 <div class="empty-state">No session selected</div>
               {/if}
-            </div>
-            <div slot="secondary">
+            {/snippet}
+            {#snippet secondary()}
               {#if layout.split && active}
                 {#if layout.view === "agent"}
                   <Terminal paneId={active.paneId} cwd={active.worktreePath} />
@@ -409,12 +422,15 @@
                   {/key}
                 {/if}
               {/if}
-            </div>
+            {/snippet}
           </Stage>
         </div>
 
-        <div class="divider divider-h" role="separator" aria-label="Resize shell drawer"
-             onmousedown={startResizeShell}></div>
+        <div class="divider divider-h" role="slider" aria-label="Resize shell drawer"
+             aria-orientation="horizontal" aria-valuenow={layout.shellH} aria-valuemin={80} aria-valuemax={800}
+             tabindex="0"
+             onmousedown={startResizeShell}
+             onkeydown={keyResizeShell}></div>
 
         <div data-zone="shell-drawer" class="shell-drawer-zone"
              style:height="{layout.shellH}px"

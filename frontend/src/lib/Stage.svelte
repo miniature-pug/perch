@@ -1,9 +1,15 @@
 <script lang="ts">
+  import type { Snippet } from "svelte";
   import type { View } from "./stores/layout.svelte";
 
   let {
     view, split, onView, onSplit,
-  }: { view: View; split: boolean; onView: (v: View) => void; onSplit: () => void } = $props();
+    primary, secondary,
+  }: {
+    view: View; split: boolean;
+    onView: (v: View) => void; onSplit: () => void;
+    primary?: Snippet; secondary?: Snippet;
+  } = $props();
 
   const segs: { id: View; label: string }[] = [
     { id: "agent", label: "Agent" },
@@ -16,16 +22,16 @@
   <header class="stage-bar">
     <nav aria-label="View">
       {#each segs as s}
-        <button aria-selected={view === s.id} onclick={() => onView(s.id)}>{s.label}</button>
+        <button aria-pressed={view === s.id} onclick={() => onView(s.id)}>{s.label}</button>
       {/each}
     </nav>
     <button onclick={onSplit} aria-label="Split pane">Split</button>
   </header>
 
   <div class="stage-content" class:split>
-    <div data-pane="primary"   class="pane"><slot name="primary"   /></div>
+    <div data-pane="primary"   class="pane">{@render primary?.()}</div>
     {#if split}
-    <div data-pane="secondary" class="pane"><slot name="secondary" /></div>
+    <div data-pane="secondary" class="pane">{@render secondary?.()}</div>
     {/if}
   </div>
 </div>

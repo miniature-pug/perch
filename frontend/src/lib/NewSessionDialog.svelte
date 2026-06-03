@@ -10,7 +10,7 @@
   } = $props();
 
   let agent    = $state("claude");
-  let repo     = $state(repos[0] ?? "");
+  let repo     = $state("");
   let branch   = $state("");
   let model    = $state("claude-sonnet-4-5");
   let branches = $state<string[]>([]);

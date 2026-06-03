@@ -46,7 +46,7 @@
       <button role="menuitem" aria-haspopup="menu" aria-expanded={openMenu === m.label}
         onclick={(e) => { e.stopPropagation(); toggleMenu(m.label); }}>{m.label}</button>
       {#if openMenu === m.label}
-        <ul role="menu" class="dropdown" onclick={(e) => e.stopPropagation()}>
+        <ul role="menu" class="dropdown" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
           {#each m.items as item}
             <li role="menuitem" tabindex="0"
               onclick={() => runItem(item.id)}
