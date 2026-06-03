@@ -196,6 +196,31 @@ type WorkspaceVM struct {
 	LastActive   time.Time   `json:"lastActive"`
 }
 
+// ListWorkspaces returns all known workspaces from the registry. State and
+// Caps come from a live Monitor when one is active; otherwise State=Idle.
+func (a *App) ListWorkspaces() []WorkspaceVM {
+	ws := a.store.List()
+	out := make([]WorkspaceVM, 0, len(ws))
+	for _, w := range ws {
+		vm := WorkspaceVM{
+			ID:           w.ID,
+			WorktreePath: w.WorktreePath,
+			Agent:        w.Agent,
+			Title:        w.Title,
+			State:        agent.StateIdle,
+		}
+		a.mu.Lock()
+		m, ok := a.monitors[w.ID]
+		a.mu.Unlock()
+		if ok {
+			vm.State = m.CurrentState()
+			vm.Caps = m.Capabilities()
+		}
+		out = append(out, vm)
+	}
+	return out
+}
+
 // Settings is the persisted user preference blob.
 type Settings struct {
 	Theme       string       `json:"theme"`

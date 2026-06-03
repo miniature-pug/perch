@@ -259,3 +259,66 @@ func TestApp_Shutdown_Idempotent(t *testing.T) {
 	a.shutdown(context.Background())
 	a.shutdown(context.Background()) // must not panic
 }
+
+func TestApp_ListWorkspaces_FromRegistry(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+
+	wt := t.TempDir()
+	_ = store.Upsert(registry.Workspace{
+		ID:           "ws-abc",
+		WorktreePath: wt,
+		Agent:        "claude",
+		Title:        "my-feature",
+	})
+
+	a := &App{
+		store:    store,
+		roots:    []string{wt},
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+	}
+
+	vms := a.ListWorkspaces()
+	if len(vms) != 1 {
+		t.Fatalf("ListWorkspaces = %d items, want 1", len(vms))
+	}
+	if vms[0].ID != "ws-abc" {
+		t.Errorf("ID = %q, want ws-abc", vms[0].ID)
+	}
+	if vms[0].Agent != "claude" {
+		t.Errorf("Agent = %q, want claude", vms[0].Agent)
+	}
+	if vms[0].State != agent.StateIdle {
+		t.Errorf("State = %q, want idle", vms[0].State)
+	}
+}
+
+func TestApp_ListWorkspaces_LiveMonitorStatePropagated(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	wt := t.TempDir()
+	_ = store.Upsert(registry.Workspace{ID: "ws-1", WorktreePath: wt, Agent: "claude", Title: "t"})
+
+	fm := agent.NewFakeMonitor(nil)
+	fm.SetState(agent.StateRunning)
+
+	a := &App{
+		store:    store,
+		roots:    []string{wt},
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{"ws-1": fm},
+	}
+
+	vms := a.ListWorkspaces()
+	if len(vms) != 1 || vms[0].State != agent.StateRunning {
+		t.Errorf("live monitor state not reflected; vms=%+v", vms)
+	}
+	if vms[0].Caps != fm.Capabilities() {
+		t.Errorf("Caps not propagated from monitor")
+	}
+}
