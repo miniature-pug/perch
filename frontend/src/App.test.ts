@@ -1,5 +1,5 @@
 // frontend/src/App.test.ts
-import { render, screen, fireEvent, waitFor } from "@testing-library/svelte";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 
@@ -565,10 +565,49 @@ describe("App.svelte approval card + notification hub (4.25.5)", () => {
     // But must NOT be inside the stage zone
     const stageEl = document.querySelector("[data-zone='stage']")!;
     expect(stageEl).toBeInTheDocument();
-    const { queryByText } = await import("@testing-library/svelte");
-    // Use within from @testing-library/svelte
-    const { within } = await import("@testing-library/svelte");
     expect(within(stageEl).queryByText("Unique docking summary text")).toBeNull();
+  });
+
+  it("approve RPC failure: card stays visible and adds a blocking notification", async () => {
+    const { listWorkspaces, approve } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(approvalWorkspaces);
+    (vi.mocked(approve)).mockRejectedValueOnce(new Error("boom"));
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    // Select workspace
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    await tick();
+
+    // Inject approval
+    const cb = captured.agent.at(-1)!;
+    cb({
+      workspaceId: "ws-1",
+      kind: "approval",
+      state: "awaiting-approval",
+      approval: { reqId: "req-fail", tool: "bash", summary: "Failing approval" },
+    });
+    await tick();
+
+    // Wait for card to appear
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument()
+    );
+
+    // Click Allow — approve will reject
+    await fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+
+    // (a) ApprovalCard must still be present — not dequeued
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument()
+    );
+
+    // (b) A blocking notification with title "Approval failed" must be in the store
+    const { getItems } = await import("./lib/stores/notifications.svelte");
+    await waitFor(() =>
+      expect(getItems().some((n) => n.title === "Approval failed")).toBe(true)
+    );
   });
 
   it("NotificationHub renders and shows notifications from the store", async () => {

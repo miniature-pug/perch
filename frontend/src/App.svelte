@@ -135,11 +135,14 @@
   // ---------------------------------------------------------------------------
   // Approval decision handler — called by ApprovalCard docked chrome.
   // ---------------------------------------------------------------------------
-  function onDecision(reqId: string, decision: "allow" | "deny" | "always") {
-    approve(reqId, decision);
-    if (activeId) {
+  async function onDecision(reqId: string, decision: "allow" | "deny" | "always") {
+    if (!activeId) return;
+    try {
+      await approve(reqId, decision);
       const { [activeId]: _, ...rest } = approvals;
       approvals = rest;
+    } catch (e) {
+      addBlocking(activeId, "Approval failed", String(e));
     }
   }
 </script>
