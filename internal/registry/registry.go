@@ -12,13 +12,14 @@ import (
 )
 
 // Workspace is the persistent record for one perch workspace.
-// JSON tags are frozen — do not rename.
+// JSON tags are frozen — do not rename. New fields may be added.
 type Workspace struct {
 	ID            string    `json:"id"`
 	WorktreePath  string    `json:"worktreePath"`
 	Agent         string    `json:"agent"`
 	LastSessionID string    `json:"lastSessionID"`
 	Title         string    `json:"title"`
+	Branch        string    `json:"branch"`
 	LastActive    time.Time `json:"lastActive"`
 }
 

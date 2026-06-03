@@ -255,6 +255,12 @@ type WorkspaceVM struct {
 	LastActive   time.Time   `json:"lastActive"`
 }
 
+// paneIDFor returns the deterministic pane ID for a given workspace ID.
+// The formula must stay in sync with OpenWorkspace.
+func paneIDFor(workspaceID string) string {
+	return "pane-" + workspaceID
+}
+
 // ListWorkspaces returns all known workspaces from the registry. State and
 // Caps come from a live Monitor when one is active; otherwise State=Idle.
 func (a *App) ListWorkspaces() []WorkspaceVM {
@@ -266,6 +272,9 @@ func (a *App) ListWorkspaces() []WorkspaceVM {
 			WorktreePath: w.WorktreePath,
 			Agent:        w.Agent,
 			Title:        w.Title,
+			Branch:       w.Branch,
+			PaneID:       paneIDFor(w.ID),
+			LastActive:   w.LastActive,
 			State:        agent.StateIdle,
 		}
 		a.mu.Lock()
@@ -336,12 +345,14 @@ func (a *App) CreateWorkspace(agentName, repoPath, branch, model string) (Worksp
 		return WorkspaceVM{}, err
 	}
 
+	now := time.Now()
 	w := registry.Workspace{
 		ID:           id,
 		WorktreePath: treePath,
 		Agent:        agentName,
 		Title:        handle,
-		LastActive:   time.Now(),
+		Branch:       branch,
+		LastActive:   now,
 	}
 	if err := a.store.Upsert(w); err != nil {
 		return WorkspaceVM{}, fmt.Errorf("persist workspace: %w", err)
@@ -352,6 +363,9 @@ func (a *App) CreateWorkspace(agentName, repoPath, branch, model string) (Worksp
 		WorktreePath: treePath,
 		Agent:        agentName,
 		Title:        handle,
+		Branch:       branch,
+		PaneID:       paneIDFor(id),
+		LastActive:   now,
 		State:        agent.StateIdle,
 	}, nil
 }
@@ -481,6 +495,17 @@ func (a *App) OpenWorkspace(id string) error {
 			case evt, ok := <-mon.Events():
 				if !ok {
 					return
+				}
+				// BUG 4 fix: stamp WorkspaceID so the frontend can match events to
+				// the correct workspace (evt.workspaceId == "" before this fix).
+				evt.WorkspaceID = id
+				// BUG 5 fix: compose the approval ReqID as "<raw>:<workspaceID>" so
+				// that Approve() can parse and route it via strings.LastIndex(":").
+				// Copy the ApprovalReq to avoid mutating the monitor's own pointee.
+				if evt.Approval != nil {
+					a2 := *evt.Approval
+					a2.ReqID = a2.ReqID + ":" + id
+					evt.Approval = &a2
 				}
 				a.emit("agent:event", evt)
 				a.dispatchNotify(evt)
