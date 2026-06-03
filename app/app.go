@@ -623,6 +623,53 @@ func (a *App) Worktrees(repo string) ([]gitpkg.WorktreeInfo, error) {
 	return gitpkg.Worktrees(context.Background(), a.runner(), repo)
 }
 
+// Approve routes a tool-approval decision to the owning Monitor.
+// reqID format: "<raw>:<workspaceID>". decision: "allow"|"deny"|"always".
+// On "always", an AlwaysRule is persisted to Settings.
+func (a *App) Approve(reqID, decision string) error {
+	sep := strings.LastIndex(reqID, ":")
+	if sep < 0 {
+		return fmt.Errorf("invalid reqID format %q", reqID)
+	}
+	rawReqID := reqID[:sep]
+	workspaceID := reqID[sep+1:]
+
+	a.mu.Lock()
+	mon, ok := a.monitors[workspaceID]
+	a.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("no active monitor for workspace %q", workspaceID)
+	}
+
+	d := agent.Decision{}
+	switch decision {
+	case "allow":
+		d.Allow = true
+	case "always":
+		d.Allow = true
+		d.Always = true
+	case "deny":
+		d.Allow = false
+	default:
+		return fmt.Errorf("unknown decision %q", decision)
+	}
+
+	if err := mon.Approve(rawReqID, d); err != nil {
+		return err
+	}
+
+	if d.Always {
+		tool := mon.LastApprovalTool()
+		s, _ := a.GetSettings()
+		s.AlwaysRules = append(s.AlwaysRules, AlwaysRule{
+			Agent: "claude",
+			Tool:  tool,
+		})
+		_ = a.SaveSettings(s)
+	}
+	return nil
+}
+
 // agentAdapter returns the Adapter for a known tool name, or nil for unknown.
 func agentAdapter(tool string) agent.Adapter {
 	switch tool {

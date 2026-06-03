@@ -6,15 +6,22 @@ import (
 	"sync"
 )
 
+// ApproveCall records one Approve invocation for test assertions.
+type ApproveCall struct {
+	ReqID string
+	D     Decision
+}
+
 type FakeMonitor struct {
-	sequence  []Event
-	events    chan Event
-	mu        sync.Mutex
-	decisions []Decision
-	state     State
-	lastTool  string
-	tornDown  bool
-	launchCmd string
+	sequence     []Event
+	events       chan Event
+	mu           sync.Mutex
+	decisions    []Decision
+	approveCalls []ApproveCall
+	state        State
+	lastTool     string
+	tornDown     bool
+	launchCmd    string
 }
 
 func NewFakeMonitor(seq []Event) *FakeMonitor {
@@ -41,11 +48,26 @@ func (f *FakeMonitor) Prepare(_ context.Context, workspaceID, _, _ string) (stri
 	return cmd, nil
 }
 func (f *FakeMonitor) Events() <-chan Event { return f.events }
-func (f *FakeMonitor) Approve(_ string, d Decision) error {
+func (f *FakeMonitor) Approve(reqID string, d Decision) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.decisions = append(f.decisions, d)
+	f.approveCalls = append(f.approveCalls, ApproveCall{ReqID: reqID, D: d})
 	return nil
+}
+
+// ApproveCalls returns the recorded Approve invocations. Test-only.
+func (f *FakeMonitor) ApproveCalls() []ApproveCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.approveCalls
+}
+
+// SetApprovalTool sets the tool LastApprovalTool() reports. Test-only.
+func (f *FakeMonitor) SetApprovalTool(tool string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastTool = tool
 }
 func (f *FakeMonitor) Capabilities() Caps { return Caps{true, true, true} }
 func (f *FakeMonitor) Teardown() error {

@@ -765,6 +765,91 @@ func TestApp_ListDir_ReturnsDirEntries(t *testing.T) {
 	}
 }
 
+func TestApp_Approve_RoutesToMonitor(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	wt := t.TempDir()
+	_ = store.Upsert(registry.Workspace{ID: "ws-ap", WorktreePath: wt, Agent: "claude"})
+
+	fm := agent.NewFakeMonitor(nil)
+
+	a := &App{
+		store:        store,
+		emit:         func(string, ...any) {},
+		bridges:      map[string]*internalpty.Bridge{},
+		monitors:     map[string]agent.Monitor{"ws-ap": fm},
+		settingsPath: filepath.Join(cfgDir, "settings.json"),
+	}
+
+	if err := a.Approve("req-001:ws-ap", "allow"); err != nil {
+		t.Fatalf("Approve allow: %v", err)
+	}
+	calls := fm.ApproveCalls()
+	if len(calls) != 1 || calls[0].ReqID != "req-001" {
+		t.Errorf("Approve did not route to monitor; calls=%+v", calls)
+	}
+}
+
+func TestApp_Approve_AlwaysPersistsRule(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	wt := t.TempDir()
+	_ = store.Upsert(registry.Workspace{ID: "ws-alw", WorktreePath: wt, Agent: "claude"})
+
+	fm := agent.NewFakeMonitor(nil)
+	fm.SetApprovalTool("Bash")
+
+	a := &App{
+		store:        store,
+		emit:         func(string, ...any) {},
+		bridges:      map[string]*internalpty.Bridge{},
+		monitors:     map[string]agent.Monitor{"ws-alw": fm},
+		settingsPath: filepath.Join(cfgDir, "settings.json"),
+	}
+
+	if err := a.Approve("req-002:ws-alw", "always"); err != nil {
+		t.Fatalf("Approve always: %v", err)
+	}
+
+	s, err := a.GetSettings()
+	if err != nil {
+		t.Fatalf("GetSettings: %v", err)
+	}
+	if len(s.AlwaysRules) == 0 {
+		t.Fatal("AlwaysRule must be persisted on 'always' decision")
+	}
+	if s.AlwaysRules[0].Tool != "Bash" {
+		t.Errorf("rule tool = %q, want Bash", s.AlwaysRules[0].Tool)
+	}
+}
+
+func TestApp_Approve_DenyNoSideEffects(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	wt := t.TempDir()
+	_ = store.Upsert(registry.Workspace{ID: "ws-deny", WorktreePath: wt, Agent: "claude"})
+
+	fm := agent.NewFakeMonitor(nil)
+	a := &App{
+		store:        store,
+		emit:         func(string, ...any) {},
+		bridges:      map[string]*internalpty.Bridge{},
+		monitors:     map[string]agent.Monitor{"ws-deny": fm},
+		settingsPath: filepath.Join(cfgDir, "settings.json"),
+	}
+
+	if err := a.Approve("req-003:ws-deny", "deny"); err != nil {
+		t.Fatalf("Approve deny: %v", err)
+	}
+	s, _ := a.GetSettings()
+	if len(s.AlwaysRules) != 0 {
+		t.Error("deny must not persist an AlwaysRule")
+	}
+}
+
 func TestApp_ReadWriteFile_RoundTrip(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
