@@ -86,6 +86,29 @@ func TestClaudeMonitorPrepare(t *testing.T) {
 	if !foreignStillThere { t.Error("foreign Stop hook missing after Teardown") }
 }
 
+func TestClaudeMonitorTranscriptTail(t *testing.T) {
+	m, _, cleanup := newMonitorWithTestListener(t)
+	defer cleanup()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	abs, _ := filepath.Abs(filepath.Join("testdata", "claude", "transcript-usage.jsonl"))
+	m.TailTranscript(ctx, abs)
+
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case ev := <-m.Events():
+			if ev.Kind == "usage" {
+				if ev.Tokens != 15 { t.Errorf("want tokens=15 (10+5), got %d", ev.Tokens) }
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for usage event")
+		}
+	}
+}
+
 func TestClaudeMonitorEventTranslation(t *testing.T) {
 	m, l, cleanup := newMonitorWithTestListener(t)
 	defer cleanup()

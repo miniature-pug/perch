@@ -2,6 +2,7 @@
 package agent
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -45,6 +46,44 @@ func (m *ClaudeMonitor) StartTranslating(ctx context.Context) {
 					return
 				}
 				m.translateAndEmit(he)
+			}
+		}
+	}()
+}
+
+// TailTranscript reads transcriptPath and emits a usage Event for each assistant
+// record carrying a usage field. Absent fields produce no event, set no error.
+func (m *ClaudeMonitor) TailTranscript(ctx context.Context, transcriptPath string) {
+	go func() {
+		f, err := os.Open(transcriptPath)
+		if err != nil {
+			return
+		}
+		defer func() { _ = f.Close() }()
+		sc := bufio.NewScanner(f)
+		sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+		for sc.Scan() {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			var rec struct {
+				Type    string `json:"type"`
+				Message *struct {
+					Usage *struct {
+						Input  int `json:"input_tokens"`
+						Output int `json:"output_tokens"`
+					} `json:"usage"`
+				} `json:"message"`
+			}
+			if json.Unmarshal(sc.Bytes(), &rec) != nil || rec.Type != "assistant" ||
+				rec.Message == nil || rec.Message.Usage == nil {
+				continue
+			}
+			total := rec.Message.Usage.Input + rec.Message.Usage.Output
+			if total > 0 {
+				m.events <- Event{Kind: "usage", Tokens: total}
 			}
 		}
 	}()
