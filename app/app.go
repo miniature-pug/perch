@@ -670,6 +670,40 @@ func (a *App) Approve(reqID, decision string) error {
 	return nil
 }
 
+// DiffStat returns per-file diff summary for worktree, validated against roots.
+func (a *App) DiffStat(worktree string) ([]gitpkg.FileDiff, error) {
+	if err := validateWorktreeUnderRoots(worktree, a.roots); err != nil {
+		return nil, err
+	}
+	return gitpkg.DiffStat(context.Background(), a.runner(), worktree)
+}
+
+// Hunks returns the unified hunks for a single file in worktree.
+func (a *App) Hunks(worktree, file string) ([]gitpkg.Hunk, error) {
+	if err := validateWorktreeUnderRoots(worktree, a.roots); err != nil {
+		return nil, err
+	}
+	return gitpkg.Hunks(context.Background(), a.runner(), worktree, file)
+}
+
+// StageHunk applies hunk `index` of file to the index (git apply --cached).
+// index is relative to the current Hunks(worktree, file) output; the frontend
+// re-fetches hunks after each call so indices stay fresh.
+func (a *App) StageHunk(worktree, file string, index int) error {
+	if err := validateWorktreeUnderRoots(worktree, a.roots); err != nil {
+		return err
+	}
+	return gitpkg.StageHunk(context.Background(), a.runner(), worktree, file, index)
+}
+
+// DiscardHunk reverses hunk `index` of file in the working tree (git apply --reverse).
+func (a *App) DiscardHunk(worktree, file string, index int) error {
+	if err := validateWorktreeUnderRoots(worktree, a.roots); err != nil {
+		return err
+	}
+	return gitpkg.DiscardHunk(context.Background(), a.runner(), worktree, file, index)
+}
+
 // agentAdapter returns the Adapter for a known tool name, or nil for unknown.
 func agentAdapter(tool string) agent.Adapter {
 	switch tool {

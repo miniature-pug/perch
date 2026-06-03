@@ -850,6 +850,104 @@ func TestApp_Approve_DenyNoSideEffects(t *testing.T) {
 	}
 }
 
+func initGitRepo(t *testing.T, root string) string {
+	t.Helper()
+	repo := filepath.Join(root, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "init", "-q")
+	runGit(t, repo, "-c", "user.email=t@t", "-c", "user.name=t",
+		"commit", "--allow-empty", "-qm", "init")
+	return repo
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, out)
+	}
+}
+
+func TestApp_DiffStat_ValidateAndDelegate(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	repo := initGitRepo(t, root)
+
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	a := &App{
+		store:    store,
+		roots:    []string{root},
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+	}
+
+	if err := os.WriteFile(filepath.Join(repo, "hello.txt"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := a.DiffStat(repo)
+	if err != nil {
+		t.Fatalf("DiffStat: %v", err)
+	}
+	if len(files) == 0 {
+		t.Error("DiffStat must return at least one FileDiff for an unstaged file")
+	}
+}
+
+func TestApp_DiffStat_RejectsOutsideRoot(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	a := &App{
+		store:    store,
+		roots:    []string{t.TempDir()},
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+	}
+	if _, err := a.DiffStat("/etc"); err == nil {
+		t.Fatal("must reject path outside roots")
+	}
+}
+
+func TestApp_Hunks_ReturnsHunks(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	repo := initGitRepo(t, root)
+
+	p := filepath.Join(repo, "file.txt")
+	if err := os.WriteFile(p, []byte("line1\nline2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", "file.txt")
+	runGit(t, repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "add file")
+	if err := os.WriteFile(p, []byte("line1\nchanged\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	a := &App{
+		store:    store,
+		roots:    []string{root},
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+	}
+
+	hunks, err := a.Hunks(repo, "file.txt")
+	if err != nil {
+		t.Fatalf("Hunks: %v", err)
+	}
+	if len(hunks) == 0 {
+		t.Error("Hunks must return at least one hunk for modified file")
+	}
+}
+
 func TestApp_ReadWriteFile_RoundTrip(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
