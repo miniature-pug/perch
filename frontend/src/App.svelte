@@ -36,6 +36,9 @@
   let filtering    = $state(false);
   let filterQuery  = $state("");
 
+  // Svelte action: focus the node immediately on mount (avoids a11y warning from autofocus attr).
+  function focusOnMount(node: HTMLElement) { node.focus(); }
+
   // Dialog state
   let newSessionOpen  = $state(false);
   let confirmRemove   = $state<WorkspaceVM | null>(null);
@@ -293,6 +296,7 @@
             class="filter-input"
             type="text"
             aria-label="filter sessions"
+            use:focusOnMount
             value={filterQuery}
             oninput={(e) => { filterQuery = (e.currentTarget as HTMLInputElement).value; }}
             onkeydown={(e) => {

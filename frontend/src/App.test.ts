@@ -1023,6 +1023,9 @@ describe("App.svelte keymap: filter UI (4.25.6b)", () => {
     const filterInput = await screen.findByRole("textbox", { name: "filter sessions" });
     expect(filterInput).toBeInTheDocument();
 
+    // Filter input must receive focus immediately on mount so keystrokes reach it, not the window keymap.
+    expect(document.activeElement).toBe(filterInput);
+
     // Both workspaces visible initially
     expect(screen.getByRole("button", { name: "Alpha" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Beta" })).toBeInTheDocument();
