@@ -35,6 +35,8 @@ go.work.sum
 /bin/
 # Root binary from an ad-hoc `go build ./cmd/perch` (canonical build goes to /bin via `make build`)
 /perch
+# Stray fake-agent binary (test builds it to a temp dir; ignore any accidental root-level copy)
+/fake-agent
 
 # Editor/IDE
 # .idea/

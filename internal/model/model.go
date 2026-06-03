@@ -64,30 +64,3 @@ type Session struct {
 	Updated int64
 }
 
-// Window is the on-disk wire format for the live-window shadow record written
-// under $XDG_STATE_HOME/perch/windows/<paneKey>.json.
-// One file per running window; isolated files allow concurrent perch instances
-// to launch/kill windows without clobbering each other.
-// JSON tags are the durable wire contract — do not change them without a
-// migration plan.
-type Window struct {
-	// PaneKey is the tmux pane id (e.g. "%17").
-	PaneKey string `json:"pane_key"`
-	// Tool is the agent running in this window.
-	Tool Tool `json:"tool"`
-	// SessionID is the agent-assigned conversation identifier.
-	SessionID string `json:"session_id"`
-	// Tree is the absolute path to the working directory for this window.
-	Tree string `json:"tree"`
-	// TmuxSession is the tmux session name.
-	TmuxSession string `json:"tmux_session"`
-	// TmuxWindow is the tmux window name.
-	TmuxWindow string `json:"tmux_window"`
-	// BootID is the tmux server's #{start_time} at the moment this window was
-	// created. It is the crash sentinel used by perch resurrect: a mismatch
-	// between BootID and the live server's start_time means the server was
-	// restarted and this window needs to be recreated.
-	BootID string `json:"boot_id"`
-	// Updated is the last-write timestamp as unix seconds.
-	Updated int64 `json:"updated"`
-}
