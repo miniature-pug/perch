@@ -13,8 +13,10 @@
   import { layout }      from "./lib/stores/layout.svelte";
   import { mode }        from "./lib/stores/mode.svelte";
   import { settings }    from "./lib/stores/settings.svelte";
-  import { getDnd, setDnd, addBlocking, addAmbient, addRoutine } from "./lib/stores/notifications.svelte";
-  import { listWorkspaces, openWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged } from "./lib/wails";
+  import ApprovalCard    from "./lib/ApprovalCard.svelte";
+  import NotificationHub from "./lib/NotificationHub.svelte";
+  import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead } from "./lib/stores/notifications.svelte";
+  import { listWorkspaces, openWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, approve } from "./lib/wails";
   import type { WorkspaceVM, ApprovalReq } from "./lib/wails";
 
   let workspaces = $state<WorkspaceVM[]>([]);
@@ -129,6 +131,17 @@
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
   }
+
+  // ---------------------------------------------------------------------------
+  // Approval decision handler — called by ApprovalCard docked chrome.
+  // ---------------------------------------------------------------------------
+  function onDecision(reqId: string, decision: "allow" | "deny" | "always") {
+    approve(reqId, decision);
+    if (activeId) {
+      const { [activeId]: _, ...rest } = approvals;
+      approvals = rest;
+    }
+  }
 </script>
 
 <svelte:window onkeydown={onKeyDown} />
@@ -202,6 +215,27 @@
       onRun={(id) => { runCommand(id); mode.leaveCommand(); }}
       onClose={() => mode.leaveCommand()}
     />
+
+    {#if active && approvals[active.id]}
+      <div data-zone="approval-dock" class="approval-dock">
+        <ApprovalCard
+          req={approvals[active.id]}
+          queue={[approvals[active.id]]}
+          caps={active.caps}
+          {onDecision}
+        />
+      </div>
+    {/if}
+
+    <div data-zone="notification-hub" class="notification-hub-dock">
+      <NotificationHub
+        items={getItems()}
+        dnd={getDnd()}
+        onDismiss={(id) => markRead(id)}
+        onToggleDnd={() => setDnd(!getDnd())}
+        onClearRead={clearRead}
+      />
+    </div>
   </div>
 </ThemeProvider>
 
@@ -216,4 +250,10 @@
   .center-column    { display: flex; flex-direction: column; flex: 1; min-width: 0; }
   .stage-zone       { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .shell-drawer-zone { flex-shrink: 0; overflow: hidden; border-top: 1px solid var(--perch-border); }
+  .approval-dock     { position: absolute; bottom: 2rem; left: 50%; transform: translateX(-50%);
+                       z-index: 100; min-width: 320px; max-width: 560px; }
+  .notification-hub-dock { position: absolute; top: 2.5rem; right: 0; z-index: 90;
+                            width: 320px; max-height: 60vh; overflow-y: auto;
+                            border-left: 1px solid var(--perch-border);
+                            background: var(--perch-bg); }
 </style>

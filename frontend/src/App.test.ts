@@ -38,6 +38,7 @@ vi.mock("./lib/wails", () => ({
   getSettings:     vi.fn(async () => ({})),
   saveSettings:    vi.fn(async () => {}),
   revealInFiles:   vi.fn(async () => {}),
+  approve:         vi.fn(async () => {}),
   onAgentEvent:    vi.fn((cb) => { captured.agent.push(cb);     return () => {}; }),
   onNotify:        vi.fn((cb) => { captured.notify.push(cb);    return () => {}; }),
   onFsChanged:     vi.fn((cb) => { captured.fsChanged.push(cb); return () => {}; }),
@@ -457,5 +458,138 @@ describe("App.svelte live event wiring (4.25.4)", () => {
     expect(offAgent).toHaveBeenCalled();
     expect(offNotify).toHaveBeenCalled();
     expect(offFsChanged).toHaveBeenCalled();
+  });
+});
+
+describe("App.svelte approval card + notification hub (4.25.5)", () => {
+  // Workspace with caps.approvals=true so ApprovalCard actually renders.
+  const approvalWorkspaces = [
+    {
+      id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
+      worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
+      caps: { approvals: true, attention: false, tokens: false },
+    },
+  ];
+
+  it("ApprovalCard renders in docked chrome when active workspace has a pending approval", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(approvalWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    // Select the workspace to make it active
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    await tick();
+
+    // Inject approval event for ws-1
+    const cb = captured.agent.at(-1)!;
+    cb({
+      workspaceId: "ws-1",
+      kind: "approval",
+      state: "awaiting-approval",
+      approval: { reqId: "req-42", tool: "bash", summary: "Run the test suite" },
+    });
+    await tick();
+
+    // Card should be visible — check for summary text and Allow button
+    await waitFor(() => {
+      expect(screen.getByText("Run the test suite")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument();
+    });
+  });
+
+  it("clicking Allow calls approve(reqId, 'allow') and dequeues the card", async () => {
+    const { listWorkspaces, approve } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(approvalWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    // Select the workspace to make it active
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    await tick();
+
+    // Inject approval event
+    const cb = captured.agent.at(-1)!;
+    cb({
+      workspaceId: "ws-1",
+      kind: "approval",
+      state: "awaiting-approval",
+      approval: { reqId: "req-99", tool: "bash", summary: "Deploy to prod" },
+    });
+    await tick();
+
+    // Wait for card to appear
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument()
+    );
+
+    // Click Allow
+    await fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+    await tick();
+
+    // approve() called with the right args
+    expect(approve).toHaveBeenCalledWith("req-99", "allow");
+
+    // Card disappears after dequeue
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Allow" })).not.toBeInTheDocument()
+    );
+  });
+
+  it("ApprovalCard is docked OUTSIDE the stage grid — not a descendant of [data-zone='stage']", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(approvalWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    await tick();
+
+    const cb = captured.agent.at(-1)!;
+    cb({
+      workspaceId: "ws-1",
+      kind: "approval",
+      state: "awaiting-approval",
+      approval: { reqId: "req-dock", tool: "bash", summary: "Unique docking summary text" },
+    });
+    await tick();
+
+    // Summary text must be visible in the document
+    await waitFor(() =>
+      expect(screen.getByText("Unique docking summary text")).toBeInTheDocument()
+    );
+
+    // But must NOT be inside the stage zone
+    const stageEl = document.querySelector("[data-zone='stage']")!;
+    expect(stageEl).toBeInTheDocument();
+    const { queryByText } = await import("@testing-library/svelte");
+    // Use within from @testing-library/svelte
+    const { within } = await import("@testing-library/svelte");
+    expect(within(stageEl).queryByText("Unique docking summary text")).toBeNull();
+  });
+
+  it("NotificationHub renders and shows notifications from the store", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(approvalWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    await screen.findByRole("button", { name: "Alpha" });
+
+    // Inject a notification via the notify callback
+    const cb = captured.notify.at(-1)!;
+    cb({ tier: "blocking", title: "Hub test notification", body: "Hub body", workspaceId: "ws-1" });
+    await tick();
+
+    // NotificationHub is always rendered; "notification hub" section must be present
+    expect(screen.getByRole("region", { name: "notification hub" })).toBeInTheDocument();
+
+    // The notification title should appear in the hub
+    await waitFor(() =>
+      expect(screen.getByText("Hub test notification")).toBeInTheDocument()
+    );
   });
 });
