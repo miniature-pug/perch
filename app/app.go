@@ -8,14 +8,17 @@ package app
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/Miniature-Pug/perch/internal/agent"
+	fspkg "github.com/Miniature-Pug/perch/internal/fs"
 	gitpkg "github.com/Miniature-Pug/perch/internal/git"
 	internalpty "github.com/Miniature-Pug/perch/internal/pty"
 	"github.com/Miniature-Pug/perch/internal/proc"
@@ -51,20 +54,25 @@ type App struct {
 
 	spawnPty   spawnPtyFunc
 	newMonitor newMonitorFunc
+
+	settingsPath string
+	layoutPath   string
 }
 
 // NewApp builds the production App.
 func NewApp(store *registry.Store, roots []string) *App {
 	return &App{
-		store:      store,
-		roots:      roots,
-		run:        proc.ExecRunner{},
-		emit:       func(string, ...any) {},
-		bridges:    map[string]*internalpty.Bridge{},
-		monitors:   map[string]agent.Monitor{},
-		cancels:    map[string]context.CancelFunc{},
-		spawnPty:   internalpty.Spawn,
-		newMonitor: agent.NewMonitor,
+		store:        store,
+		roots:        roots,
+		run:          proc.ExecRunner{},
+		emit:         func(string, ...any) {},
+		bridges:      map[string]*internalpty.Bridge{},
+		monitors:     map[string]agent.Monitor{},
+		cancels:      map[string]context.CancelFunc{},
+		spawnPty:     internalpty.Spawn,
+		newMonitor:   agent.NewMonitor,
+		settingsPath: filepath.Join(registry.DefaultConfigDir(), "settings.json"),
+		layoutPath:   filepath.Join(registry.DefaultConfigDir(), "layout.json"),
 	}
 }
 
@@ -513,6 +521,106 @@ func (a *App) OpenShell(paneID, cwd string) error {
 	}
 	a.putBridge(paneID, br)
 	return nil
+}
+
+// GetSettings reads settings from disk; returns defaults if the file is absent.
+func (a *App) GetSettings() (Settings, error) {
+	data, err := os.ReadFile(a.settingsPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return Settings{Theme: "gruvbox", Density: "dense", Font: "geist"}, nil
+		}
+		return Settings{}, err
+	}
+	var s Settings
+	if err := json.Unmarshal(data, &s); err != nil {
+		return Settings{}, err
+	}
+	return s, nil
+}
+
+// SaveSettings atomically writes settings to disk.
+func (a *App) SaveSettings(s Settings) error {
+	data, err := json.Marshal(s)
+	if err != nil {
+		return err
+	}
+	return atomicWriteApp(a.settingsPath, data)
+}
+
+// GetLayout reads the opaque layout JSON blob from disk.
+func (a *App) GetLayout() (string, error) {
+	data, err := os.ReadFile(a.layoutPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "{}", nil
+		}
+		return "", err
+	}
+	return string(data), nil
+}
+
+// SaveLayout atomically writes the opaque layout JSON blob.
+func (a *App) SaveLayout(layoutJSON string) error {
+	return atomicWriteApp(a.layoutPath, []byte(layoutJSON))
+}
+
+// atomicWriteApp writes data to path via temp file + rename (atomic on Linux),
+// creating the parent dir if needed.
+func atomicWriteApp(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".tmp-")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	return os.Rename(tmpName, path)
+}
+
+// ListDir returns directory entries under absDir, gitignore-unaware.
+func (a *App) ListDir(absDir string) ([]fspkg.Node, error) {
+	return fspkg.ListDir(absDir, false)
+}
+
+// ReadFile returns the contents of absPath as a string.
+func (a *App) ReadFile(absPath string) (string, error) {
+	data, err := fspkg.ReadFile(absPath)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+// WriteFile atomically writes content to absPath.
+func (a *App) WriteFile(absPath, content string) error {
+	return fspkg.WriteFile(absPath, []byte(content))
+}
+
+// RevealInFiles opens the containing directory of absPath in the system file manager.
+func (a *App) RevealInFiles(absPath string) error {
+	return fspkg.RevealInFiles(absPath)
+}
+
+// Branches returns git branch names for the repo at repo.
+func (a *App) Branches(repo string) ([]string, error) {
+	return gitpkg.Branches(context.Background(), a.runner(), repo)
+}
+
+// Worktrees returns git worktree info for the repo at repo.
+func (a *App) Worktrees(repo string) ([]gitpkg.WorktreeInfo, error) {
+	return gitpkg.Worktrees(context.Background(), a.runner(), repo)
 }
 
 // agentAdapter returns the Adapter for a known tool name, or nil for unknown.

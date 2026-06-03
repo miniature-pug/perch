@@ -673,3 +673,118 @@ func TestApp_OpenShell_SpawnsAndEmits(t *testing.T) {
 		t.Error("bridge for shell-1 not registered")
 	}
 }
+
+func TestApp_Settings_RoundTrip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	a := &App{
+		store:        store,
+		emit:         func(string, ...any) {},
+		bridges:      map[string]*internalpty.Bridge{},
+		monitors:     map[string]agent.Monitor{},
+		settingsPath: filepath.Join(cfgDir, "settings.json"),
+	}
+	s := Settings{Theme: "tokyo-night", Density: "comfortable", DND: true}
+	if err := a.SaveSettings(s); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+	got, err := a.GetSettings()
+	if err != nil {
+		t.Fatalf("GetSettings: %v", err)
+	}
+	if got.Theme != "tokyo-night" || got.Density != "comfortable" || !got.DND {
+		t.Errorf("settings round-trip mismatch: %+v", got)
+	}
+}
+
+func TestApp_Layout_RoundTrip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	a := &App{
+		store:      store,
+		emit:       func(string, ...any) {},
+		bridges:    map[string]*internalpty.Bridge{},
+		monitors:   map[string]agent.Monitor{},
+		layoutPath: filepath.Join(cfgDir, "layout.json"),
+	}
+	blob := `{"sidebarW":240,"shellH":200}`
+	if err := a.SaveLayout(blob); err != nil {
+		t.Fatalf("SaveLayout: %v", err)
+	}
+	got, err := a.GetLayout()
+	if err != nil {
+		t.Fatalf("GetLayout: %v", err)
+	}
+	if got != blob {
+		t.Errorf("layout round-trip = %q, want %q", got, blob)
+	}
+}
+
+func TestApp_GetSettings_ReturnsDefaultOnMissing(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	a := &App{
+		store:        store,
+		emit:         func(string, ...any) {},
+		bridges:      map[string]*internalpty.Bridge{},
+		monitors:     map[string]agent.Monitor{},
+		settingsPath: filepath.Join(cfgDir, "no-such-settings.json"),
+	}
+	s, err := a.GetSettings()
+	if err != nil {
+		t.Fatalf("GetSettings on missing file: %v", err)
+	}
+	if s.Theme != "gruvbox" {
+		t.Errorf("default theme = %q, want gruvbox", s.Theme)
+	}
+}
+
+func TestApp_ListDir_ReturnsDirEntries(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	a := &App{
+		store:    store,
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+	}
+	nodes, err := a.ListDir(dir)
+	if err != nil {
+		t.Fatalf("ListDir: %v", err)
+	}
+	if len(nodes) == 0 {
+		t.Error("ListDir must return at least the written file")
+	}
+}
+
+func TestApp_ReadWriteFile_RoundTrip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.txt")
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	a := &App{
+		store:    store,
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+	}
+	if err := a.WriteFile(path, "hello world"); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	got, err := a.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if got != "hello world" {
+		t.Errorf("ReadFile = %q, want 'hello world'", got)
+	}
+}
