@@ -16,9 +16,11 @@ test("file drop fires writeToPty with @mention when fileDrop cap is true", async
   await waitFor(() => expect(w.writeToPty).toHaveBeenCalledWith("p1", expect.any(Array)));
 });
 
-test("renders Open file fallback when fileDrop cap is false", async () => {
+test("renders paste-path hint and no buttons when fileDrop cap is false", async () => {
   const { default: DragDrop } = await import("./DragDrop.svelte");
   render(DragDrop, { props: { paneId: "p1", fileDrop: false } });
-  expect(screen.getByRole("button", { name: /open file/i })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: /copy path/i })).toBeInTheDocument();
+  // The old "Open file" / "Copy path" buttons were removed as dead no-ops.
+  // When fileDrop is false the component shows a hint paragraph instead.
+  expect(screen.getByText(/paste path/i)).toBeInTheDocument();
+  expect(screen.queryByRole("button")).toBeNull();
 });

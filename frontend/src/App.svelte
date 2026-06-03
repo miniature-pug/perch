@@ -236,6 +236,18 @@
 
     // NORMAL mode ---------------------------------------------------------------
 
+    // Ctrl-K / Cmd-K → command palette (spec §7.7). Check before the switch so
+    // the plain "k" workspace-nav case does not fire when Ctrl is held.
+    // Do NOT intercept when focus is inside an input or textarea (would hijack typing).
+    if ((e.ctrlKey || e.metaKey) && e.key === "k") {
+      const tag = (e.target as HTMLElement)?.tagName?.toUpperCase();
+      if (tag !== "INPUT" && tag !== "TEXTAREA") {
+        e.preventDefault();
+        mode.enterCommand();
+        return;
+      }
+    }
+
     // g-prefix resolution must come first so gd/ge work correctly.
     if (pendingG) {
       pendingG = false;
@@ -387,12 +399,14 @@
                   </DragDrop>
                 {:else if layout.view === "code"}
                   {#key fsVersion[active.id] ?? 0}
-                    <FileTree root={active.worktreePath} onOpen={(p) => { codePath = p; }} />
-                    {#if isPreviewable(codePath)}
-                      <Preview path={codePath ?? ""} kind={previewKind(codePath ?? "")} content={previewContent} />
-                    {:else}
-                      <Editor path={codePath} worktree={active.worktreePath} />
-                    {/if}
+                    <div class="code-layout">
+                      <FileTree root={active.worktreePath} onOpen={(p) => { codePath = p; }} />
+                      {#if isPreviewable(codePath)}
+                        <Preview path={codePath ?? ""} kind={previewKind(codePath ?? "")} content={previewContent} />
+                      {:else}
+                        <Editor path={codePath} worktree={active.worktreePath} />
+                      {/if}
+                    </div>
                   {/key}
                 {:else if layout.view === "diff"}
                   {#key fsVersion[active.id] ?? 0}
@@ -409,12 +423,14 @@
                   <Terminal paneId={active.paneId} cwd={active.worktreePath} />
                 {:else if layout.view === "code"}
                   {#key fsVersion[active.id] ?? 0}
-                    <FileTree root={active.worktreePath} onOpen={(p) => { codePath = p; }} />
-                    {#if isPreviewable(codePath)}
-                      <Preview path={codePath ?? ""} kind={previewKind(codePath ?? "")} content={previewContent} />
-                    {:else}
-                      <Editor path={codePath} worktree={active.worktreePath} />
-                    {/if}
+                    <div class="code-layout">
+                      <FileTree root={active.worktreePath} onOpen={(p) => { codePath = p; }} />
+                      {#if isPreviewable(codePath)}
+                        <Preview path={codePath ?? ""} kind={previewKind(codePath ?? "")} content={previewContent} />
+                      {:else}
+                        <Editor path={codePath} worktree={active.worktreePath} />
+                      {/if}
+                    </div>
                   {/key}
                 {:else if layout.view === "diff"}
                   {#key fsVersion[active.id] ?? 0}
@@ -435,7 +451,30 @@
         <div data-zone="shell-drawer" class="shell-drawer-zone"
              style:height="{layout.shellH}px"
              style:display={layout.collapsed["shell"] ? "none" : undefined}>
-          <ShellDrawer />
+          {#if active}
+            {#key active.id}
+              <ShellDrawer paneId="{active.id}:shell" cwd={active.worktreePath} />
+            {/key}
+          {/if}
+        </div>
+        <div data-zone="status-line" class="status-line">
+          <span class="status-mode">{mode.current.toUpperCase()}</span>
+          {#if active}
+            <span class="status-sep" aria-hidden="true">·</span>
+            <span class="status-session">{active.title}</span>
+            <span class="status-sep" aria-hidden="true">·</span>
+            <span class="status-branch">{active.branch}</span>
+            <span class="status-sep" aria-hidden="true">·</span>
+            <span class="status-state">{active.state}</span>
+          {/if}
+          <span class="status-spacer"></span>
+          {#if active}
+            <TokenMeter
+              tokens={usage[active.id]?.tokens ?? 0}
+              cost={usage[active.id]?.cost ?? 0}
+              capsTokens={active.caps.tokens}
+            />
+          {/if}
         </div>
       </div>
     </div>
@@ -466,16 +505,6 @@
           onDismiss={(id) => markRead(id)}
           onToggleDnd={() => setDnd(!getDnd())}
           onClearRead={clearRead}
-        />
-      </div>
-    {/if}
-
-    {#if active}
-      <div data-zone="token-meter" class="token-meter-dock">
-        <TokenMeter
-          tokens={usage[active.id]?.tokens ?? 0}
-          cost={usage[active.id]?.cost ?? 0}
-          capsTokens={active.caps.tokens}
         />
       </div>
     {/if}
@@ -514,6 +543,7 @@
   .divider-h        { height: 4px; cursor: row-resize; background: var(--perch-border); }
   .center-column    { display: flex; flex-direction: column; flex: 1; min-width: 0; }
   .stage-zone       { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .code-layout      { display: flex; flex-direction: row; flex: 1; min-height: 0; min-width: 0; }
   .shell-drawer-zone { flex-shrink: 0; overflow: hidden; border-top: 1px solid var(--perch-border); }
   .filter-input      { display: block; width: 100%; box-sizing: border-box;
                        padding: 0.25rem 0.5rem; border: none; border-bottom: 1px solid var(--perch-border);
@@ -526,6 +556,21 @@
                             width: 320px; max-height: 60vh; overflow-y: auto;
                             border-left: 1px solid var(--perch-border);
                             background: var(--perch-bg); }
-  .token-meter-dock      { position: absolute; bottom: 0; right: 0; z-index: 80;
-                            padding: 0.25rem 0.5rem; }
+  /* Status line — spans the full bottom of the center column; always in DOM */
+  .status-line       { display: flex; align-items: center; flex-shrink: 0;
+                       height: 24px; padding: 0 var(--perch-sp-1);
+                       border-top: 1px solid var(--perch-border);
+                       background: var(--perch-surface);
+                       font-size: var(--perch-fs-caption);
+                       color: var(--perch-text-dim);
+                       gap: var(--perch-sp-1);
+                       font-family: var(--perch-font-sans); }
+  .status-mode       { font-size: var(--perch-fs-label); font-weight: 600;
+                       letter-spacing: 0.06em; text-transform: uppercase;
+                       color: var(--perch-accent); }
+  .status-sep        { color: var(--perch-border); }
+  .status-session    { color: var(--perch-text); font-weight: 500; }
+  .status-branch     { font-family: var(--perch-font-mono); font-size: var(--perch-fs-caption); }
+  .status-state      { color: var(--perch-text-dim); }
+  .status-spacer     { flex: 1; }
 </style>

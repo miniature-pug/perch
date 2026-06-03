@@ -738,7 +738,7 @@ describe("App.svelte TokenMeter + usage storage (4.25.6a)", () => {
     await waitFor(() => {
       const meter = screen.getByRole("status", { name: "token usage" });
       expect(meter).toBeInTheDocument();
-      expect(meter.textContent).toContain("12,345");
+      expect(meter.textContent).toContain("12.3k");
     });
   });
 });
@@ -1138,6 +1138,38 @@ describe("App.svelte keymap: mode transitions (4.25.6b)", () => {
     await fireEvent.keyDown(document.body, { key: ":" });
     await tick();
     expect(mode.current).toBe("command");
+  });
+
+  it("Ctrl-K in NORMAL → mode becomes 'command' (spec §7.7 command palette shortcut)", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    const { mode } = await import("./lib/stores/mode.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await tick();
+
+    await fireEvent.keyDown(document.body, { key: "k", ctrlKey: true });
+    await tick();
+    expect(mode.current).toBe("command");
+  });
+
+  it("Ctrl-K does NOT open command palette when focus is inside an input", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    const { mode } = await import("./lib/stores/mode.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await tick();
+
+    // Open the filter input (/) so there is a focused input in the DOM.
+    await fireEvent.keyDown(document.body, { key: "/" });
+    await tick();
+    const filterInput = await screen.findByRole("textbox", { name: "filter sessions" });
+    // Fire Ctrl-K on the input element itself (target = INPUT).
+    await fireEvent.keyDown(filterInput, { key: "k", ctrlKey: true });
+    await tick();
+    // Mode must remain normal — Ctrl-K must not fire inside an input.
+    expect(mode.current).toBe("normal");
   });
 });
 

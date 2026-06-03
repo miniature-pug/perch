@@ -6,6 +6,7 @@ node_modules/
 
 # Playwright e2e artifacts (screenshots committed separately if desired; test artifacts never)
 e2e/__screenshots__/
+e2e/__test-output__/
 test-results/
 playwright-report/
 .playwright/
