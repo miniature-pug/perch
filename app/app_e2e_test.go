@@ -1,16 +1,19 @@
 //go:build integration
 
-// app_e2e_test.go — headless integration test locking 5 previously-fixed backend
+// app_e2e_test.go — headless integration test locking 6 previously-fixed backend
 // "seam" bugs. The fake-agent binary drives the real ClaudeMonitor and
 // hooklistener without launching any real claude/opencode binary.
 //
 // BUG locks:
-//   1+2+3: ListWorkspaces populates PaneID, LastActive, Branch (covered in seam_bugs_test.go; re-verified here by round-trip through CreateWorkspace).
+//   1 (pty wire): OpenWorkspace passes dataEvent == "pty:data:pane-<id>" so the
+//      backend emits on exactly the channel WorkspaceVM.PaneID ("pane-<id>") that
+//      the frontend Terminal subscribes to. The fake spawnPty captures and asserts
+//      the event name; it also fires the emit callback once to exercise the path.
+//      NOTE: the true cross-process round-trip (real pty bytes → WebKit → xterm)
+//      is verified by the manual smoke checklist, since this test uses a fake bridge.
+//   2+3: ListWorkspaces populates PaneID, LastActive, Branch (covered in seam_bugs_test.go; re-verified here by round-trip through CreateWorkspace).
 //   4: OpenWorkspace stamps WorkspaceID on every forwarded agent:event.
 //   5: OpenWorkspace composes Approval.ReqID as "<raw>:<wsID>"; Approve parses it back correctly.
-//
-// NOTE: pty:data:* events are NOT asserted here. With the fake Bridge, no pty
-// bytes flow; that code-path is covered by internalpty unit tests and manual smoke.
 package app
 
 import (
@@ -126,8 +129,15 @@ func TestE2E_HeadlessFullLoop(t *testing.T) {
 	}
 
 	// ── spawnPty seam (no real shell/agent launch) ────────────────────────────
-	a.spawnPty = func(_ context.Context, _ string, _ []string, _, _ string,
-		_ internalpty.EmitFunc, _, _ uint16) (*internalpty.Bridge, error) {
+	// Capture the event-name args passed by OpenWorkspace so we can assert the
+	// pty data wire (bug-1): dataEvent must equal "pty:data:" + vm.PaneID.
+	var capturedDataEvent, capturedExitEvent string
+	var capturedPtyEmit internalpty.EmitFunc
+	a.spawnPty = func(_ context.Context, _ string, _ []string, dataEvent, exitEvent string,
+		emit internalpty.EmitFunc, _, _ uint16) (*internalpty.Bridge, error) {
+		capturedDataEvent = dataEvent
+		capturedExitEvent = exitEvent
+		capturedPtyEmit = emit
 		return internalpty.NewBridgeForTest(func() error { return nil }), nil
 	}
 
@@ -149,6 +159,47 @@ func TestE2E_HeadlessFullLoop(t *testing.T) {
 		t.Fatalf("OpenWorkspace: %v", err)
 	}
 	t.Cleanup(func() { _ = a.CloseWorkspace(wsID) })
+
+	// ── BUG-1 ASSERTIONS: pty data event name matches WorkspaceVM.PaneID ─────
+	//
+	// OpenWorkspace computes:
+	//   paneID   = "pane-" + id
+	//   event    = "pty:data:" + paneID   →  "pty:data:pane-<id>"
+	//   exitEvent = "pty:exit:" + paneID  →  "pty:exit:pane-<id>"
+	//
+	// (a) The VM exposes the pane id the Terminal will subscribe with.
+	if vm.PaneID != "pane-"+wsID {
+		t.Errorf("bug-1: vm.PaneID = %q, want %q", vm.PaneID, "pane-"+wsID)
+	}
+	// (b) The backend emits pty output on "pty:data:" + vm.PaneID, so the
+	//     Terminal subscription ("pty:data:${paneId}") matches exactly.
+	wantDataEvent := "pty:data:" + vm.PaneID // == "pty:data:pane-"+wsID
+	if capturedDataEvent != wantDataEvent {
+		t.Errorf("bug-1: spawnPty received dataEvent = %q, want %q", capturedDataEvent, wantDataEvent)
+	}
+	// Also assert the exit-event name for completeness (same pane-<id> formula).
+	wantExitEvent := "pty:exit:" + vm.PaneID
+	if capturedExitEvent != wantExitEvent {
+		t.Errorf("bug-1: spawnPty received exitEvent = %q, want %q", capturedExitEvent, wantExitEvent)
+	}
+	// (c) Emit-path: fire the captured emit callback once and confirm the event
+	//     name appears in the capture slice — exercises the full wire end-to-end
+	//     without a real pty. (The true pty-bytes→WebKit→xterm round-trip is
+	//     covered by the manual smoke checklist.)
+	capturedPtyEmit(wantDataEvent, []byte("x"))
+	emitMu.Lock()
+	var foundPtyData bool
+	for _, e := range emitted {
+		if e.event == wantDataEvent {
+			foundPtyData = true
+			break
+		}
+	}
+	emitMu.Unlock()
+	if !foundPtyData {
+		t.Errorf("bug-1: emit-path: no captured event %q after firing pty emit callback", wantDataEvent)
+	}
+	t.Logf("bug-1: dataEvent=%q exitEvent=%q paneID=%q — all locked", capturedDataEvent, capturedExitEvent, vm.PaneID)
 
 	// ── extract addr + token from the written settings.json ──────────────────
 	// writeHooks runs synchronously inside Prepare (called by OpenWorkspace), so
