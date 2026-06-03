@@ -115,8 +115,8 @@ type Hunk struct {
 
 func DiffStat(worktree string) ([]FileDiff, error)
 func Hunks(worktree, file string) ([]Hunk, error)
-func StageHunk(worktree string, h Hunk) error    // git apply --cached  (patch reconstructed from h)
-func DiscardHunk(worktree string, h Hunk) error  // git apply --reverse (worktree)
+func StageHunk(worktree, file string, index int) error    // git apply --cached  (verbatim Nth hunk of file; index relative to current Hunks output)
+func DiscardHunk(worktree, file string, index int) error  // git apply --reverse (verbatim Nth hunk of file; re-derive hunks after each call)
 func Branches(repo string) ([]string, error)
 type WorktreeInfo struct { Path string `json:"path"`; Branch string `json:"branch"`; Head string `json:"head"` }
 func Worktrees(repo string) ([]WorktreeInfo, error)
@@ -242,8 +242,8 @@ func (a *App) OpenShell(paneID, cwd string) error       // pinned shell drawer (
 func (a *App) Approve(reqID, decision string) error     // decision: "allow"|"deny"|"always"
 func (a *App) DiffStat(worktree string) ([]git.FileDiff, error)
 func (a *App) Hunks(worktree, file string) ([]git.Hunk, error)
-func (a *App) StageHunk(worktree string, h git.Hunk) error
-func (a *App) DiscardHunk(worktree string, h git.Hunk) error
+func (a *App) StageHunk(worktree, file string, index int) error
+func (a *App) DiscardHunk(worktree, file string, index int) error
 func (a *App) ListDir(absDir string) ([]fs.Node, error)
 func (a *App) ReadFile(absPath string) (string, error)
 func (a *App) WriteFile(absPath, content string) error
@@ -2743,6 +2743,8 @@ git add internal/git/hunk.go internal/git/hunks_test.go && git commit -m "feat(g
 ---
 
 ### Task 2.4: internal/git — StageHunk + DiscardHunk
+
+> **⚠ SUPERSEDED (implemented, then revised).** The reconstruct-patch-from-`Hunk` design shown in this task was found to corrupt the index for files without a trailing newline and to mis-stage file deletions. It was replaced with **index-based, raw-text staging** — `StageHunk(ctx, r, worktree, file string, index int)` / `DiscardHunk(...)` re-run `git diff` and apply the index-th hunk's verbatim text. Authoritative signatures live in the Shared Contracts above; the as-built implementation and tests are in `internal/git/hunk.go` / `stage_test.go` (commit `6f5a495`). The code blocks below are retained only as historical record — do not re-implement them.
 
 **Files:**
 - Modify `internal/git/hunk.go` (add `StageHunk`, `DiscardHunk`, `reconstructPatch`)
@@ -6920,7 +6922,7 @@ func (a *App) DiffStat(worktree string) ([]gitpkg.FileDiff, error) {
 	if err := validateWorktreeUnderRoots(worktree, a.roots); err != nil {
 		return nil, err
 	}
-	return gitpkg.DiffStat(worktree)
+	return gitpkg.DiffStat(context.Background(), a.run, worktree)
 }
 
 // Hunks returns the unified hunks for a single file in worktree.
@@ -6928,30 +6930,33 @@ func (a *App) Hunks(worktree, file string) ([]gitpkg.Hunk, error) {
 	if err := validateWorktreeUnderRoots(worktree, a.roots); err != nil {
 		return nil, err
 	}
-	return gitpkg.Hunks(worktree, file)
+	return gitpkg.Hunks(context.Background(), a.run, worktree, file)
 }
 
-// StageHunk applies one hunk to the index (git apply --cached).
-func (a *App) StageHunk(worktree string, h gitpkg.Hunk) error {
+// StageHunk applies hunk `index` of file to the index (git apply --cached).
+// index is relative to the current Hunks(worktree, file) output; the frontend
+// re-fetches hunks after each call so indices stay fresh.
+func (a *App) StageHunk(worktree, file string, index int) error {
 	if err := validateWorktreeUnderRoots(worktree, a.roots); err != nil {
 		return err
 	}
-	return gitpkg.StageHunk(worktree, h)
+	return gitpkg.StageHunk(context.Background(), a.run, worktree, file, index)
 }
 
-// DiscardHunk reverses one hunk in the working tree (git apply --reverse).
-func (a *App) DiscardHunk(worktree string, h gitpkg.Hunk) error {
+// DiscardHunk reverses hunk `index` of file in the working tree (git apply --reverse).
+func (a *App) DiscardHunk(worktree, file string, index int) error {
 	if err := validateWorktreeUnderRoots(worktree, a.roots); err != nil {
 		return err
 	}
-	return gitpkg.DiscardHunk(worktree, h)
+	return gitpkg.DiscardHunk(context.Background(), a.run, worktree, file, index)
 }
 ```
 
-> These call the new `internal/git` hunk API (`DiffStat(worktree string) ([]FileDiff, error)`,
-> `Hunks(worktree, file string) ([]Hunk, error)`, etc.) defined in Phase 2.
-> The existing `Diff(ctx, runner, root)` overload is retained for the old
-> `app.Diff` method which can co-exist or be removed when the old tests are cleaned up.
+> These call the new `internal/git` hunk API (`DiffStat(ctx, r, worktree) ([]FileDiff, error)`,
+> `Hunks(ctx, r, worktree, file) ([]Hunk, error)`, `StageHunk(ctx, r, worktree, file, index)`,
+> `DiscardHunk(ctx, r, worktree, file, index)`) defined in Phase 2. `a.run` is the App's
+> `proc.Runner`. The legacy `git.Diff`/`app.Diff` aggregate-diff island was removed in
+> Phase 2 cleanup (commit `a7be846`) — there is no Diff overload to co-exist with.
 
 - [ ] **Step 4: Run** — `go test -race -count=1 -run "TestApp_DiffStat|TestApp_Hunks" ./app/`; Expected: PASS
 
@@ -8165,8 +8170,8 @@ interface App {
   Approve(reqId: string, decision: string): Promise<void>;
   DiffStat(worktree: string): Promise<FileDiff[]>;
   Hunks(worktree: string, file: string): Promise<Hunk[]>;
-  StageHunk(worktree: string, h: Hunk): Promise<void>;
-  DiscardHunk(worktree: string, h: Hunk): Promise<void>;
+  StageHunk(worktree: string, file: string, index: number): Promise<void>;
+  DiscardHunk(worktree: string, file: string, index: number): Promise<void>;
   ListDir(absDir: string): Promise<FsNode[]>;
   ReadFile(absPath: string): Promise<string>;
   WriteFile(absPath: string, content: string): Promise<void>;
@@ -8203,8 +8208,8 @@ export const approve = (reqId: string, decision: "allow"|"deny"|"always")       
 // Git
 export const diffStat    = (worktree: string)                                     => app().DiffStat(worktree);
 export const hunks       = (worktree: string, file: string)                       => app().Hunks(worktree, file);
-export const stageHunk   = (worktree: string, h: Hunk)                           => app().StageHunk(worktree, h);
-export const discardHunk = (worktree: string, h: Hunk)                           => app().DiscardHunk(worktree, h);
+export const stageHunk   = (worktree: string, file: string, index: number)       => app().StageHunk(worktree, file, index);
+export const discardHunk = (worktree: string, file: string, index: number)       => app().DiscardHunk(worktree, file, index);
 export const branches    = (repo: string)                                         => app().Branches(repo);
 export const worktrees   = (repo: string)                                         => app().Worktrees(repo);
 // FS
@@ -8813,8 +8818,8 @@ export interface ApprovalReq { reqId: string; tool: string; summary: string; }
 // WriteFile(absPath: string, content: string): Promise<void>
 // Hunks(worktree: string, file: string): Promise<Hunk[]>
 // DiffStat(worktree: string): Promise<FileDiff[]>
-// StageHunk(worktree: string, h: Hunk): Promise<void>
-// DiscardHunk(worktree: string, h: Hunk): Promise<void>
+// StageHunk(worktree: string, file: string, index: number): Promise<void>
+// DiscardHunk(worktree: string, file: string, index: number): Promise<void>
 // ListDir(absDir: string): Promise<FSNode[]>
 // RevealInFiles(absPath: string): Promise<void>
 // CopyPath(absPath: string): string
@@ -8827,8 +8832,8 @@ export const readFile    = (p: string) => app().ReadFile(p);
 export const writeFile   = (p: string, c: string) => app().WriteFile(p, c);
 export const hunks       = (wt: string, f: string) => app().Hunks(wt, f);
 export const diffStat    = (wt: string) => app().DiffStat(wt);
-export const stageHunk   = (wt: string, h: Hunk) => app().StageHunk(wt, h);
-export const discardHunk = (wt: string, h: Hunk) => app().DiscardHunk(wt, h);
+export const stageHunk   = (wt: string, file: string, index: number) => app().StageHunk(wt, file, index);
+export const discardHunk = (wt: string, file: string, index: number) => app().DiscardHunk(wt, file, index);
 export const listDir     = (d: string) => app().ListDir(d);
 export const revealInFiles = (p: string) => app().RevealInFiles(p);
 export const copyPath    = (p: string) => app().CopyPath(p);
@@ -9080,7 +9085,7 @@ test("Stage button calls stageHunk", async () => {
   const w = await import("./wails");
   await waitFor(() => screen.getByRole("button", { name: /stage/i }));
   await fireEvent.click(screen.getByRole("button", { name: /stage/i }));
-  await waitFor(() => expect(w.stageHunk).toHaveBeenCalledWith("/wt", fakeHunks[0]));
+  await waitFor(() => expect(w.stageHunk).toHaveBeenCalledWith("/wt", "src/main.go", 0));
 });
 ```
 
@@ -9122,12 +9127,12 @@ test("Stage button calls stageHunk", async () => {
   }
 
   async function stage(h: Hunk) {
-    await stageHunk(worktree, h);
+    await stageHunk(worktree, h.file, h.index);
     expanded = { ...expanded, [h.file]: await fetchHunks(worktree, h.file) };
   }
 
   async function discard(h: Hunk) {
-    await discardHunk(worktree, h);
+    await discardHunk(worktree, h.file, h.index);
     expanded = { ...expanded, [h.file]: await fetchHunks(worktree, h.file) };
   }
 </script>
