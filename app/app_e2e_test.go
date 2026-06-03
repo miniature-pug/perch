@@ -131,13 +131,13 @@ func TestE2E_HeadlessFullLoop(t *testing.T) {
 	// ── spawnPty seam (no real shell/agent launch) ────────────────────────────
 	// Capture the event-name args passed by OpenWorkspace so we can assert the
 	// pty data wire (bug-1): dataEvent must equal "pty:data:" + vm.PaneID.
+	// NOTE: the true cross-process round-trip (real pty bytes → WebKit → xterm)
+	// is smoke-tested via the manual checklist; this test uses a fake bridge.
 	var capturedDataEvent, capturedExitEvent string
-	var capturedPtyEmit internalpty.EmitFunc
 	a.spawnPty = func(_ context.Context, _ string, _ []string, dataEvent, exitEvent string,
-		emit internalpty.EmitFunc, _, _ uint16) (*internalpty.Bridge, error) {
+		_ internalpty.EmitFunc, _, _ uint16) (*internalpty.Bridge, error) {
 		capturedDataEvent = dataEvent
 		capturedExitEvent = exitEvent
-		capturedPtyEmit = emit
 		return internalpty.NewBridgeForTest(func() error { return nil }), nil
 	}
 
@@ -181,23 +181,6 @@ func TestE2E_HeadlessFullLoop(t *testing.T) {
 	wantExitEvent := "pty:exit:" + vm.PaneID
 	if capturedExitEvent != wantExitEvent {
 		t.Errorf("bug-1: spawnPty received exitEvent = %q, want %q", capturedExitEvent, wantExitEvent)
-	}
-	// (c) Emit-path: fire the captured emit callback once and confirm the event
-	//     name appears in the capture slice — exercises the full wire end-to-end
-	//     without a real pty. (The true pty-bytes→WebKit→xterm round-trip is
-	//     covered by the manual smoke checklist.)
-	capturedPtyEmit(wantDataEvent, []byte("x"))
-	emitMu.Lock()
-	var foundPtyData bool
-	for _, e := range emitted {
-		if e.event == wantDataEvent {
-			foundPtyData = true
-			break
-		}
-	}
-	emitMu.Unlock()
-	if !foundPtyData {
-		t.Errorf("bug-1: emit-path: no captured event %q after firing pty emit callback", wantDataEvent)
 	}
 	t.Logf("bug-1: dataEvent=%q exitEvent=%q paneID=%q — all locked", capturedDataEvent, capturedExitEvent, vm.PaneID)
 

@@ -298,12 +298,24 @@ func removeMonitorHooks(path string, data []byte) error {
 	return atomicWrite(path, append(out, '\n'))
 }
 
+// atomicWrite writes data to path atomically via a temp file.
+// The file is always created with mode 0600 (owner read/write only) because
+// settings.json embeds a Bearer token; preserving a pre-existing looser mode
+// would expose the token to other local users.
 func atomicWrite(path string, data []byte) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".settings-*.json")
 	if err != nil {
 		return err
 	}
 	name := tmp.Name()
+	// Set 0600 on the temp file before writing so there is no window where the
+	// token-bearing content is readable by group/world. os.CreateTemp already
+	// uses 0600, but we set it explicitly to document the invariant.
+	if err := os.Chmod(name, 0o600); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(name)
+		return err
+	}
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(name)
@@ -313,10 +325,5 @@ func atomicWrite(path string, data []byte) error {
 		_ = os.Remove(name)
 		return err
 	}
-	mode := os.FileMode(0o600)
-	if fi, err := os.Stat(path); err == nil {
-		mode = fi.Mode().Perm()
-	}
-	_ = os.Chmod(name, mode)
 	return os.Rename(name, path)
 }

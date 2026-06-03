@@ -102,6 +102,51 @@ func TestClaudeMonitorSettingsFileMode(t *testing.T) {
 	}
 }
 
+// TestClaudeMonitorSettingsFileModePreExisting asserts that Prepare forces the
+// settings.json to 0600 even when a pre-existing file is world-readable (0644).
+// The Bearer token is the sole defence against other local users; it must not
+// be leaked via a permissive file mode, regardless of what mode the file had
+// before Prepare ran.
+func TestClaudeMonitorSettingsFileModePreExisting(t *testing.T) {
+	m, _, cleanup := newMonitorWithTestListener(t)
+	defer cleanup()
+	worktree := filepath.Join(os.Getenv("HOME"), "repo-mode-preexisting")
+	claudeDir := filepath.Join(worktree, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+
+	// Create a settings.json at 0644, then chmod explicitly to defeat umask.
+	if err := os.WriteFile(settingsPath, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(settingsPath, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Verify the pre-condition: file really is 0644 before Prepare.
+	fi, err := os.Stat(settingsPath)
+	if err != nil {
+		t.Fatalf("pre-condition stat: %v", err)
+	}
+	if fi.Mode().Perm() != 0o644 {
+		t.Fatalf("pre-condition: expected 0644, got %o", fi.Mode().Perm())
+	}
+
+	// Run Prepare — must force the file down to 0600.
+	if _, err := m.Prepare(context.Background(), "wsMPE", worktree, ""); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+
+	fi2, err := os.Stat(settingsPath)
+	if err != nil {
+		t.Fatalf("post-Prepare stat: %v", err)
+	}
+	if perm := fi2.Mode().Perm(); perm != 0o600 {
+		t.Errorf("settings.json mode = %o, want 600 (pre-existing 0644 must be forced down; carries bearer token)", perm)
+	}
+}
+
 func TestClaudeMonitorTranscriptTail(t *testing.T) {
 	m, _, cleanup := newMonitorWithTestListener(t)
 	defer cleanup()
