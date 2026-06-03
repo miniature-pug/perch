@@ -94,14 +94,30 @@ WebKitGTK from hijacking the drop, and that `OnFileDrop` delivers the file path 
 
 **Prereqs:** Wails v2.12.0 build env; Linux desktop with Nautilus/Thunar; `npm` and Go available.
 
-**Run:**
+**Run (manifest-free — recommended):**
+
+`cmd/spike-4/` has no `wails.json`, so `wails build` cannot be used directly. Build without it:
+
 ```
 cd cmd/spike-4
+
+# 1. Scaffold a vanilla Vite frontend (this will overwrite frontend/src/main.js)
 npm create vite@latest frontend -- --template vanilla
-# Replace frontend/src/main.js with the content already at cmd/spike-4/frontend/src/main.js
+
+# 2. Restore the committed drop-zone harness (overwritten by the scaffold above)
+git checkout cmd/spike-4/frontend/src/main.js
+
+# 3. Install deps and build the frontend bundle
 npm --prefix frontend install && npm --prefix frontend run build
-wails build -tags production
-./build/bin/spike-4
+
+# 4. Build the Go binary
+#    -tags "ignore production": 'ignore' satisfies the //go:build ignore first line of main.go
+#    (without it the file is excluded by the toolchain and the build produces nothing);
+#    'production' is the standard Wails production tag that embeds the built frontend.
+go build -tags "ignore production" -o spike-4 main.go
+
+# 5. Run
+./spike-4
 # Open Nautilus/Thunar and drag a file onto the Spike 4 window.
 ```
 
@@ -110,8 +126,12 @@ wails build -tags production
 
 **Record:** `docs/superpowers/spikes/4-ondrop-linux-3686.md` — Outcome, evidence (terminal output or screenshot description), Fallback-engaged?.
 
-Note: `cmd/spike-4/main.go` carries `//go:build ignore` so it is excluded from `go build ./...`.
-The user must run `wails build` (or `go build -tags production`) from within `cmd/spike-4/` after scaffolding the frontend.
+Note: `cmd/spike-4/main.go` carries `//go:build ignore` (line 1) to exclude it from `go build ./...`
+at the repo root. The `-tags "ignore production"` flag above re-includes the file for this local build.
+
+**Alternative (wails build):** If you want to use `wails build`, first generate a manifest with
+`wails init` inside `cmd/spike-4/`, then run `wails build -tags production`. This is not the
+recommended path because it creates extra scaffolding not tracked by the repo.
 
 ---
 
