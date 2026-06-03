@@ -23,22 +23,28 @@ vi.mock("./lib/FileTree.svelte", async () => ({
 }));
 
 vi.mock("./lib/wails", () => ({
-  listWorkspaces: vi.fn(async () => []),
-  openWorkspace:  vi.fn(async () => {}),
-  openShell:      vi.fn(async () => {}),
-  getLayout:      vi.fn(async () => "{}"),
-  saveLayout:     vi.fn(async () => {}),
-  getSettings:    vi.fn(async () => ({})),
-  saveSettings:   vi.fn(async () => {}),
+  listWorkspaces:  vi.fn(async () => []),
+  openWorkspace:   vi.fn(async () => {}),
+  openShell:       vi.fn(async () => {}),
+  getLayout:       vi.fn(async () => "{}"),
+  saveLayout:      vi.fn(async () => {}),
+  getSettings:     vi.fn(async () => ({})),
+  saveSettings:    vi.fn(async () => {}),
+  revealInFiles:   vi.fn(async () => {}),
 }));
 
-// NOTE: layout store is NOT mocked — we use the real $state runes store.
+// NOTE: layout and mode stores are NOT mocked — we use the real $state runes stores.
 // restore() calls getLayout() which is mocked to return "{}", so onMount is safe.
-vi.mock("./lib/stores/mode.svelte", () => ({
-  mode: { current: "normal", enterTerminal: vi.fn(), enterCommand: vi.fn(), leaveCommand: vi.fn() },
-}));
 vi.mock("./lib/stores/settings.svelte", () => ({
-  settings: { theme: "gruvbox", density: "dense", load: vi.fn(async () => {}) },
+  settings: {
+    theme:   "gruvbox",
+    density: "dense",
+    load:       vi.fn(async () => {}),
+    setTheme:   vi.fn(async () => {}),
+    setDensity: vi.fn(async () => {}),
+    setFont:    vi.fn(async () => {}),
+    setDnd:     vi.fn(async () => {}),
+  },
 }));
 
 const fakeWorkspaces = [
@@ -63,6 +69,10 @@ beforeEach(async () => {
   (layout as any).sidebarW  = 240;
   (layout as any).shellH    = 200;
   (layout as any).collapsed = {};
+  // Reset the real mode singleton — must be "normal" for keymap guard to work.
+  const { mode } = await import("./lib/stores/mode.svelte");
+  mode.leaveCommand();
+  (mode as any).current = "normal";
 });
 
 describe("App.svelte skeleton", () => {
@@ -254,5 +264,60 @@ describe("App.svelte Stage content routing (4.25.2)", () => {
       const terminals = screen.getAllByTestId("terminal");
       expect(terminals).toHaveLength(2);
     });
+  });
+});
+
+describe("App.svelte MenuBar + CommandPalette (4.25.3)", () => {
+  it("pressing ':' in NORMAL opens the CommandPalette (dialog appears)", async () => {
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    // Palette must not be visible initially
+    expect(screen.queryByRole("dialog", { name: "command palette" })).not.toBeInTheDocument();
+    // Fire ':' keydown — onKeyDown calls mode.enterCommand() → mode.current = "command"
+    await fireEvent.keyDown(document.body, { key: ":" });
+    await tick();
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "command palette" })).toBeInTheDocument()
+    );
+  });
+
+  it("running 'view:code' via the palette sets layout.view to 'code' and closes the palette", async () => {
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { mode }   = await import("./lib/stores/mode.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    // Open the palette
+    await fireEvent.keyDown(document.body, { key: ":" });
+    await tick();
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "command palette" })).toBeInTheDocument()
+    );
+    // Click the "Code view" palette item
+    const codeItem = screen.getByRole("option", { name: /code view/i });
+    await fireEvent.click(codeItem);
+    await tick();
+    // Command ran: layout.view changed
+    expect(layout.view).toBe("code");
+    // Palette closed: mode back to normal
+    expect(mode.current).toBe("normal");
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "command palette" })).not.toBeInTheDocument()
+    );
+  });
+
+  it("MenuBar 'view:split' command flips layout.split via the registry", async () => {
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    expect(layout.split).toBe(false);
+    // Open the View menu in the real MenuBar
+    const viewMenuBtn = screen.getByRole("menuitem", { name: "View" });
+    await fireEvent.click(viewMenuBtn);
+    await tick();
+    // Click the "Split" item in the dropdown
+    const splitItem = screen.getByRole("menuitem", { name: "Split" });
+    await fireEvent.click(splitItem);
+    await tick();
+    expect(layout.split).toBe(true);
   });
 });
