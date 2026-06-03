@@ -1,4 +1,4 @@
-// frontend/src/lib/preview.test.ts
+// frontend/src/lib/preview-detect.test.ts
 // Unit tests for the pure previewKind / isPreviewable helpers.
 import { describe, it, expect } from "vitest";
 import { isPreviewable, previewKind } from "./preview";
