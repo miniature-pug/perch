@@ -102,7 +102,7 @@ func fullSystem(home string) *fakeSystem {
 			"opencode": "/home/user/.local/bin/opencode",
 		},
 		outputs: map[string]fakeOutput{
-			"go version":         {out: []byte("go version go1.26.3 linux/amd64")},
+			"go version":         {out: []byte("go version go1.26.4 linux/amd64")},
 			"tmux -V":            {out: []byte("tmux 3.6")},
 			"git --version":      {out: []byte("git version 2.43.0")},
 			"claude --version":   {out: []byte("2.1.158")},
@@ -331,9 +331,9 @@ func TestRunExitCode_GoMissing_IsWarn(t *testing.T) {
 // ── Drift warning logic ───────────────────────────────────────────────────────
 
 func TestRunDrift_NewerInstalled_NoWarn(t *testing.T) {
-	// go 1.26.3 installed, pin is 1.26.2 → installed > pinned → go row must be [ok].
-	// fullSystem already reports go1.26.3; no override needed.
+	// go 1.26.5 installed, pin is 1.26.4 → installed > pinned → go row must be [ok].
 	sys := fullSystem("/home/tester")
+	sys.outputs["go version"] = fakeOutput{out: []byte("go version go1.26.5 linux/amd64")}
 	var out strings.Builder
 	Run("v0.1.0-dev", &out, sys)
 	output := out.String()
@@ -512,7 +512,7 @@ func TestRunSummary_DynamicWarnCount(t *testing.T) {
 			// opencode absent
 		},
 		outputs: map[string]fakeOutput{
-			"go version":         {out: []byte("go version go1.26.3 linux/amd64")},
+			"go version":         {out: []byte("go version go1.26.4 linux/amd64")},
 			"tmux -V":            {out: []byte("tmux 3.6")},
 			"git --version":      {out: []byte("git version 2.43.0")},
 			"claude --version":   {out: []byte("2.1.158")},

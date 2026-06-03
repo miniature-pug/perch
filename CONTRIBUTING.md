@@ -5,7 +5,7 @@
 | Tool | Required version |
 |------|-----------------|
 | Go directive | `1.25.0` (see `go.mod`) |
-| Go toolchain | `go1.26.2` (see `go.mod` `toolchain` directive) |
+| Go toolchain | `go1.26.4` (see `go.mod` `toolchain` directive) |
 | tmux | `3.6` (pinned in `.tool-versions`, verified by `perch doctor`) |
 | Node.js | `v22.x` (for building the Svelte frontend; checked by `node --version`) |
 | npm | bundled with Node v22 |

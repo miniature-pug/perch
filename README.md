@@ -39,7 +39,7 @@ sudo apt install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.0-de
 
 | Tool | Version |
 |------|---------|
-| Go toolchain | 1.26.2 |
+| Go toolchain | 1.26.4 |
 | Node.js | v22 |
 | npm | (bundled with Node) |
 

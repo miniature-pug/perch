@@ -137,7 +137,7 @@ execution path found). `make vulncheck` → "No vulnerabilities found"; `go mod 
 "all modules verified"; full `-race` + integration suite green on real git/tmux 3.6.
 
 > **Note (go directive):** bumping `golang.org/x/sys` to v0.44.0 raised the module's `go`
-> directive 1.24.2 → 1.25.0 (the dependency requires it); the toolchain stays `go1.26.2`.
+> directive 1.24.2 → 1.25.0 (the dependency requires it); the toolchain was `go1.26.2`, bumped to `go1.26.4` to clear crypto/x509 CVEs.
 
 ## GUI Pivot — New Surface (V14–V18)
 

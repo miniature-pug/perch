@@ -25,7 +25,7 @@ Key properties:
   assets are served via the `wails://` custom scheme. The
   `ws://localhost:34115` reload socket is `//go:build dev` only.
 - **Module:** `github.com/Miniature-Pug/perch`
-- **Go directive:** `1.25.0` / **toolchain:** `go1.26.2`
+- **Go directive:** `1.25.0` / **toolchain:** `go1.26.4`
 - **Wails:** v2.12.0 / **Frontend:** Svelte 5 + Vite (in `frontend/`)
 - **tmux pin:** 3.6 (checked by `perch doctor`)
 - **Key deps:** `bmatcuk/doublestar/v4` (glob), `sahilm/fuzzy` (fuzzy match),
