@@ -20,7 +20,7 @@
   import ApprovalCard       from "./lib/ApprovalCard.svelte";
   import NotificationHub    from "./lib/NotificationHub.svelte";
   import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead } from "./lib/stores/notifications.svelte";
-  import { listWorkspaces, createWorkspace, removeWorkspace, openWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, approve } from "./lib/wails";
+  import { listWorkspaces, createWorkspace, removeWorkspace, openWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, approve, branches } from "./lib/wails";
   import type { WorkspaceVM, ApprovalReq } from "./lib/wails";
 
   let workspaces = $state<WorkspaceVM[]>([]);
@@ -36,10 +36,9 @@
 
   const active = $derived(workspaces.find(w => w.id === activeId) ?? null);
 
-  // Derived lists for NewSessionDialog dropdowns — placeholder source until a backend list call exists.
-  // Uses worktreePaths from loaded workspaces as a stand-in for repo roots (semantically approximate).
-  const repos    = $derived([...new Set(workspaces.map(w => w.worktreePath))]);
-  const branches = $derived([...new Set(workspaces.map(w => w.branch))]);
+  // Derived repo list for NewSessionDialog — uses distinct worktreePaths from known workspaces.
+  // branches() from the wails seam resolves all repo branches from any worktree path.
+  const repos = $derived([...new Set(workspaces.map(w => w.worktreePath))]);
 
   // Off-functions captured from wails event subscriptions (subscribed synchronously in onMount).
   let offAgentEvent: (() => void) | null = null;
@@ -54,7 +53,7 @@
       if (ev.state) ws.state = ev.state;
       if (ev.approval) approvals[ev.workspaceId] = ev.approval;
       if (ev.kind === "usage") {
-        usage[ev.workspaceId] = { tokens: ev.tokens ?? 0, cost: ev.cost ?? 0 };
+        usage = { ...usage, [ev.workspaceId]: { tokens: ev.tokens ?? 0, cost: ev.cost ?? 0 } };
       }
     });
 
@@ -297,7 +296,7 @@
     <NewSessionDialog
       open={newSessionOpen}
       {repos}
-      {branches}
+      loadBranches={(repo) => branches(repo)}
       onCreate={handleCreate}
       onClose={() => { newSessionOpen = false; }}
     />
@@ -307,6 +306,7 @@
       message={confirmRemove ? `Remove workspace "${confirmRemove.title}"?` : ""}
       confirmLabel="Remove"
       destructive={true}
+      note="Removes this session from perch. The worktree and its files remain on disk."
       onConfirm={handleConfirmRemove}
       onCancel={handleCancelRemove}
     />

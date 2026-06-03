@@ -1,19 +1,32 @@
 <!-- frontend/src/lib/NewSessionDialog.svelte -->
 <script lang="ts">
   let {
-    open, repos, branches, onCreate, onClose,
+    open, repos, loadBranches, onCreate, onClose,
   }: {
-    open: boolean; repos: string[]; branches: string[];
+    open: boolean; repos: string[];
+    loadBranches: (repo: string) => Promise<string[]>;
     onCreate: (agent: string, repo: string, branch: string, model: string) => void;
     onClose: () => void;
   } = $props();
 
-  let agent  = $state("claude");
-  let repo   = $state(repos[0] ?? "");
-  let branch = $state(branches[0] ?? "");
-  let model  = $state("claude-sonnet-4-5");
+  let agent    = $state("claude");
+  let repo     = $state(repos[0] ?? "");
+  let branch   = $state("");
+  let model    = $state("claude-sonnet-4-5");
+  let branches = $state<string[]>([]);
 
-  $effect(() => { if (open) { agent = "claude"; repo = repos[0] ?? ""; branch = branches[0] ?? ""; model = "claude-sonnet-4-5"; } });
+  // Reset dialog fields when opened; load branches per selected repo.
+  $effect(() => { if (open) { agent = "claude"; repo = repos[0] ?? ""; model = "claude-sonnet-4-5"; } });
+
+  // Load branches whenever repo changes (and is non-empty).
+  $effect(() => {
+    const currentRepo = repo;
+    if (!currentRepo) { branches = []; branch = ""; return; }
+    loadBranches(currentRepo).then((list) => {
+      branches = list;
+      branch   = list[0] ?? "";
+    });
+  });
 
   function handleCreate() {
     if (!repo || !branch) return;

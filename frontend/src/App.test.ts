@@ -46,6 +46,7 @@ vi.mock("./lib/wails", () => ({
   })),
   removeWorkspace: vi.fn(async () => {}),
   writeToPty:      vi.fn(async () => {}),
+  branches:        vi.fn(async (_repo: string) => ["main", "feat/x"]),
   onAgentEvent:    vi.fn((cb) => { captured.agent.push(cb);     return () => {}; }),
   onNotify:        vi.fn((cb) => { captured.notify.push(cb);    return () => {}; }),
   onFsChanged:     vi.fn((cb) => { captured.fsChanged.push(cb); return () => {}; }),
@@ -710,13 +711,28 @@ describe("App.svelte NewSessionDialog (4.25.6a)", () => {
       expect(screen.getByRole("dialog", { name: "new session" })).toBeInTheDocument()
     );
 
+    // Wait for branch options to load from the mock loadBranches
+    await waitFor(() => {
+      const branchSelect = screen.getByLabelText(/branch/i) as HTMLSelectElement;
+      expect(branchSelect.options.length).toBeGreaterThan(0);
+    });
+
+    // Select specific values so we can assert exact args
+    await fireEvent.change(screen.getByLabelText(/repo/i),   { target: { value: "/tmp/alpha" } });
+    await waitFor(() => {
+      const branchSelect = screen.getByLabelText(/branch/i) as HTMLSelectElement;
+      expect(branchSelect.options.length).toBeGreaterThan(0);
+    });
+    await fireEvent.change(screen.getByLabelText(/branch/i), { target: { value: "feat/x" } });
+    await fireEvent.change(screen.getByLabelText(/model/i),  { target: { value: "claude-sonnet-4-5" } });
+
     // Hit the "Create" button inside the dialog
     const createBtn = screen.getByRole("button", { name: "Create" });
     await fireEvent.click(createBtn);
     await tick();
 
-    // createWorkspace must have been called
-    expect(createWorkspace).toHaveBeenCalled();
+    // createWorkspace must have been called with the selected agent/repo/branch/model
+    expect(createWorkspace).toHaveBeenCalledWith("claude", "/tmp/alpha", "feat/x", "claude-sonnet-4-5");
 
     // Dialog must close
     await waitFor(() =>

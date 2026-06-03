@@ -52,12 +52,26 @@ test("does not render when closed", async () => {
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 
-test("undo affordance shown for destructive ops", async () => {
+test("note prop renders when provided", async () => {
+  const { default: ConfirmDialog } = await import("./ConfirmDialog.svelte");
+  render(ConfirmDialog, { props: {
+    open: true, message: "Remove workspace?", destructive: true,
+    note: "Removes this session from perch. The worktree and its files remain on disk.",
+    onConfirm: () => {}, onCancel: () => {},
+  }});
+  await waitFor(() => screen.getByRole("dialog", { name: /confirm/i }));
+  expect(screen.getByText("Removes this session from perch. The worktree and its files remain on disk.")).toBeInTheDocument();
+  // No hardcoded undo text
+  expect(screen.queryByText(/can be undone/i)).not.toBeInTheDocument();
+});
+
+test("no hardcoded undo text when destructive=true but no note", async () => {
   const { default: ConfirmDialog } = await import("./ConfirmDialog.svelte");
   render(ConfirmDialog, { props: {
     open: true, message: "Remove workspace?", destructive: true,
     onConfirm: () => {}, onCancel: () => {},
   }});
   await waitFor(() => screen.getByRole("dialog", { name: /confirm/i }));
-  expect(screen.getByText(/undo/i)).toBeInTheDocument();
+  expect(screen.queryByText(/can be undone/i)).not.toBeInTheDocument();
+  expect(screen.queryByText(/undo/i)).not.toBeInTheDocument();
 });
