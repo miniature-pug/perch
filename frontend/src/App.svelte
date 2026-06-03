@@ -1,85 +1,80 @@
 <script lang="ts">
-  import Sidebar from "./lib/Sidebar.svelte";
-  import Tabs from "./lib/Tabs.svelte";
-  import Terminal from "./lib/Terminal.svelte";
-  import DiffPanel from "./lib/DiffPanel.svelte";
-  import CommandPalette from "./lib/CommandPalette.svelte";
-  import NewAgentDialog from "./lib/NewAgentDialog.svelte";
-  import ConfirmDialog from "./lib/ConfirmDialog.svelte";
-  import { createAgent, killSession, type SessionInfo } from "./lib/wails";
+  import { onMount } from "svelte";
+  import ThemeProvider from "./lib/ThemeProvider.svelte";
+  import Sidebar       from "./lib/Sidebar.svelte";
+  import Stage         from "./lib/Stage.svelte";
+  import ShellDrawer   from "./lib/ShellDrawer.svelte";
+  import { layout }   from "./lib/stores/layout.svelte";
+  import { mode }     from "./lib/stores/mode.svelte";
+  import { settings } from "./lib/stores/settings.svelte";
 
-  type OpenTab = { id: string; label: string; sessionId: string; dir: string };
-  let tabs = $state<OpenTab[]>([]);
-  let activeId = $state("");
-  let paletteOpen = $state(false);
-  let newAgentOpen = $state(false);
-  let pendingKill = $state<SessionInfo | null>(null);
+  onMount(async () => { await Promise.all([settings.load(), layout.restore()]); });
 
-  const commands = [
-    { id: "new-agent", label: "New agent", run: () => { paletteOpen = false; newAgentOpen = true; } },
-  ];
-
-  async function handleNewAgent(tool: string, projectPath: string, branch: string) {
-    try {
-      await createAgent(tool, projectPath, branch);
-    } catch (err) {
-      console.error("createAgent failed:", err);
+  function onKeyDown(e: KeyboardEvent) {
+    if (mode.current !== "normal") return;
+    switch (e.key) {
+      case "1": e.preventDefault(); layout.setView("agent"); break;
+      case "2": e.preventDefault(); layout.setView("code");  break;
+      case "3": e.preventDefault(); layout.setView("diff");  break;
+      case "\\": e.preventDefault(); layout.toggleSplit();   break;
+      case "i": e.preventDefault(); mode.enterTerminal();    break;
+      case ":": e.preventDefault(); mode.enterCommand();     break;
     }
-    newAgentOpen = false;
   }
 
-  function openSession(s: SessionInfo) {
-    if (!tabs.find((t) => t.id === s.id)) {
-      tabs = [...tabs, { id: s.id, label: s.window, sessionId: s.id, dir: s.dir }];
-    }
-    activeId = s.id;
+  function startResizeSidebar(e: MouseEvent) {
+    const startX = e.clientX, startW = layout.sidebarW;
+    function onMove(mv: MouseEvent) { layout.setSidebarW(Math.max(160, startW + mv.clientX - startX)); }
+    function onUp() { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
   }
-  function closeTab(id: string) {
-    tabs = tabs.filter((t) => t.id !== id);
-    if (activeId === id) activeId = tabs[0]?.id ?? "";
-  }
-  const active = $derived(tabs.find((t) => t.id === activeId));
 
-  function onKey(e: KeyboardEvent) {
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-      e.preventDefault();
-      paletteOpen = !paletteOpen;
-    }
+  function startResizeShell(e: MouseEvent) {
+    const startY = e.clientY, startH = layout.shellH;
+    function onMove(mv: MouseEvent) { layout.setShellH(Math.max(80, startH - (mv.clientY - startY))); }
+    function onUp() { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
   }
 </script>
 
-<svelte:window onkeydown={onKey} />
+<svelte:window onkeydown={onKeyDown} />
 
-<div class="layout">
-  <Sidebar onselect={openSession} onkill={(s) => (pendingKill = s)} />
-  <section class="main">
-    <Tabs {tabs} {activeId} onselect={(id) => (activeId = id)} onclose={closeTab} />
-    {#if active}
-      {#key active.id}
-        <Terminal tabId={active.id} sessionId={active.sessionId} />
-      {/key}
-      <DiffPanel worktreePath={active.dir} />
-    {/if}
-  </section>
-</div>
+<ThemeProvider theme={settings.theme} density={settings.density}>
+  <div class="app-root">
+    <aside data-zone="sidebar" class="sidebar-zone" style:width="{layout.sidebarW}px">
+      <Sidebar />
+    </aside>
 
-<CommandPalette open={paletteOpen} {commands} />
+    <div class="divider divider-v" role="separator" aria-label="Resize sidebar"
+         onmousedown={startResizeSidebar}></div>
 
-<NewAgentDialog
-  open={newAgentOpen}
-  onsubmit={handleNewAgent}
-  oncancel={() => (newAgentOpen = false)}
-/>
+    <div class="center-column">
+      <div data-zone="stage" class="stage-zone">
+        <Stage view={layout.view} split={layout.split}
+               onView={(v) => layout.setView(v)}
+               onSplit={() => layout.toggleSplit()} />
+      </div>
 
-<ConfirmDialog
-  open={pendingKill !== null}
-  message={pendingKill ? `Kill agent "${pendingKill.window}"? The session and its agent will be terminated.` : ""}
-  confirmLabel="Kill"
-  onconfirm={async () => {
-    if (pendingKill) {
-      await killSession(pendingKill.id);
-      pendingKill = null;
-    }
-  }}
-  oncancel={() => (pendingKill = null)}
-/>
+      <div class="divider divider-h" role="separator" aria-label="Resize shell drawer"
+           onmousedown={startResizeShell}></div>
+
+      <div data-zone="shell-drawer" class="shell-drawer-zone" style:height="{layout.shellH}px">
+        <ShellDrawer />
+      </div>
+    </div>
+  </div>
+</ThemeProvider>
+
+<style>
+  .app-root         { display: flex; height: 100vh; overflow: hidden;
+                      background: var(--perch-bg); color: var(--perch-text);
+                      font-family: var(--perch-font-sans); font-size: var(--perch-fs-body); }
+  .sidebar-zone     { flex-shrink: 0; overflow: hidden; border-right: 1px solid var(--perch-border); }
+  .divider-v        { width: 4px; cursor: col-resize; background: var(--perch-border); flex-shrink: 0; }
+  .divider-h        { height: 4px; cursor: row-resize; background: var(--perch-border); }
+  .center-column    { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+  .stage-zone       { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .shell-drawer-zone { flex-shrink: 0; overflow: hidden; border-top: 1px solid var(--perch-border); }
+</style>
