@@ -4,6 +4,10 @@
   import Sidebar       from "./lib/Sidebar.svelte";
   import Stage         from "./lib/Stage.svelte";
   import ShellDrawer   from "./lib/ShellDrawer.svelte";
+  import Terminal      from "./lib/Terminal.svelte";
+  import Editor        from "./lib/Editor.svelte";
+  import FileTree      from "./lib/FileTree.svelte";
+  import DiffView      from "./lib/DiffView.svelte";
   import { layout }   from "./lib/stores/layout.svelte";
   import { mode }     from "./lib/stores/mode.svelte";
   import { settings } from "./lib/stores/settings.svelte";
@@ -12,6 +16,9 @@
 
   let workspaces = $state<WorkspaceVM[]>([]);
   let activeId   = $state<string | null>(null);
+  let codePath   = $state<string | null>(null);
+
+  const active = $derived(workspaces.find(w => w.id === activeId) ?? null);
 
   onMount(async () => {
     await Promise.all([settings.load(), layout.restore()]);
@@ -71,7 +78,34 @@
       <div data-zone="stage" class="stage-zone">
         <Stage view={layout.view} split={layout.split}
                onView={(v) => layout.setView(v)}
-               onSplit={() => layout.toggleSplit()} />
+               onSplit={() => layout.toggleSplit()}>
+          <div slot="primary">
+            {#if active}
+              {#if layout.view === "agent"}
+                <Terminal paneId={active.paneId} cwd={active.worktreePath} />
+              {:else if layout.view === "code"}
+                <FileTree root={active.worktreePath} onOpen={(p) => { codePath = p; }} />
+                <Editor path={codePath} worktree={active.worktreePath} />
+              {:else if layout.view === "diff"}
+                <DiffView worktree={active.worktreePath} />
+              {/if}
+            {:else}
+              <div class="empty-state">No session selected</div>
+            {/if}
+          </div>
+          <div slot="secondary">
+            {#if layout.split && active}
+              {#if layout.view === "agent"}
+                <Terminal paneId={active.paneId} cwd={active.worktreePath} />
+              {:else if layout.view === "code"}
+                <FileTree root={active.worktreePath} onOpen={(p) => { codePath = p; }} />
+                <Editor path={codePath} worktree={active.worktreePath} />
+              {:else if layout.view === "diff"}
+                <DiffView worktree={active.worktreePath} />
+              {/if}
+            {/if}
+          </div>
+        </Stage>
       </div>
 
       <div class="divider divider-h" role="separator" aria-label="Resize shell drawer"

@@ -7,6 +7,20 @@ vi.mock("./lib/ShellDrawer.svelte", async () => ({
   default: (await import("./lib/__stubs__/Empty.svelte")).default,
 }));
 
+// Stub heavy children — xterm/CodeMirror crash jsdom; wails calls in $effect would throw.
+vi.mock("./lib/Terminal.svelte", async () => ({
+  default: (await import("./lib/__stubs__/TerminalProbe.svelte")).default,
+}));
+vi.mock("./lib/Editor.svelte", async () => ({
+  default: (await import("./lib/__stubs__/EditorProbe.svelte")).default,
+}));
+vi.mock("./lib/DiffView.svelte", async () => ({
+  default: (await import("./lib/__stubs__/DiffProbe.svelte")).default,
+}));
+vi.mock("./lib/FileTree.svelte", async () => ({
+  default: (await import("./lib/__stubs__/FileTreeProbe.svelte")).default,
+}));
+
 vi.mock("./lib/wails", () => ({
   listWorkspaces: vi.fn(async () => []),
   openWorkspace:  vi.fn(async () => {}),
@@ -47,7 +61,13 @@ const fakeWorkspaces = [
   },
 ];
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(async () => {
+  vi.clearAllMocks();
+  // Reset layout view/split to defaults (clearAllMocks doesn't reset plain properties).
+  const { layout } = await import("./lib/stores/layout.svelte");
+  (layout as any).view = "agent";
+  (layout as any).split = false;
+});
 
 describe("App.svelte skeleton", () => {
   it("renders sidebar, stage, and shell-drawer zones", async () => {
@@ -113,5 +133,77 @@ describe("App.svelte workspace wiring (4.25.1)", () => {
       expect(alphaBtn).toHaveAttribute("aria-current", "page")
     );
     expect(screen.getByRole("button", { name: "Beta" })).not.toHaveAttribute("aria-current");
+  });
+});
+
+describe("App.svelte Stage content routing (4.25.2)", () => {
+  it("view='agent' → TerminalProbe mounted with paneId and cwd from active workspace", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    (layout as any).view = "agent";
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    // Select workspace ws-1 (Alpha)
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    const terminal = await screen.findByTestId("terminal");
+    expect(terminal).toBeInTheDocument();
+    expect(terminal.dataset.paneId).toBe("p1");
+    expect(terminal.dataset.cwd).toBe("/tmp/alpha");
+  });
+
+  it("view='code' → EditorProbe + FileTreeProbe mounted; FileTree open callback updates Editor path", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    (layout as any).view = "code";
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    // Select workspace ws-1 (Alpha)
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    const filetree = await screen.findByTestId("filetree");
+    expect(filetree).toBeInTheDocument();
+    expect(filetree.dataset.root).toBe("/tmp/alpha");
+    const editor = screen.getByTestId("editor");
+    expect(editor).toBeInTheDocument();
+    expect(editor.dataset.worktree).toBe("/tmp/alpha");
+    // Initially no path selected
+    expect(editor.dataset.path).toBe("");
+    // Clicking the FileTreeProbe's open button triggers onOpen → sets codePath
+    const openBtn = screen.getByRole("button", { name: "open file" });
+    await fireEvent.click(openBtn);
+    await waitFor(() =>
+      expect(screen.getByTestId("editor").dataset.path).toBe("/some/file.ts")
+    );
+  });
+
+  it("view='diff' → DiffProbe mounted with active worktree", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    (layout as any).view = "diff";
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    // Select workspace ws-1 (Alpha)
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    const diff = await screen.findByTestId("diff");
+    expect(diff).toBeInTheDocument();
+    expect(diff.dataset.worktree).toBe("/tmp/alpha");
+  });
+
+  it("activeId null → no child probes, empty-state placeholder shown", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    // Don't select any workspace — activeId stays null
+    await screen.findByRole("button", { name: "Alpha" }); // workspaces loaded
+    expect(document.querySelector(".empty-state")).toBeInTheDocument();
+    expect(screen.queryByTestId("terminal")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("editor")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("diff")).not.toBeInTheDocument();
   });
 });
