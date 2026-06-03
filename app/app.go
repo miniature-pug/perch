@@ -23,6 +23,13 @@ import (
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
+// spawnPtyFunc and newMonitorFunc are injectable seams (real funcs in NewApp,
+// replaced in tests for headless execution).
+type spawnPtyFunc func(ctx context.Context, cwd string, argv []string, event string,
+	emit internalpty.EmitFunc, cols, rows uint16) (*internalpty.Bridge, error)
+
+type newMonitorFunc func(tool string, adapter agent.Adapter) (agent.Monitor, error)
+
 // App is the Wails bound object.
 type App struct {
 	store *registry.Store
@@ -39,17 +46,25 @@ type App struct {
 	mu       sync.Mutex
 	bridges  map[string]*internalpty.Bridge // paneID → Bridge
 	monitors map[string]agent.Monitor       // workspaceID → Monitor
+
+	cancels map[string]context.CancelFunc // workspaceID → pump/translation canceller
+
+	spawnPty   spawnPtyFunc
+	newMonitor newMonitorFunc
 }
 
 // NewApp builds the production App.
 func NewApp(store *registry.Store, roots []string) *App {
 	return &App{
-		store:    store,
-		roots:    roots,
-		run:      proc.ExecRunner{},
-		emit:     func(string, ...any) {},
-		bridges:  map[string]*internalpty.Bridge{},
-		monitors: map[string]agent.Monitor{},
+		store:      store,
+		roots:      roots,
+		run:        proc.ExecRunner{},
+		emit:       func(string, ...any) {},
+		bridges:    map[string]*internalpty.Bridge{},
+		monitors:   map[string]agent.Monitor{},
+		cancels:    map[string]context.CancelFunc{},
+		spawnPty:   internalpty.Spawn,
+		newMonitor: agent.NewMonitor,
 	}
 }
 
@@ -69,15 +84,21 @@ func (a *App) startup(ctx context.Context) {
 	}
 }
 
-// shutdown closes every live Bridge and tears down every Monitor. Idempotent.
+// shutdown cancels every workspace pump, closes every Bridge, and tears down
+// every Monitor. Idempotent.
 func (a *App) shutdown(_ context.Context) {
 	a.mu.Lock()
 	bridges := a.bridges
 	monitors := a.monitors
+	cancels := a.cancels
 	a.bridges = map[string]*internalpty.Bridge{}
 	a.monitors = map[string]agent.Monitor{}
+	a.cancels = map[string]context.CancelFunc{}
 	a.mu.Unlock()
 
+	for _, c := range cancels {
+		c()
+	}
 	for _, b := range bridges {
 		_ = b.Close()
 	}
@@ -297,4 +318,131 @@ func (a *App) CreateWorkspace(agentName, repoPath, branch, model string) (Worksp
 		Title:        handle,
 		State:        agent.StateIdle,
 	}, nil
+}
+
+// OpenWorkspace spawns a login-shell pty for the workspace, calls Monitor.Prepare
+// to obtain the agent launch command and install the side-channel, starts the
+// monitor's event pump, writes the launch command into the pty, and forwards
+// monitor events to the frontend. All goroutines are bound to a per-workspace
+// context cancelled by CloseWorkspace/shutdown.
+//
+// mon.Start(wctx) is REQUIRED: without it no events ever flow from a real monitor.
+func (a *App) OpenWorkspace(id string) error {
+	w, ok := a.store.Get(id)
+	if !ok {
+		return fmt.Errorf("unknown workspace %q", id)
+	}
+
+	paneID := "pane-" + id
+	event := "pty:data:" + paneID
+
+	wctx, cancel := context.WithCancel(context.Background())
+
+	br, err := a.spawnPty(wctx, w.WorktreePath, internalpty.LoginShellArgv(), event, a.emit, 220, 50)
+	if err != nil {
+		cancel()
+		return fmt.Errorf("spawn pty: %w", err)
+	}
+
+	adpt := agentAdapter(w.Agent)
+	mon, err := a.newMonitor(w.Agent, adpt)
+	if err != nil {
+		cancel()
+		_ = br.Close()
+		return fmt.Errorf("new monitor: %w", err)
+	}
+
+	launchCmd, err := mon.Prepare(wctx, id, w.WorktreePath, w.LastSessionID)
+	if err != nil {
+		cancel()
+		_ = br.Close()
+		_ = mon.Teardown()
+		return fmt.Errorf("monitor prepare: %w", err)
+	}
+
+	// REQUIRED: start the monitor's event pump (translation/SSE), bound to wctx.
+	mon.Start(wctx)
+
+	a.mu.Lock()
+	oldBr := a.bridges[paneID]
+	oldMon := a.monitors[id]
+	oldCancel := a.cancels[id]
+	a.bridges[paneID] = br
+	a.monitors[id] = mon
+	a.cancels[id] = cancel
+	a.mu.Unlock()
+
+	if oldCancel != nil {
+		oldCancel()
+	}
+	if oldBr != nil {
+		_ = oldBr.Close()
+	}
+	if oldMon != nil {
+		_ = oldMon.Teardown()
+	}
+
+	if launchCmd != "" {
+		_, _ = br.Write([]byte(launchCmd))
+	}
+
+	// Forward monitor events to the frontend. Forward-and-continue: emit and move
+	// on, never blocking on a user decision. Exits on wctx cancellation, since
+	// mon.Events() is never closed.
+	go func() {
+		for {
+			select {
+			case <-wctx.Done():
+				return
+			case evt, ok := <-mon.Events():
+				if !ok {
+					return
+				}
+				a.emit("agent:event", evt)
+				a.dispatchNotify(evt)
+			}
+		}
+	}()
+
+	return nil
+}
+
+// dispatchNotify translates an agent.Event into a "notify" Wails event at the
+// appropriate tier.
+func (a *App) dispatchNotify(evt agent.Event) {
+	switch {
+	case evt.Kind == "state" && evt.State == agent.StateAwaitingApproval:
+		a.emit("notify", map[string]any{
+			"tier":        "blocking",
+			"title":       "Approval needed",
+			"body":        "An agent is waiting for your decision.",
+			"workspaceId": evt.WorkspaceID,
+		})
+	case evt.Kind == "state" && evt.State == agent.StateDone:
+		a.emit("notify", map[string]any{
+			"tier":        "ambient",
+			"title":       "Turn complete",
+			"body":        "Agent finished a turn.",
+			"workspaceId": evt.WorkspaceID,
+		})
+	case evt.Kind == "state" && evt.State == agent.StateErrored:
+		a.emit("notify", map[string]any{
+			"tier":        "blocking",
+			"title":       "Agent error",
+			"body":        evt.Err,
+			"workspaceId": evt.WorkspaceID,
+		})
+	}
+}
+
+// agentAdapter returns the Adapter for a known tool name, or nil for unknown.
+func agentAdapter(tool string) agent.Adapter {
+	switch tool {
+	case "claude":
+		return agent.NewClaude()
+	case "opencode":
+		return agent.NewOpencode()
+	default:
+		return nil
+	}
 }

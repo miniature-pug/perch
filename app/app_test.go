@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Miniature-Pug/perch/internal/agent"
 	internalpty "github.com/Miniature-Pug/perch/internal/pty"
@@ -404,5 +405,116 @@ func TestApp_CreateWorkspace_RejectsInvalidAgent(t *testing.T) {
 	}
 	if _, err := a.CreateWorkspace("ghost", sub, "feat/x", ""); err == nil {
 		t.Fatal("must reject unknown agent")
+	}
+}
+
+func TestApp_OpenWorkspace_WritesLaunchCmdAndEmitsEvents(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+
+	wt := t.TempDir()
+	_ = store.Upsert(registry.Workspace{
+		ID:           "ws-open",
+		WorktreePath: wt,
+		Agent:        "claude",
+		Title:        "t",
+	})
+
+	fm := agent.NewFakeMonitor(nil)
+	fm.SetLaunchCmd("claude --resume abc\n")
+
+	var mu sync.Mutex
+	var emitted []struct {
+		event string
+		data  []any
+	}
+	emit := func(event string, data ...any) {
+		mu.Lock()
+		emitted = append(emitted, struct {
+			event string
+			data  []any
+		}{event, data})
+		mu.Unlock()
+	}
+
+	var written []byte
+	var writeMu sync.Mutex
+
+	a := &App{
+		store:    store,
+		roots:    []string{wt},
+		emit:     emit,
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+		cancels:  map[string]context.CancelFunc{},
+		spawnPty: func(ctx context.Context, cwd string, argv []string, event string,
+			ef internalpty.EmitFunc, cols, rows uint16) (*internalpty.Bridge, error) {
+			b := internalpty.NewBridgeForTest(func() error { return nil })
+			b.OverrideWriteForTest(func(p []byte) (int, error) {
+				writeMu.Lock()
+				written = append(written, p...)
+				writeMu.Unlock()
+				return len(p), nil
+			})
+			return b, nil
+		},
+		newMonitor: func(toolName string, _ agent.Adapter) (agent.Monitor, error) {
+			return fm, nil
+		},
+	}
+
+	if err := a.OpenWorkspace("ws-open"); err != nil {
+		t.Fatalf("OpenWorkspace: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		writeMu.Lock()
+		got := string(written)
+		writeMu.Unlock()
+		if strings.Contains(got, "claude") {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	writeMu.Lock()
+	got := string(written)
+	writeMu.Unlock()
+	if !strings.Contains(got, "claude") {
+		t.Errorf("launchCmd not written to pty; wrote: %q", got)
+	}
+
+	// Replay a fake event and assert it is re-emitted on "agent:event".
+	fm.Replay(agent.Event{WorkspaceID: "ws-open", Kind: "state", State: agent.StateRunning})
+
+	time.Sleep(50 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	found := false
+	for _, e := range emitted {
+		if e.event == "agent:event" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("agent:event was not emitted after Monitor.Events() replay")
+	}
+}
+
+func TestApp_OpenWorkspace_UnknownID(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	a := &App{
+		store:    store,
+		roots:    []string{t.TempDir()},
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+		cancels:  map[string]context.CancelFunc{},
+	}
+	if err := a.OpenWorkspace("no-such-id"); err == nil {
+		t.Fatal("must error on unknown workspace ID")
 	}
 }
