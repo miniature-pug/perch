@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -627,5 +628,48 @@ func TestApp_RemoveWorkspace_RemovesFromRegistry(t *testing.T) {
 	}
 	if _, ok := store.Get("ws-rm"); ok {
 		t.Error("RemoveWorkspace must remove workspace from registry")
+	}
+}
+
+func TestApp_OpenShell_SpawnsAndEmits(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("SHELL", "/bin/sh")
+
+	var mu sync.Mutex
+	var emitted []string
+	emit := func(event string, data ...any) {
+		if strings.HasPrefix(event, "pty:data:") {
+			mu.Lock()
+			emitted = append(emitted, event)
+			mu.Unlock()
+		}
+	}
+
+	spawnCalled := false
+	a := &App{
+		emit:     emit,
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+		spawnPty: func(_ context.Context, cwd string, argv []string, event string,
+			ef internalpty.EmitFunc, _, _ uint16) (*internalpty.Bridge, error) {
+			spawnCalled = true
+			if event != "pty:data:shell-1" {
+				return nil, fmt.Errorf("wrong event %q", event)
+			}
+			return internalpty.NewBridgeForTest(func() error { return nil }), nil
+		},
+	}
+
+	if err := a.OpenShell("shell-1", t.TempDir()); err != nil {
+		t.Fatalf("OpenShell: %v", err)
+	}
+	if !spawnCalled {
+		t.Error("spawnPty must be called by OpenShell")
+	}
+	a.mu.Lock()
+	_, ok := a.bridges["shell-1"]
+	a.mu.Unlock()
+	if !ok {
+		t.Error("bridge for shell-1 not registered")
 	}
 }

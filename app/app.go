@@ -498,6 +498,23 @@ func (a *App) RemoveWorkspace(id string) error {
 	return a.store.Remove(id)
 }
 
+// OpenShell spawns a $SHELL -l pty for the shell drawer pane (paneID) in cwd.
+// Output flows to the "pty:data:<paneID>" event. Separate from agent panes so
+// the shell drawer has its own independent pty.
+func (a *App) OpenShell(paneID, cwd string) error {
+	if err := validateSessionID(paneID); err != nil {
+		return fmt.Errorf("invalid pane id: %w", err)
+	}
+	event := "pty:data:" + paneID
+	ctx := context.Background()
+	br, err := a.spawnPty(ctx, cwd, internalpty.LoginShellArgv(), event, a.emit, 220, 50)
+	if err != nil {
+		return fmt.Errorf("OpenShell spawn: %w", err)
+	}
+	a.putBridge(paneID, br)
+	return nil
+}
+
 // agentAdapter returns the Adapter for a known tool name, or nil for unknown.
 func agentAdapter(tool string) agent.Adapter {
 	switch tool {
