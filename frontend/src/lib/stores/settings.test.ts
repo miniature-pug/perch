@@ -1,0 +1,41 @@
+// frontend/src/lib/stores/settings.test.ts
+import { vi, describe, it, expect, beforeEach } from "vitest";
+
+vi.mock("../wails", () => ({
+  getSettings: vi.fn(async () => ({
+    theme: "gruvbox", density: "dense", font: "geist", dnd: false, alwaysRules: [],
+  })),
+  saveSettings: vi.fn(async () => {}),
+}));
+
+beforeEach(() => { vi.clearAllMocks(); vi.resetModules(); });
+
+describe("settings store", () => {
+  it("load() populates state from getSettings", async () => {
+    const { settings } = await import("./settings.svelte");
+    const w = await import("../wails");
+    await settings.load();
+    expect(vi.mocked(w.getSettings)).toHaveBeenCalledOnce();
+    expect(settings.theme).toBe("gruvbox");
+  });
+  it("setTheme updates state and calls saveSettings", async () => {
+    const { settings } = await import("./settings.svelte");
+    const w = await import("../wails");
+    await settings.load();
+    await settings.setTheme("tokyo-night");
+    expect(settings.theme).toBe("tokyo-night");
+    expect(vi.mocked(w.saveSettings)).toHaveBeenCalledWith(
+      expect.objectContaining({ theme: "tokyo-night" }),
+    );
+  });
+  it("setDnd updates and persists", async () => {
+    const { settings } = await import("./settings.svelte");
+    const w = await import("../wails");
+    await settings.load();
+    await settings.setDnd(true);
+    expect(settings.dnd).toBe(true);
+    expect(vi.mocked(w.saveSettings)).toHaveBeenCalledWith(
+      expect.objectContaining({ dnd: true }),
+    );
+  });
+});
