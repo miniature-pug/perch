@@ -1,38 +1,47 @@
+// frontend/src/lib/Sidebar.test.ts
 import { render, screen, waitFor } from "@testing-library/svelte";
+import { fireEvent } from "@testing-library/svelte";
 import { vi } from "vitest";
 
-const sessions = [
-  { id: "ses_a", session: "perch", window: "feat-x", paneId: "%1", status: "working", dir: "/wt/x" },
+const workspaces = [
+  { id: "ws_a", worktreePath: "/wt/a", agent: "claude", title: "feat-auth",
+    branch: "feat/auth", state: "running", caps: {}, paneId: "p1", lastActive: "" },
+  { id: "ws_b", worktreePath: "/wt/b", agent: "claude", title: "feat-core",
+    branch: "feat/core", state: "idle", caps: {}, paneId: "p2", lastActive: "" },
+  { id: "ws_c", worktreePath: "/wt/c", agent: "claude", title: "bug-fix",
+    branch: "fix/crash", state: "awaiting-approval", caps: {}, paneId: "p3", lastActive: "" },
+  { id: "ws_d", worktreePath: "/wt/d", agent: "claude", title: "done-work",
+    branch: "feat/done", state: "done", caps: {}, paneId: "p4", lastActive: "" },
+  { id: "ws_e", worktreePath: "/wt/e", agent: "claude", title: "errored-work",
+    branch: "feat/err", state: "errored", caps: {}, paneId: "p5", lastActive: "" },
 ];
-vi.mock("./wails", () => ({
-  listSessions: vi.fn(async () => sessions),
-  onSessionsChanged: vi.fn(() => () => {}),
-}));
 
-test("renders a row per session and subscribes to changes", async () => {
+test("renders status icon+label for all states", async () => {
   const { default: Sidebar } = await import("./Sidebar.svelte");
-  const w = await import("./wails");
-  render(Sidebar);
-  await waitFor(() => expect(screen.getByText("feat-x")).toBeInTheDocument());
-  expect(w.onSessionsChanged).toHaveBeenCalled();
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {} } });
+  expect(screen.getByText(/◐/)).toBeInTheDocument();
+  expect(screen.getByText(/running/i)).toBeInTheDocument();
+  expect(screen.getByText(/◯/)).toBeInTheDocument();
+  expect(screen.getByText(/idle/i)).toBeInTheDocument();
+  expect(screen.getByText(/⚠/)).toBeInTheDocument();
+  expect(screen.getByText(/needs you/i)).toBeInTheDocument();
+  expect(screen.getByText(/✓/)).toBeInTheDocument();
+  expect(screen.getByText(/✗/)).toBeInTheDocument();
 });
 
-test("invokes onselect when a session is clicked", async () => {
-  const { fireEvent } = await import("@testing-library/svelte");
+test("clicking a workspace calls onSelect", async () => {
   const { default: Sidebar } = await import("./Sidebar.svelte");
-  let picked: any;
-  render(Sidebar, { props: { onselect: (s: any) => (picked = s) } });
-  await waitFor(() => screen.getByText("feat-x"));
-  await fireEvent.click(screen.getByText("feat-x"));
-  expect(picked?.id).toBe("ses_a");
+  const onSelect = vi.fn();
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect, onNew: () => {} } });
+  await waitFor(() => screen.getByText("feat-core"));
+  await fireEvent.click(screen.getByRole("button", { name: /feat-core/ }));
+  expect(onSelect).toHaveBeenCalledWith("ws_b");
 });
 
-test("invokes onkill with the session when kill button is clicked", async () => {
-  const { fireEvent } = await import("@testing-library/svelte");
+test("New session button calls onNew", async () => {
   const { default: Sidebar } = await import("./Sidebar.svelte");
-  let killed: any;
-  render(Sidebar, { props: { onkill: (s: any) => (killed = s) } });
-  await waitFor(() => screen.getByLabelText("kill feat-x"));
-  await fireEvent.click(screen.getByLabelText("kill feat-x"));
-  expect(killed?.id).toBe("ses_a");
+  const onNew = vi.fn();
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew } });
+  await fireEvent.click(screen.getByRole("button", { name: /new session/i }));
+  expect(onNew).toHaveBeenCalled();
 });

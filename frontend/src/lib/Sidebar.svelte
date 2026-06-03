@@ -1,37 +1,42 @@
+<!-- frontend/src/lib/Sidebar.svelte -->
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
-  import { listSessions, onSessionsChanged, type SessionInfo } from "./wails";
+  import type { WorkspaceVM } from "./wails";
 
   let {
-    onselect,
-    onkill,
-  }: { onselect?: (s: SessionInfo) => void; onkill?: (s: SessionInfo) => void } = $props();
-  let sessions = $state<SessionInfo[]>([]);
-  let off: (() => void) | undefined;
+    workspaces, activeId, onSelect, onNew,
+  }: {
+    workspaces: WorkspaceVM[];
+    activeId: string;
+    onSelect: (id: string) => void;
+    onNew: () => void;
+  } = $props();
 
-  async function refresh() {
-    sessions = await listSessions();
-  }
-  onMount(() => {
-    refresh();
-    off = onSessionsChanged(refresh);
-  });
-  onDestroy(() => off?.());
+  const STATUS = {
+    running:             { icon: "◐", label: "running" },
+    idle:                { icon: "◯", label: "idle" },
+    "awaiting-approval": { icon: "⚠", label: "needs you" },
+    done:                { icon: "✓", label: "done" },
+    errored:             { icon: "✗", label: "error" },
+  } as const;
 </script>
 
-<nav aria-label="sessions">
-  <ul>
-    {#each sessions as s (s.id)}
-      <li>
-        <button onclick={() => onselect?.(s)}>
-          <span class="branch">{s.window}</span>
-          <span class="status status-{s.status}">{s.status}</span>
+<nav aria-label="sessions" class="sidebar">
+  <ul class="workspace-list">
+    {#each workspaces as ws (ws.id)}
+      {@const st = STATUS[ws.state as keyof typeof STATUS] ?? { icon: "?", label: ws.state }}
+      <li class:active={ws.id === activeId}>
+        <button class="workspace-row"
+          aria-current={ws.id === activeId ? "page" : undefined}
+          onclick={() => onSelect(ws.id)}
+          aria-label={ws.title}
+        >
+          <span class="status-icon" aria-hidden="true">{st.icon}</span>
+          <span class="workspace-title">{ws.title}</span>
+          <span class="workspace-branch dim">{ws.branch}</span>
+          <span class="status-label">{st.label}</span>
         </button>
-        <button
-          aria-label={"kill " + s.window}
-          onclick={(e) => { e.stopPropagation(); onkill?.(s); }}
-        >✕</button>
       </li>
     {/each}
   </ul>
+  <button class="new-session-cta" onclick={onNew} aria-label="New session">+ New session</button>
 </nav>
