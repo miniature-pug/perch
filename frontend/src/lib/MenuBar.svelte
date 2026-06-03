@@ -34,8 +34,60 @@
   ];
 
   let openMenu = $state<string | null>(null);
-  function toggleMenu(label: string) { openMenu = openMenu === label ? null : label; }
+  // Track which top-level button opened the current menu (for focus-return on Escape)
+  let triggerButtons = $state<Map<string, HTMLButtonElement>>(new Map());
+
+  function toggleMenu(label: string, btn: HTMLButtonElement) {
+    triggerButtons.set(label, btn);
+    openMenu = openMenu === label ? null : label;
+  }
+
   function runItem(id: string) { onCommand(id); openMenu = null; }
+
+  function closeAndReturn() {
+    const label = openMenu;
+    openMenu = null;
+    if (label) {
+      // Return focus to the button that opened this menu
+      const btn = triggerButtons.get(label);
+      if (btn) btn.focus();
+    }
+  }
+
+  function handleTriggerKey(e: KeyboardEvent, label: string, btn: HTMLButtonElement) {
+    if (e.key === "Enter" || e.key === " " || e.key === "ArrowDown") {
+      e.preventDefault();
+      triggerButtons.set(label, btn);
+      openMenu = label;
+      // Focus first item after Svelte updates DOM
+      requestAnimationFrame(() => {
+        const menu = btn.parentElement?.querySelector<HTMLElement>('[role="menu"] [role="menuitem"]');
+        menu?.focus();
+      });
+    } else if (e.key === "Escape") {
+      openMenu = null;
+    }
+  }
+
+  function handleItemKey(e: KeyboardEvent, item: MenuItem, items: MenuItem[], menuEl: HTMLElement) {
+    const allItems = Array.from(menuEl.querySelectorAll<HTMLElement>('[role="menuitem"]'));
+    const currentIndex = allItems.findIndex((el) => el === e.currentTarget);
+
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      const next = allItems[currentIndex + 1];
+      if (next) next.focus();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      const prev = allItems[currentIndex - 1];
+      if (prev) prev.focus();
+    } else if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      runItem(item.id);
+    } else if (e.key === "Escape") {
+      closeAndReturn();
+    }
+  }
 </script>
 
 <svelte:window onclick={() => (openMenu = null)} />
@@ -44,13 +96,18 @@
   {#each menus as m}
     <div class="menu-root">
       <button role="menuitem" aria-haspopup="menu" aria-expanded={openMenu === m.label}
-        onclick={(e) => { e.stopPropagation(); toggleMenu(m.label); }}>{m.label}</button>
+        onclick={(e) => { e.stopPropagation(); toggleMenu(m.label, e.currentTarget as HTMLButtonElement); }}
+        onkeydown={(e) => handleTriggerKey(e, m.label, e.currentTarget as HTMLButtonElement)}
+      >{m.label}</button>
       {#if openMenu === m.label}
-        <ul role="menu" class="dropdown" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
+        <ul role="menu" class="dropdown">
           {#each m.items as item}
             <li role="menuitem" tabindex="0"
-              onclick={() => runItem(item.id)}
-              onkeydown={(e) => e.key === "Enter" && runItem(item.id)}
+              onclick={(e) => { e.stopPropagation(); runItem(item.id); }}
+              onkeydown={(e) => {
+                const menuEl = (e.currentTarget as HTMLElement).closest('[role="menu"]') as HTMLElement;
+                handleItemKey(e, item, m.items, menuEl);
+              }}
             >{item.label}</li>
           {/each}
         </ul>

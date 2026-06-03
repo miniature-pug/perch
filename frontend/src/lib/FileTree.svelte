@@ -24,6 +24,28 @@
   function menuReveal() { if (!menu) return; revealInFiles(menu.node.path); closeMenu(); }
   function menuCopy()   { if (!menu) return; const p = copyPath(menu.node.path); navigator.clipboard?.writeText(p).catch(() => {}); closeMenu(); }
   function menuSend()   { if (!menu) return; onOpen(`@mention:${menu.node.path}`); closeMenu(); }
+
+  function handleContextMenuKey(e: KeyboardEvent, action: () => void) {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      action();
+    } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const menuEl = (e.currentTarget as HTMLElement).closest('[role="menu"]') as HTMLElement;
+      if (!menuEl) return;
+      const items = Array.from(menuEl.querySelectorAll<HTMLElement>('[role="menuitem"]'));
+      const idx = items.findIndex((el) => el === e.currentTarget);
+      if (e.key === "ArrowDown") {
+        const next = items[idx + 1];
+        if (next) next.focus();
+      } else {
+        const prev = items[idx - 1];
+        if (prev) prev.focus();
+      }
+    } else if (e.key === "Escape") {
+      closeMenu();
+    }
+  }
 </script>
 
 <svelte:window onclick={closeMenu} />
@@ -52,13 +74,17 @@
 
 {#if menu}
   <ul role="menu" class="context-menu" style="position:fixed;left:{menu.x}px;top:{menu.y}px">
-    <li role="menuitem" tabindex="0" onclick={menuOpen}
-      onkeydown={(e) => e.key === "Enter" && menuOpen()}>Open</li>
-    <li role="menuitem" tabindex="0" onclick={menuReveal}
-      onkeydown={(e) => e.key === "Enter" && menuReveal()}>Reveal in Files</li>
-    <li role="menuitem" tabindex="0" onclick={menuCopy}
-      onkeydown={(e) => e.key === "Enter" && menuCopy()}>Copy path</li>
-    <li role="menuitem" tabindex="0" onclick={menuSend}
-      onkeydown={(e) => e.key === "Enter" && menuSend()}>Send to agent</li>
+    <li role="menuitem" tabindex="0"
+      onclick={(e) => { e.stopPropagation(); menuOpen(); }}
+      onkeydown={(e) => handleContextMenuKey(e, menuOpen)}>Open</li>
+    <li role="menuitem" tabindex="0"
+      onclick={(e) => { e.stopPropagation(); menuReveal(); }}
+      onkeydown={(e) => handleContextMenuKey(e, menuReveal)}>Reveal in Files</li>
+    <li role="menuitem" tabindex="0"
+      onclick={(e) => { e.stopPropagation(); menuCopy(); }}
+      onkeydown={(e) => handleContextMenuKey(e, menuCopy)}>Copy path</li>
+    <li role="menuitem" tabindex="0"
+      onclick={(e) => { e.stopPropagation(); menuSend(); }}
+      onkeydown={(e) => handleContextMenuKey(e, menuSend)}>Send to agent</li>
   </ul>
 {/if}
