@@ -123,6 +123,84 @@ func DiffStat(ctx context.Context, r proc.Runner, worktree string) ([]FileDiff, 
 	return out, nil
 }
 
+// Hunks parses `git diff` unified output for a single file in worktree and
+// returns the slice of Hunk structs with 0-based Index values.
+func Hunks(ctx context.Context, r proc.Runner, worktree, file string) ([]Hunk, error) {
+	out, errOut, err := r.Run(ctx, "git", "-C", worktree, "diff", "--unified=3", "--no-color", "--", file)
+	if err != nil {
+		return nil, fmt.Errorf("git diff %s: %w: %s", file, err, strings.TrimSpace(string(errOut)))
+	}
+	return parseUnifiedDiff(file, string(out)), nil
+}
+
+// parseUnifiedDiff parses unified diff output for a single file into []Hunk.
+func parseUnifiedDiff(file, raw string) []Hunk {
+	var hunks []Hunk
+	var cur *Hunk
+	for _, line := range strings.Split(raw, "\n") {
+		if strings.HasPrefix(line, "@@ ") {
+			if cur != nil {
+				hunks = append(hunks, *cur)
+			}
+			h := Hunk{
+				File:   file,
+				Index:  len(hunks),
+				Header: line,
+			}
+			// Parse @@ -oldStart,oldLines +newStart,newLines @@
+			parseHunkHeader(line, &h)
+			cur = &h
+			continue
+		}
+		if cur == nil {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
+			cur.Lines = append(cur.Lines, HunkLine{Kind: "add", Text: line[1:]})
+		case strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
+			cur.Lines = append(cur.Lines, HunkLine{Kind: "del", Text: line[1:]})
+		case strings.HasPrefix(line, " "):
+			cur.Lines = append(cur.Lines, HunkLine{Kind: "ctx", Text: line[1:]})
+		case line == `\ No newline at end of file`:
+			// skip
+		}
+	}
+	if cur != nil {
+		hunks = append(hunks, *cur)
+	}
+	return hunks
+}
+
+// parseHunkHeader parses "@@ -a,b +c,d @@" into h fields.
+// Missing comma-count defaults to 1 (git omits it for single-line hunks).
+func parseHunkHeader(header string, h *Hunk) {
+	// Find the @@ ... @@ span
+	inner := strings.TrimPrefix(header, "@@ ")
+	end := strings.Index(inner, " @@")
+	if end > 0 {
+		inner = inner[:end]
+	}
+	parts := strings.Fields(inner)
+	if len(parts) >= 2 {
+		h.OldStart, h.OldLines = parseRange(parts[0])
+		h.NewStart, h.NewLines = parseRange(parts[1])
+	}
+}
+
+// parseRange parses "-a,b" or "+c,d" into (start, lines).
+func parseRange(s string) (int, int) {
+	s = strings.TrimPrefix(s, "-")
+	s = strings.TrimPrefix(s, "+")
+	parts := strings.SplitN(s, ",", 2)
+	start, _ := strconv.Atoi(parts[0])
+	if len(parts) == 1 {
+		return start, 1
+	}
+	lines, _ := strconv.Atoi(parts[1])
+	return start, lines
+}
+
 // statusCode maps a git porcelain XY two-char status string to a single letter.
 func statusCode(xy string) string {
 	if len(xy) < 2 {
