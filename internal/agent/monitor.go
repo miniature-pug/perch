@@ -16,9 +16,19 @@ const (
 	StateErrored          State = "errored"
 )
 
-type Caps struct{ Approvals, Attention, Tokens bool }
+type Caps struct {
+	Approvals bool `json:"approvals"`
+	Attention bool `json:"attention"`
+	Tokens    bool `json:"tokens"`
+}
+
 type Decision struct{ Allow, Always bool }
-type ApprovalReq struct{ ReqID, Tool, Summary string }
+
+type ApprovalReq struct {
+	ReqID   string `json:"reqId"`
+	Tool    string `json:"tool"`
+	Summary string `json:"summary"`
+}
 
 type Event struct {
 	WorkspaceID string       `json:"workspaceId"`
