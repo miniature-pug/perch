@@ -1,5 +1,27 @@
-<!-- Phase 4a stub — real ShellDrawer implemented in Phase 4b -->
+<!-- frontend/src/lib/ShellDrawer.svelte -->
 <script lang="ts">
-  let { paneId = "shell", cwd = "/" }: { paneId?: string; cwd?: string } = $props();
+  import { onMount } from "svelte";
+  import Terminal from "./Terminal.svelte";
+  import { openShell } from "./wails";
+
+  let { paneId, cwd }: { paneId: string; cwd: string } = $props();
+  let collapsed = $state(false);
+
+  onMount(() => { openShell(paneId, cwd); });
 </script>
-<div class="shell-drawer-stub" data-paneid={paneId} aria-label="Shell drawer"></div>
+
+<div class="shell-drawer" class:collapsed>
+  <div class="shell-header">
+    <span class="shell-title">Shell — {cwd}</span>
+    {#if collapsed}
+      <button onclick={() => (collapsed = false)} aria-label="expand shell">▲ Expand</button>
+    {:else}
+      <button onclick={() => (collapsed = true)} aria-label="collapse shell">▼ Collapse</button>
+    {/if}
+  </div>
+  {#if !collapsed}
+    <section aria-label="shell" class="shell-body">
+      <Terminal {paneId} {cwd} />
+    </section>
+  {/if}
+</div>
