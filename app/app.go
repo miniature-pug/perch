@@ -182,6 +182,20 @@ func validateWorktreeUnderRoots(p string, roots []string) error {
 	return fmt.Errorf("worktree path %q is outside configured roots", p)
 }
 
+// validateRelFile rejects a repo-relative file path that is empty, absolute, or
+// escapes the worktree via "..". Used to gate the `file` arg of the git hunk
+// methods before it becomes a git pathspec.
+func validateRelFile(file string) error {
+	if file == "" || filepath.IsAbs(file) {
+		return fmt.Errorf("file must be a non-empty relative path")
+	}
+	clean := filepath.Clean(file)
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("file path %q escapes the worktree", file)
+	}
+	return nil
+}
+
 func containedUnderRoots(treePath string, roots []string) bool {
 	clean := filepath.Clean(treePath)
 	if !filepath.IsAbs(clean) {
@@ -446,6 +460,9 @@ func (a *App) dispatchNotify(evt agent.Event) {
 // WriteToPty forwards keystrokes (a JSON number array from xterm.js) to the
 // pane's pty. The []int→[]byte conversion is the inverse of the data pump.
 func (a *App) WriteToPty(paneID string, data []int) error {
+	if err := validateSessionID(paneID); err != nil {
+		return fmt.Errorf("invalid pane id: %w", err)
+	}
 	a.mu.Lock()
 	br, ok := a.bridges[paneID]
 	a.mu.Unlock()
@@ -462,6 +479,9 @@ func (a *App) WriteToPty(paneID string, data []int) error {
 
 // ResizePty applies new dimensions to the pane's pty.
 func (a *App) ResizePty(paneID string, cols, rows uint16) error {
+	if err := validateSessionID(paneID); err != nil {
+		return fmt.Errorf("invalid pane id: %w", err)
+	}
 	a.mu.Lock()
 	br, ok := a.bridges[paneID]
 	a.mu.Unlock()
@@ -512,6 +532,9 @@ func (a *App) RemoveWorkspace(id string) error {
 func (a *App) OpenShell(paneID, cwd string) error {
 	if err := validateSessionID(paneID); err != nil {
 		return fmt.Errorf("invalid pane id: %w", err)
+	}
+	if err := validateWorktreeUnderRoots(cwd, a.roots); err != nil {
+		return fmt.Errorf("invalid shell cwd: %w", err)
 	}
 	event := "pty:data:" + paneID
 	ctx := context.Background()
@@ -591,11 +614,17 @@ func atomicWriteApp(path string, data []byte) error {
 
 // ListDir returns directory entries under absDir, gitignore-unaware.
 func (a *App) ListDir(absDir string) ([]fspkg.Node, error) {
+	if err := validateWorktreeUnderRoots(absDir, a.roots); err != nil {
+		return nil, err
+	}
 	return fspkg.ListDir(absDir, false)
 }
 
 // ReadFile returns the contents of absPath as a string.
 func (a *App) ReadFile(absPath string) (string, error) {
+	if err := validateWorktreeUnderRoots(absPath, a.roots); err != nil {
+		return "", err
+	}
 	data, err := fspkg.ReadFile(absPath)
 	if err != nil {
 		return "", err
@@ -605,21 +634,33 @@ func (a *App) ReadFile(absPath string) (string, error) {
 
 // WriteFile atomically writes content to absPath.
 func (a *App) WriteFile(absPath, content string) error {
+	if err := validateWorktreeUnderRoots(filepath.Dir(absPath), a.roots); err != nil {
+		return err
+	}
 	return fspkg.WriteFile(absPath, []byte(content))
 }
 
 // RevealInFiles opens the containing directory of absPath in the system file manager.
 func (a *App) RevealInFiles(absPath string) error {
+	if err := validateWorktreeUnderRoots(absPath, a.roots); err != nil {
+		return err
+	}
 	return fspkg.RevealInFiles(absPath)
 }
 
 // Branches returns git branch names for the repo at repo.
 func (a *App) Branches(repo string) ([]string, error) {
+	if err := validateWorktreeUnderRoots(repo, a.roots); err != nil {
+		return nil, err
+	}
 	return gitpkg.Branches(context.Background(), a.runner(), repo)
 }
 
 // Worktrees returns git worktree info for the repo at repo.
 func (a *App) Worktrees(repo string) ([]gitpkg.WorktreeInfo, error) {
+	if err := validateWorktreeUnderRoots(repo, a.roots); err != nil {
+		return nil, err
+	}
 	return gitpkg.Worktrees(context.Background(), a.runner(), repo)
 }
 
@@ -660,9 +701,13 @@ func (a *App) Approve(reqID, decision string) error {
 
 	if d.Always {
 		tool := mon.LastApprovalTool()
+		agentName := "claude"
+		if w, ok := a.store.Get(workspaceID); ok && w.Agent != "" {
+			agentName = w.Agent
+		}
 		s, _ := a.GetSettings()
 		s.AlwaysRules = append(s.AlwaysRules, AlwaysRule{
-			Agent: "claude",
+			Agent: agentName,
 			Tool:  tool,
 		})
 		_ = a.SaveSettings(s)
@@ -683,6 +728,9 @@ func (a *App) Hunks(worktree, file string) ([]gitpkg.Hunk, error) {
 	if err := validateWorktreeUnderRoots(worktree, a.roots); err != nil {
 		return nil, err
 	}
+	if err := validateRelFile(file); err != nil {
+		return nil, err
+	}
 	return gitpkg.Hunks(context.Background(), a.runner(), worktree, file)
 }
 
@@ -693,12 +741,18 @@ func (a *App) StageHunk(worktree, file string, index int) error {
 	if err := validateWorktreeUnderRoots(worktree, a.roots); err != nil {
 		return err
 	}
+	if err := validateRelFile(file); err != nil {
+		return err
+	}
 	return gitpkg.StageHunk(context.Background(), a.runner(), worktree, file, index)
 }
 
 // DiscardHunk reverses hunk `index` of file in the working tree (git apply --reverse).
 func (a *App) DiscardHunk(worktree, file string, index int) error {
 	if err := validateWorktreeUnderRoots(worktree, a.roots); err != nil {
+		return err
+	}
+	if err := validateRelFile(file); err != nil {
 		return err
 	}
 	return gitpkg.DiscardHunk(context.Background(), a.runner(), worktree, file, index)

@@ -645,9 +645,11 @@ func TestApp_OpenShell_SpawnsAndEmits(t *testing.T) {
 		}
 	}
 
+	shellCwd := t.TempDir()
 	spawnCalled := false
 	a := &App{
 		emit:     emit,
+		roots:    []string{shellCwd},
 		bridges:  map[string]*internalpty.Bridge{},
 		monitors: map[string]agent.Monitor{},
 		spawnPty: func(_ context.Context, cwd string, argv []string, event string,
@@ -660,7 +662,7 @@ func TestApp_OpenShell_SpawnsAndEmits(t *testing.T) {
 		},
 	}
 
-	if err := a.OpenShell("shell-1", t.TempDir()); err != nil {
+	if err := a.OpenShell("shell-1", shellCwd); err != nil {
 		t.Fatalf("OpenShell: %v", err)
 	}
 	if !spawnCalled {
@@ -752,6 +754,7 @@ func TestApp_ListDir_ReturnsDirEntries(t *testing.T) {
 	store, _ := registry.Load(cfgDir)
 	a := &App{
 		store:    store,
+		roots:    []string{dir},
 		emit:     func(string, ...any) {},
 		bridges:  map[string]*internalpty.Bridge{},
 		monitors: map[string]agent.Monitor{},
@@ -956,6 +959,7 @@ func TestApp_ReadWriteFile_RoundTrip(t *testing.T) {
 	store, _ := registry.Load(cfgDir)
 	a := &App{
 		store:    store,
+		roots:    []string{dir},
 		emit:     func(string, ...any) {},
 		bridges:  map[string]*internalpty.Bridge{},
 		monitors: map[string]agent.Monitor{},
@@ -969,5 +973,52 @@ func TestApp_ReadWriteFile_RoundTrip(t *testing.T) {
 	}
 	if got != "hello world" {
 		t.Errorf("ReadFile = %q, want 'hello world'", got)
+	}
+}
+
+func TestApp_ReadFile_RejectsOutsideRoot(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	a := &App{roots: []string{t.TempDir()}, emit: func(string, ...any) {},
+		bridges: map[string]*internalpty.Bridge{}, monitors: map[string]agent.Monitor{}}
+	if _, err := a.ReadFile("/etc/passwd"); err == nil {
+		t.Fatal("ReadFile must reject a path outside configured roots")
+	}
+}
+
+func TestApp_WriteFile_RejectsOutsideRoot(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	a := &App{roots: []string{t.TempDir()}, emit: func(string, ...any) {},
+		bridges: map[string]*internalpty.Bridge{}, monitors: map[string]agent.Monitor{}}
+	if err := a.WriteFile("/tmp/perch-evil-test.txt", "x"); err == nil {
+		t.Fatal("WriteFile must reject a path whose parent is outside configured roots")
+	}
+}
+
+func TestApp_ListDir_RejectsOutsideRoot(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	a := &App{roots: []string{t.TempDir()}, emit: func(string, ...any) {},
+		bridges: map[string]*internalpty.Bridge{}, monitors: map[string]agent.Monitor{}}
+	if _, err := a.ListDir("/etc"); err == nil {
+		t.Fatal("ListDir must reject a directory outside configured roots")
+	}
+}
+
+func TestApp_Approve_AlwaysUsesWorkspaceAgent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	wt := t.TempDir()
+	_ = store.Upsert(registry.Workspace{ID: "ws-oc", WorktreePath: wt, Agent: "opencode"})
+	fm := agent.NewFakeMonitor(nil)
+	fm.SetApprovalTool("bash")
+	a := &App{store: store, emit: func(string, ...any) {},
+		bridges: map[string]*internalpty.Bridge{}, monitors: map[string]agent.Monitor{"ws-oc": fm},
+		settingsPath: filepath.Join(cfgDir, "settings.json")}
+	if err := a.Approve("r1:ws-oc", "always"); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	s, _ := a.GetSettings()
+	if len(s.AlwaysRules) == 0 || s.AlwaysRules[0].Agent != "opencode" {
+		t.Errorf("AlwaysRule agent = %v, want opencode", s.AlwaysRules)
 	}
 }
