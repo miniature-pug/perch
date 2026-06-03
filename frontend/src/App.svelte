@@ -15,6 +15,7 @@
   import NewSessionDialog   from "./lib/NewSessionDialog.svelte";
   import ConfirmDialog      from "./lib/ConfirmDialog.svelte";
   import HelpDialog         from "./lib/HelpDialog.svelte";
+  import SettingsPanel      from "./lib/SettingsPanel.svelte";
   import TokenMeter         from "./lib/TokenMeter.svelte";
   import DragDrop           from "./lib/DragDrop.svelte";
   import { layout }         from "./lib/stores/layout.svelte";
@@ -60,6 +61,7 @@
   let confirmRemove   = $state<WorkspaceVM | null>(null);
   let notifOpen       = $state(false);
   let helpOpen        = $state(false);
+  let settingsOpen    = $state(false);
 
   const active       = $derived(workspaces.find(w => w.id === activeId) ?? null);
   const unreadCount  = $derived(getItems().filter(n => !n.read).length);
@@ -197,6 +199,8 @@
     // Help
     { id: "help:shortcuts", group: "Help", label: "Keyboard shortcuts", run: () => { helpOpen = true; } },
     { id: "help:about",     group: "Help", label: "About perch",        run: () => { helpOpen = true; } },
+    // Settings
+    { id: "settings:open", group: "Settings", label: "Settings…",       run: () => { settingsOpen = true; } },
   ];
 
   function runCommand(id: string) {
@@ -479,6 +483,8 @@
     />
 
     <HelpDialog open={helpOpen} onClose={() => { helpOpen = false; }} />
+
+    <SettingsPanel open={settingsOpen} onClose={() => { settingsOpen = false; }} />
   </div>
 </ThemeProvider>
 

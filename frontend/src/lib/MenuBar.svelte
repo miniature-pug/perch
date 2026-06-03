@@ -28,6 +28,9 @@
       { id: "help:shortcuts", label: "Keyboard shortcuts" },
       { id: "help:about",     label: "About perch" },
     ]},
+    { label: "Settings", items: [
+      { id: "settings:open", label: "Settings…" },
+    ]},
   ];
 
   let openMenu = $state<string | null>(null);
