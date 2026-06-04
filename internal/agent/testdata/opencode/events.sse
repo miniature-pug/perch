@@ -1,8 +1,7 @@
-data: {"type":"session.next.step.started","sessionId":"ses-1","step":{"type":"text"}}
+data: {"id":"evt_1","type":"session.next.step.started","properties":{"sessionID":"ses-1","agent":"build","model":{"providerID":"anthropic","modelID":"claude"}}}
 
-data: {"type":"session.next.step.ended","sessionId":"ses-1","step":{"type":"text","cost":0.0012,"tokens":{"input":100,"output":40}}}
+data: {"id":"evt_2","type":"session.next.step.ended","properties":{"sessionID":"ses-1","finish":"stop","cost":0.0012,"tokens":{"input":100,"output":40,"reasoning":0,"cache":{"read":0,"write":0}}}}
 
-data: {"type":"permission.v2.asked","sessionId":"ses-1","permissionId":"perm-1","tool":"Bash","input":{"command":"ls"}}
+data: {"id":"evt_3","type":"permission.asked","properties":{"id":"perm-1","sessionID":"ses-1","permission":"bash","patterns":["ls -la"],"metadata":{},"always":[]}}
 
-data: {"type":"session.next.step.failed","sessionId":"ses-1","error":"timeout"}
-
+data: {"id":"evt_4","type":"session.next.step.failed","properties":{"sessionID":"ses-1","error":{"name":"TimeoutError","message":"timeout"}}}
