@@ -59,6 +59,13 @@ type App struct {
 	bridges  map[string]*internalpty.Bridge // paneID → Bridge
 	monitors map[string]agent.Monitor       // workspaceID → Monitor
 
+	// settingsMu guards the GetSettings→check-duplicate→append→SaveSettings
+	// read-modify-write sequence in Approve and the GetSettings read in
+	// maybeAutoApprove. It must NEVER be acquired while a.mu is held (lock order:
+	// a.mu first, then settingsMu — but never nest a.mu inside settingsMu).
+	// M-12 fix: prevents concurrent Approve(always) calls from losing rules.
+	settingsMu sync.Mutex
+
 	// pending maps a composed approval reqID ("<raw>:<workspaceID>") to the
 	// in-flight ApprovalReq. The pump adds an entry when it surfaces a card;
 	// Approve consumes it to resolve the tool+input authoritatively for an
@@ -151,6 +158,9 @@ func (a *App) shutdown(_ context.Context) {
 	a.bridges = map[string]*internalpty.Bridge{}
 	a.monitors = map[string]agent.Monitor{}
 	a.cancels = map[string]context.CancelFunc{}
+	// L-12: reset pending approvals on shutdown so stale entries cannot outlive
+	// their workspaces.
+	a.pending = map[string]agent.ApprovalReq{}
 	a.mu.Unlock()
 
 	for _, c := range cancels {
@@ -324,7 +334,11 @@ type Settings struct {
 type AlwaysRule struct {
 	Agent   string `json:"agent"`
 	Tool    string `json:"tool"`
-	Pattern string `json:"pattern"`
+	Pattern string `json:"pattern"` // truncated display value; NOT the security boundary
+	// Hash is the hex-encoded sha256 of the FULL (untruncated) tool input at the
+	// time the user clicked "always". maybeAutoApprove matches on Hash, not Pattern,
+	// so two inputs sharing a 4096-byte prefix cannot collide (M-13 fix).
+	Hash string `json:"hash,omitempty"`
 }
 
 // CreateWorkspace validates inputs, resolves/creates the worktree, persists the
@@ -401,6 +415,10 @@ func (a *App) CreateWorkspace(agentName, repoPath, branch, model string) (Worksp
 //
 // mon.Start(wctx) is REQUIRED: without it no events ever flow from a real monitor.
 func (a *App) OpenWorkspace(id string) error {
+	// L-11: validate workspace id before touching the store.
+	if err := validateSessionID(id); err != nil {
+		return fmt.Errorf("invalid workspace id: %w", err)
+	}
 	w, ok := a.store.Get(id)
 	if !ok {
 		return fmt.Errorf("unknown workspace %q", id)
@@ -547,7 +565,10 @@ func (a *App) OpenWorkspace(id string) error {
 				}
 				// Session-resume: when the agent reports a new session id, persist
 				// it so the next OpenWorkspace call can pass it as resumeID.
-				if evt.SessionID != "" {
+				// L-10: validate the session id before persisting; an invalid id
+				// (e.g. containing shell metacharacters) is silently dropped so it
+				// can never be concatenated into a shell launch command later.
+				if evt.SessionID != "" && validateSessionID(evt.SessionID) == nil {
 					if cur, ok := a.store.Get(id); ok && cur.LastSessionID != evt.SessionID {
 						cur.LastSessionID = evt.SessionID
 						_ = a.store.Upsert(cur)
@@ -581,13 +602,30 @@ func (a *App) maybeAutoApprove(workspaceID, rawReqID string, req agent.ApprovalR
 	if w, ok := a.store.Get(workspaceID); ok && w.Agent != "" {
 		agentName = w.Agent
 	}
+	// M-12: hold settingsMu (read side) so we see a consistent snapshot of
+	// settings and don't race with a concurrent Approve(always) write.
+	// DEADLOCK GUARD: a.mu must NOT be held before settingsMu is taken; callers
+	// of maybeAutoApprove are outside any a.mu critical section.
+	a.settingsMu.Lock()
 	s, err := a.GetSettings()
+	a.settingsMu.Unlock()
 	if err != nil {
 		return false
 	}
 	matched := false
 	for _, r := range s.AlwaysRules {
-		if r.Pattern != "" && r.Agent == agentName && r.Tool == req.Tool && r.Pattern == req.Input {
+		if r.Agent != agentName || r.Tool != req.Tool {
+			continue
+		}
+		// M-13: the SHA-256 hash of the full (untruncated) tool input is the sole
+		// authoritative match key. Pattern is display-only (it is truncated to
+		// MaxApprovalInputLen, so two inputs sharing a 4096-byte prefix collide on
+		// Pattern — matching on it would be a privilege-escalation hole). A rule
+		// without a Hash, or a request without an InputHash, never auto-approves
+		// (fail closed). There is no backward-compat requirement, so no legacy
+		// pattern fallback: any pre-Hash rule simply prompts once and is re-saved
+		// with a hash.
+		if r.Hash != "" && req.InputHash != "" && r.Hash == req.InputHash {
 			matched = true
 			break
 		}
@@ -687,6 +725,10 @@ func (a *App) ResizePty(paneID string, cols, rows uint16) error {
 // CloseWorkspace cancels the workspace pump, tears down the monitor, and closes
 // the pty — but keeps the workspace record in the registry (it can be reopened).
 func (a *App) CloseWorkspace(id string) error {
+	// L-11: validate workspace id before touching the store.
+	if err := validateSessionID(id); err != nil {
+		return fmt.Errorf("invalid workspace id: %w", err)
+	}
 	paneID := "pane-" + id
 	a.mu.Lock()
 	br := a.bridges[paneID]
@@ -697,6 +739,16 @@ func (a *App) CloseWorkspace(id string) error {
 	if a.cancels != nil {
 		cancel = a.cancels[id]
 		delete(a.cancels, id)
+	}
+	// L-12: purge pending approvals belonging to this workspace so that a
+	// closed workspace does not accumulate phantom entries in the pending map.
+	// Pending keys have the form "<raw>:<workspaceID>" (see Approve / event pump);
+	// validateSessionID forbids ':' in ids so the suffix match is unambiguous.
+	suffix := ":" + id
+	for k := range a.pending {
+		if strings.HasSuffix(k, suffix) {
+			delete(a.pending, k)
+		}
 	}
 	a.mu.Unlock()
 
@@ -715,6 +767,13 @@ func (a *App) CloseWorkspace(id string) error {
 // RemoveWorkspace closes the workspace (pump + monitor + pty) and removes it
 // from the registry permanently.
 func (a *App) RemoveWorkspace(id string) error {
+	// L-11: validate workspace id before touching the store.
+	// CloseWorkspace also validates, but we validate here first so RemoveWorkspace
+	// returns a clear validation error rather than silently calling CloseWorkspace
+	// (which would return the same error) before the store.Remove.
+	if err := validateSessionID(id); err != nil {
+		return fmt.Errorf("invalid workspace id: %w", err)
+	}
 	_ = a.CloseWorkspace(id)
 	return a.store.Remove(id)
 }
@@ -830,8 +889,44 @@ func (a *App) ReadFile(absPath string) (string, error) {
 
 // WriteFile atomically writes content to absPath.
 func (a *App) WriteFile(absPath, content string) error {
-	if err := validateWorktreeUnderRoots(filepath.Dir(absPath), a.roots); err != nil {
+	// L-5: validate absPath itself (not just its Dir) so a symlink-as-final-component
+	// that resolves outside root is caught.
+	//
+	// Primary path: absPath resolves successfully via EvalSymlinks (file exists or is
+	// a non-dangling symlink). validateWorktreeUnderRoots does the full resolve+check.
+	if err := validateWorktreeUnderRoots(absPath, a.roots); err == nil {
+		// absPath resolves inside roots — allow.
+		return fspkg.WriteFile(absPath, []byte(content))
+	}
+	// absPath may be a new (not-yet-created) file, OR it may be a symlink
+	// (dangling or resolving outside root). Distinguish these cases:
+	//
+	// If absPath exists as a symlink (even dangling), reject it — a write would
+	// follow the symlink to an outside-root target, which is the escape vector.
+	if _, lstatErr := os.Lstat(absPath); lstatErr == nil {
+		// absPath exists on disk (as a symlink or regular file). If
+		// validateWorktreeUnderRoots rejected it above, reject here too.
+		return fmt.Errorf("WriteFile: path %q is outside configured roots or escapes via symlink", absPath)
+	}
+	// absPath does not exist (truly a new file). Validate by checking:
+	//   1. The parent dir must exist and resolve inside roots.
+	//   2. The cleaned absPath must be lexically under the resolved parent
+	//      (guards against ".." or other path escapes in the filename component).
+	parentDir := filepath.Dir(absPath)
+	if err := validateWorktreeUnderRoots(parentDir, a.roots); err != nil {
 		return err
+	}
+	cleanAbs := filepath.Clean(absPath)
+	if !filepath.IsAbs(cleanAbs) {
+		return fmt.Errorf("WriteFile: path must be absolute")
+	}
+	resolvedParent, err := filepath.EvalSymlinks(parentDir)
+	if err != nil {
+		return fmt.Errorf("WriteFile: resolve parent %q: %w", parentDir, err)
+	}
+	expectedPrefix := resolvedParent + string(filepath.Separator)
+	if cleanAbs != resolvedParent && !strings.HasPrefix(cleanAbs, expectedPrefix) {
+		return fmt.Errorf("WriteFile: path %q escapes its parent dir", absPath)
 	}
 	return fspkg.WriteFile(absPath, []byte(content))
 }
@@ -847,6 +942,11 @@ func (a *App) RevealInFiles(absPath string) error {
 // CopyPath copies absPath to the system clipboard via the Wails runtime.
 // WebKit2GTK's navigator.clipboard is unreliable, so the copy happens host-side.
 func (a *App) CopyPath(absPath string) error {
+	// L-8: validate before the ctx guard so tests can exercise the security
+	// boundary without a Wails runtime (ctx == nil → clipboard no-op after validation).
+	if err := validateWorktreeUnderRoots(absPath, a.roots); err != nil {
+		return err
+	}
 	if a.ctx == nil {
 		return nil
 	}
@@ -919,10 +1019,15 @@ func (a *App) Approve(reqID, decision string) error {
 		if w, ok := a.store.Get(workspaceID); ok && w.Agent != "" {
 			agentName = w.Agent
 		}
+		// M-12: hold settingsMu across the entire read-modify-write so that
+		// concurrent Approve(always) calls cannot interleave and lose rules.
+		// DEADLOCK GUARD: a.mu is released above before settingsMu is taken.
+		a.settingsMu.Lock()
 		s, _ := a.GetSettings()
 		dup := false
 		for _, r := range s.AlwaysRules {
-			if r.Agent == agentName && r.Tool == req.Tool && r.Pattern == req.Input {
+			// Dedup on the same authoritative key used for matching (M-13: hash).
+			if r.Agent == agentName && r.Tool == req.Tool && r.Hash != "" && r.Hash == req.InputHash {
 				dup = true
 				break
 			}
@@ -931,10 +1036,12 @@ func (a *App) Approve(reqID, decision string) error {
 			s.AlwaysRules = append(s.AlwaysRules, AlwaysRule{
 				Agent:   agentName,
 				Tool:    req.Tool,
-				Pattern: req.Input,
+				Pattern: req.Input,       // truncated display value
+				Hash:    req.InputHash,   // M-13: hash of full input, authoritative match key
 			})
 			_ = a.SaveSettings(s)
 		}
+		a.settingsMu.Unlock()
 	}
 	return nil
 }

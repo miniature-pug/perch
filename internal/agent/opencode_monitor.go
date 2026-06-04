@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -102,8 +103,9 @@ func (m *OpencodeMonitor) Prepare(_ context.Context, _, _, resumeID, _ string) (
 
 	attach := "opencode attach " + m.serverURL
 	if resumeID != "" {
-		// resumeID charset is [A-Za-z0-9_-] (validated upstream), so plain
-		// concatenation is safe as a single shell token; no quoting needed.
+		// resumeID charset is [A-Za-z0-9_-], validated by app.validateSessionID
+		// in the event pump (L-10 fix) before any session id is persisted to the
+		// registry, so plain concatenation is safe as a single shell token.
 		attach += " --session " + resumeID
 	}
 
@@ -305,24 +307,29 @@ func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
 		if len(p.Patterns) > 0 {
 			summary += ": " + strings.Join(p.Patterns, ", ")
 		}
-		// SECURITY: ApprovalReq.Input is the exact-match key for "always-allow"
-		// auto-approval (app.maybeAutoApprove). An empty Input can never match a
-		// rule, so we FAIL CLOSED — populate a specific key only when the request
-		// carries distinguishing patterns; otherwise leave it empty and force the
-		// user to approve every time. Never collapse distinct operations to one key.
+		// SECURITY: ApprovalReq.InputHash is the authoritative always-allow match key
+		// (app.maybeAutoApprove). An empty InputHash can never match a rule, so we
+		// FAIL CLOSED — compute hash only when the request carries distinguishing
+		// patterns; otherwise leave InputHash empty and force the user to approve
+		// every time. Never collapse distinct operations to one key.
+		// M-13: hash is computed from the FULL (untruncated) input before truncation.
 		input := ""
+		inputHash := ""
 		if len(p.Patterns) > 0 {
 			key, _ := json.Marshal(struct {
 				Permission string   `json:"permission"`
 				Patterns   []string `json:"patterns"`
 			}{p.Permission, p.Patterns})
-			input = string(key)
+			fullInput := string(key)
+			h := sha256.Sum256([]byte(fullInput))
+			inputHash = hex.EncodeToString(h[:])
+			input = fullInput
 			if len(input) > MaxApprovalInputLen {
 				input = input[:MaxApprovalInputLen]
 			}
 		}
 		ev = Event{Kind: "approval", State: StateAwaitingApproval,
-			Approval: &ApprovalReq{ReqID: p.ID, Tool: p.Permission, Summary: summary, Input: input}}
+			Approval: &ApprovalReq{ReqID: p.ID, Tool: p.Permission, Summary: summary, Input: input, InputHash: inputHash}}
 	default:
 		return
 	}

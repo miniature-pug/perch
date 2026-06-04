@@ -216,3 +216,84 @@ func TestStageHunk_RejectsNewlineInPath(t *testing.T) {
 		t.Fatal("expected error for path containing newline")
 	}
 }
+
+// TestStageHunk_GoesToRunnerSeam verifies that the `git apply` invocation
+// is routed through the proc.Runner seam (via RunStdin) so that FakeRunner
+// intercepts it. Before the fix, gitApplyPatch called exec.CommandContext
+// directly and FakeRunner never saw the apply call.
+func TestStageHunk_GoesToRunnerSeam(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ctx := context.Background()
+
+	// Minimal fake diff output for a single hunk.
+	diffOut := "diff --git a/f.txt b/f.txt\n" +
+		"index 1111111..2222222 100644\n" +
+		"--- a/f.txt\n" +
+		"+++ b/f.txt\n" +
+		"@@ -1,1 +1,1 @@\n" +
+		"-old\n" +
+		"+new\n"
+
+	r := proc.NewFakeRunner()
+	// git diff call returns the canned diff.
+	r.Respond(proc.FakeResult{Stdout: []byte(diffOut)},
+		"git", "-C", "/repo", "diff", "--unified=3", "--no-color", "--", "f.txt")
+	// git apply call succeeds (empty stdout/stderr, no error).
+	r.Respond(proc.FakeResult{}, "git", "apply", "--cached", "-")
+
+	err := git.StageHunk(ctx, r, "/repo", "f.txt", 0)
+	if err != nil {
+		t.Fatalf("StageHunk: %v", err)
+	}
+
+	// Find the git-apply call in Calls. Before the fix this call was never
+	// recorded because gitApplyPatch used exec.CommandContext directly.
+	var applyCall *proc.Call
+	for i := range r.Calls {
+		if r.Calls[i].Name == "git" && len(r.Calls[i].Args) >= 1 && r.Calls[i].Args[0] == "apply" {
+			applyCall = &r.Calls[i]
+			break
+		}
+	}
+	if applyCall == nil {
+		t.Fatal("git apply was never invoked through the runner — runner seam bypassed")
+	}
+	if len(applyCall.Stdin) == 0 {
+		t.Error("git apply was called but with empty stdin — patch not piped through runner")
+	}
+	if !strings.Contains(string(applyCall.Stdin), "@@ -1,1 +1,1 @@") {
+		t.Errorf("git apply stdin does not contain hunk header; got:\n%s", applyCall.Stdin)
+	}
+}
+
+// TestStageHunk_ExecRunnerStdinWired verifies that ExecRunner.RunStdin actually
+// wires the patch to git's stdin. This is the real-git counterpart that ensures
+// the production apply path (not just the seam) works end-to-end.
+func TestStageHunk_ExecRunnerStdinWired(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := twoHunkFile(t)
+	r := proc.ExecRunner{}
+	ctx := context.Background()
+
+	hunks, err := git.Hunks(ctx, r, repo, "target.txt")
+	if err != nil || len(hunks) < 2 {
+		t.Fatalf("Hunks: err=%v count=%d", err, len(hunks))
+	}
+
+	// Stage only the first hunk (TOP_CHANGE) via the runner-backed path.
+	if err := git.StageHunk(ctx, r, repo, "target.txt", 0); err != nil {
+		t.Fatalf("StageHunk (ExecRunner.RunStdin): %v", err)
+	}
+
+	// Confirm the staged index contains TOP_CHANGE but not BOTTOM_CHANGE.
+	cachedOut, cachedErr, runErr := r.Run(ctx, "git", "-C", repo, "diff", "--cached", "--", "target.txt")
+	if runErr != nil {
+		t.Fatalf("git diff --cached: %v: %s", runErr, cachedErr)
+	}
+	if !strings.Contains(string(cachedOut), "TOP_CHANGE") {
+		t.Errorf("staged diff should contain TOP_CHANGE:\n%s", cachedOut)
+	}
+	if strings.Contains(string(cachedOut), "BOTTOM_CHANGE") {
+		t.Errorf("staged diff should NOT contain BOTTOM_CHANGE:\n%s", cachedOut)
+	}
+}

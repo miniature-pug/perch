@@ -2,10 +2,8 @@
 package git
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"os/exec"
 	"strconv"
 	"strings"
 
@@ -132,13 +130,55 @@ func statusCode(xy string) string {
 	}
 }
 
-// Hunks parses `git diff` unified output for one file and returns []Hunk.
+// Hunks returns unified-diff hunks for file from both the working tree
+// (unstaged changes) and the index (staged-only changes). Files that appear
+// in neither diff return an empty slice. Files with both staged and unstaged
+// changes are deduplicated by hunk header so identical hunks are not reported
+// twice.
+//
+// NOTE: applying staged-only hunks (unstaging them) is outside the scope of
+// this function — StageHunk operates on working-tree hunks only.
 func Hunks(ctx context.Context, r proc.Runner, worktree, file string) ([]Hunk, error) {
-	out, errOut, err := r.Run(ctx, "git", "-C", worktree, "diff", "--unified=3", "--no-color", "--", file)
+	// Working-tree (unstaged) hunks.
+	wtOut, wtErr, err := r.Run(ctx, "git", "-C", worktree, "diff", "--unified=3", "--no-color", "--", file)
 	if err != nil {
-		return nil, fmt.Errorf("git diff %s: %w: %s", file, err, strings.TrimSpace(string(errOut)))
+		return nil, fmt.Errorf("git diff %s: %w: %s", file, err, strings.TrimSpace(string(wtErr)))
 	}
-	return parseUnifiedDiff(file, string(out)), nil
+	wtHunks := parseUnifiedDiff(file, string(wtOut))
+
+	// Staged (cached) hunks — cover files added to the index but not further
+	// modified in the working tree.
+	stOut, stErr, err := r.Run(ctx, "git", "-C", worktree, "diff", "--cached", "--unified=3", "--no-color", "--", file)
+	if err != nil {
+		return nil, fmt.Errorf("git diff --cached %s: %w: %s", file, err, strings.TrimSpace(string(stErr)))
+	}
+	stHunks := parseUnifiedDiff(file, string(stOut))
+
+	if len(stHunks) == 0 {
+		// Fast path: no staged hunks — just return working-tree hunks.
+		return wtHunks, nil
+	}
+
+	// Build a set of hunk headers already present in wtHunks to avoid duplicates.
+	// A file that has both staged and unstaged changes would otherwise report the
+	// same hunk twice. Key by Header string (the "@@ -a,b +c,d @@" line).
+	seenHeaders := make(map[string]bool, len(wtHunks))
+	for _, h := range wtHunks {
+		seenHeaders[h.Header] = true
+	}
+
+	// Append staged-only hunks (those not already in the working-tree set).
+	// Re-index so that Hunk.Index is contiguous across the merged slice.
+	merged := make([]Hunk, len(wtHunks))
+	copy(merged, wtHunks)
+	for _, h := range stHunks {
+		if seenHeaders[h.Header] {
+			continue
+		}
+		h.Index = len(merged)
+		merged = append(merged, h)
+	}
+	return merged, nil
 }
 
 func parseUnifiedDiff(file, raw string) []Hunk {
@@ -225,7 +265,7 @@ func applyHunkByIndex(ctx context.Context, r proc.Runner, worktree, file string,
 	if err != nil {
 		return err
 	}
-	return gitApplyPatch(ctx, worktree, patch, flag)
+	return gitApplyPatch(ctx, r, worktree, patch, flag)
 }
 
 // singleHunkPatch builds a self-contained, git-apply-compatible patch for hunk
@@ -278,15 +318,13 @@ func singleHunkPatch(raw string, index int) (string, error) {
 	return sb.String(), nil
 }
 
-// gitApplyPatch pipes patch into `git apply <flag>` with worktree as cwd.
-func gitApplyPatch(ctx context.Context, worktree, patch, flag string) error {
-	cmd := exec.CommandContext(ctx, "git", "apply", flag, "-")
-	cmd.Dir = worktree
-	cmd.Stdin = bytes.NewBufferString(patch)
-	var errBuf bytes.Buffer
-	cmd.Stderr = &errBuf
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("git apply %s: %w: %s", flag, err, strings.TrimSpace(errBuf.String()))
+// gitApplyPatch pipes patch into `git apply <flag> -` via the runner so that
+// the call is visible to FakeRunner in tests and obeys the runner's context
+// and timeout controls.
+func gitApplyPatch(ctx context.Context, r proc.Runner, worktree, patch, flag string) error {
+	_, errOut, err := r.RunStdin(ctx, worktree, []byte(patch), "git", "apply", flag, "-")
+	if err != nil {
+		return fmt.Errorf("git apply %s: %w: %s", flag, err, strings.TrimSpace(string(errOut)))
 	}
 	return nil
 }

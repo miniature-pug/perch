@@ -4,6 +4,8 @@ package agent
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -110,12 +112,17 @@ func (m *ClaudeMonitor) translateAndEmit(ctx context.Context, he hooklistener.Ho
 		if len(he.ToolInput) > 0 && len(he.ToolInput) < 120 {
 			sum += ": " + string(he.ToolInput)
 		}
-		input := string(he.ToolInput)
+		fullInput := string(he.ToolInput)
+		// M-13: compute hash of the FULL (untruncated) input before truncation so
+		// two inputs sharing a 4096-byte prefix produce distinct hashes.
+		h := sha256.Sum256([]byte(fullInput))
+		inputHash := hex.EncodeToString(h[:])
+		input := fullInput
 		if len(input) > MaxApprovalInputLen {
 			input = input[:MaxApprovalInputLen]
 		}
 		ev = Event{Kind: "approval", State: StateAwaitingApproval,
-			Approval: &ApprovalReq{ReqID: he.ReqID, Tool: he.ToolName, Summary: sum, Input: input}}
+			Approval: &ApprovalReq{ReqID: he.ReqID, Tool: he.ToolName, Summary: sum, Input: input, InputHash: inputHash}}
 	default:
 		return
 	}

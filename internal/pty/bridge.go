@@ -95,19 +95,23 @@ func Spawn(ctx context.Context, cwd string, argv []string, dataEvent, exitEvent 
 			return creackpty.Setsize(f, &creackpty.Winsize{Cols: c, Rows: r})
 		},
 		closer: func() error {
-			ferr := f.Close()
+			// Send SIGKILL to the whole process group BEFORE closing the pty
+			// master fd. Closing first unblocks pumpReader → the reaper goroutine
+			// calls cmd.Wait() → the kernel can reap the pid and potentially
+			// reuse it before the Kill reaches the (now stale) pgid. By killing
+			// first we guarantee the signal targets the correct group.
+			// Fall back to killing just the process on any Kill error.
 			if cmd.Process != nil {
-				// Kill the whole process group (the shell is a session/group leader via
-				// creack/pty's Setsid), so children the shell forked die too. Negative
-				// pid targets the group. Fall back to killing just the process.
 				if perr := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); perr != nil {
 					_ = cmd.Process.Kill()
 				}
-				// NOTE: cmd.Wait() is NOT called here. The reaper goroutine below is
-				// the single Wait site. Calling Wait in two places yields an incorrect
-				// ProcessState on the second call; we must not do it.
 			}
-			return ferr
+			// Close the pty master fd after the kill so pumpReader unblocks and
+			// the reaper goroutine can proceed with cmd.Wait().
+			// NOTE: cmd.Wait() is NOT called here. The reaper goroutine below is
+			// the single Wait site. Calling Wait in two places yields an incorrect
+			// ProcessState on the second call; we must not do it.
+			return f.Close()
 		},
 	}
 	go func() {

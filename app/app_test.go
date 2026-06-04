@@ -867,9 +867,12 @@ func newAlwaysTestApp(t *testing.T, agentName string, notifies *[]map[string]any
 func TestApp_MaybeAutoApprove_ExactMatch(t *testing.T) {
 	var notifies []map[string]any
 	a, fm := newAlwaysTestApp(t, "claude", &notifies)
-	_ = a.SaveSettings(Settings{AlwaysRules: []AlwaysRule{{Agent: "claude", Tool: "Bash", Pattern: "ls -la"}}})
+	// M-13: the authoritative match key is the sha256 hash of the full input, not
+	// the (truncated, display-only) Pattern. A rule must carry a Hash and the
+	// incoming request must carry the matching InputHash.
+	_ = a.SaveSettings(Settings{AlwaysRules: []AlwaysRule{{Agent: "claude", Tool: "Bash", Pattern: "ls -la", Hash: hashInput("ls -la")}}})
 
-	req := agent.ApprovalReq{ReqID: "raw1", Tool: "Bash", Input: "ls -la"}
+	req := agent.ApprovalReq{ReqID: "raw1", Tool: "Bash", Input: "ls -la", InputHash: hashInput("ls -la")}
 	if !a.maybeAutoApprove("ws", "raw1", req, fm) {
 		t.Fatal("exact-matching request must be auto-approved (suppressed)")
 	}
@@ -890,10 +893,11 @@ func TestApp_MaybeAutoApprove_NoMatch(t *testing.T) {
 		rule AlwaysRule
 		req  agent.ApprovalReq
 	}{
-		{"different input", AlwaysRule{"claude", "Bash", "ls -la"}, agent.ApprovalReq{ReqID: "r", Tool: "Bash", Input: "rm -rf /"}},
-		{"different tool", AlwaysRule{"claude", "Read", "/x"}, agent.ApprovalReq{ReqID: "r", Tool: "Bash", Input: "/x"}},
-		{"empty pattern never matches", AlwaysRule{"claude", "Bash", ""}, agent.ApprovalReq{ReqID: "r", Tool: "Bash", Input: "anything"}},
-		{"glob is NOT honored (exact only)", AlwaysRule{"claude", "Read", "/tmp/**"}, agent.ApprovalReq{ReqID: "r", Tool: "Read", Input: "/tmp/secret"}},
+		{"different input → different hash", AlwaysRule{Agent: "claude", Tool: "Bash", Pattern: "ls -la", Hash: hashInput("ls -la")}, agent.ApprovalReq{ReqID: "r", Tool: "Bash", Input: "rm -rf /", InputHash: hashInput("rm -rf /")}},
+		{"different tool (same content hash)", AlwaysRule{Agent: "claude", Tool: "Read", Pattern: "/x", Hash: hashInput("/x")}, agent.ApprovalReq{ReqID: "r", Tool: "Bash", Input: "/x", InputHash: hashInput("/x")}},
+		{"rule with empty hash never matches (fail closed)", AlwaysRule{Agent: "claude", Tool: "Bash", Pattern: "anything", Hash: ""}, agent.ApprovalReq{ReqID: "r", Tool: "Bash", Input: "anything", InputHash: hashInput("anything")}},
+		{"request with empty hash never matches (fail closed)", AlwaysRule{Agent: "claude", Tool: "Bash", Pattern: "anything", Hash: hashInput("anything")}, agent.ApprovalReq{ReqID: "r", Tool: "Bash", Input: "anything", InputHash: ""}},
+		{"glob is NOT honored (hash is exact)", AlwaysRule{Agent: "claude", Tool: "Read", Pattern: "/tmp/**", Hash: hashInput("/tmp/**")}, agent.ApprovalReq{ReqID: "r", Tool: "Read", Input: "/tmp/secret", InputHash: hashInput("/tmp/secret")}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

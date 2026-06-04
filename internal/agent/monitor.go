@@ -28,10 +28,16 @@ type ApprovalReq struct {
 	ReqID   string `json:"reqId"`
 	Tool    string `json:"tool"`
 	Summary string `json:"summary"`
-	// Input is the (length-capped) raw tool input. It is the value an
-	// always-allow rule matches against by exact equality, so it must be the
-	// real input — not the truncated Summary used for display.
+	// Input is the (length-capped) raw tool input shown in the approval card
+	// and stored as the human-readable Pattern in an AlwaysRule.
+	// Matching is NOT done on Input — it is done on InputHash (sha256 of the
+	// full, untruncated input) so that two inputs sharing the same 4096-byte
+	// prefix cannot collide (M-13 / privilege-escalation fix).
 	Input string `json:"input"`
+	// InputHash is the hex-encoded sha256 of the FULL (untruncated) tool input.
+	// Computed by the monitor before truncating Input for display. Used as the
+	// authoritative always-rule match key in maybeAutoApprove.
+	InputHash string `json:"inputHash,omitempty"`
 }
 
 // MaxApprovalInputLen caps the ApprovalReq.Input length so a pathological tool

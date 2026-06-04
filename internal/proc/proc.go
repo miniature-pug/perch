@@ -22,6 +22,10 @@ type Runner interface {
 	// set to dir. When dir is empty the parent process cwd is inherited
 	// unchanged, making RunInDir(ctx, "", ...) identical to Run(ctx, ...).
 	RunInDir(ctx context.Context, dir, name string, args ...string) (stdout, stderr []byte, err error)
+	// RunStdin is like RunInDir but pipes stdin into the command's standard
+	// input. It is the only way to feed patch data to `git apply -` through
+	// the runner seam so that tests can intercept the invocation via FakeRunner.
+	RunStdin(ctx context.Context, dir string, stdin []byte, name string, args ...string) (stdout, stderr []byte, err error)
 }
 
 // ── ExecRunner ────────────────────────────────────────────────────────────────
@@ -57,13 +61,31 @@ func (e ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byt
 	return e.RunInDir(ctx, "", name, args...)
 }
 
+// RunStdin executes name with args in dir, piping stdin into the command's
+// standard input. When dir is empty the parent cwd is inherited. Stdout and
+// stderr are captured separately; the command error is returned verbatim.
+func (e ExecRunner) RunStdin(ctx context.Context, dir string, stdin []byte, name string, args ...string) ([]byte, []byte, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	cmd.Stdin = bytes.NewReader(stdin)
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+	err := cmd.Run()
+	return outBuf.Bytes(), errBuf.Bytes(), err
+}
+
 // ── FakeRunner ────────────────────────────────────────────────────────────────
 
-// Call records a single invocation of FakeRunner.Run or FakeRunner.RunInDir.
+// Call records a single invocation of FakeRunner.Run, FakeRunner.RunInDir,
+// or FakeRunner.RunStdin. Stdin is non-nil only for RunStdin calls.
 type Call struct {
-	Name string
-	Args []string
-	Dir  string
+	Name  string
+	Args  []string
+	Dir   string
+	Stdin []byte // non-nil only for RunStdin invocations
 }
 
 // FakeResult is the canned response returned by FakeRunner for a matched command.
@@ -143,6 +165,25 @@ func (f *FakeRunner) RunInDir(_ context.Context, dir, name string, args ...strin
 
 func (f *FakeRunner) Run(ctx context.Context, name string, args ...string) ([]byte, []byte, error) {
 	return f.RunInDir(ctx, "", name, args...)
+}
+
+// RunStdin records the call (including dir and stdin) and returns the canned
+// response keyed by name+args only. stdin is recorded in Call.Stdin for
+// assertion in tests; it does not affect response routing.
+func (f *FakeRunner) RunStdin(_ context.Context, dir string, stdin []byte, name string, args ...string) ([]byte, []byte, error) {
+	f.Calls = append(f.Calls, Call{Name: name, Args: args, Dir: dir, Stdin: stdin})
+	key := cmdline(name, args)
+	if res, ok := f.Responses[key]; ok {
+		return res.Stdout, res.Stderr, res.Err
+	}
+	if f.Default != nil {
+		return f.Default.Stdout, f.Default.Stderr, f.Default.Err
+	}
+	human := name
+	if len(args) > 0 {
+		human = name + " " + strings.Join(args, " ")
+	}
+	return nil, nil, fmt.Errorf("proc: FakeRunner: no canned response for %q", human)
 }
 
 // ── ExitCode ──────────────────────────────────────────────────────────────────

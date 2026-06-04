@@ -100,6 +100,100 @@ func TestPreToolUse_ClientCancelDoesNotHang(t *testing.T) {
 	}
 }
 
+// TestStopEventNotDroppedUnderBackpressure verifies that a Stop event is NOT
+// silently dropped when the 64-slot event buffer is full.
+//
+// How it distinguishes pre-fix (drop) from post-fix (block):
+//
+//	Pre-fix:  non-blocking send with `default:`. When buffer is full the Stop
+//	          handler returns 200 immediately, silently discarding the event.
+//	Post-fix: blocking send on r.Context(). The handler blocks until the test
+//	          drains a slot, then delivers the Stop event.
+//
+// The test uses FillEventsBuffer (an internal test helper) to fill the channel
+// to capacity atomically — no HTTP races — then posts the Stop via HTTP in a
+// goroutine. Draining starts after the POST goroutine is running; the drain
+// frees a slot which (post-fix) unblocks the handler and delivers Stop.
+func TestStopEventNotDroppedUnderBackpressure(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	l, err := hooklistener.New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = l.Close() }()
+
+	// Fill the channel to capacity directly (no HTTP, no race).
+	bufCap := l.EventsCap()
+	l.FillEventsBuffer(bufCap)
+
+	// POST Stop in a goroutine. Pre-fix: handler sees a full buffer, takes the
+	// `default:` branch (drops event), writes 200, and the goroutine finishes.
+	// Post-fix: handler blocks on the channel send until a slot is freed.
+	stopBody := `{"hook_event_name":"Stop","session_id":"marker","transcript_path":"/t.jsonl","cwd":"/p"}`
+	stopDone := make(chan struct{})
+	go func() {
+		defer close(stopDone)
+		req, _ := http.NewRequest(http.MethodPost, "http://"+l.Addr()+"/hook", strings.NewReader(stopBody))
+		req.Header.Set("Authorization", "Bearer "+l.Token())
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return
+		}
+		_ = resp.Body.Close()
+	}()
+
+	// Give the Stop handler time to reach the channel-send decision point. In
+	// the pre-fix code it drops and returns in <1 ms; in the post-fix code it
+	// blocks (stopDone stays open). 50 ms is a generous but still fast budget.
+	time.Sleep(50 * time.Millisecond)
+
+	// Drain Events() until we find Stop or exhaust the buffer. The drain frees
+	// slots; post-fix that unblocks the handler so Stop is delivered. Pre-fix:
+	// the handler already dropped Stop (it returned within 50 ms), so Stop never
+	// appears in the channel and the loop exhausts bufCap reads without finding it.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	found := false
+	for n := 0; n < bufCap && !found; n++ {
+		select {
+		case ev := <-l.Events():
+			if ev.Type == "Stop" && ev.SessionID == "marker" {
+				found = true
+			}
+		case <-ctx.Done():
+			t.Fatal("Stop event never arrived — dropped under backpressure (timeout 5s)")
+		}
+	}
+	if !found {
+		// Drain any remaining events including potentially a late Stop.
+		timeout := time.NewTimer(200 * time.Millisecond)
+		defer timeout.Stop()
+	drainRest:
+		for {
+			select {
+			case ev := <-l.Events():
+				if ev.Type == "Stop" && ev.SessionID == "marker" {
+					found = true
+					break drainRest
+				}
+			case <-timeout.C:
+				break drainRest
+			}
+		}
+	}
+	if !found {
+		t.Fatal("Stop event not found after draining all buffer slots — dropped under backpressure")
+	}
+
+	// Handler must have returned now that Stop was received.
+	select {
+	case <-stopDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Stop POST goroutine never returned after event was delivered")
+	}
+}
+
 func TestPreToolUseAllowDeny(t *testing.T) {
 	for _, tc := range []struct{ name string; allow bool; want string }{
 		{"allow", true, "allow"}, {"deny", false, "deny"},

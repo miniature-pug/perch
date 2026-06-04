@@ -3,6 +3,7 @@ package fs
 
 import (
 	"bufio"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -162,10 +163,11 @@ func (w *Watcher) loop() {
 					_ = w.fw.Add(event.Name)
 				}
 			}
-		case _, ok := <-w.fw.Errors:
+		case werr, ok := <-w.fw.Errors:
 			if !ok {
 				return
 			}
+			log.Printf("fs.Watcher: fsnotify error: %v", werr)
 		case <-w.done:
 			return
 		}

@@ -312,3 +312,62 @@ func TestFakeRunner_Run_DelegatesViaRunInDir(t *testing.T) {
 		t.Errorf("stdout: got %q, want %q", stdout, "delegated\n")
 	}
 }
+
+// ── RunStdin ──────────────────────────────────────────────────────────────────
+
+func TestFakeRunner_RunStdin_RecordsCallAndStdin(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{}, "git", "apply", "--cached", "-")
+
+	stdinData := []byte("--- a\n+++ b\n@@ -1 +1 @@\n-old\n+new\n")
+	_, _, err := r.RunStdin(context.Background(), "/repo", stdinData, "git", "apply", "--cached", "-")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(r.Calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(r.Calls))
+	}
+	c := r.Calls[0]
+	if c.Name != "git" {
+		t.Errorf("Call.Name = %q, want %q", c.Name, "git")
+	}
+	if c.Dir != "/repo" {
+		t.Errorf("Call.Dir = %q, want %q", c.Dir, "/repo")
+	}
+	if string(c.Stdin) != string(stdinData) {
+		t.Errorf("Call.Stdin = %q, want %q", c.Stdin, stdinData)
+	}
+}
+
+func TestExecRunner_RunStdin_PipesData(t *testing.T) {
+	// Use `cat` to echo stdin back on stdout; verifies the pipe is wired correctly.
+	var r proc.ExecRunner
+	input := []byte("hello from stdin\n")
+	stdout, _, err := r.RunStdin(context.Background(), "", input, "cat")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(stdout) != string(input) {
+		t.Errorf("stdout = %q, want %q", stdout, input)
+	}
+}
+
+func TestExecRunner_RunStdin_UsesDir(t *testing.T) {
+	tmp := t.TempDir()
+	want, err := filepath.EvalSymlinks(tmp)
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+	var r proc.ExecRunner
+	stdout, _, err := r.RunStdin(context.Background(), tmp, nil, "pwd")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got, err := filepath.EvalSymlinks(strings.TrimSpace(string(stdout)))
+	if err != nil {
+		t.Fatalf("EvalSymlinks(stdout): %v", err)
+	}
+	if got != want {
+		t.Errorf("RunStdin dir: got %q, want %q", got, want)
+	}
+}

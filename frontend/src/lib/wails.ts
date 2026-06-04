@@ -19,7 +19,7 @@ export interface Hunk {
   oldStart: number; oldLines: number; newStart: number; newLines: number; lines: HunkLine[];
 }
 export interface FsNode { name: string; path: string; isDir: boolean; }
-export interface AlwaysRule { agent: string; tool: string; pattern: string; }
+export interface AlwaysRule { agent: string; tool: string; pattern: string; hash?: string; }
 export interface AppSettings {
   theme: string; density: string; font: string; dnd: boolean; alwaysRules: AlwaysRule[];
 }

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Miniature-Pug/perch/internal/git"
@@ -18,6 +19,59 @@ func runGit(t *testing.T, dir string, args ...string) {
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+// TestHunks_StagedOnlyFile verifies that Hunks() returns hunks for a file
+// whose changes have been staged (git add) but NOT further modified in the
+// working tree (clean working tree, dirty index). Before the fix, Hunks()
+// only ran `git diff` (working-tree) and returned zero hunks for such files.
+func TestHunks_StagedOnlyFile(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := initRepo(t) // creates repo with README.md committed
+
+	// Write and commit a new file.
+	target := filepath.Join(repo, "staged.txt")
+	if err := os.WriteFile(target, []byte("line1\nline2\nline3\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "add staged.txt")
+
+	// Modify the file and stage the change (git add). Do NOT leave any unstaged
+	// changes — the working tree is clean relative to the index.
+	if err := os.WriteFile(target, []byte("line1\nMODIFIED\nline3\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", "staged.txt")
+
+	// Sanity: working-tree diff must be empty (no unstaged changes).
+	r := proc.ExecRunner{}
+	wtDiff, _, _ := r.Run(context.Background(), "git", "-C", repo, "diff", "--", "staged.txt")
+	if strings.TrimSpace(string(wtDiff)) != "" {
+		t.Fatalf("working-tree diff should be empty after git add; got:\n%s", wtDiff)
+	}
+
+	// Before fix: Hunks() returns zero hunks (only queries working-tree diff).
+	// After fix:  Hunks() returns ≥1 hunk (also queries cached diff).
+	hunks, err := git.Hunks(context.Background(), r, repo, "staged.txt")
+	if err != nil {
+		t.Fatalf("Hunks: %v", err)
+	}
+	if len(hunks) == 0 {
+		t.Fatal("Hunks() returned no hunks for a staged-only file — M-4 not fixed")
+	}
+	// The hunk must reference MODIFIED.
+	found := false
+	for _, h := range hunks {
+		for _, l := range h.Lines {
+			if strings.Contains(l.Text, "MODIFIED") {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Errorf("hunk lines don't contain MODIFIED; hunks: %+v", hunks)
 	}
 }
 

@@ -91,9 +91,15 @@ func (l *Listener) handleHook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if ev.Type != "PreToolUse" {
+		// Lifecycle events (Stop, StopFailure, SessionStart, Notification) must
+		// not be silently dropped — the sidebar state depends on them. Use a
+		// blocking send, but remain cancellable so client-disconnect or server
+		// shutdown cannot leak this handler goroutine.
 		select {
 		case l.events <- ev:
-		default:
+		case <-r.Context().Done():
+			http.Error(w, "client gone", http.StatusServiceUnavailable)
+			return
 		}
 		w.WriteHeader(http.StatusOK)
 		return
