@@ -94,6 +94,14 @@ writes the masked volume.
 byte-identical environment `make` uses. Inside it, `CONTAINERIZE=0` so targets
 run natively (no nested podman).
 
+> **Caveat (devcontainer only):** because targets run with `CONTAINERIZE=0`
+> inside the devcontainer, frontend-building targets (`test-e2e`, `gui-build`,
+> `test-all`) run `vite build` directly against the mounted workspace — there is
+> no `run.sh` dist mask — so they regenerate `frontend/dist`, including the
+> tracked `//go:embed` stub `index.html`. Don't commit the regenerated stub
+> (same rule as a host `make gui-build`). The host front door (`make …` with the
+> default `CONTAINERIZE=1`) always masks `dist` and never touches the stub.
+
 ## Not automated here
 
 The manual WebKit + real-agent + D-Bus single-instance smoke
