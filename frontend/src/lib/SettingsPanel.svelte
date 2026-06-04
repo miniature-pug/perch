@@ -4,10 +4,7 @@
   import { getSettings, type AppSettings } from "./wails";
   import { settings as settingsStore } from "./stores/settings.svelte";
   import { setDnd } from "./stores/notifications.svelte";
-
-  const THEMES    = ["gruvbox","tokyo-night","catppuccin","dracula","nord","rose-pine","one-dark","perch-cyan","light"];
-  const DENSITIES = ["dense","comfortable","ultra"] as const;
-  const FONTS     = ["geist","ibm-plex","inter"];
+  import { THEMES, DENSITIES, FONTS, DEFAULT_THEME, DEFAULT_DENSITY, DEFAULT_FONT, type Density } from "./constants";
 
   let {
     open,
@@ -18,7 +15,7 @@
   } = $props();
 
   let settings = $state<AppSettings>({
-    theme: "gruvbox", density: "dense", font: "geist", dnd: false, alwaysRules: [],
+    theme: DEFAULT_THEME, density: DEFAULT_DENSITY as Density, font: DEFAULT_FONT, dnd: false, alwaysRules: [],
   });
 
   onMount(async () => {
@@ -150,11 +147,11 @@
   .dialog-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.5);
+    background: var(--perch-scrim);
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 200;
+    z-index: var(--perch-z-modal);
   }
 
   .dialog {
@@ -219,9 +216,9 @@
   }
 
   .dnd-switch.on {
-    background: var(--perch-accent, #7c8eff);
-    color: #fff;
-    border-color: var(--perch-accent, #7c8eff);
+    background: var(--perch-accent);
+    color: var(--perch-accent-fg);
+    border-color: var(--perch-accent);
   }
 
   .rules-caveat {
@@ -230,16 +227,16 @@
     gap: var(--perch-sp-1);
     margin: 0 0 var(--perch-sp-1) 0;
     padding: 6px 8px;
-    border: 1px solid var(--perch-warn, #e5a000);
+    border: 1px solid var(--perch-warn);
     border-radius: 4px;
-    background: color-mix(in srgb, var(--perch-warn, #e5a000) 8%, var(--perch-bg));
+    background: color-mix(in srgb, var(--perch-warn) 8%, var(--perch-bg));
     color: var(--perch-text-dim, var(--perch-text));
     font-size: var(--perch-fs-code);
     line-height: 1.4;
   }
 
   .caveat-icon {
-    color: var(--perch-warn, #e5a000);
+    color: var(--perch-warn);
     flex-shrink: 0;
     font-size: var(--perch-fs-body);
     line-height: 1.4;
@@ -282,7 +279,7 @@
     min-width: 80px;
     font-family: var(--perch-font-mono);
     font-size: var(--perch-fs-code);
-    color: var(--perch-accent, #7c8eff);
+    color: var(--perch-accent);
   }
 
   .rule-pattern {
@@ -306,8 +303,8 @@
   }
 
   .revoke-btn:hover {
-    border-color: var(--perch-accent, #7c8eff);
-    color: var(--perch-accent, #7c8eff);
+    border-color: var(--perch-accent);
+    color: var(--perch-accent);
   }
 
   .close-btn {

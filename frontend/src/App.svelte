@@ -26,6 +26,7 @@
   import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead } from "./lib/stores/notifications.svelte";
   import { listWorkspaces, createWorkspace, removeWorkspace, openWorkspace, closeWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, approve, branches, readFile, setWindowFocus, writeToPty, discoverRepos } from "./lib/wails";
   import type { WorkspaceVM, ApprovalReq } from "./lib/wails";
+  import { UNDO_REMOVE_DELAY_MS, SIDEBAR_MIN_W, SIDEBAR_MAX_W, SHELL_MIN_H, SHELL_MAX_H, RESIZE_STEP_PX, THEMES, MIME_SESSION, MENTION_PREFIX } from "./lib/constants";
 
   let workspaces      = $state<WorkspaceVM[]>([]);
   let activeId        = $state<string | null>(null);
@@ -239,7 +240,7 @@
         // If the backend call fails, put the workspace back.
         workspaces = await listWorkspaces();
       }
-    }, 6000);
+    }, UNDO_REMOVE_DELAY_MS);
 
     pendingRemovals = [...pendingRemovals, { ws: wsToRemove, timer }];
   }
@@ -270,8 +271,6 @@
   // ---------------------------------------------------------------------------
   // Command registry — keyed by the ids MenuBar actually emits.
   // ---------------------------------------------------------------------------
-  const THEMES = ["gruvbox", "tokyo-night", "catppuccin", "dracula", "nord", "rose-pine", "one-dark", "perch-cyan", "light"];
-
   // ---------------------------------------------------------------------------
   // Shared bulk-approval helper — mid-flight safe.
   // Snapshots entries pre-await; reads approvals fresh post-await; only removes
@@ -459,28 +458,28 @@
 
   function startResizeSidebar(e: MouseEvent) {
     const startX = e.clientX, startW = layout.sidebarW;
-    function onMove(mv: MouseEvent) { layout.setSidebarW(Math.max(160, startW + mv.clientX - startX)); }
+    function onMove(mv: MouseEvent) { layout.setSidebarW(Math.max(SIDEBAR_MIN_W, startW + mv.clientX - startX)); }
     function onUp() { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); }
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
   }
 
   function keyResizeSidebar(e: KeyboardEvent) {
-    if (e.key === "ArrowRight") { e.preventDefault(); layout.setSidebarW(Math.max(160, layout.sidebarW + 16)); }
-    else if (e.key === "ArrowLeft") { e.preventDefault(); layout.setSidebarW(Math.max(160, layout.sidebarW - 16)); }
+    if (e.key === "ArrowRight") { e.preventDefault(); layout.setSidebarW(Math.max(SIDEBAR_MIN_W, layout.sidebarW + RESIZE_STEP_PX)); }
+    else if (e.key === "ArrowLeft") { e.preventDefault(); layout.setSidebarW(Math.max(SIDEBAR_MIN_W, layout.sidebarW - RESIZE_STEP_PX)); }
   }
 
   function startResizeShell(e: MouseEvent) {
     const startY = e.clientY, startH = layout.shellH;
-    function onMove(mv: MouseEvent) { layout.setShellH(Math.max(80, startH - (mv.clientY - startY))); }
+    function onMove(mv: MouseEvent) { layout.setShellH(Math.max(SHELL_MIN_H, startH - (mv.clientY - startY))); }
     function onUp() { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); }
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
   }
 
   function keyResizeShell(e: KeyboardEvent) {
-    if (e.key === "ArrowUp") { e.preventDefault(); layout.setShellH(Math.max(80, layout.shellH + 16)); }
-    else if (e.key === "ArrowDown") { e.preventDefault(); layout.setShellH(Math.max(80, layout.shellH - 16)); }
+    if (e.key === "ArrowUp") { e.preventDefault(); layout.setShellH(Math.max(SHELL_MIN_H, layout.shellH + RESIZE_STEP_PX)); }
+    else if (e.key === "ArrowDown") { e.preventDefault(); layout.setShellH(Math.max(SHELL_MIN_H, layout.shellH - RESIZE_STEP_PX)); }
   }
 
   // ---------------------------------------------------------------------------
@@ -545,7 +544,7 @@
       </aside>
 
       <div class="divider divider-v" role="slider" aria-label="Resize sidebar"
-           aria-orientation="vertical" aria-valuenow={layout.sidebarW} aria-valuemin={160} aria-valuemax={800}
+           aria-orientation="vertical" aria-valuenow={layout.sidebarW} aria-valuemin={SIDEBAR_MIN_W} aria-valuemax={SIDEBAR_MAX_W}
            tabindex="0"
            onmousedown={startResizeSidebar}
            onkeydown={keyResizeSidebar}></div>
@@ -554,13 +553,13 @@
         <div data-zone="stage" class="stage-zone" role="region" aria-label="stage"
              ondragover={(e) => {
                if (typeof e.dataTransfer?.types?.includes === "function" &&
-                   e.dataTransfer.types.includes("application/x-perch-session")) {
+                   e.dataTransfer.types.includes(MIME_SESSION)) {
                  e.preventDefault();
                }
              }}
              ondrop={(e) => {
                if (typeof e.dataTransfer?.getData !== "function") return;
-               const id = e.dataTransfer.getData("application/x-perch-session");
+               const id = e.dataTransfer.getData(MIME_SESSION);
                if (!id) return;
                e.preventDefault();
                layout.split = true as any;
@@ -589,8 +588,8 @@
                       <FileTree root={active.worktreePath} onOpen={(p) => {
                         // H-8: FileTree may send '@mention:'+path for "Send to agent".
                         // Route to sendToAgent; otherwise treat as a regular file open.
-                        if (p.startsWith("@mention:")) {
-                          const path = p.slice("@mention:".length);
+                        if (p.startsWith(MENTION_PREFIX)) {
+                          const path = p.slice(MENTION_PREFIX.length);
                           // Format matches DragDrop: '@'+path+' '
                           sendToAgent("@" + path + " ");
                         } else {
@@ -671,7 +670,7 @@
         </div>
 
         <div class="divider divider-h" role="slider" aria-label="Resize shell drawer"
-             aria-orientation="horizontal" aria-valuenow={layout.shellH} aria-valuemin={80} aria-valuemax={800}
+             aria-orientation="horizontal" aria-valuenow={layout.shellH} aria-valuemin={SHELL_MIN_H} aria-valuemax={SHELL_MAX_H}
              tabindex="0"
              onmousedown={startResizeShell}
              onkeydown={keyResizeShell}></div>
@@ -801,8 +800,8 @@
                        font-family: var(--perch-font-sans); font-size: var(--perch-fs-body); }
   .filter-input:focus { outline: 1px solid var(--perch-accent); }
   .approval-dock     { position: absolute; bottom: 2rem; left: 50%; transform: translateX(-50%);
-                       z-index: 100; min-width: 320px; max-width: 560px; }
-  .notification-hub-dock { position: absolute; top: 2.5rem; right: 0; z-index: 90;
+                       z-index: var(--perch-z-approval); min-width: 320px; max-width: 560px; }
+  .notification-hub-dock { position: absolute; top: 2.5rem; right: 0; z-index: var(--perch-z-notify);
                             width: 320px; max-height: 60vh; overflow-y: auto;
                             border-left: 1px solid var(--perch-border);
                             background: var(--perch-bg); }
@@ -907,7 +906,7 @@
   /* Undo toast — stacked at bottom-right */
   .undo-toast-stack {
     position: fixed; bottom: var(--perch-sp-3); right: var(--perch-sp-3);
-    z-index: 300;
+    z-index: var(--perch-z-undo-toast);
     display: flex; flex-direction: column; gap: var(--perch-sp-1);
   }
   .undo-toast {

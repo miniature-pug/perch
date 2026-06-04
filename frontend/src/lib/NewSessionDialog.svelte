@@ -1,5 +1,6 @@
 <!-- frontend/src/lib/NewSessionDialog.svelte -->
 <script lang="ts">
+  import { DEFAULT_AGENT, DEFAULT_MODEL } from "./constants";
   let {
     open, repos, loadBranches, onCreate, onClose, initialAgent = null,
   }: {
@@ -10,14 +11,14 @@
     initialAgent?: string | null;
   } = $props();
 
-  let agent    = $state("claude");
+  let agent    = $state(DEFAULT_AGENT);
   let repo     = $state("");
   let branch   = $state("");
-  let model    = $state("claude-sonnet-4-5");
+  let model    = $state(DEFAULT_MODEL);
   let branches = $state<string[]>([]);
 
   // Reset dialog fields when opened; load branches per selected repo.
-  $effect(() => { if (open) { agent = initialAgent ?? "claude"; repo = repos[0] ?? ""; model = "claude-sonnet-4-5"; } });
+  $effect(() => { if (open) { agent = initialAgent ?? DEFAULT_AGENT; repo = repos[0] ?? ""; model = DEFAULT_MODEL; } });
 
   // Load branches whenever repo changes (and is non-empty).
   $effect(() => {
@@ -75,11 +76,11 @@
   .dialog-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.5);
+    background: var(--perch-scrim);
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 200;
+    z-index: var(--perch-z-modal);
   }
 
   /* Modal card */
@@ -88,7 +89,7 @@
     color: var(--perch-text);
     border: 1px solid var(--perch-border);
     border-radius: 6px;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+    box-shadow: var(--perch-shadow-float);
     padding: var(--perch-sp-3);
     min-width: 480px;
     max-width: 560px;

@@ -1,8 +1,7 @@
 <!-- frontend/src/lib/DiffView.svelte -->
 <script lang="ts">
   import { diffStat, hunks as fetchHunks, stageHunk, discardHunk, type FileDiff, type Hunk } from "./wails";
-
-  const MIME_TEXT = "application/x-perch-text";
+  import { MIME_TEXT } from "./constants";
 
   function handleHunkDragStart(e: DragEvent, h: Hunk) {
     if (!e.dataTransfer) return;

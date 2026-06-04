@@ -16,6 +16,7 @@
   import { go }         from "@codemirror/lang-go";
   import { readFile, writeFile, hunks as fetchHunks, type Hunk } from "./wails";
   import { gutterChangesFromHunks } from "./gutter";
+  import { MIME_TEXT } from "./constants";
 
   let {
     path,
@@ -258,7 +259,7 @@
   function handleDragStart(e: DragEvent) {
     if (!selectionText || !e.dataTransfer) return;
     e.dataTransfer.effectAllowed = "copy";
-    e.dataTransfer.setData("application/x-perch-text", selectionText);
+    e.dataTransfer.setData(MIME_TEXT, selectionText);
     e.dataTransfer.setData("text/plain", selectionText);
   }
 
@@ -332,7 +333,7 @@
     line-height: 1;
     color: var(--perch-warn);
     pointer-events: none;
-    z-index: 20;
+    z-index: var(--perch-z-editor-dirty);
     user-select: none;
   }
 
@@ -354,7 +355,7 @@
     transition:
       background var(--perch-dur) var(--perch-ease),
       color var(--perch-dur) var(--perch-ease);
-    z-index: 10;
+    z-index: var(--perch-z-editor-send);
   }
   .send-to-agent-btn:hover {
     background: color-mix(in srgb, var(--perch-accent) 15%, var(--perch-bg-elev));

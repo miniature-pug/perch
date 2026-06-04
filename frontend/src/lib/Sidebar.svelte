@@ -1,8 +1,7 @@
 <!-- frontend/src/lib/Sidebar.svelte -->
 <script lang="ts">
   import type { WorkspaceVM } from "./wails";
-
-  const MIME_SESSION = "application/x-perch-session";
+  import { MIME_SESSION } from "./constants";
 
   let {
     workspaces, activeId, onSelect, onNew, onReorder,

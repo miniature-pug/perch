@@ -97,21 +97,29 @@ export const saveSettings    = (s: AppSettings)                                 
 // Window focus reporting
 export const setWindowFocus  = (focused: boolean)                                   => app().SetWindowFocus(focused);
 
+// Event name constants — MUST match Go's ptyDataEventPrefix / ptyExitEventPrefix in app/app.go.
+// Any rename here requires a matching rename on the Go side.
+export const EVT_AGENT           = "agent:event";
+export const EVT_FS_CHANGED      = "fs:changed";
+export const EVT_NOTIFY          = "notify";
+export const EVT_PTY_DATA_PREFIX = "pty:data:"; // append paneId to form full event name
+export const EVT_PTY_EXIT_PREFIX = "pty:exit:"; // append paneId to form full event name
+
 // Event helpers — colon-separated names match the frozen Wails event table.
 export function onPtyData(paneId: string, cb: (bytes: Uint8Array) => void): () => void {
-  return window.runtime.EventsOn("pty:data:" + paneId, (data: number[]) => cb(Uint8Array.from(data)));
+  return window.runtime.EventsOn(EVT_PTY_DATA_PREFIX + paneId, (data: number[]) => cb(Uint8Array.from(data)));
 }
 export function onPtyExit(paneId: string, cb: (code: number) => void): () => void {
-  return window.runtime.EventsOn("pty:exit:" + paneId, (p: { code: number }) => cb(p.code));
+  return window.runtime.EventsOn(EVT_PTY_EXIT_PREFIX + paneId, (p: { code: number }) => cb(p.code));
 }
 export function onAgentEvent(cb: (ev: AgentEvent) => void): () => void {
-  return window.runtime.EventsOn("agent:event", (ev: AgentEvent) => cb(ev));
+  return window.runtime.EventsOn(EVT_AGENT, (ev: AgentEvent) => cb(ev));
 }
 export function onFsChanged(cb: (p: { workspaceId: string; path: string }) => void): () => void {
-  return window.runtime.EventsOn("fs:changed", cb);
+  return window.runtime.EventsOn(EVT_FS_CHANGED, cb);
 }
 export function onNotify(
   cb: (p: { tier: "blocking"|"ambient"|"routine"; title: string; body: string; workspaceId: string }) => void,
 ): () => void {
-  return window.runtime.EventsOn("notify", cb);
+  return window.runtime.EventsOn(EVT_NOTIFY, cb);
 }

@@ -29,11 +29,11 @@
   .confirm-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.5);
+    background: var(--perch-scrim);
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 200;
+    z-index: var(--perch-z-modal);
   }
 
   /* Modal card */
@@ -42,7 +42,7 @@
     color: var(--perch-text);
     border: 1px solid var(--perch-border);
     border-radius: 6px;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+    box-shadow: var(--perch-shadow-float);
     padding: var(--perch-sp-3);
     min-width: 360px;
     max-width: 480px;

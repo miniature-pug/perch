@@ -1,10 +1,11 @@
 import { getLayout, saveLayout } from "../wails";
+import { DEFAULT_SIDEBAR_W, DEFAULT_SHELL_H, LAYOUT_SAVE_DEBOUNCE_MS } from "../constants";
 
 export type View = "agent" | "code" | "diff";
 
 class LayoutStore {
-  sidebarW  = $state<number>(240);
-  shellH    = $state<number>(200);
+  sidebarW  = $state<number>(DEFAULT_SIDEBAR_W);
+  shellH    = $state<number>(DEFAULT_SHELL_H);
   view      = $state<View>("agent");
   split     = $state<boolean>(false);
   splitId   = $state<string | null>(null);
@@ -18,8 +19,8 @@ class LayoutStore {
       const raw = await getLayout();
       if (raw) {
         const s = JSON.parse(raw);
-        this.sidebarW  = s.sidebarW  ?? 240;
-        this.shellH    = s.shellH    ?? 200;
+        this.sidebarW  = s.sidebarW  ?? DEFAULT_SIDEBAR_W;
+        this.shellH    = s.shellH    ?? DEFAULT_SHELL_H;
         this.view      = s.view      ?? "agent";
         this.split     = s.split     ?? false;
         this.splitId   = s.splitId   ?? null;
@@ -35,7 +36,7 @@ class LayoutStore {
       sidebarW: this.sidebarW, shellH: this.shellH,
       view: this.view, split: this.split, splitId: this.splitId,
       collapsed: this.collapsed, order: this.order,
-    })), 300);
+    })), LAYOUT_SAVE_DEBOUNCE_MS);
   }
 
   setSidebarW(v: number):  void { this.sidebarW = v;          this.save(); }

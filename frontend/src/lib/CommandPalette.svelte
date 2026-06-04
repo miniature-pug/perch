@@ -1,5 +1,6 @@
 <!-- frontend/src/lib/CommandPalette.svelte -->
 <script lang="ts">
+  import { CMD_RECENCY_MAX, STORAGE_CMD_RECENTS } from "./constants";
   type Command = { id: string; group: string; label: string; keybinding?: string };
   let {
     open, commands, onRun, onClose,
@@ -13,10 +14,9 @@
 
   // Track command invocation recency: id → last-invoked timestamp.
   // Persisted to localStorage so recency survives palette re-opens within a session.
-  const RECENCY_KEY = "perch:cmd-recents";
   function loadRecents(): Map<string, number> {
     try {
-      const raw = localStorage.getItem(RECENCY_KEY);
+      const raw = localStorage.getItem(STORAGE_CMD_RECENTS);
       if (raw) return new Map(JSON.parse(raw) as [string, number][]);
     } catch { /* ignore */ }
     return new Map();
@@ -24,12 +24,12 @@
   function saveRecent(id: string) {
     const map = loadRecents();
     map.set(id, Date.now());
-    // Keep at most 20 entries
-    if (map.size > 20) {
+    // Keep at most CMD_RECENCY_MAX entries
+    if (map.size > CMD_RECENCY_MAX) {
       const oldest = [...map.entries()].sort((a, b) => a[1] - b[1])[0][0];
       map.delete(oldest);
     }
-    try { localStorage.setItem(RECENCY_KEY, JSON.stringify([...map.entries()])); } catch { /* ignore */ }
+    try { localStorage.setItem(STORAGE_CMD_RECENTS, JSON.stringify([...map.entries()])); } catch { /* ignore */ }
   }
 
   function fuzzyScore(label: string, q: string): number {
@@ -149,11 +149,11 @@
   .palette-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.5);
+    background: var(--perch-scrim);
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 300;
+    z-index: var(--perch-z-command-palette);
   }
 
   /* Floating card — no padding (input/items touch the edges) */
@@ -162,7 +162,7 @@
     color: var(--perch-text);
     border: 1px solid var(--perch-border);
     border-radius: 6px;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+    box-shadow: var(--perch-shadow-float);
     min-width: 520px;
     max-width: 680px;
     width: 100%;

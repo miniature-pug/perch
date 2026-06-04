@@ -1,11 +1,12 @@
 import { getSettings, saveSettings, type AppSettings } from "../wails";
+import { DEFAULT_THEME, DEFAULT_DENSITY, DEFAULT_FONT } from "../constants";
 
 export type { AppSettings };
 
 class SettingsStore {
-  theme       = $state<string>("gruvbox");
-  density     = $state<"dense" | "comfortable" | "ultra">("dense");
-  font        = $state<string>("geist");
+  theme       = $state<string>(DEFAULT_THEME);
+  density     = $state<"dense" | "comfortable" | "ultra">(DEFAULT_DENSITY);
+  font        = $state<string>(DEFAULT_FONT);
   dnd         = $state<boolean>(false);
   alwaysRules = $state<AppSettings["alwaysRules"]>([]);
 

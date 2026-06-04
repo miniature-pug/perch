@@ -1,4 +1,5 @@
 // frontend/src/lib/stores/notifications.svelte.ts
+import { AMBIENT_DISMISS_MS, ROUTINE_DISMISS_MS } from "../constants";
 export type Tier = "blocking" | "ambient" | "routine";
 export interface Notification {
   id: string; workspaceId: string; tier: Tier;
@@ -25,7 +26,7 @@ function add(tier: Tier, workspaceId: string, title: string, body: string) {
 
   // Auto-dismiss for non-blocking tiers (spec §8 "ambient → toast 5-7s")
   if (tier !== "blocking") {
-    const delay = tier === "ambient" ? 6000 : 3000;
+    const delay = tier === "ambient" ? AMBIENT_DISMISS_MS : ROUTINE_DISMISS_MS;
     const t = setTimeout(() => {
       _timers.delete(id);
       markRead(id);

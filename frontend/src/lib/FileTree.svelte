@@ -1,8 +1,7 @@
 <!-- frontend/src/lib/FileTree.svelte -->
 <script lang="ts">
   import { listDir, revealInFiles, copyPath, type FsNode } from "./wails";
-
-  const MIME_TEXT = "application/x-perch-text";
+  import { MIME_TEXT } from "./constants";
 
   function handleDragStart(e: DragEvent, node: TreeNode) {
     if (!e.dataTransfer) return;
@@ -231,8 +230,8 @@
     background: var(--perch-bg);
     border: 1px solid var(--perch-border);
     border-radius: 6px;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
-    z-index: 250;
+    box-shadow: var(--perch-shadow-float);
+    z-index: var(--perch-z-context-menu);
     font-family: var(--perch-font-sans);
     font-size: var(--perch-fs-body);
   }

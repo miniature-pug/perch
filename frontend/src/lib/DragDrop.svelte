@@ -1,8 +1,7 @@
 <!-- frontend/src/lib/DragDrop.svelte -->
 <script lang="ts">
   import { writeToPty } from "./wails";
-
-  const MIME_TEXT = "application/x-perch-text";
+  import { MIME_TEXT } from "./constants";
 
   let {
     paneId,
@@ -85,7 +84,7 @@
   .drop-overlay {
     position: absolute;
     inset: 0;
-    z-index: 50;
+    z-index: var(--perch-z-drop-overlay);
     display: flex;
     align-items: center;
     justify-content: center;

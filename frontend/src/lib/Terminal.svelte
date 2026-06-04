@@ -3,6 +3,7 @@
   import { Terminal } from "@xterm/xterm";
   import { FitAddon }  from "@xterm/addon-fit";
   import { onPtyData, onPtyExit, writeToPty, resizePty } from "./wails";
+  import { TERMINAL_SCROLLBACK, PTY_MAX_DIM } from "./constants";
 
   let { paneId, cwd, onExit }: { paneId: string; cwd: string; onExit?: (code: number) => void } = $props();
 
@@ -57,10 +58,10 @@
   onMount(() => {
     term = new Terminal({
       convertEol: false,
-      scrollback: 10000,
+      scrollback: TERMINAL_SCROLLBACK,
       fontFamily: cssVar("--perch-font-mono", "monospace"),
-      fontSize:   13,
-      lineHeight: 1.5,
+      fontSize:   parseInt(cssVar("--perch-fs-shell", "13px"), 10),
+      lineHeight: parseFloat(cssVar("--perch-lh-shell", "1.5")),
       theme: buildXtermTheme(),
     });
     fit  = new FitAddon();
@@ -78,8 +79,8 @@
 
     obs = new ResizeObserver(() => {
       fit.fit();
-      const cols = Math.max(1, Math.min(65535, term.cols | 0));
-      const rows = Math.max(1, Math.min(65535, term.rows | 0));
+      const cols = Math.max(1, Math.min(PTY_MAX_DIM, term.cols | 0));
+      const rows = Math.max(1, Math.min(PTY_MAX_DIM, term.rows | 0));
       if (Number.isFinite(cols) && Number.isFinite(rows) && cols > 0 && rows > 0) {
         resizePty(paneId, cols, rows);
       }
