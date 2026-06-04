@@ -21,6 +21,8 @@ endif
 
 .PHONY: build install run gui-build gui-run test test-integration test-all coverage lint fmt vet tidy vendor verify vulncheck verify-all doctor clean cross
 
+# build: backend binary only — embeds the committed frontend/dist/index.html stub
+# (no frontend rebuild). For a full production artifact, use `make gui-build`.
 build:                ## build the binary into ./bin (vendored, reproducible); -tags production required for GUI
 	@mkdir -p $(BIN_DIR)
 	@go build -tags production -trimpath -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/$(BIN) ./cmd/perch

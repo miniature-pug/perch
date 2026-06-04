@@ -334,9 +334,8 @@ func TestPrintUsage_ShowsAttach(t *testing.T) {
 
 func TestWriteProjects(t *testing.T) {
 	proj := &model.Project{
-		Path:  "/repos/myrepo",
-		Name:  "myrepo",
-		IsGit: true,
+		Path: "/repos/myrepo",
+		Name: "myrepo",
 	}
 
 	tests := []struct {

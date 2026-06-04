@@ -3,6 +3,7 @@ package fs
 
 import (
 	"bufio"
+	"context"
 	"log"
 	"os"
 	"os/exec"
@@ -10,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/fsnotify/fsnotify"
@@ -18,9 +20,11 @@ import (
 // Node is one entry in a directory listing.
 // JSON tags are frozen — do not rename.
 type Node struct {
-	Name  string `json:"name"`
-	Path  string `json:"path"` // absolute
-	IsDir bool   `json:"isDir"`
+	Name      string `json:"name"`
+	Path      string `json:"path"` // absolute
+	IsDir     bool   `json:"isDir"`
+	Modified  bool   `json:"modified"`
+	Untracked bool   `json:"untracked"`
 }
 
 // ListDir returns the immediate children of absDir sorted dirs-first, then
@@ -58,7 +62,73 @@ func ListDir(absDir string, gitignoreAware bool) ([]Node, error) {
 
 	sort.Slice(dirs, func(i, j int) bool { return dirs[i].Name < dirs[j].Name })
 	sort.Slice(files, func(i, j int) bool { return files[i].Name < files[j].Name })
-	return append(dirs, files...), nil
+	result := append(dirs, files...)
+	enrichGitStatus(absDir, result)
+	return result, nil
+}
+
+// enrichGitStatus queries git status for absDir and marks each node's Modified
+// and Untracked fields accordingly. It is best-effort: any git failure leaves
+// both flags false and the listing is returned normally.
+func enrichGitStatus(absDir string, nodes []Node) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Determine the repo root. This also acts as the "is a git repo?" check.
+	rootCmd := exec.CommandContext(ctx, "git", "-C", absDir, "rev-parse", "--show-toplevel")
+	rootOut, err := rootCmd.Output()
+	if err != nil {
+		return // not a git repo or git not available
+	}
+	repoRoot := strings.TrimSpace(string(rootOut))
+
+	// Run git status --porcelain from the repo root so paths are always
+	// relative to repoRoot (no ambiguity about cwd vs repo root).
+	statusCmd := exec.CommandContext(ctx, "git", "-C", repoRoot, "status", "--porcelain")
+	statusOut, err := statusCmd.Output()
+	if err != nil {
+		return
+	}
+
+	// Build a set of relative paths that are modified or untracked.
+	type gitEntry struct{ modified, untracked bool }
+	entries := make(map[string]gitEntry)
+	sc := bufio.NewScanner(strings.NewReader(string(statusOut)))
+	for sc.Scan() {
+		line := sc.Text()
+		if len(line) < 4 {
+			continue
+		}
+		xy := line[0:2]   // two status chars
+		rel := line[3:]   // path relative to repo root
+		e := entries[rel] // zero-value if not present
+		if xy == "??" {
+			e.untracked = true
+		} else {
+			e.modified = true
+		}
+		entries[rel] = e
+	}
+
+	// Match each node against the porcelain entries.
+	for i := range nodes {
+		rel, err := filepath.Rel(repoRoot, nodes[i].Path)
+		if err != nil {
+			continue
+		}
+		if e, ok := entries[rel]; ok {
+			nodes[i].Modified = e.modified
+			nodes[i].Untracked = e.untracked
+			continue
+		}
+		// Untracked directories are emitted with a trailing slash in porcelain.
+		if nodes[i].IsDir {
+			if e, ok := entries[rel+"/"]; ok {
+				nodes[i].Modified = e.modified
+				nodes[i].Untracked = e.untracked
+			}
+		}
+	}
 }
 
 // loadGitignorePatterns reads pattern lines from a .gitignore file.

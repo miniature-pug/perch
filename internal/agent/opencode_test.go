@@ -172,33 +172,6 @@ func TestListSessions_EmptyOutput(t *testing.T) {
 	}
 }
 
-// ── GroupByDirectory ──────────────────────────────────────────────────────────
-
-func TestGroupByDirectory(t *testing.T) {
-	raw := mustRead(t, "testdata/opencode/session-list.json")
-	sessions, err := parseSessionList(raw)
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-
-	groups := GroupByDirectory(sessions)
-	if len(groups) != 2 {
-		t.Fatalf("got %d groups, want 2", len(groups))
-	}
-	if got := len(groups["/home/user/projA"]); got != 2 {
-		t.Errorf("projA group = %d sessions, want 2", got)
-	}
-	if got := len(groups["/home/user/projB"]); got != 1 {
-		t.Errorf("projB group = %d sessions, want 1", got)
-	}
-}
-
-func TestGroupByDirectory_Empty(t *testing.T) {
-	if got := GroupByDirectory(nil); len(got) != 0 {
-		t.Errorf("GroupByDirectory(nil) = %v, want empty", got)
-	}
-}
-
 // ── arg builders, Detect, Name ─────────────────────────────────────────────────
 
 func TestOpencode_ResumeArgs(t *testing.T) {

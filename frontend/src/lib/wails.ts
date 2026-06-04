@@ -18,7 +18,7 @@ export interface Hunk {
   file: string; index: number; header: string;
   oldStart: number; oldLines: number; newStart: number; newLines: number; lines: HunkLine[];
 }
-export interface FsNode { name: string; path: string; isDir: boolean; }
+export interface FsNode { name: string; path: string; isDir: boolean; modified?: boolean; untracked?: boolean; }
 export interface AlwaysRule { agent: string; tool: string; pattern: string; hash?: string; }
 export interface AppSettings {
   theme: string; density: string; font: string; dnd: boolean; alwaysRules: AlwaysRule[];
@@ -82,7 +82,6 @@ export const hunks       = (worktree: string, file: string)                     
 export const stageHunk   = (worktree: string, file: string, index: number)       => app().StageHunk(worktree, file, index);
 export const discardHunk = (worktree: string, file: string, index: number)       => app().DiscardHunk(worktree, file, index);
 export const branches      = (repo: string)                                       => app().Branches(repo);
-export const worktrees     = (repo: string)                                       => app().Worktrees(repo);
 export const discoverRepos = ()                                                   => app().DiscoverRepos();
 // FS
 export const listDir      = (absDir: string)                                      => app().ListDir(absDir);

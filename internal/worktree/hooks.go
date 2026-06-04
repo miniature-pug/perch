@@ -49,9 +49,9 @@ func buildScript(cmd string, env HookEnv) string {
 }
 
 // shellQuote wraps s in POSIX single quotes. Embedded single quotes are escaped
-// using the standard POSIX sequence (end quote, literal ', reopen quote) —
-// identical to the approach in tmux/cleanup.go, duplicated here to keep the
-// packages independent (do not import across packages for an unexported helper).
+// using the standard POSIX sequence (end quote, literal ', reopen quote).
+// Duplicated here to keep the packages independent (do not import across
+// packages for an unexported helper).
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

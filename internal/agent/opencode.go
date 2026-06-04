@@ -228,13 +228,3 @@ func parseSessionList(raw []byte) ([]model.Session, error) {
 	return sessions, nil
 }
 
-// GroupByDirectory buckets sessions by their bound directory. opencode's session
-// list is project-scoped and a project can span sub-directories, so directory is
-// the join key perch uses to attach a session to a working tree.
-func GroupByDirectory(sessions []model.Session) map[string][]model.Session {
-	out := make(map[string][]model.Session)
-	for _, s := range sessions {
-		out[s.Directory] = append(out[s.Directory], s)
-	}
-	return out
-}

@@ -2,16 +2,19 @@
 import { render, screen, waitFor } from "@testing-library/svelte";
 import { fireEvent } from "@testing-library/svelte";
 import { vi } from "vitest";
+import type { FsNode } from "./wails";
+
+const mockListDir = vi.fn(async (path: string): Promise<FsNode[]> => {
+  if (path === "/wt") return [
+    { name: "src",       path: "/wt/src",         isDir: true  },
+    { name: "README.md", path: "/wt/README.md",   isDir: false },
+  ];
+  if (path === "/wt/src") return [{ name: "main.go", path: "/wt/src/main.go", isDir: false }];
+  return [];
+});
 
 vi.mock("./wails", () => ({
-  listDir: vi.fn(async (path: string) => {
-    if (path === "/wt") return [
-      { name: "src",       path: "/wt/src",         isDir: true  },
-      { name: "README.md", path: "/wt/README.md",   isDir: false },
-    ];
-    if (path === "/wt/src") return [{ name: "main.go", path: "/wt/src/main.go", isDir: false }];
-    return [];
-  }),
+  listDir: mockListDir,
   revealInFiles: vi.fn(async () => {}),
   copyPath: vi.fn((p: string) => p),
 }));
@@ -82,6 +85,36 @@ test("context menu Escape closes the menu", async () => {
   const openItem = screen.getByRole("menuitem", { name: /open/i });
   await fireEvent.keyDown(openItem, { key: "Escape" });
   expect(screen.queryByRole("menuitem", { name: /open/i })).toBeNull();
+});
+
+// --- Behavior: git-status coloring classes ---
+
+test("modified node gets is-modified class on its button", async () => {
+  const { default: FileTree } = await import("./FileTree.svelte");
+  mockListDir.mockResolvedValueOnce([
+    { name: "dirty.ts", path: "/wt/dirty.ts", isDir: false, modified: true, untracked: false },
+    { name: "clean.ts", path: "/wt/clean.ts", isDir: false, modified: false, untracked: false },
+  ]);
+  render(FileTree, { props: { root: "/wt", onOpen: () => {} } });
+  await waitFor(() => screen.getByText("dirty.ts"));
+  const dirtyBtn = screen.getByRole("button", { name: /dirty\.ts/ });
+  const cleanBtn = screen.getByRole("button", { name: /clean\.ts/ });
+  expect(dirtyBtn.classList.contains("is-modified")).toBe(true);
+  expect(cleanBtn.classList.contains("is-modified")).toBe(false);
+});
+
+test("untracked node gets is-untracked class on its button", async () => {
+  const { default: FileTree } = await import("./FileTree.svelte");
+  mockListDir.mockResolvedValueOnce([
+    { name: "new.ts", path: "/wt/new.ts", isDir: false, modified: false, untracked: true },
+    { name: "old.ts", path: "/wt/old.ts", isDir: false, modified: false, untracked: false },
+  ]);
+  render(FileTree, { props: { root: "/wt", onOpen: () => {} } });
+  await waitFor(() => screen.getByText("new.ts"));
+  const newBtn = screen.getByRole("button", { name: /new\.ts/ });
+  const oldBtn = screen.getByRole("button", { name: /old\.ts/ });
+  expect(newBtn.classList.contains("is-untracked")).toBe(true);
+  expect(oldBtn.classList.contains("is-untracked")).toBe(false);
 });
 
 // --- Behavior 2: file node dragstart sets @mention payload ---

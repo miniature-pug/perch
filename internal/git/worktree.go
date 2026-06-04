@@ -34,8 +34,8 @@ var ErrWorktreeDirty = errors.New("git: worktree has modified/untracked files or
 // consecutive '-' runs to one, trim leading/trailing '-', lowercase the result.
 // An empty or fully-stripped result becomes "worktree".
 //
-// This slugifier is distinct from the tmux name sanitizer — do not unify them;
-// they serve different character-set constraints.
+// This slugifier targets git-branch → filesystem constraints. Do not conflate
+// it with any pane-title sanitizer, which has different allowed character sets.
 func SlugifyBranch(branch string) string {
 	var b strings.Builder
 	prevDash := false

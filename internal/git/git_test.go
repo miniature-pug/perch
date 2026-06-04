@@ -193,7 +193,7 @@ func TestToTrees_BareSkipped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	proj := &model.Project{Path: "/repos/bare-repo", Name: "bare-repo", IsGit: true}
+	proj := &model.Project{Path: "/repos/bare-repo", Name: "bare-repo"}
 	trees := ToTrees(wts, proj)
 	if len(trees) != 0 {
 		t.Errorf("ToTrees must skip bare entries, got %d trees", len(trees))
@@ -419,7 +419,7 @@ func TestToTrees_Multi(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	proj := &model.Project{Path: "/repos/main-repo", Name: "main-repo", IsGit: true}
+	proj := &model.Project{Path: "/repos/main-repo", Name: "main-repo"}
 	trees := ToTrees(wts, proj)
 
 	if len(trees) != 3 {
@@ -462,7 +462,7 @@ func TestToTrees_BareAndNonBare(t *testing.T) {
 		{Path: "/repos/main", Branch: "main"},
 		{Path: "/repos/linked", Branch: "linked"},
 	}
-	proj := &model.Project{Path: "/repos/bare", Name: "bare", IsGit: true}
+	proj := &model.Project{Path: "/repos/bare", Name: "bare"}
 	trees := ToTrees(wts, proj)
 
 	if len(trees) != 2 {

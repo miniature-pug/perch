@@ -1,27 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { changedLinesFromHunks, gutterChangesFromHunks } from "./gutter";
+import { gutterChangesFromHunks } from "./gutter";
 import type { Hunk } from "./wails";
 
 function hunk(p: Partial<Hunk>): Hunk {
   return { file: "f", index: 0, header: "", oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: [], ...p };
 }
-
-describe("changedLinesFromHunks", () => {
-  it("returns empty set for no hunks", () => {
-    expect(changedLinesFromHunks([]).size).toBe(0);
-  });
-  it("marks each line in a hunk's new range", () => {
-    const s = changedLinesFromHunks([hunk({ newStart: 1, newLines: 2 })]);
-    expect([...s].sort((a, b) => a - b)).toEqual([1, 2]);
-  });
-  it("unions lines across multiple hunks", () => {
-    const s = changedLinesFromHunks([hunk({ newStart: 1, newLines: 1 }), hunk({ newStart: 10, newLines: 3 })]);
-    expect([...s].sort((a, b) => a - b)).toEqual([1, 10, 11, 12]);
-  });
-  it("contributes no lines for a pure deletion (newLines 0)", () => {
-    expect(changedLinesFromHunks([hunk({ newStart: 5, newLines: 0 })]).size).toBe(0);
-  });
-});
 
 describe("gutterChangesFromHunks", () => {
   it("returns empty sets for no hunks", () => {
@@ -87,15 +70,5 @@ describe("gutterChangesFromHunks", () => {
     const { changed, deleted } = gutterChangesFromHunks([h]);
     expect([...changed].sort((a, b) => a - b)).toEqual([10, 11, 12]);
     expect(deleted.size).toBe(0);
-  });
-
-  it("backward-compat: changedLinesFromHunks uses range metadata, agrees with gutterChangesFromHunks on pure-add hunks", () => {
-    // When all lines are "add", both functions should mark the same set
-    const h = hunk({ newStart: 2, newLines: 2, lines: [{ kind: "add", text: "+x" }, { kind: "add", text: "+y" }] });
-    const compat = changedLinesFromHunks([h]);
-    const { changed } = gutterChangesFromHunks([h]);
-    // Both should have lines 2 and 3
-    expect([...compat].sort((a, b) => a - b)).toEqual([2, 3]);
-    expect([...changed].sort((a, b) => a - b)).toEqual([2, 3]);
   });
 });

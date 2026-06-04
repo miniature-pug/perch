@@ -63,9 +63,8 @@ func Projects(
 
 		pt := &ProjectTrees{
 			Project: model.Project{
-				Path:  main.Path,
-				Name:  filepath.Base(main.Path),
-				IsGit: true,
+				Path: main.Path,
+				Name: filepath.Base(main.Path),
 			},
 		}
 		// Pass &pt.Project so every Tree.Project pointer is stable (points into

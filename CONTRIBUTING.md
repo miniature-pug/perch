@@ -7,7 +7,7 @@
 | Go directive | `1.25.0` (see `go.mod`) |
 | Go toolchain | `go1.26.4` (see `go.mod` `toolchain` directive) |
 | git | any recent version (worktree + diff operations) |
-| Node.js | `v22.x` (for building the Svelte frontend; checked by `node --version`) |
+| Node.js | `22.22.3` (pinned in `.tool-versions`; for building the Svelte frontend) |
 | npm | bundled with Node v22 |
 
 **GUI system libraries (Linux only)** — install once on a fresh machine:

@@ -2,8 +2,7 @@
 <script lang="ts">
   import { writeToPty } from "./wails";
 
-  export const MIME_TEXT    = "application/x-perch-text";
-  export const MIME_SESSION = "application/x-perch-session";
+  const MIME_TEXT = "application/x-perch-text";
 
   let {
     paneId,

@@ -61,6 +61,23 @@ export const WORKSPACE_FIXTURE: MockWorkspace = {
 };
 
 /**
+ * Workspace fixture representing a workspace with no active monitor (zero-value caps).
+ * Production ListWorkspaces returns all-false caps when no monitor is running; this
+ * fixture exercises the caps-disabled UI path (approval badge hidden, etc.).
+ */
+export const WORKSPACE_FIXTURE_NO_CAPS: MockWorkspace = {
+  id: "ws-2",
+  worktreePath: "/home/user/project-no-caps",
+  agent: "claude",
+  title: "test session (no monitor)",
+  branch: "main",
+  state: "idle",
+  caps: { approvals: false, attention: false, tokens: false },
+  paneId: "pane-ws-2",
+  lastActive: new Date().toISOString(),
+};
+
+/**
  * Produce the init-script function source.
  *
  * addInitScript requires either a path-to-file or a plain function with NO

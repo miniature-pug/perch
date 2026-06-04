@@ -24,7 +24,7 @@ import (
 type Adapter interface {
 	// Name returns the canonical tool identifier — "claude" or "opencode" —
 	// matching the model.Tool constants. Used in log messages, session records,
-	// and tmux window metadata.
+	// and window pane labels.
 	Name() string
 
 	// Detect reports whether the tool's CLI binary can be resolved on PATH.

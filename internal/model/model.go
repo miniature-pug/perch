@@ -2,10 +2,9 @@
 // All types are plain data structs; no I/O or shell-outs occur here.
 package model
 
-// Tool identifies which AI coding agent runs in a window.
+// Tool identifies which AI coding agent runs in a pane.
 // Using a named type (not a bare string) means "claude"/"opencode" are defined
-// in exactly one place — preventing drift across config, state, adapters, and
-// tmux options.
+// in exactly one place — preventing drift across config, state, and adapters.
 type Tool string
 
 const (
@@ -26,9 +25,6 @@ type Project struct {
 	Path string
 	// Name is the display name (typically the repository's base directory name).
 	Name string
-	// IsGit is false only for a non-git directory opened via the open-anywhere
-	// escape hatch; all normally discovered projects are git repos.
-	IsGit bool
 }
 
 // Tree is a working directory that perch can run a session in.

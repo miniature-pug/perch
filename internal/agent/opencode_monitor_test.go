@@ -85,6 +85,9 @@ func TestOpencodeMonitorSSEParser(t *testing.T) {
 	if got[1].Kind != "usage" || got[1].Tokens != 140 {
 		t.Errorf("ev[1]: want usage tokens=140 (input+output), got %+v", got[1])
 	}
+	if got[1].Cost != 0.0012 {
+		t.Errorf("ev[1].Cost = %v, want 0.0012 (from fixture cost field)", got[1].Cost)
+	}
 	if got[2].State != agent.StateAwaitingApproval || got[2].Approval == nil {
 		t.Fatalf("ev[2]: want awaiting-approval, got %+v", got[2])
 	}

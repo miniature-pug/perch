@@ -76,7 +76,14 @@
     });
     term.onData((d) => writeToPty(paneId, Array.from(new TextEncoder().encode(d))));
 
-    obs = new ResizeObserver(() => { fit.fit(); resizePty(paneId, term.cols, term.rows); });
+    obs = new ResizeObserver(() => {
+      fit.fit();
+      const cols = Math.max(1, Math.min(65535, term.cols | 0));
+      const rows = Math.max(1, Math.min(65535, term.rows | 0));
+      if (Number.isFinite(cols) && Number.isFinite(rows) && cols > 0 && rows > 0) {
+        resizePty(paneId, cols, rows);
+      }
+    });
     obs.observe(host);
 
     // Re-apply theme whenever the active theme changes (data-theme attribute on <html>)

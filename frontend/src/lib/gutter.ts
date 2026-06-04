@@ -1,24 +1,6 @@
 import type { Hunk } from "./wails";
 
 /**
- * changedLinesFromHunks returns the set of 1-based line numbers in the NEW
- * file that lie within any hunk's added range. Drives the editor git gutter.
- *
- * Uses the hunk's range metadata (newStart / newLines) directly — same as the
- * original implementation — so it works even when the lines array is absent/empty.
- *
- * Kept for backward compatibility. Use gutterChangesFromHunks for add/delete
- * distinction based on per-line kind metadata.
- */
-export function changedLinesFromHunks(hunkList: Hunk[]): Set<number> {
-  const changed = new Set<number>();
-  for (const h of hunkList) {
-    for (let i = h.newStart; i < h.newStart + h.newLines; i++) changed.add(i);
-  }
-  return changed;
-}
-
-/**
  * GutterChanges distinguishes added/changed lines from deleted lines.
  *
  * changed: 1-based line numbers in the new file that contain additions or

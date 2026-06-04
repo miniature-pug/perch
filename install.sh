@@ -210,72 +210,7 @@ fi
 export PATH="/usr/local/go/bin:$PATH"
 
 # ---------------------------------------------------------------------------
-# Step 2: tmux
-# ---------------------------------------------------------------------------
-TMUX_MIN_MAJOR=3
-TMUX_MIN_MINOR=2
-
-tmux_meets_minimum() {
-  if ! command -v tmux >/dev/null 2>&1; then
-    return 1
-  fi
-  _ver="$(tmux -V | awk '{print $2}')"
-  _major="$(printf '%s' "$_ver" | cut -d. -f1)"
-  # Strip trailing letters (e.g. "5a" -> "5") before numeric comparison.
-  _minor="$(printf '%s' "$_ver" | cut -d. -f2 | sed 's/[^0-9].*//')"
-  [ "$_major" -gt "$TMUX_MIN_MAJOR" ] || \
-    { [ "$_major" -eq "$TMUX_MIN_MAJOR" ] && [ "$_minor" -ge "$TMUX_MIN_MINOR" ]; }
-}
-
-if tmux_meets_minimum; then
-  printf '[skip] tmux %s already installed\n' "$(tmux -V | awk '{print $2}')"
-else
-  if command -v tmux >/dev/null 2>&1; then
-    printf '[install] tmux (upgrading from %s)\n' "$(tmux -V | awk '{print $2}')"
-  else
-    printf '[install] tmux\n'
-  fi
-
-  if [ -n "$PKG_MGR" ]; then
-    pkg_install tmux
-    if tmux_meets_minimum; then
-      printf '[ok]    tmux %s installed\n' "$(tmux -V | awk '{print $2}')"
-    else
-      printf '[warn]  tmux installed but version is below minimum %d.%d — check your package manager\n' \
-        "$TMUX_MIN_MAJOR" "$TMUX_MIN_MINOR"
-    fi
-  else
-    printf '[warn]  no package manager found; please install tmux >= %d.%d manually\n' \
-      "$TMUX_MIN_MAJOR" "$TMUX_MIN_MINOR"
-  fi
-fi
-
-# Pin-drift check: warn if installed tmux is at/above minimum but below the
-# pinned version in .tool-versions (§21.1/§21.2 single-source-of-truth).
-# Read the pin — never hardcode a version here.
-TMUX_PINNED="$(tool_version tmux)"
-if command -v tmux >/dev/null 2>&1 && [ -n "$TMUX_PINNED" ]; then
-  _inst_ver="$(tmux -V | awk '{print $2}')"
-  _inst_major="$(printf '%s' "$_inst_ver" | cut -d. -f1)"
-  _inst_minor="$(printf '%s' "$_inst_ver" | cut -d. -f2 | sed 's/[^0-9].*//')"
-  _pin_major="$(printf '%s' "$TMUX_PINNED" | cut -d. -f1)"
-  _pin_minor="$(printf '%s' "$TMUX_PINNED" | cut -d. -f2 | sed 's/[^0-9].*//')"
-  # Only warn when installed is below the pin (and at/above min, so still usable).
-  _below_pin=0
-  if [ "$_inst_major" -lt "$_pin_major" ]; then
-    _below_pin=1
-  elif [ "$_inst_major" -eq "$_pin_major" ] && [ "$_inst_minor" -lt "$_pin_minor" ]; then
-    _below_pin=1
-  fi
-  if [ "$_below_pin" = "1" ] && tmux_meets_minimum; then
-    printf '[warn]  tmux %s installed; .tool-versions pins %s\n' \
-      "$_inst_ver" "$TMUX_PINNED"
-    printf '        Run '"'"'tmux update'"'"' or upgrade via your package manager to match.\n'
-  fi
-fi
-
-# ---------------------------------------------------------------------------
-# Step 3: git (non-fatal install check; exit 1 if absent or too old)
+# Step 2: git (non-fatal install check; exit 1 if absent or too old)
 # ---------------------------------------------------------------------------
 GIT_MIN_MAJOR=2
 GIT_MIN_MINOR=20
@@ -314,7 +249,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 4: claude
+# Step 3: claude
 # ---------------------------------------------------------------------------
 if [ "$SKIP_AGENTS" = "1" ]; then
   printf '[skip] claude (--skip-agents)\n'
@@ -347,7 +282,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 5: opencode
+# Step 4: opencode
 # ---------------------------------------------------------------------------
 if [ "$SKIP_AGENTS" = "1" ]; then
   printf '[skip] opencode (--skip-agents)\n'
@@ -393,7 +328,7 @@ if [ -z "$INSTALL_PREFIX" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Step 6: build perch
+# Step 5: build perch
 # ---------------------------------------------------------------------------
 if [ "$SKIP_BUILD" = "1" ]; then
   printf '[skip] perch build (--skip-build)\n'
@@ -407,7 +342,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 7: perch setup
+# Step 6: perch setup
 # ---------------------------------------------------------------------------
 if [ "$SKIP_SETUP" = "1" ]; then
   printf '[skip] perch setup (--skip-setup)\n'

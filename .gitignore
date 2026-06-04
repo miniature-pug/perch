@@ -43,6 +43,10 @@ go.work.sum
 # .vscode/
 
 frontend/node_modules/
+# frontend/dist/ is ignored as a whole — Vite build output is not committed.
+# Exception: frontend/dist/index.html is intentionally tracked as the go:embed
+# stub that Wails embeds into the production binary. To commit the stub, use
+# `git add -f frontend/dist/index.html` (or it stays tracked once committed).
 frontend/dist/
 frontend/wailsjs/
 build/bin/
