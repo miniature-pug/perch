@@ -250,6 +250,30 @@ func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
 		}
 		_ = json.Unmarshal(env.Properties, &p)
 		ev = Event{Kind: "state", State: StateRunning, SessionID: p.SessionID}
+	case "session.status":
+		// The session-level status is the authoritative idle/running signal.
+		// step.ended fires per-step (a turn has many steps) so it must NOT drive
+		// idle; session.status does. status.type ∈ {idle, busy, retry}
+		// (v1.15.12 session/status.ts). retry is transient → no transition.
+		var p struct {
+			Status struct {
+				Type string `json:"type"`
+			} `json:"status"`
+		}
+		if json.Unmarshal(env.Properties, &p) != nil {
+			return
+		}
+		switch p.Status.Type {
+		case "idle":
+			ev = Event{Kind: "state", State: StateIdle}
+		case "busy":
+			ev = Event{Kind: "state", State: StateRunning}
+		default:
+			return
+		}
+	case "session.idle":
+		// Deprecated alias of session.status{type:idle}; handle both for safety.
+		ev = Event{Kind: "state", State: StateIdle}
 	case "session.next.step.ended":
 		var p struct {
 			Cost   float64 `json:"cost"`

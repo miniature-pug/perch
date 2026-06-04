@@ -329,6 +329,49 @@ func TestOpencodeMonitorPrepare_LaunchIncantationRunsInShell(t *testing.T) {
 	t.Errorf("launch incantation never reached `opencode attach` with the server URL; pty output: %q", got)
 }
 
+// TestOpencodeMonitorSSE_SessionStatusDrivesIdle verifies the session-level
+// status event drives running/idle (step.ended must NOT, since a turn has many
+// steps): status.type busy→running, idle→idle (v1.15.12 session/status.ts).
+func TestOpencodeMonitorSSE_SessionStatusDrivesIdle(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	fixture := `data: {"type":"session.status","properties":{"sessionID":"s","status":{"type":"busy"}}}` + "\n\n" +
+		`data: {"type":"session.status","properties":{"sessionID":"s","status":{"type":"idle"}}}` + "\n\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/event" {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte(fixture))
+		} else {
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	om := agent.NewOpencodeMonitorWithServer(agent.NewOpencode(), srv.URL, "pw")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	om.Start(ctx)
+
+	deadline := time.After(3 * time.Second)
+	var got []agent.Event
+	for len(got) < 2 {
+		select {
+		case ev := <-om.Events():
+			got = append(got, ev)
+		case <-deadline:
+			t.Fatalf("timeout after %d events", len(got))
+		}
+	}
+	if got[0].State != agent.StateRunning {
+		t.Errorf("busy → want running, got %+v", got[0])
+	}
+	if got[1].State != agent.StateIdle {
+		t.Errorf("idle → want idle, got %+v", got[1])
+	}
+	if om.CurrentState() != agent.StateIdle {
+		t.Errorf("CurrentState = %q, want idle", om.CurrentState())
+	}
+}
+
 // TestOpencodeMonitorSSE_SessionIDCapture verifies sessionID capture from the
 // real envelope (properties.sessionID), which is what lets app.go persist
 // LastSessionID for resume.
