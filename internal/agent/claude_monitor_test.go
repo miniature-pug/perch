@@ -9,11 +9,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/Miniature-Pug/perch/internal/agent"
 	"github.com/Miniature-Pug/perch/internal/hooklistener"
+	"github.com/Miniature-Pug/perch/internal/pty"
 )
 
 // newMonitorWithTestListener creates a ClaudeMonitor backed by a real in-process
@@ -204,4 +206,83 @@ func TestClaudeMonitorEventTranslation(t *testing.T) {
 	if m.CurrentState() != agent.StateIdle {
 		t.Errorf("CurrentState after Stop = %q, want %q", m.CurrentState(), agent.StateIdle)
 	}
+}
+
+// TestClaudeMonitorPrepare_LaunchCommandSubmitsToShell is the falsifying guard
+// for the core agent-launch loop. The string Prepare() returns is written
+// VERBATIM into the pane's pty (app.OpenWorkspace → pty.Bridge.Write, a raw
+// passthrough), and a shell only runs a line once it is terminated by a
+// newline. Earlier code returned the launch command without a trailing "\n",
+// so the agent never started — a bug invisible to every mock-bounded test
+// because they assert the returned string, not that a shell executes it.
+//
+// This test exercises Prepare()'s REAL output through a REAL /bin/sh: a fake
+// `claude` on PATH prints a sentinel, and we assert the command actually runs.
+// It regresses the instant the submitting newline is dropped from Prepare().
+func TestClaudeMonitorPrepare_LaunchCommandSubmitsToShell(t *testing.T) {
+	m, _, cleanup := newMonitorWithTestListener(t)
+	defer cleanup()
+
+	// Fake `claude` on PATH that prints a sentinel. Prepare()'s command name is
+	// the literal "claude" (Adapter.Name()), so a real shell resolving and
+	// running it via PATH is exactly the production path minus the real binary.
+	binDir := t.TempDir()
+	const sentinel = "PERCH_SUBMIT_OK"
+	script := "#!/bin/sh\nprintf '" + sentinel + "\\n'\n"
+	if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake claude: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	cwd := t.TempDir()
+	cmd, err := m.Prepare(context.Background(), "ws-submit", cwd, "", "")
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if !strings.HasSuffix(cmd, "\n") {
+		t.Fatalf("Prepare() command %q lacks the trailing newline that submits it to the shell", cmd)
+	}
+
+	var mu sync.Mutex
+	var out []byte
+	emit := func(event string, data ...any) {
+		if event != "data" || len(data) != 1 {
+			return
+		}
+		if chunk, ok := data[0].([]int); ok {
+			mu.Lock()
+			for _, v := range chunk {
+				out = append(out, byte(v))
+			}
+			mu.Unlock()
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	br, err := pty.Spawn(ctx, cwd, []string{"/bin/sh"}, "data", "exit", emit, 80, 24)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	defer func() { _ = br.Close() }()
+
+	if _, err := br.Write([]byte(cmd)); err != nil {
+		t.Fatalf("Write launch command: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		seen := strings.Contains(string(out), sentinel)
+		mu.Unlock()
+		if seen {
+			return // command executed: the launch loop's real contract holds
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	mu.Lock()
+	got := string(out)
+	mu.Unlock()
+	t.Errorf("launch command never executed in the shell: sentinel %q absent from pty output %q "+
+		"(command written but not submitted — missing trailing newline?)", sentinel, got)
 }

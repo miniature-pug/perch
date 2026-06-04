@@ -180,7 +180,11 @@ func (m *ClaudeMonitor) Prepare(ctx context.Context, workspaceID, cwd, resumeID,
 		// Fresh start: thread model through NewOpts so --model <m> is emitted.
 		args = m.adapter.NewArgs(NewOpts{Model: model})
 	}
-	return strings.Join(append([]string{m.adapter.Name()}, args...), " "), nil
+	// The returned command is written verbatim into the pane's pty (see
+	// pty.Bridge.Write — raw passthrough, no transformation). The trailing
+	// newline is what actually submits it to the shell; without it the launch
+	// command sits on the prompt unexecuted and the agent never starts.
+	return strings.Join(append([]string{m.adapter.Name()}, args...), " ") + "\n", nil
 }
 
 func (m *ClaudeMonitor) writeHooks(cwd string) error {
