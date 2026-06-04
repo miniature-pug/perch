@@ -257,25 +257,23 @@ See `docs/diagrams/worktree-lifecycle.mmd` for the full flowchart.
 
 ### Create
 
-1. Preflight checks (branch name validation via `git.ValidRef`).
-2. **Trust gate** — if `.perch.toml` defines `post_create` hooks, a modal
-   prompts `(a) trust always / (o) once / (d) deny`.
-3. `git worktree add` in the configured `worktree_dir`.
-4. File seeding — `[files].copy` and `[files].symlink` entries copied/linked
-   into the new worktree.
-5. `post_create` hooks executed (trust-gated, TOCTOU re-hash before exec).
-6. Workspace recorded in `workspaces.json`. When opened, a direct pty is
+1. Preflight checks: `repoPath` resolved under a configured root, branch name
+   validated via `git.ValidRef`, agent name known (`claude` / `opencode`).
+2. The linked-worktree path is derived from the repository and the slugified
+   branch, then re-checked to confirm it stays under the configured roots.
+3. `git worktree add` (an already-existing branch is tolerated).
+4. Workspace recorded in `workspaces.json`. When opened, a direct pty is
    spawned and the agent's Monitor is started.
 
 ### Remove
 
-1. Confirm modal.
-2. `pre_remove` hooks executed (trust-gated, TOCTOU re-hash before exec).
-3. The pty bridge and Monitor are torn down (Monitor `Teardown` removes the
+1. Confirm modal, then a deferred removal with an undo window.
+2. The pty bridge and Monitor are torn down (Monitor `Teardown` removes the
    per-workspace hook entries from `.claude/settings.json` and closes the
    listener).
-4. `git worktree remove` (force if the worktree is dirty).
-5. The workspace record is removed from `workspaces.json`.
+3. The workspace record is removed from `workspaces.json`. The worktree
+   directory is **left on disk** — so the removal can be undone and the agent's
+   conversation history survives.
 
 ---
 
@@ -308,18 +306,13 @@ Hardening details:
 
 This is the entire production local network surface.
 
-### Trust (TOFU on `.perch.toml`)
+### Always-allow approval rules
 
-Opening a repo whose `.perch.toml` defines shell hooks (`post_create` or
-`pre_remove`) triggers a trust prompt:
-
-- `(a)` trust always — approves this config path + content hash permanently.
-- `(o)` once — runs hooks this time, does not persist the approval.
-- `(d)` deny — hooks are skipped; the worktree operation continues without them.
-
-Approvals are keyed on the **resolved config path** and the **SHA-256 hash of
-the file's bytes**. Before each hook execution, perch **re-hashes the file** and
-compares it to the approved hash (TOCTOU guard). A mismatch aborts the hooks.
+`Always` on an approval persists an `AlwaysRule {agent, tool, pattern}` in
+`settings.json`. On a later request, perch auto-approves only when the agent,
+tool, and tool **input match exactly** (byte-for-byte — never a glob), so a rule
+can never grant more than the request the user approved. Rules are listed and
+revocable in Settings; a security caveat is surfaced there.
 
 ### Global-only agent binary boundary
 

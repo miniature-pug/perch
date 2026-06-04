@@ -178,11 +178,15 @@ cockpit degrades rather than showing dead controls.
 The GUI is **mouse-first**: everything is clickable. A vim-style **modal**
 keyboard layer accelerates power use but is never required.
 
-| Mode | Entered by | What it does |
-|------|-----------|--------------|
-| **NORMAL** | default / `Esc` | Navigation and command keys; keystrokes drive the UI, not the pty |
-| **TERMINAL** | `i` | All keys pass straight to the focused pane's pty |
-| **COMMAND** | `:` | Command palette / command line |
+| Mode | Enter | Leave | What it does |
+|------|-------|-------|--------------|
+| **NORMAL** | default; `Ctrl-\ Ctrl-n` from TERMINAL; click chrome | — | Navigation/command keys drive the UI, not the pty: `j`/`k` move sessions, `1`/`2`/`3` switch Agent/Code/Diff, `\` splits the stage, `/` filters sessions, `⏎` opens the selected session |
+| **TERMINAL** | `i`; click a pane | `Ctrl-\ Ctrl-n`; click chrome | All keys pass straight to the focused pane's pty |
+| **COMMAND** | `:` or `⌘`/`Ctrl-K` | `Esc`; run a command | Command palette / command line |
+
+`Esc` leaves COMMAND mode — it does **not** leave TERMINAL. Exit a terminal with
+the `Ctrl-\ Ctrl-n` chord (or click any chrome). The current mode is always shown
+in the status line.
 
 ---
 
@@ -193,11 +197,10 @@ The workspace registry is persisted at `~/.config/perch/workspaces.json`
 worktree path, agent, branch, title, and last session id. Settings and saved
 layout live alongside it (`settings.json`, `layout.json`).
 
-Per-project `.perch.toml` (walked up from the launch directory to the nearest
-`.git` boundary) configures the base branch, worktree directory, default agent,
-lifecycle hooks, and file seeding for new worktrees. Project config may only set
-a **relative** `worktree_dir`; absolute agent-binary paths come from the global
-config only.
+The global `~/.config/perch/config.toml` supplies the allowed project `roots`
+(with no config, the launch directory is the sole root) and the `[agents]`
+binary paths. Agent-binary paths are a **global-only** setting — see the
+security model below.
 
 ---
 
@@ -224,13 +227,6 @@ when the workspace closes.
 
 This is the entire production local network surface — one short-lived,
 loopback-only, token-gated listener per active Claude workspace.
-
-### Trust prompt for `.perch.toml` hooks
-
-When a repo's `.perch.toml` defines shell hooks (`post_create` or `pre_remove`)
-and perch needs to run them, it displays a trust modal: `(a)` trust always /
-`(o)` once / `(d)` deny. Approvals are keyed on the config path + content hash;
-the file is re-hashed immediately before execution to close the TOCTOU window.
 
 ### Global-only agent binary boundary
 

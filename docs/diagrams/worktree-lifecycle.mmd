@@ -1,63 +1,34 @@
 flowchart TD
     subgraph Create["CREATE path"]
-        w_start(["user creates worktree\n(GUI new-session action)"])
-        w_preflight["preflight:\ncheck existing mapping"]
-        w_mapping{"existing\nmapping?"}
-        w_picker["show new-session modal\n(worktree / run-here / run-main)"]
-        w_loadcfg["load config\n(.perch.toml + global config.toml)"]
-        w_validate["validate config"]
-        w_hooks_check{"post_create\nhooks present?"}
-        w_trust["TRUST GATE\nconsult trust.json\n(a) always / (o) once / (d) deny"]
-        w_trusted{"approved?"}
-        w_git_add["git worktree add\n(branch: perch/&lt;slug&gt;-&lt;uuid8&gt;)"]
-        w_seed["seed files\n(copy / symlink per config.Files)"]
-        w_post_create["run post_create hooks\n(TOCTOU re-hash guard)"]
+        w_start(["user creates a session\n(GUI New Session dialog)"])
+        w_pick["pick repo / branch / agent / model\n(repos discovered across configured roots)"]
+        w_validate["validate:\nrepoPath under a configured root,\nbranch via git.ValidRef,\nagent known (claude / opencode)"]
+        w_derive["derive linked-worktree path\n(repo + slugified branch),\nre-check it stays under roots"]
+        w_git_add["git worktree add\n(an existing branch is tolerated)"]
         w_state["record workspace\nin workspaces.json"]
         w_launch["open workspace:\nspawn direct pty + login shell,\nstart agent Monitor"]
 
-        w_start --> w_preflight
-        w_preflight --> w_mapping
-        w_mapping -->|"yes — resume"| w_launch
-        w_mapping -->|"no"| w_picker
-        w_picker --> w_loadcfg
-        w_loadcfg --> w_validate
-        w_validate --> w_hooks_check
-        w_hooks_check -->|"no hooks"| w_git_add
-        w_hooks_check -->|"yes"| w_trust
-        w_trust --> w_trusted
-        w_trusted -->|"denied"| w_git_add
-        w_trusted -->|"approved"| w_git_add
-        w_git_add --> w_seed
-        w_seed --> w_post_create
-        w_post_create --> w_state
+        w_start --> w_pick
+        w_pick --> w_validate
+        w_validate --> w_derive
+        w_derive --> w_git_add
+        w_git_add --> w_state
         w_state --> w_launch
     end
 
     subgraph Remove["REMOVE path"]
-        d_start(["user removes session\n(GUI kill action)"])
-        d_preflight["preflight:\ncheck session exists\nand is removable"]
-        d_confirm["show confirm modal"]
-        d_loadcfg2["load config"]
-        d_pre_check{"pre_remove\nhooks present?"}
-        d_trust2["TRUST GATE\nconsult trust.json\n(a) always / (o) once / (d) deny"]
-        d_trusted2{"approved?"}
-        d_pre_remove["run pre_remove hooks\n(TOCTOU re-hash guard)"]
+        d_start(["user removes a session\n(GUI remove action)"])
+        d_confirm["confirm modal,\nthen deferred removal\nwith an undo window"]
+        d_undo{"undo before\nthe window closes?"}
+        d_cancel["cancel: session restored,\nnothing torn down"]
         d_teardown["tear down pty Bridge + Monitor\n(Monitor.Teardown removes hook entries,\ncloses hooklistener)"]
-        d_unlock["unlock git worktree\ninternal lock file"]
-        d_git_remove["git worktree remove\n(force if dirty)"]
         d_state2["remove workspace record\nfrom workspaces.json"]
+        d_disk["worktree directory left on disk\n(removal is undoable; agent history persists)"]
 
-        d_start --> d_preflight
-        d_preflight --> d_confirm
-        d_confirm --> d_loadcfg2
-        d_loadcfg2 --> d_pre_check
-        d_pre_check -->|"no hooks"| d_teardown
-        d_pre_check -->|"yes"| d_trust2
-        d_trust2 --> d_trusted2
-        d_trusted2 -->|"denied"| d_teardown
-        d_trusted2 -->|"approved"| d_pre_remove
-        d_pre_remove --> d_teardown
-        d_teardown --> d_unlock
-        d_unlock --> d_git_remove
-        d_git_remove --> d_state2
+        d_start --> d_confirm
+        d_confirm --> d_undo
+        d_undo -->|"yes"| d_cancel
+        d_undo -->|"no — window elapsed"| d_teardown
+        d_teardown --> d_state2
+        d_state2 --> d_disk
     end
