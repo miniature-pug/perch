@@ -148,17 +148,15 @@ See `docs/diagrams/architecture.mmd` for the component dependency graph.
 | `internal/agent` | `Monitor` seam + `Adapter` interface; concrete `ClaudeMonitor` (hook listener) and `OpencodeMonitor` (serve + SSE), plus per-tool adapters for `claude`/`opencode`. |
 | `internal/hooklistener` | Per-workspace loopback HTTP listener (`127.0.0.1:0`) protected by a random Bearer token; receives Claude hook POSTs and blocks `PreToolUse` until `Decide()`. |
 | `internal/registry` | Workspace registry persisted at `~/.config/perch/workspaces.json` (XDG). `Store` with `Load`/`List`/`Get`/`Upsert`/`Remove`. |
-| `internal/config` | Two-layer TOML config load: global `config.toml` overlaid by project `.perch.toml`. Houses the **agent-binary security boundary** (see [Security model](#security-model)). |
+| `internal/config` | Single-layer global TOML config load: reads `config.toml` and exposes `Config{Roots}`. No project overlay; unknown keys are silently dropped. |
 | `internal/discover` | Filesystem scanner: walks `roots` for `.git` entries up to `DefaultMaxDepth`, pruning `node_modules`/`vendor`/`.git`. |
 | `internal/doctor` | `perch doctor` health check — read-only, all OS calls injected for testability. |
 | `internal/git` | git subprocess wrappers behind `proc.Runner`; includes `ValidRef` for ref-name validation, worktree management, and diff/hunk staging. |
 | `internal/fs` | Worktree filesystem helpers: directory listing for the file tree and a change watcher. |
-| `internal/match` | `**`-aware glob matching backed by `doublestar`; used for blacklist filtering and `[[wildcard]]` agent assignment. |
 | `internal/model` | Shared domain vocabulary (`Tool`, …) — pure data, no I/O. |
 | `internal/notify` | Notification tiering (blocking / ambient) for agent lifecycle events. |
 | `internal/proc` | `Runner` interface + `ExecRunner` (production) + `FakeRunner` (tests). All shell-outs go through this seam. |
 | `internal/status` | Status-hook helper used by `perch setup` for agent state reporting. |
-| `internal/worktree` | File seeding (copy/symlink) and lifecycle-hook (`post_create`/`pre_remove`) helpers. **Not currently wired into the cockpit** — `CreateWorkspace` creates worktrees via `internal/git` directly; these helpers have no caller. |
 | `frontend/` | Svelte 5 (runes) SPA (Vite build); communicates with Go via Wails bindings and events; renders agent terminals via xterm.js. |
 
 ---
@@ -218,8 +216,6 @@ Settings (`settings.json`, including persisted `AlwaysRules`) and saved layout
 2. **Scan** — `internal/discover.Scan` walks each root up to the max depth,
    pruning `node_modules`, `vendor`, and `.git`; returns paths containing a
    `.git` entry.
-3. **Blacklist filter** — `**`-glob patterns hide matching project/tree paths
-   from the GUI after discovery (a post-walk filter, not a prune).
 
 ---
 
@@ -315,15 +311,6 @@ tool, and tool **input match exactly** (byte-for-byte — never a glob), so a ru
 can never grant more than the request the user approved. Rules are listed and
 revocable in Settings; a security caveat is surfaced there.
 
-### Global-only agent binary boundary
-
-`[agents].<name>` (absolute binary paths) and
-`[default_session].startup_command` live **only** in the global config
-(`~/.config/perch/config.toml`). The project-config struct has no corresponding
-fields; unknown TOML keys are silently dropped by `BurntSushi/toml`. This is a
-structural guarantee — a malicious `.perch.toml` cannot influence which binary
-is executed.
-
 ### Bound-method input validation
 
 Every argument the Svelte frontend sends over the IPC bridge is validated in
@@ -338,7 +325,6 @@ Every argument the Svelte frontend sends over the IPC bridge is validated in
 
 | Constraint | Detail |
 |------------|--------|
-| `worktree_dir` in project config | Must be a **relative path** (absolute rejected at load time). |
 | Git ref validation | `git.ValidRef` rejects empty strings, leading `-`, `..` sequences, control characters, and other chars forbidden by `git check-ref-format`. |
 | Process group teardown | Closing a pty bridge kills the shell's whole process group, so agent children cannot outlive the workspace. |
 

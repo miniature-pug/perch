@@ -115,10 +115,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (`layout.json`) live alongside it.
 
 - **`perch setup [--replace]`** — detects installed AI coding tools (claude,
-  opencode) and installs agent hooks/plugins: `~/.claude/settings.json` (claude
-  status hooks) and `~/.config/opencode/plugins/perch-status.ts` (opencode
-  plugin). Additive and idempotent without `--replace`; with `--replace`, stale
-  perch-owned blocks are overwritten while all foreign config is preserved.
+  opencode) and installs agent hooks: `~/.claude/settings.json` (claude status
+  hooks). opencode status flows natively via its `opencode serve` SSE stream
+  (`OpencodeMonitor`); no plugin file is needed. Additive and idempotent without
+  `--replace`; with `--replace`, stale perch-owned blocks are overwritten while
+  all foreign config is preserved.
 
 - **`perch attach <query>`** — registry-backed informational lookup: fuzzy-
   matches a workspace by title or worktree path and prints the result. The GUI
@@ -135,10 +136,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   session's panes and drops the registry record but leaves the worktree on disk,
   so a removal can be undone and the agent's history survives.
 
-- **Global config + agent-binary security boundary** — `~/.config/perch/config.toml`
-  supplies the allowed project `roots`; with no config the launch directory is the
-  sole root. Agent binary paths are a global-only setting — a project `.perch.toml`
-  has no `[agents]` field and cannot influence which binary is executed.
+- **Global config** — `~/.config/perch/config.toml` supplies the allowed `roots`
+  directories; with no config the launch directory is the sole root. Agent
+  selection is handled per-workspace via the registry, not via config.
 
 - **Linux-only build** — requires WebKit2GTK + GTK3 system libraries. Build
   with `make gui-build` (`-tags production` embeds the frontend assets).

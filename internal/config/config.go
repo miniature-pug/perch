@@ -20,8 +20,7 @@ const configFileName = "config.toml"
 
 // globalConfig is the TOML target for $XDG_CONFIG_HOME/perch/config.toml.
 type globalConfig struct {
-	Roots     []string `toml:"roots"`
-	Blacklist []string `toml:"blacklist"`
+	Roots []string `toml:"roots"`
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -31,8 +30,6 @@ type globalConfig struct {
 type Config struct {
 	// Roots is the list of directories perch scans for git repos.
 	Roots []string
-	// Blacklist contains glob patterns that hide matching paths from the UI.
-	Blacklist []string
 }
 
 // ── Loader ────────────────────────────────────────────────────────────────────
@@ -76,10 +73,6 @@ func Load(globalPath string, projectStartDir string) (*Config, error) {
 		if projectStartDir != "" {
 			cfg.Roots = []string{projectStartDir}
 		}
-	}
-
-	if len(gc.Blacklist) > 0 {
-		cfg.Blacklist = gc.Blacklist
 	}
 
 	return cfg, nil

@@ -189,26 +189,9 @@ func TestExpandRootsTildeHomeMissing(t *testing.T) {
 	}
 }
 
-// TestBlacklist verifies that the blacklist field is loaded from the global config.
-func TestBlacklist(t *testing.T) {
-	tmp := t.TempDir()
-	initGitDir(t, tmp)
-
-	globalPath := filepath.Join(tmp, "config.toml")
-	writeFile(t, globalPath, `blacklist = ["**/node_modules", "**/.git"]`)
-
-	cfg, err := config.Load(globalPath, tmp)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-
-	if len(cfg.Blacklist) != 2 {
-		t.Errorf("Blacklist len = %d; want 2", len(cfg.Blacklist))
-	}
-}
-
 // TestUnknownKeysIgnored verifies that unknown TOML keys (including removed
-// fields like sort_order, refresh_ms, etc.) are silently dropped and Load succeeds.
+// fields like sort_order, refresh_ms, blacklist, etc.) are silently dropped and
+// Load succeeds.
 func TestUnknownKeysIgnored(t *testing.T) {
 	tmp := t.TempDir()
 	initGitDir(t, tmp)
@@ -218,6 +201,7 @@ func TestUnknownKeysIgnored(t *testing.T) {
 roots        = ["`+tmp+`"]
 sort_order   = ["running","frecency"]
 refresh_ms   = 2000
+blacklist    = ["**/node_modules"]
 
 [default_session]
 agent = "opencode"

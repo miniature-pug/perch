@@ -214,6 +214,6 @@ All five §10 spikes are documented-but-unverified Claude/Wails behaviors. Each 
 
 **Resolved spikes:** spike-1 (Claude `PreToolUse` GUI approval), spike-2 (Claude transcript token availability — resolved: tokens present, cost absent; `TailTranscript` is wired), spike-3 (opencode serve+SSE+REST approval). spike-4 (Wails `OnFileDrop` Linux #3686) and spike-5 (Linux OS desktop notifications) are exercised in the manual WebKit smoke.
 
-**Remaining open items (user decisions required):**
-- `internal/worktree` package is fully orphaned — pending decision to either wire `.perch.toml` lifecycle hooks + trust gate, or delete.
-- `resources/perch-status.ts` shells an unrouted `perch status set` verb — pending decision on the opencode status-reporting strategy.
+**Resolved post-audit (2026-06-04):**
+- `internal/worktree` (the orphaned `.perch.toml` lifecycle-hooks + trust helpers) was **deleted** — never cockpit scope; worktrees are created/removed via `internal/git`. The dead `config.Config` fields it alone fed were removed with it (config is now global-only `roots`).
+- `resources/perch-status.ts` was **removed** — opencode status reaches perch natively over the `opencode serve` SSE stream (`session.status`/`permission.*`) consumed by `OpencodeMonitor`; no installed plugin is needed.

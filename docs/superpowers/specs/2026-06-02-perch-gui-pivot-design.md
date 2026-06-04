@@ -1,7 +1,13 @@
 # perch GUI Pivot — Design Spec
 
+> **⚠ SUPERSEDED (historical).** This pivot kept **tmux** as the pty/persistence
+> backend. It was superseded by [`2026-06-02-perch-cockpit-design.md`](2026-06-02-perch-cockpit-design.md),
+> which removed tmux entirely (direct `creack/pty` per pane) and dropped the
+> `internal/worktree` and `internal/match` packages referenced below. Read the
+> cockpit design for the shipped architecture; this file is kept for history only.
+
 **Date:** 2026-06-02
-**Status:** Approved (design); pending implementation plan
+**Status:** Superseded by the cockpit design (direct-pty)
 **Supersedes:** the Bubble Tea terminal TUI as the interactive front-end (M0–M17)
 
 ---

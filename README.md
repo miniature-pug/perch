@@ -199,9 +199,8 @@ worktree path, agent, branch, title, and last session id. Settings and saved
 layout live alongside it (`settings.json`, `layout.json`).
 
 The global `~/.config/perch/config.toml` supplies the allowed project `roots`
-(with no config, the launch directory is the sole root) and the `[agents]`
-binary paths. Agent-binary paths are a **global-only** setting — see the
-security model below.
+(with no config, the launch directory is the sole root). It is the only config
+file perch reads — there is no project-local config overlay.
 
 ---
 
@@ -229,12 +228,13 @@ when the workspace closes.
 This is the entire production local network surface — one short-lived,
 loopback-only, token-gated listener per active Claude workspace.
 
-### Global-only agent binary boundary
+### Configuration is global-only
 
-`[agents]` binary paths and `startup_command` come **only** from the global
-config. A project `.perch.toml` has no `[agents]` field — any such key is
-silently dropped by the TOML decoder. A malicious repo cannot point perch at an
-arbitrary binary.
+The global `config.toml` supplies only the project `roots` perch scans. There is
+no project `.perch.toml` overlay and no config-driven agent-binary selection — the
+agent is chosen per workspace through the registry, and any keys in a repo-local
+config file are silently ignored. A malicious repo cannot influence how perch
+launches.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system-level breakdown.
 
