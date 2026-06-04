@@ -9,10 +9,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Miniature-Pug/perch/internal/hooklistener"
 )
@@ -27,6 +29,11 @@ type ClaudeMonitor struct {
 	mu       sync.Mutex
 	state    State
 	lastTool string
+
+	// tailOnce ensures at most one TailTranscript goroutine starts per session.
+	// It is reset-able by using a pointer so a second SessionStart event (e.g.
+	// duplicate delivery) cannot start a second tail on the same monitor.
+	tailOnce sync.Once
 }
 
 func newClaudeMonitor(a Adapter) *ClaudeMonitor {
@@ -36,7 +43,12 @@ func NewClaudeMonitorWithListener(a Adapter, l *hooklistener.Listener) *ClaudeMo
 	return &ClaudeMonitor{adapter: a, listener: l, events: make(chan Event, 64)}
 }
 func (m *ClaudeMonitor) Events() <-chan Event { return m.events }
-func (m *ClaudeMonitor) Capabilities() Caps  { return Caps{Approvals: true, Attention: true, Tokens: true} }
+
+// Capabilities reports what this monitor supports. Tokens:true is justified:
+// TailTranscript tails the JSONL transcript and emits usage events per turn.
+// NOTE (M-29): Claude's JSONL transcript carries input/output token counts but
+// NOT cost, so usage events have Cost=0. This is correct — do not fake a cost.
+func (m *ClaudeMonitor) Capabilities() Caps { return Caps{Approvals: true, Attention: true, Tokens: true} }
 
 func (m *ClaudeMonitor) Start(ctx context.Context) {
 	go func() {
@@ -63,37 +75,72 @@ func (m *ClaudeMonitor) TailTranscript(ctx context.Context, transcriptPath strin
 			return
 		}
 		defer func() { _ = f.Close() }()
-		sc := bufio.NewScanner(f)
-		sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
-		for sc.Scan() {
+		r := bufio.NewReader(f)
+		var pending strings.Builder
+		const pollInterval = 500 * time.Millisecond
+		for {
 			select {
 			case <-ctx.Done():
 				return
 			default:
 			}
-			var rec struct {
-				Type    string `json:"type"`
-				Message *struct {
-					Usage *struct {
-						Input  int `json:"input_tokens"`
-						Output int `json:"output_tokens"`
-					} `json:"usage"`
-				} `json:"message"`
+			line, rerr := r.ReadString('\n')
+			if len(line) > 0 {
+				pending.WriteString(line)
 			}
-			if json.Unmarshal(sc.Bytes(), &rec) != nil || rec.Type != "assistant" ||
-				rec.Message == nil || rec.Message.Usage == nil {
-				continue
-			}
-			total := rec.Message.Usage.Input + rec.Message.Usage.Output
-			if total > 0 {
+			switch {
+			case rerr == nil:
+				// A complete line (newline-terminated) is available.
+				m.emitTranscriptUsage(ctx, strings.TrimRight(pending.String(), "\r\n"))
+				pending.Reset()
+			case rerr == io.EOF:
+				// Reached the current end of the file. The transcript keeps growing
+				// as the session progresses, so wait and re-read appended lines
+				// (tail -f). A partial trailing line (not yet newline-terminated)
+				// stays buffered in `pending` until the rest is written.
 				select {
-				case m.events <- Event{Kind: "usage", Tokens: total}:
 				case <-ctx.Done():
 					return
+				case <-time.After(pollInterval):
 				}
+			default:
+				// Unexpected read error: stop tailing.
+				return
 			}
 		}
 	}()
+}
+
+// emitTranscriptUsage parses one transcript JSONL line and, if it is an assistant
+// message carrying token usage, emits a usage Event. The frontend token meter
+// shows the most recent usage event, so each assistant turn updates the displayed
+// count. Claude transcripts carry no cost field, so Cost is left zero (see
+// Capabilities).
+func (m *ClaudeMonitor) emitTranscriptUsage(ctx context.Context, line string) {
+	if line == "" {
+		return
+	}
+	var rec struct {
+		Type    string `json:"type"`
+		Message *struct {
+			Usage *struct {
+				Input  int `json:"input_tokens"`
+				Output int `json:"output_tokens"`
+			} `json:"usage"`
+		} `json:"message"`
+	}
+	if json.Unmarshal([]byte(line), &rec) != nil || rec.Type != "assistant" ||
+		rec.Message == nil || rec.Message.Usage == nil {
+		return
+	}
+	total := rec.Message.Usage.Input + rec.Message.Usage.Output
+	if total <= 0 {
+		return
+	}
+	select {
+	case m.events <- Event{Kind: "usage", Tokens: total}:
+	case <-ctx.Done():
+	}
 }
 
 func (m *ClaudeMonitor) translateAndEmit(ctx context.Context, he hooklistener.HookEvent) {
@@ -101,12 +148,28 @@ func (m *ClaudeMonitor) translateAndEmit(ctx context.Context, he hooklistener.Ho
 	switch he.Type {
 	case "SessionStart":
 		ev = Event{Kind: "state", State: StateRunning, SessionID: he.SessionID}
+		// H-1: wire TailTranscript on the first SessionStart that carries a path.
+		// tailOnce ensures exactly one tail goroutine per monitor lifetime, even if
+		// SessionStart is delivered more than once (duplicate hook delivery).
+		// TailTranscript already backgrounds itself, so we call it directly (no
+		// extra `go` needed).
+		if he.TranscriptPath != "" {
+			m.tailOnce.Do(func() {
+				m.TailTranscript(ctx, he.TranscriptPath)
+			})
+		}
 	case "Stop":
-		ev = Event{Kind: "state", State: StateIdle}
+		// H-6: Stop means the agent finished its turn — emit StateDone so
+		// dispatchNotify can fire the §8 "Turn complete" ambient toast.
+		ev = Event{Kind: "state", State: StateDone}
 	case "StopFailure":
 		ev = Event{Kind: "state", State: StateErrored, Err: he.ErrorType}
-	case "Notification":
-		ev = Event{Kind: "state", State: StateIdle}
+	// NOTE (M-5): "Notification" is intentionally absent. §6.2 of the spec
+	// lists exactly four hooked events: PreToolUse, Stop, StopFailure, and
+	// SessionStart — "Notification" is not among them and is NOT installed in
+	// perchMonitorEvents, so the hook never fires and the case is unreachable.
+	// §8 defines no specced UI consumer for a Claude attention-notification
+	// signal. Removing the dead case keeps the code honest.
 	case "PreToolUse":
 		sum := he.ToolName
 		if len(he.ToolInput) > 0 && len(he.ToolInput) < 120 {

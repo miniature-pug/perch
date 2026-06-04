@@ -236,11 +236,27 @@ type sseEnvelope struct {
 	Properties json.RawMessage `json:"properties"`
 }
 
+// idleTransition maps an opencode idle signal to a lifecycle state given the
+// prior state: a busy→idle transition is a completed turn (StateDone, drives the
+// §8 ambient toast); any other idle is a steady idle (StateIdle, no toast).
+func idleTransition(prev State) Event {
+	if prev == StateRunning {
+		return Event{Kind: "state", State: StateDone}
+	}
+	return Event{Kind: "state", State: StateIdle}
+}
+
 func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
 	var env sseEnvelope
 	if json.Unmarshal(data, &env) != nil {
 		return
 	}
+	// translateSSE is called serially from the single SSE-reader goroutine, so
+	// reading the prior state here is race-free w.r.t. the write at the end.
+	m.mu.Lock()
+	prev := m.state
+	m.mu.Unlock()
+
 	var ev Event
 	switch env.Type {
 	case "session.next.step.started":
@@ -267,15 +283,20 @@ func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
 		}
 		switch p.Status.Type {
 		case "idle":
-			ev = Event{Kind: "state", State: StateIdle}
+			// H-6: a busy→idle transition means the agent finished a turn → StateDone
+			// so dispatchNotify fires the §8 ambient toast. An idle that does NOT
+			// follow a running state (e.g. the session reporting idle at connect, or
+			// a duplicate idle / the deprecated session.idle alias firing too) is a
+			// steady idle → StateIdle, no spurious "Turn complete" toast.
+			ev = idleTransition(prev)
 		case "busy":
 			ev = Event{Kind: "state", State: StateRunning}
 		default:
 			return
 		}
 	case "session.idle":
-		// Deprecated alias of session.status{type:idle}; handle both for safety.
-		ev = Event{Kind: "state", State: StateIdle}
+		// Deprecated alias of session.status{type:idle}; same transition rule.
+		ev = idleTransition(prev)
 	case "session.next.step.ended":
 		var p struct {
 			Cost   float64 `json:"cost"`

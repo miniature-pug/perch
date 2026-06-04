@@ -172,6 +172,113 @@ func TestClaudeMonitorTranscriptTail(t *testing.T) {
 	}
 }
 
+// TestClaudeMonitorTranscriptTail_FollowsAppends verifies the tail actually
+// follows the growing transcript (tail -f). SessionStart fires when the file is
+// near-empty, so a one-shot read-to-EOF would miss every token produced during
+// the session. This appends a record AFTER tailing starts and asserts its usage
+// reaches the meter.
+func TestClaudeMonitorTranscriptTail_FollowsAppends(t *testing.T) {
+	m, _, cleanup := newMonitorWithTestListener(t)
+	defer cleanup()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	path := filepath.Join(t.TempDir(), "live.jsonl")
+	rec1 := `{"type":"assistant","message":{"role":"assistant","usage":{"input_tokens":10,"output_tokens":5}}}` + "\n"
+	if err := os.WriteFile(path, []byte(rec1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m.TailTranscript(ctx, path)
+
+	awaitTokens := func(want int) {
+		t.Helper()
+		deadline := time.After(5 * time.Second)
+		for {
+			select {
+			case ev := <-m.Events():
+				if ev.Kind == "usage" && ev.Tokens == want {
+					return
+				}
+			case <-deadline:
+				t.Fatalf("timeout waiting for usage event tokens=%d", want)
+			}
+		}
+	}
+	awaitTokens(15) // initial record read
+
+	// Append a second assistant turn after the tail has reached EOF.
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec2 := `{"type":"assistant","message":{"role":"assistant","usage":{"input_tokens":100,"output_tokens":20}}}` + "\n"
+	if _, err := f.WriteString(rec2); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Close()
+
+	awaitTokens(120) // appended record must be followed and emitted
+}
+
+// TestClaudeMonitorSessionStart_WiresTailTranscript verifies H-1: when a
+// SessionStart hook event carries a TranscriptPath, the monitor automatically
+// starts tailing that transcript and emits a usage event for assistant records
+// with token counts — without the caller ever calling TailTranscript directly.
+//
+// RED (before fix): the SessionStart case in translateAndEmit ignores
+// TranscriptPath, so no usage event ever flows.
+// GREEN (after fix): translateAndEmit calls m.TailTranscript(ctx, path) on the
+// first SessionStart with a non-empty TranscriptPath.
+func TestClaudeMonitorSessionStart_WiresTailTranscript(t *testing.T) {
+	m, l, cleanup := newMonitorWithTestListener(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.Start(ctx)
+
+	// Build the absolute path to the testdata transcript (10+5=15 tokens).
+	abs, err := filepath.Abs(filepath.Join("testdata", "claude", "transcript-usage.jsonl"))
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+
+	// Fire a SessionStart hook event with the transcript path, just as claude does.
+	post := func(payload string) {
+		req, _ := http.NewRequest(http.MethodPost, "http://"+l.Addr()+"/hook", strings.NewReader(payload))
+		req.Header.Set("Authorization", "Bearer "+l.Token())
+		req.Header.Set("Content-Type", "application/json")
+		resp, _ := http.DefaultClient.Do(req)
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}
+	post(`{"hook_event_name":"SessionStart","session_id":"sid-wired","transcript_path":"` + abs + `","cwd":"/p"}`)
+
+	// Wait for: first a state:running event, then a usage event with tokens=15.
+	deadline := time.After(5 * time.Second)
+	sawRunning := false
+	for {
+		select {
+		case ev := <-m.Events():
+			if ev.Kind == "state" && ev.State == agent.StateRunning {
+				sawRunning = true
+			}
+			if ev.Kind == "usage" {
+				if !sawRunning {
+					t.Error("usage event arrived before state:running event")
+				}
+				if ev.Tokens != 15 {
+					t.Errorf("want tokens=15 (10+5), got %d", ev.Tokens)
+				}
+				return // success
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for usage event from auto-wired TailTranscript")
+		}
+	}
+}
+
 func TestClaudeMonitorEventTranslation(t *testing.T) {
 	m, l, cleanup := newMonitorWithTestListener(t)
 	defer cleanup()
@@ -199,12 +306,12 @@ func TestClaudeMonitorEventTranslation(t *testing.T) {
 		}
 	}
 	if got[0].Kind != "state" || got[0].State != agent.StateRunning { t.Errorf("ev[0]: %+v", got[0]) }
-	if got[1].Kind != "state" || got[1].State != agent.StateIdle { t.Errorf("ev[1]: %+v", got[1]) }
+	if got[1].Kind != "state" || got[1].State != agent.StateDone { t.Errorf("ev[1]: %+v", got[1]) }
 
-	// State tracking: after the Stop event drained, CurrentState reflects idle.
+	// State tracking: after the Stop event drained, CurrentState reflects done.
 	// (translateAndEmit sets m.state BEFORE the channel send, so this is race-free.)
-	if m.CurrentState() != agent.StateIdle {
-		t.Errorf("CurrentState after Stop = %q, want %q", m.CurrentState(), agent.StateIdle)
+	if m.CurrentState() != agent.StateDone {
+		t.Errorf("CurrentState after Stop = %q, want %q", m.CurrentState(), agent.StateDone)
 	}
 }
 

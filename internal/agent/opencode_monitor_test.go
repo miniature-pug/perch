@@ -364,11 +364,80 @@ func TestOpencodeMonitorSSE_SessionStatusDrivesIdle(t *testing.T) {
 	if got[0].State != agent.StateRunning {
 		t.Errorf("busy → want running, got %+v", got[0])
 	}
-	if got[1].State != agent.StateIdle {
-		t.Errorf("idle → want idle, got %+v", got[1])
+	if got[1].State != agent.StateDone {
+		t.Errorf("idle → want done (turn complete), got %+v", got[1])
 	}
-	if om.CurrentState() != agent.StateIdle {
-		t.Errorf("CurrentState = %q, want idle", om.CurrentState())
+	if om.CurrentState() != agent.StateDone {
+		t.Errorf("CurrentState = %q, want done", om.CurrentState())
+	}
+}
+
+// TestOpencodeMonitorSSE_SessionIdleEmitsDone verifies H-6 for the deprecated
+// session.idle alias: a busy→idle transition (running then session.idle) is a
+// completed turn and must produce State==StateDone.
+func TestOpencodeMonitorSSE_SessionIdleEmitsDone(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	fixture := `data: {"type":"session.status","properties":{"status":{"type":"busy"}}}` + "\n\n" +
+		`data: {"type":"session.idle","properties":{}}` + "\n\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/event" {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte(fixture))
+		} else {
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	om := agent.NewOpencodeMonitorWithServer(agent.NewOpencode(), srv.URL, "pw")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	om.Start(ctx)
+
+	var got []agent.Event
+	deadline := time.After(3 * time.Second)
+	for len(got) < 2 {
+		select {
+		case ev := <-om.Events():
+			got = append(got, ev)
+		case <-deadline:
+			t.Fatalf("timeout after %d events", len(got))
+		}
+	}
+	if got[1].State != agent.StateDone {
+		t.Errorf("busy→session.idle → want StateDone, got %+v", got[1])
+	}
+}
+
+// TestOpencodeMonitorSSE_IdleAtConnectIsSteady verifies the no-spurious-toast
+// rule: an idle that does NOT follow a running state (e.g. the session reporting
+// idle at connect) maps to StateIdle, not StateDone — so dispatchNotify does not
+// fire a "Turn complete" toast on workspace open.
+func TestOpencodeMonitorSSE_IdleAtConnectIsSteady(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	fixture := `data: {"type":"session.status","properties":{"status":{"type":"idle"}}}` + "\n\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/event" {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte(fixture))
+		} else {
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	om := agent.NewOpencodeMonitorWithServer(agent.NewOpencode(), srv.URL, "pw")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	om.Start(ctx)
+
+	select {
+	case ev := <-om.Events():
+		if ev.State != agent.StateIdle {
+			t.Errorf("idle-at-connect → want StateIdle (no toast), got %+v", ev)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for idle event")
 	}
 }
 
