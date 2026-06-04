@@ -166,7 +166,7 @@ supports.
 |-----|---------|:------:|:--------:|
 | `approvals` | Inline tool-call approval (Allow / Always / Deny) | ✅ | ✅ |
 | `attention` | Lifecycle / attention state (running, idle, awaiting, done, errored) | ✅ | ✅ |
-| `tokens` | Token / cost usage reporting | ✅ | ✅ |
+| `tokens` | Token / cost usage reporting | ✅ (tokens only; no cost) | ✅ |
 
 An agent that did not advertise a cap simply has that surface hidden — the
 cockpit degrades rather than showing dead controls.

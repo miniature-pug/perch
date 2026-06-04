@@ -34,11 +34,11 @@ flowchart TD
 
     subgraph Worktrees["Worktrees"]
         worktree["internal/worktree\nfile seeding + lifecycle hooks\n(present, not wired into the cockpit)"]
-        fs["internal/fs\nfile tree + change watcher"]
+        fs["internal/fs\nfile tree + change watcher\n(Node.Modified/Untracked from git status)"]
     end
 
     subgraph ShellSeam["Shell-out seam (§20.1)"]
-        proc["internal/proc\nRunner interface\nFakeRunner in tests"]
+        proc["internal/proc\nRunner / RunStdin interface\nFakeRunner in tests"]
         git["internal/git\ngit command wrappers + diff/hunks"]
     end
 
@@ -58,10 +58,9 @@ flowchart TD
     apppkg -->|"new Monitor"| monitor
     apppkg -->|"read/write"| registry
     apppkg -->|"load config"| config
-    apppkg -->|"worktree create/remove"| worktree
+    apppkg -->|"worktree add/remove + diff/staging"| git
     apppkg -->|"file tree / watch"| fs
     apppkg -->|"project scan"| discover
-    apppkg -->|"diff / staging"| git
 
     pty -->|"exec"| shell
 

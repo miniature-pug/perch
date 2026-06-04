@@ -126,7 +126,7 @@
     flex: 1;
     background: var(--perch-bg);
     color: var(--perch-text);
-    border: 1px solid var(--perch-border);
+    border: 1px solid var(--perch-border-strong);
     border-radius: 4px;
     padding: 3px 8px;
     font-family: var(--perch-font-sans);
@@ -146,7 +146,7 @@
     flex: 1;
     background: var(--perch-bg);
     color: var(--perch-text);
-    border: 1px solid var(--perch-border);
+    border: 1px solid var(--perch-border-strong);
     border-radius: 4px;
     padding: 3px 8px;
     font-family: var(--perch-font-sans);
@@ -184,7 +184,7 @@
     padding: 4px 12px;
     background: var(--perch-bg);
     color: var(--perch-text);
-    border: 1px solid var(--perch-border);
+    border: 1px solid var(--perch-border-strong);
     border-radius: 4px;
     font-family: var(--perch-font-sans);
     font-size: var(--perch-fs-body);

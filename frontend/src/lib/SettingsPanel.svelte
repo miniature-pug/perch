@@ -201,7 +201,7 @@
     flex: 1;
     background: var(--perch-bg);
     color: var(--perch-text);
-    border: 1px solid var(--perch-border);
+    border: 1px solid var(--perch-border-strong);
     border-radius: 4px;
     padding: 2px 6px;
     font-size: var(--perch-fs-body);
@@ -210,7 +210,7 @@
 
   .dnd-switch {
     padding: 2px 10px;
-    border: 1px solid var(--perch-border);
+    border: 1px solid var(--perch-border-strong);
     border-radius: 4px;
     background: var(--perch-bg);
     color: var(--perch-text);
@@ -298,7 +298,7 @@
     padding: 2px 8px;
     background: var(--perch-bg);
     color: var(--perch-text);
-    border: 1px solid var(--perch-border);
+    border: 1px solid var(--perch-border-strong);
     border-radius: 4px;
     cursor: pointer;
     font-size: var(--perch-fs-body);
@@ -315,7 +315,7 @@
     padding: 4px 12px;
     background: var(--perch-bg);
     color: var(--perch-text);
-    border: 1px solid var(--perch-border);
+    border: 1px solid var(--perch-border-strong);
     border-radius: 4px;
     font-size: var(--perch-fs-body);
     cursor: pointer;

@@ -18,7 +18,7 @@ sequenceDiagram
     HL-->>Agent: permissionDecision allow (unblocks the POST)
     Agent->>Agent: continues the tool call
 
-    Note over Agent,HL: lifecycle hooks (SessionStart / Stop / StopFailure / Notification) POST non-blocking
+    Note over Agent,HL: lifecycle hooks (SessionStart / Stop / StopFailure) POST non-blocking
     Agent->>HL: POST lifecycle event
     HL->>App: agent:event (state)
     App->>FE: agent:event → re-render state glyph

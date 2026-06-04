@@ -842,7 +842,10 @@ func (a *App) SaveLayout(layoutJSON string) error {
 }
 
 // atomicWriteApp writes data to path via temp file + rename (atomic on Linux),
-// creating the parent dir if needed.
+// creating the parent dir if needed. The file is always created with mode 0600
+// (owner read/write only) because it may carry a token-bearing settings payload.
+// os.CreateTemp already uses 0600, but we set it explicitly — before any write —
+// so the invariant is auditable and consistent with claude_monitor.go's atomicWrite.
 func atomicWriteApp(path string, data []byte) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -853,6 +856,13 @@ func atomicWriteApp(path string, data []byte) error {
 		return err
 	}
 	tmpName := tmp.Name()
+	// Set 0600 before writing so there is no window where content is readable
+	// at a looser mode. Mirror the same invariant as claude_monitor.go atomicWrite.
+	if err := os.Chmod(tmpName, 0o600); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return err
+	}
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpName)

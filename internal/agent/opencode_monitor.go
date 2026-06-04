@@ -108,6 +108,17 @@ func (m *OpencodeMonitor) Prepare(_ context.Context, _, _, resumeID, _ string) (
 		// registry, so plain concatenation is safe as a single shell token.
 		attach += " --session " + resumeID
 	}
+	// L-18: opencode also accepts --continue/-c to resume the most-recent session
+	// without knowing its ID. We deliberately do NOT wire that flag here because
+	// there is no mechanism in the call path for a caller to express "continue
+	// intent" as distinct from "I have no session id": app.OpenWorkspace always
+	// passes w.LastSessionID (a concrete ID or ""). An empty resumeID means the
+	// workspace is fresh, not that --continue should be used. Adding --continue
+	// support would require a new signal in the Monitor.Prepare signature, which
+	// is a shared interface (ClaudeMonitor, FakeMonitor also implement it) — a
+	// multi-file interface change outside the scope of this fix. If a "resume
+	// most recent" UX is later desired, extend app.OpenWorkspace / the registry
+	// to pass a "continueLatest bool" through to Prepare, then add the flag here.
 
 	// Leading space keeps the password out of history-ignoring shells. The poll
 	// caps at ~10s (50 × 0.2s) then falls through to attach, which will surface

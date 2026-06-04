@@ -702,6 +702,32 @@ func TestApp_Settings_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestAtomicWriteApp_Mode0600 verifies N-5: atomicWriteApp (used by SaveSettings
+// and SaveLayout) produces files with mode 0600 so a token-bearing settings
+// payload is never readable by group/world.
+func TestAtomicWriteApp_Mode0600(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	a := &App{
+		store:        store,
+		emit:         func(string, ...any) {},
+		bridges:      map[string]*internalpty.Bridge{},
+		monitors:     map[string]agent.Monitor{},
+		settingsPath: filepath.Join(cfgDir, "settings.json"),
+	}
+	if err := a.SaveSettings(Settings{Theme: "gruvbox"}); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+	info, err := os.Stat(a.settingsPath)
+	if err != nil {
+		t.Fatalf("Stat settings file: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("settings file mode = %04o, want 0600", got)
+	}
+}
+
 func TestApp_Layout_RoundTrip(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cfgDir := t.TempDir()

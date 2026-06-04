@@ -57,9 +57,6 @@ func DiffStat(ctx context.Context, r proc.Runner, worktree string) ([]FileDiff, 
 		}
 		xy := line[:2]
 		path := strings.TrimSpace(line[3:])
-		if i := strings.Index(path, "\x00"); i >= 0 {
-			path = path[:i]
-		}
 		if path == "" {
 			continue
 		}

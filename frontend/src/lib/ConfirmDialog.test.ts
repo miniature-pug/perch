@@ -4,15 +4,15 @@ import { vi } from "vitest";
 
 test("renders message when open", async () => {
   const { default: ConfirmDialog } = await import("./ConfirmDialog.svelte");
-  const onconfirm = vi.fn();
-  const oncancel = vi.fn();
+  const onConfirm = vi.fn();
+  const onCancel = vi.fn();
   render(ConfirmDialog, {
     props: {
       open: true,
       message: 'Kill agent "feat-x"? The session and its agent will be terminated.',
       confirmLabel: "Kill",
-      onconfirm,
-      oncancel,
+      onConfirm,
+      onCancel,
     },
   });
   await waitFor(() =>
@@ -22,26 +22,26 @@ test("renders message when open", async () => {
   );
 });
 
-test("clicking confirm calls onconfirm", async () => {
+test("clicking confirm calls onConfirm", async () => {
   const { default: ConfirmDialog } = await import("./ConfirmDialog.svelte");
-  const onconfirm = vi.fn();
+  const onConfirm = vi.fn();
   render(ConfirmDialog, {
-    props: { open: true, message: "Are you sure?", confirmLabel: "Kill", onconfirm },
+    props: { open: true, message: "Are you sure?", confirmLabel: "Kill", onConfirm },
   });
   await waitFor(() => screen.getByRole("button", { name: "Kill" }));
   await fireEvent.click(screen.getByRole("button", { name: "Kill" }));
-  expect(onconfirm).toHaveBeenCalledTimes(1);
+  expect(onConfirm).toHaveBeenCalledTimes(1);
 });
 
-test("clicking cancel calls oncancel", async () => {
+test("clicking cancel calls onCancel", async () => {
   const { default: ConfirmDialog } = await import("./ConfirmDialog.svelte");
-  const oncancel = vi.fn();
+  const onCancel = vi.fn();
   render(ConfirmDialog, {
-    props: { open: true, message: "Are you sure?", oncancel },
+    props: { open: true, message: "Are you sure?", onCancel },
   });
   await waitFor(() => screen.getByRole("button", { name: "Cancel" }));
   await fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-  expect(oncancel).toHaveBeenCalledTimes(1);
+  expect(onCancel).toHaveBeenCalledTimes(1);
 });
 
 test("does not render when closed", async () => {

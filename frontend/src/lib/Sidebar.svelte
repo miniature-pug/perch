@@ -123,7 +123,7 @@
 
   .workspace-list > li {
     display: block;
-    border-bottom: 1px solid var(--perch-border);
+    border-bottom: 1px solid var(--perch-border-strong);
     transition: border-color 100ms var(--perch-ease);
   }
 

@@ -262,7 +262,7 @@ export function buildInitScriptContent(opts: MockOptions = {}): string {
               path: '/home/user/perch',
               name: 'perch',
               branch: 'main',
-              worktrees: [{ path: '/home/user/perch', branch: 'main', head: 'abc1234' }],
+              worktrees: [{ path: '/home/user/perch', branch: 'main', head: '' }],
             },
             {
               path: '/home/user/my-project',

@@ -8,7 +8,7 @@ export interface WorkspaceVM {
 export type AgentState = "running"|"idle"|"awaiting-approval"|"done"|"errored";
 export interface AgentCaps { approvals: boolean; attention: boolean; tokens: boolean; }
 export interface AgentEvent {
-  workspaceId: string; kind: "state"|"usage"|"approval";
+  sessionId?: string; workspaceId: string; kind: "state"|"usage"|"approval";
   state?: AgentState; tokens?: number; cost?: number; approval?: ApprovalReq; err?: string;
 }
 export interface ApprovalReq { reqId: string; tool: string; summary: string; input?: string; }

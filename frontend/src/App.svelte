@@ -796,7 +796,7 @@
   .terminal-zone    { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
   .shell-drawer-zone { flex-shrink: 0; overflow: hidden; border-top: 1px solid var(--perch-border); }
   .filter-input      { display: block; width: 100%; box-sizing: border-box;
-                       padding: 0.25rem 0.5rem; border: none; border-bottom: 1px solid var(--perch-border);
+                       padding: 0.25rem 0.5rem; border: none; border-bottom: 1px solid var(--perch-border-strong);
                        background: var(--perch-bg); color: var(--perch-text);
                        font-family: var(--perch-font-sans); font-size: var(--perch-fs-body); }
   .filter-input:focus { outline: 1px solid var(--perch-accent); }
@@ -875,7 +875,7 @@
   }
   .empty-state-btn-template {
     background: var(--perch-bg); color: var(--perch-text);
-    border: 1px solid var(--perch-border);
+    border: 1px solid var(--perch-border-strong);
     width: 100%;
   }
   .empty-state-btn-template:hover {
@@ -898,7 +898,7 @@
   .split-picker-select {
     padding: 4px 8px;
     background: var(--perch-surface); color: var(--perch-text);
-    border: 1px solid var(--perch-border); border-radius: 4px;
+    border: 1px solid var(--perch-border-strong); border-radius: 4px;
     font-family: var(--perch-font-sans); font-size: var(--perch-fs-body);
     cursor: pointer;
   }

@@ -180,7 +180,7 @@
     background: transparent;
     color: var(--perch-text);
     border: none;
-    border-bottom: 1px solid var(--perch-border);
+    border-bottom: 1px solid var(--perch-border-strong);
     font-family: var(--perch-font-sans);
     font-size: var(--perch-fs-body);
     text-align: left;
@@ -305,7 +305,7 @@
     padding: 2px 8px;
     background: var(--perch-bg);
     color: var(--perch-text);
-    border: 1px solid var(--perch-border);
+    border: 1px solid var(--perch-border-strong);
     border-radius: 4px;
     font-family: var(--perch-font-sans);
     font-size: var(--perch-fs-caption);

@@ -2,11 +2,9 @@
   let {
     open, message, confirmLabel = "Confirm", destructive = false, note,
     onConfirm, onCancel,
-    onconfirm, oncancel,
   }: {
     open: boolean; message: string; confirmLabel?: string; destructive?: boolean; note?: string;
     onConfirm?: () => void; onCancel?: () => void;
-    onconfirm?: () => void; oncancel?: () => void;
   } = $props();
 </script>
 
@@ -18,9 +16,9 @@
       <div class="confirm-actions">
         <button
           class="btn {destructive ? 'btn-danger' : 'btn-primary'}"
-          onclick={() => { onConfirm?.(); onconfirm?.(); }}
+          onclick={() => { onConfirm?.(); }}
         >{confirmLabel}</button>
-        <button class="btn" onclick={() => { onCancel?.(); oncancel?.(); }}>Cancel</button>
+        <button class="btn" onclick={() => { onCancel?.(); }}>Cancel</button>
       </div>
     </div>
   </div>
@@ -87,7 +85,7 @@
     padding: 4px 12px;
     background: var(--perch-bg);
     color: var(--perch-text);
-    border: 1px solid var(--perch-border);
+    border: 1px solid var(--perch-border-strong);
     border-radius: 4px;
     font-family: var(--perch-font-sans);
     font-size: var(--perch-fs-body);

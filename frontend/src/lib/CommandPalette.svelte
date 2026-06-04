@@ -179,7 +179,7 @@
     background: var(--perch-bg);
     color: var(--perch-text);
     border: none;
-    border-bottom: 1px solid var(--perch-border);
+    border-bottom: 1px solid var(--perch-border-strong);
     border-radius: 0;
     padding: calc(var(--perch-sp-1) * var(--perch-density-scale)) calc(var(--perch-sp-2) * var(--perch-density-scale));
     font-family: var(--perch-font-sans);
@@ -232,7 +232,7 @@
     align-items: center;
     gap: var(--perch-sp-1);
     padding: calc(var(--perch-sp-1) * var(--perch-density-scale)) calc(var(--perch-sp-2) * var(--perch-density-scale));
-    border-bottom: 1px solid var(--perch-border);
+    border-bottom: 1px solid var(--perch-border-strong);
     font-size: var(--perch-fs-body);
     font-family: var(--perch-font-sans);
     color: var(--perch-text);

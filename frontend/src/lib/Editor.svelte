@@ -206,7 +206,7 @@
           ".cm-search input": {
             background:  "var(--perch-bg)",
             color:       "var(--perch-text)",
-            border:      "1px solid var(--perch-border)",
+            border:      "1px solid var(--perch-border-strong)",
             borderRadius: "3px",
             padding:     "1px 4px",
             fontFamily:  "var(--perch-font-mono)",
@@ -215,7 +215,7 @@
           ".cm-search button": {
             background:  "var(--perch-bg)",
             color:       "var(--perch-text)",
-            border:      "1px solid var(--perch-border)",
+            border:      "1px solid var(--perch-border-strong)",
             borderRadius: "3px",
             padding:     "1px 6px",
             cursor:      "pointer",

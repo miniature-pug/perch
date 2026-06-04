@@ -100,8 +100,8 @@ A registry selects the adapter by agent type. `Caps` lets the UI light up only w
   - `Stop` → "turn done, your turn" (drives idle/attention). `StopFailure` → errored (carries `error_type`).
   - `SessionStart` → captures `session_id` for transcript lookup + registry.
 - **Listener:** Go HTTP server on `127.0.0.1`, ephemeral port, per-process bearer token injected into the hook command/`http` hook config. Localhost-only.
-- **Transcript tail:** tail `~/.claude/projects/<slug>/<session-id>.jsonl` for message/tool history and (spike) token/cost. Slug-derivation and token presence are **validation spikes**.
-- **Capabilities:** approvals ✓, attention ✓ (via Stop), tokens ⚠ (spike).
+- **Transcript tail:** `TailTranscript` is wired from the `SessionStart` hook and follows the growing JSONL (`tail -f` semantics). It emits token counts per turn. Claude JSONL carries **no cost field** — usage events have `Cost=0`; do not fake a cost value.
+- **Capabilities:** approvals ✓, attention ✓ (via Stop → `StateDone`), tokens ✓ (tokens only; no cost).
 
 ### 6.3 `OpencodeAdapter` (serve + SSE + REST)
 - **Spawn / launch topology:** perch self-assigns a free loopback port `P` + random password `PW`, then the pane runs roughly `export OPENCODE_SERVER_PASSWORD=PW; opencode serve --port P --hostname 127.0.0.1 & <poll until listening>; exec opencode attach http://127.0.0.1:P [--session <id>]`, so the user still sees the real TUI while perch consumes the server's stream. `opencode attach` takes the URL as an explicit positional (there is **no** `$OPENCODE_URL` env var), reads the password from `OPENCODE_SERVER_PASSWORD`, and accepts `--session` for resume but **not** `--model`/`--agent` (model selection stays in the opencode TUI — a documented deviation).
@@ -112,6 +112,8 @@ A registry selects the adapter by agent type. `Caps` lets the UI light up only w
 
 ### 6.4 State → UI mapping
 `AgentEvent`s drive: sidebar status icon (`◐ running` / `◯ idle` / `⚠ needs you` / `✓ done` / `✗ error`), the notification tiers (§8), the approval card, and the token/cost meter in the status line.
+
+**`StateDone` turn-done semantics:** monitors emit `StateDone` (not `StateIdle`) when a turn completes — claude `Stop` hook, opencode busy→idle transition. A bare idle that does **not** follow a running state emits `StateIdle` with no toast, preventing spurious "Turn complete" notifications on initial attach or reconnect.
 
 ### 6.5 CLI surface
 `cmd/perch`: default → launch GUI; keep `setup`, `doctor`, `version`. `attach` becomes "focus/raise an existing perch workspace" (no separate process to attach to); `resurrect`/`status` fold into the registry + GUI.
@@ -131,7 +133,7 @@ CodeMirror 6 (≈100 KB, vs Monaco's MBs), **editable**: open/edit/save, find/re
 
 ### 7.4 Design tokens (from the research, locked)
 - **Type:** sans (Geist; IBM Plex / Inter selectable) for chrome, mono (Geist Mono) for terminal/code/paths. Scale: code **14px/1.55**, shell **13/1.5**, body **13–14**, status/caption **12**, section labels **11/600/0.06em uppercase**, headings 20/24. Never mono mid-sentence.
-- **Color/contrast:** WCAG 2.2 AA — text ≥ 4.5:1, borders/icons/focus-ring ≥ 3:1. **Status = color + icon + label**, never color alone. Off-white on off-black (no pure `#fff/#000`); lighter weights on dark (halation).
+- **Color/contrast:** WCAG 2.2 AA — text ≥ 4.5:1, borders/icons/focus-ring ≥ 3:1. **Status = color + icon + label**, never color alone. Off-white on off-black (no pure `#fff/#000`); lighter weights on dark (halation). Implemented tokens: `--perch-border` (decorative) and `--perch-border-strong` (≥ 3:1, used for interactive / focus borders). `--perch-text-dim` is calibrated to pass WCAG AA in every theme. New heading tokens: `--perch-fs-h1` (24px) / `--perch-fs-h2` (20px).
 - **Spacing:** 8pt grid; default **Dense** tier (selectable Comfortable/Ultra).
 - **Depth:** borders, not shadows; shadow only for floating popovers/modals.
 - **Motion:** 100–150ms, `cubic-bezier(.4,0,.2,1)`, nothing > 250ms; typing/selection instant (Doherty < 400ms).
@@ -208,4 +210,10 @@ frontend/src/tokens/  # design tokens + themes
 
 ## 12. Open Risks (tracked, not deferred)
 
-All five §10 spikes are documented-but-unverified Claude/Wails behaviors. Each is a **gated early task**: if a spike fails, we adapt the mechanism (e.g., Claude token/cost via an alternate source) — but the *feature* stays in scope. opencode integration carries low risk (fully documented server/SSE). The single accepted limitation is **no separate OS windows** (Wails v2), met by splits.
+All five §10 spikes are documented-but-unverified Claude/Wails behaviors. Each is a **gated early task**: if a spike fails, we adapt the mechanism — but the *feature* stays in scope. opencode integration carries low risk (fully documented server/SSE). The single accepted limitation is **no separate OS windows** (Wails v2), met by splits.
+
+**Resolved spikes:** spike-1 (Claude `PreToolUse` GUI approval), spike-2 (Claude transcript token availability — resolved: tokens present, cost absent; `TailTranscript` is wired), spike-3 (opencode serve+SSE+REST approval). spike-4 (Wails `OnFileDrop` Linux #3686) and spike-5 (Linux OS desktop notifications) are exercised in the manual WebKit smoke.
+
+**Remaining open items (user decisions required):**
+- `internal/worktree` package is fully orphaned — pending decision to either wire `.perch.toml` lifecycle hooks + trust gate, or delete.
+- `resources/perch-status.ts` shells an unrouted `perch status set` verb — pending decision on the opencode status-reporting strategy.

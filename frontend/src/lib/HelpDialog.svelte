@@ -125,7 +125,7 @@
     padding: 4px 12px;
     background: var(--perch-bg);
     color: var(--perch-text);
-    border: 1px solid var(--perch-border);
+    border: 1px solid var(--perch-border-strong);
     border-radius: 4px;
     font-size: var(--perch-fs-body);
     cursor: pointer;
