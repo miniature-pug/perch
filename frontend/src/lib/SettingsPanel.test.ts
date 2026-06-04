@@ -125,6 +125,39 @@ describe("SettingsPanel — DND toggle persists", () => {
   });
 });
 
+describe("SettingsPanel — security caveat and pattern display", () => {
+  it("renders the security caveat text when the panel is open", async () => {
+    const { default: SettingsPanel } = await import("./SettingsPanel.svelte");
+    render(SettingsPanel, { props: { open: true, onClose: vi.fn() } });
+    await waitFor(() =>
+      expect(
+        screen.getByText(/each rule matches one exact tool input/i)
+      ).toBeInTheDocument()
+    );
+  });
+
+  it("renders the pattern for a rule with pattern '/tmp/**' as visible text", async () => {
+    const { default: SettingsPanel } = await import("./SettingsPanel.svelte");
+    render(SettingsPanel, { props: { open: true, onClose: vi.fn() } });
+    await waitFor(() =>
+      expect(screen.getByText("/tmp/**")).toBeInTheDocument()
+    );
+  });
+
+  it("does not render the pattern inside an input or textarea (display-only)", async () => {
+    const { default: SettingsPanel } = await import("./SettingsPanel.svelte");
+    const { container } = render(SettingsPanel, { props: { open: true, onClose: vi.fn() } });
+    await screen.findAllByRole("button", { name: "Revoke" });
+    const inputs = container.querySelectorAll("input, textarea");
+    // None of the input/textarea elements (if any) should contain the pattern value
+    for (const el of Array.from(inputs)) {
+      const val = (el as HTMLInputElement | HTMLTextAreaElement).value;
+      expect(val).not.toBe("/tmp/**");
+      expect(val).not.toBe("npm test");
+    }
+  });
+});
+
 describe("SettingsPanel — close behaviour", () => {
   it("clicking the close button calls onClose", async () => {
     const onClose = vi.fn();

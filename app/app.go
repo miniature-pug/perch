@@ -59,6 +59,12 @@ type App struct {
 	bridges  map[string]*internalpty.Bridge // paneID → Bridge
 	monitors map[string]agent.Monitor       // workspaceID → Monitor
 
+	// pending maps a composed approval reqID ("<raw>:<workspaceID>") to the
+	// in-flight ApprovalReq. The pump adds an entry when it surfaces a card;
+	// Approve consumes it to resolve the tool+input authoritatively for an
+	// always-rule (never trusting frontend-supplied values). Guarded by mu.
+	pending map[string]agent.ApprovalReq
+
 	cancels map[string]context.CancelFunc // workspaceID → pump/translation canceller
 
 	spawnPty   spawnPtyFunc
@@ -92,6 +98,7 @@ func NewApp(store *registry.Store, roots []string) *App {
 		emit:         func(string, ...any) {},
 		bridges:      map[string]*internalpty.Bridge{},
 		monitors:     map[string]agent.Monitor{},
+		pending:      map[string]agent.ApprovalReq{},
 		cancels:      map[string]context.CancelFunc{},
 		spawnPty:     internalpty.Spawn,
 		newMonitor:   agent.NewMonitor,
@@ -519,9 +526,24 @@ func (a *App) OpenWorkspace(id string) error {
 				// that Approve() can parse and route it via strings.LastIndex(":").
 				// Copy the ApprovalReq to avoid mutating the monitor's own pointee.
 				if evt.Approval != nil {
+					rawReqID := evt.Approval.ReqID
 					a2 := *evt.Approval
-					a2.ReqID = a2.ReqID + ":" + id
+					a2.ReqID = rawReqID + ":" + id
 					evt.Approval = &a2
+					// Always-allow auto-approval: if this request exactly matches a
+					// persisted rule, allow it silently and suppress the card +
+					// blocking notification (a routine notify keeps it visible).
+					if a.maybeAutoApprove(id, rawReqID, a2, mon) {
+						continue
+					}
+					// Register the pending approval so Approve() can resolve the
+					// tool+input authoritatively when the user clicks Always.
+					a.mu.Lock()
+					if a.pending == nil {
+						a.pending = map[string]agent.ApprovalReq{}
+					}
+					a.pending[a2.ReqID] = a2
+					a.mu.Unlock()
 				}
 				// Session-resume: when the agent reports a new session id, persist
 				// it so the next OpenWorkspace call can pass it as resumeID.
@@ -538,6 +560,51 @@ func (a *App) OpenWorkspace(id string) error {
 	}()
 
 	return nil
+}
+
+// maybeAutoApprove auto-allows an incoming approval request when it exactly
+// matches a persisted AlwaysRule (same agent, same tool, byte-identical input).
+// On a match it allows the request via the monitor, emits a routine-tier
+// transparency notification so the auto-approval is never silent, and returns
+// true so the caller suppresses the approval card and the blocking notification.
+//
+// Matching is EXACT input equality — never a glob — so an always-rule can never
+// grant more than the byte-identical request the user originally approved.
+// Rules with an empty Pattern never match (no tool-wide auto-allow hole). If the
+// monitor's Approve fails, it returns false so the card surfaces normally rather
+// than the request being silently dropped.
+func (a *App) maybeAutoApprove(workspaceID, rawReqID string, req agent.ApprovalReq, mon agent.Monitor) bool {
+	if req.Tool == "" || req.Input == "" {
+		return false
+	}
+	agentName := "claude"
+	if w, ok := a.store.Get(workspaceID); ok && w.Agent != "" {
+		agentName = w.Agent
+	}
+	s, err := a.GetSettings()
+	if err != nil {
+		return false
+	}
+	matched := false
+	for _, r := range s.AlwaysRules {
+		if r.Pattern != "" && r.Agent == agentName && r.Tool == req.Tool && r.Pattern == req.Input {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		return false
+	}
+	if err := mon.Approve(rawReqID, agent.Decision{Allow: true}); err != nil {
+		return false
+	}
+	a.emit("notify", map[string]any{
+		"tier":        "routine",
+		"title":       "Auto-approved",
+		"body":        req.Tool + " (always-allow rule)",
+		"workspaceId": workspaceID,
+	})
+	return true
 }
 
 // dispatchNotify translates an agent.Event into a "notify" Wails event at the
@@ -837,18 +904,37 @@ func (a *App) Approve(reqID, decision string) error {
 		return err
 	}
 
-	if d.Always {
-		tool := mon.LastApprovalTool()
+	// Consume the pending approval for this exact reqID. tool+input come from
+	// the backend's record of what was actually surfaced — never from the
+	// frontend — so an always-rule cannot be forged to grant something the user
+	// did not see. Resolving by reqID (not a racy "last approval" accessor) is
+	// correct even when multiple approvals are pending across workspaces.
+	a.mu.Lock()
+	req, hadPending := a.pending[reqID]
+	delete(a.pending, reqID)
+	a.mu.Unlock()
+
+	if d.Always && hadPending && req.Tool != "" && req.Input != "" {
 		agentName := "claude"
 		if w, ok := a.store.Get(workspaceID); ok && w.Agent != "" {
 			agentName = w.Agent
 		}
 		s, _ := a.GetSettings()
-		s.AlwaysRules = append(s.AlwaysRules, AlwaysRule{
-			Agent: agentName,
-			Tool:  tool,
-		})
-		_ = a.SaveSettings(s)
+		dup := false
+		for _, r := range s.AlwaysRules {
+			if r.Agent == agentName && r.Tool == req.Tool && r.Pattern == req.Input {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			s.AlwaysRules = append(s.AlwaysRules, AlwaysRule{
+				Agent:   agentName,
+				Tool:    req.Tool,
+				Pattern: req.Input,
+			})
+			_ = a.SaveSettings(s)
+		}
 	}
 	return nil
 }

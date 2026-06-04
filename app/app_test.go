@@ -804,13 +804,15 @@ func TestApp_Approve_AlwaysPersistsRule(t *testing.T) {
 	_ = store.Upsert(registry.Workspace{ID: "ws-alw", WorktreePath: wt, Agent: "claude"})
 
 	fm := agent.NewFakeMonitor(nil)
-	fm.SetApprovalTool("Bash")
 
 	a := &App{
 		store:        store,
 		emit:         func(string, ...any) {},
 		bridges:      map[string]*internalpty.Bridge{},
 		monitors:     map[string]agent.Monitor{"ws-alw": fm},
+		// Seed the pending approval the pump would have registered. tool+input
+		// are resolved from here (backend-authoritative), not from the frontend.
+		pending:      map[string]agent.ApprovalReq{"req-002:ws-alw": {ReqID: "req-002", Tool: "Bash", Input: "rm -rf /tmp/x"}},
 		settingsPath: filepath.Join(cfgDir, "settings.json"),
 	}
 
@@ -827,6 +829,118 @@ func TestApp_Approve_AlwaysPersistsRule(t *testing.T) {
 	}
 	if s.AlwaysRules[0].Tool != "Bash" {
 		t.Errorf("rule tool = %q, want Bash", s.AlwaysRules[0].Tool)
+	}
+	if s.AlwaysRules[0].Pattern != "rm -rf /tmp/x" {
+		t.Errorf("rule pattern = %q, want the exact tool input", s.AlwaysRules[0].Pattern)
+	}
+}
+
+// newAlwaysTestApp builds an App with a workspace + fake monitor + capturing
+// emit seam, for the always-allow auto-approval tests.
+func newAlwaysTestApp(t *testing.T, agentName string, notifies *[]map[string]any) (*App, *agent.FakeMonitor) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	_ = store.Upsert(registry.Workspace{ID: "ws", WorktreePath: t.TempDir(), Agent: agentName})
+	fm := agent.NewFakeMonitor(nil)
+	a := &App{
+		store: store,
+		emit: func(ev string, data ...any) {
+			if notifies != nil && ev == "notify" && len(data) == 1 {
+				if m, ok := data[0].(map[string]any); ok {
+					*notifies = append(*notifies, m)
+				}
+			}
+		},
+		bridges:      map[string]*internalpty.Bridge{},
+		monitors:     map[string]agent.Monitor{"ws": fm},
+		pending:      map[string]agent.ApprovalReq{},
+		settingsPath: filepath.Join(cfgDir, "settings.json"),
+	}
+	return a, fm
+}
+
+// TestApp_MaybeAutoApprove_ExactMatch asserts that a request exactly matching a
+// persisted rule is allowed via the monitor, fires a routine transparency
+// notification, and is suppressed (returns true).
+func TestApp_MaybeAutoApprove_ExactMatch(t *testing.T) {
+	var notifies []map[string]any
+	a, fm := newAlwaysTestApp(t, "claude", &notifies)
+	_ = a.SaveSettings(Settings{AlwaysRules: []AlwaysRule{{Agent: "claude", Tool: "Bash", Pattern: "ls -la"}}})
+
+	req := agent.ApprovalReq{ReqID: "raw1", Tool: "Bash", Input: "ls -la"}
+	if !a.maybeAutoApprove("ws", "raw1", req, fm) {
+		t.Fatal("exact-matching request must be auto-approved (suppressed)")
+	}
+	calls := fm.ApproveCalls()
+	if len(calls) != 1 || calls[0].ReqID != "raw1" || !calls[0].D.Allow {
+		t.Fatalf("expected one allow Approve(raw1); got %+v", calls)
+	}
+	if len(notifies) != 1 || notifies[0]["tier"] != "routine" {
+		t.Errorf("expected one routine transparency notify; got %+v", notifies)
+	}
+}
+
+// TestApp_MaybeAutoApprove_NoMatch asserts that a different input, a different
+// tool, and an empty-pattern rule all FAIL to auto-approve (the card surfaces).
+func TestApp_MaybeAutoApprove_NoMatch(t *testing.T) {
+	cases := []struct {
+		name string
+		rule AlwaysRule
+		req  agent.ApprovalReq
+	}{
+		{"different input", AlwaysRule{"claude", "Bash", "ls -la"}, agent.ApprovalReq{ReqID: "r", Tool: "Bash", Input: "rm -rf /"}},
+		{"different tool", AlwaysRule{"claude", "Read", "/x"}, agent.ApprovalReq{ReqID: "r", Tool: "Bash", Input: "/x"}},
+		{"empty pattern never matches", AlwaysRule{"claude", "Bash", ""}, agent.ApprovalReq{ReqID: "r", Tool: "Bash", Input: "anything"}},
+		{"glob is NOT honored (exact only)", AlwaysRule{"claude", "Read", "/tmp/**"}, agent.ApprovalReq{ReqID: "r", Tool: "Read", Input: "/tmp/secret"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a, fm := newAlwaysTestApp(t, "claude", nil)
+			_ = a.SaveSettings(Settings{AlwaysRules: []AlwaysRule{tc.rule}})
+			if a.maybeAutoApprove("ws", tc.req.ReqID, tc.req, fm) {
+				t.Errorf("%s: must NOT auto-approve", tc.name)
+			}
+			if len(fm.ApproveCalls()) != 0 {
+				t.Errorf("%s: monitor.Approve must not be called on a non-match", tc.name)
+			}
+		})
+	}
+}
+
+// TestApp_Approve_Always_CapturesPendingByReqID is the discriminating test: with
+// two approvals pending, clicking Always on the FIRST must persist a rule for
+// the FIRST's tool+input — never the most-recently-seen approval. This fails
+// under a racy "last approval" accessor and passes only with reqID resolution.
+func TestApp_Approve_Always_CapturesPendingByReqID(t *testing.T) {
+	a, _ := newAlwaysTestApp(t, "claude", nil)
+	a.pending = map[string]agent.ApprovalReq{
+		"r1:ws": {ReqID: "r1", Tool: "Read", Input: "/a.txt"},
+		"r2:ws": {ReqID: "r2", Tool: "Bash", Input: "rm -rf /"}, // the "later" one
+	}
+
+	if err := a.Approve("r1:ws", "always"); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	s, _ := a.GetSettings()
+	if len(s.AlwaysRules) != 1 {
+		t.Fatalf("expected exactly one persisted rule, got %d", len(s.AlwaysRules))
+	}
+	r := s.AlwaysRules[0]
+	if r.Tool != "Read" || r.Pattern != "/a.txt" {
+		t.Errorf("rule = {%s,%s}, want {Read,/a.txt} (the approved reqID, not the last-seen)", r.Tool, r.Pattern)
+	}
+	// Only r1 consumed; r2 stays pending.
+	a.mu.Lock()
+	_, r1Gone := a.pending["r1:ws"]
+	_, r2Kept := a.pending["r2:ws"]
+	a.mu.Unlock()
+	if r1Gone {
+		t.Error("r1 must be consumed from pending after decision")
+	}
+	if !r2Kept {
+		t.Error("r2 must remain pending (only the decided reqID is consumed)")
 	}
 }
 
@@ -1012,9 +1126,9 @@ func TestApp_Approve_AlwaysUsesWorkspaceAgent(t *testing.T) {
 	wt := t.TempDir()
 	_ = store.Upsert(registry.Workspace{ID: "ws-oc", WorktreePath: wt, Agent: "opencode"})
 	fm := agent.NewFakeMonitor(nil)
-	fm.SetApprovalTool("bash")
 	a := &App{store: store, emit: func(string, ...any) {},
 		bridges: map[string]*internalpty.Bridge{}, monitors: map[string]agent.Monitor{"ws-oc": fm},
+		pending:      map[string]agent.ApprovalReq{"r1:ws-oc": {ReqID: "r1", Tool: "bash", Input: "ls"}},
 		settingsPath: filepath.Join(cfgDir, "settings.json")}
 	if err := a.Approve("r1:ws-oc", "always"); err != nil {
 		t.Fatalf("Approve: %v", err)

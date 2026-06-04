@@ -28,7 +28,16 @@ type ApprovalReq struct {
 	ReqID   string `json:"reqId"`
 	Tool    string `json:"tool"`
 	Summary string `json:"summary"`
+	// Input is the (length-capped) raw tool input. It is the value an
+	// always-allow rule matches against by exact equality, so it must be the
+	// real input — not the truncated Summary used for display.
+	Input string `json:"input"`
 }
+
+// MaxApprovalInputLen caps the ApprovalReq.Input length so a pathological tool
+// input cannot bloat an event or a persisted always-rule. Matching is exact, so
+// both the stored rule and the incoming request are capped identically.
+const MaxApprovalInputLen = 4096
 
 type Event struct {
 	WorkspaceID string       `json:"workspaceId"`

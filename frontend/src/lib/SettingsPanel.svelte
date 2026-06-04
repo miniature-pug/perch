@@ -117,6 +117,10 @@
 
       <section class="settings-section">
         <h2>Always-allow rules</h2>
+        <p class="rules-caveat" role="note" aria-label="Security notice">
+          <span class="caveat-icon" aria-hidden="true">⚠</span>
+          Always-allow rules let an agent run a matching action again without asking. Each rule matches one exact tool input — review and revoke rules you no longer trust.
+        </p>
         {#if settings.alwaysRules.length === 0}
           <p class="empty-rules">No always-allow rules.</p>
         {:else}
@@ -125,7 +129,7 @@
               <li class="rule-row">
                 <span class="rule-agent">{rule.agent}</span>
                 <span class="rule-tool">{rule.tool}</span>
-                <span class="rule-pattern">{rule.pattern}</span>
+                <span class="rule-pattern" title={rule.pattern}>{rule.pattern}</span>
                 <button
                   aria-label="Revoke"
                   class="revoke-btn"
@@ -218,6 +222,27 @@
     background: var(--perch-accent, #7c8eff);
     color: #fff;
     border-color: var(--perch-accent, #7c8eff);
+  }
+
+  .rules-caveat {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--perch-sp-1);
+    margin: 0 0 var(--perch-sp-1) 0;
+    padding: 6px 8px;
+    border: 1px solid var(--perch-warn, #e5a000);
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--perch-warn, #e5a000) 8%, var(--perch-bg));
+    color: var(--perch-text-dim, var(--perch-text));
+    font-size: var(--perch-fs-code);
+    line-height: 1.4;
+  }
+
+  .caveat-icon {
+    color: var(--perch-warn, #e5a000);
+    flex-shrink: 0;
+    font-size: var(--perch-fs-body);
+    line-height: 1.4;
   }
 
   .empty-rules {

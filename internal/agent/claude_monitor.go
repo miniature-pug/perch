@@ -110,8 +110,12 @@ func (m *ClaudeMonitor) translateAndEmit(ctx context.Context, he hooklistener.Ho
 		if len(he.ToolInput) > 0 && len(he.ToolInput) < 120 {
 			sum += ": " + string(he.ToolInput)
 		}
+		input := string(he.ToolInput)
+		if len(input) > MaxApprovalInputLen {
+			input = input[:MaxApprovalInputLen]
+		}
 		ev = Event{Kind: "approval", State: StateAwaitingApproval,
-			Approval: &ApprovalReq{ReqID: he.ReqID, Tool: he.ToolName, Summary: sum}}
+			Approval: &ApprovalReq{ReqID: he.ReqID, Tool: he.ToolName, Summary: sum, Input: input}}
 	default:
 		return
 	}

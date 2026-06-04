@@ -11,7 +11,7 @@ export interface AgentEvent {
   workspaceId: string; kind: "state"|"usage"|"approval"|"tool";
   state?: AgentState; tokens?: number; cost?: number; approval?: ApprovalReq; err?: string;
 }
-export interface ApprovalReq { reqId: string; tool: string; summary: string; }
+export interface ApprovalReq { reqId: string; tool: string; summary: string; input?: string; }
 export interface FileDiff { path: string; added: number; removed: number; status: "M"|"A"|"D"|"R"|"?"; }
 export interface HunkLine { kind: "ctx"|"add"|"del"; text: string; }
 export interface Hunk {

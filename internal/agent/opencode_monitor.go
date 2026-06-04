@@ -115,8 +115,12 @@ func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
 		if len(f.Input) > 0 && len(f.Input) < 120 {
 			sum += ": " + string(f.Input)
 		}
+		input := string(f.Input)
+		if len(input) > MaxApprovalInputLen {
+			input = input[:MaxApprovalInputLen]
+		}
 		ev = Event{Kind: "approval", State: StateAwaitingApproval,
-			Approval: &ApprovalReq{ReqID: f.PermissionID, Tool: f.Tool, Summary: sum}}
+			Approval: &ApprovalReq{ReqID: f.PermissionID, Tool: f.Tool, Summary: sum, Input: input}}
 	default:
 		return
 	}
