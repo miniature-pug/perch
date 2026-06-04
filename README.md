@@ -122,13 +122,17 @@ from a direct pty the Go app spawned for that pane.
 |---------|---------|
 | `perch` | Open the cockpit GUI; project root = cwd |
 | `perch <path>` | Open the cockpit GUI; project root = given directory |
-| `perch attach <query>` | Fuzzy-match a workspace (by title or worktree path) in the registry and print it; the GUI owns actual focus |
+| `perch attach <query>` | Focus the running perch window on the workspace matching the query; launches the GUI if no instance is running |
 | `perch setup [--replace]` | Detect installed agents; install status hooks/plugins. `--replace` overwrites stale perch-owned entries |
 | `perch doctor` | Check runtime dependencies and configuration |
 | `perch version` | Print version and build info |
 
-`perch attach` is registry-backed and informational — it locates a workspace in
-`workspaces.json`; it does not attach to any background session.
+`perch attach <query>` uses a Wails single-instance lock: if perch is already
+running, the query is forwarded to the running window, which raises itself and
+routes to the best-matching workspace (exact `worktreePath`, else
+case-insensitive substring of path/title/branch). The forwarding process then
+exits. If no perch instance is running, `perch attach` launches the GUI
+normally.
 
 ---
 

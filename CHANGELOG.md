@@ -121,11 +121,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `--replace`; with `--replace`, stale perch-owned blocks are overwritten while
   all foreign config is preserved.
 
-- **`perch attach <query>`** — registry-backed informational lookup: fuzzy-
-  matches a workspace by title or worktree path and prints the result. The GUI
-  owns actual focus; this command does not attach to any background session.
-  Returns exit 1 on no match, exit 2 on an ambiguous match with the candidate
-  list.
+- **`perch attach <query>`** — focuses the running perch window on the
+  workspace that best matches the query (exact `worktreePath`, otherwise
+  case-insensitive substring of path/title/branch). Uses a Wails
+  `SingleInstanceLock`: the second process forwards its args to the running
+  instance, which raises the window and emits `workspace:attach {query}`; the
+  second process then exits. If no perch is running, `perch attach` launches
+  the GUI normally (the lock is a no-op when nothing holds it). On Linux the
+  forwarding process exits non-zero — expected behaviour of the lock mechanism.
 
 - **`perch doctor`** — runtime dependency check: git, agent binaries, state dir
   availability. Reports pass/fail per check.
@@ -142,3 +145,62 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **Linux-only build** — requires WebKit2GTK + GTK3 system libraries. Build
   with `make gui-build` (`-tags production` embeds the frontend assets).
+
+- **Diffstat counts in sidebar + status line** — each sidebar workspace row and
+  the status line show `+N −N` (insertions/deletions) summed from the existing
+  `DiffStat` backend call. Counts are refreshed per-workspace on every
+  `fs:changed` event so they track agent edits live.
+
+- **Sidebar collapse** — `Ctrl-b` and a toggle rail button collapse/expand the
+  sidebar. State is persisted in the layout store under the key `"sidebar"` (the
+  same mechanism as the shell drawer) and restored on next launch.
+
+- **`perch attach` single-instance focus** — see the `perch attach` entry above.
+  The command is now a thin launcher: a Wails `SingleInstanceLock` forwards
+  `os.Args` to the already-running perch window, which raises itself and routes
+  the query to workspace selection. When no instance is running it simply opens
+  the GUI.
+
+- **opencode workspace: model field hidden** — `NewSessionDialog` hides the
+  model input when `agent=opencode` and shows "Selected in the opencode TUI"
+  instead, reflecting that `opencode attach` does not accept `--model`/`--agent`
+  flags (model selection lives in the opencode TUI itself).
+
+### Changed
+
+- **Go magic-number elimination** — every former magic number and hardcoded
+  default in the Go codebase is now a named package-level constant: pty
+  cols/rows, read-buffer sizes, file-permission modes, debounce and poll
+  intervals, hook-listener token size, frecency multipliers, dbus addresses,
+  and Wails event-name prefixes. Raw `"claude"`/`"opencode"` agent strings at
+  dispatch and comparison sites are replaced with `model.ToolClaude` /
+  `model.ToolOpencode`.
+
+- **Single XDG config-dir resolver** — the `$XDG_CONFIG_HOME/perch` resolution
+  that was previously duplicated in `internal/config` and `internal/registry`
+  is now single-sourced in `registry.DefaultConfigDir()`.
+  `config.DefaultGlobalPath()` delegates to it. The app-directory name
+  `"perch"` is defined exactly once (`registry.appName`).
+
+- **Frontend constants centralised** — all frontend tuning values (timers,
+  limits, layout defaults/clamps, settings defaults, drag MIME types, the
+  `@mention` protocol prefix, localStorage keys) moved to
+  `frontend/src/lib/constants.ts`. Wails event names are named `EVT_*`
+  constants in `wails.ts`.
+
+- **CSS token additions** — `tokens.css` gained `--perch-shadow-float` (was
+  inlined in 7 components), `--perch-scrim` (5 components), the full
+  `--perch-z-*` stacking scale, `--perch-fs-shell` / `--perch-lh-shell`
+  (previously hardcoded in `Terminal.svelte`).
+
+### Fixed
+
+- **z-index 300/300 collision resolved** — the command palette and undo toast
+  both used z-index 300. The named `--perch-z-*` stacking scale in
+  `tokens.css` sets `--perch-z-undo-toast: 300` and
+  `--perch-z-command-palette: 310` so the palette is never occluded by a
+  transient toast.
+
+- **SettingsPanel wrong hex fallbacks removed** — dead/incorrect hardcoded hex
+  colour values in `SettingsPanel` that were not reachable through the token
+  system were removed; all colour references now go through CSS tokens.

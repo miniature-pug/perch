@@ -50,6 +50,29 @@ forward-design — only `Model` is set in the cockpit path).
 - **M-23 / L-26 / N-22** — `internal/worktree` deleted (zero production importers confirmed); dead `config.Config` fields (`SortOrder`, `RefreshMs`, `Agent`, `StartupCommand`, `Theme`, `BaseBranch`, `WorktreeDir`, `Files`, `PostCreate`, `PreRemove`, `Wildcards`) plus `config.Validate` and `config.AgentBinary`/`agentBins` removed.
 - **`internal/worktree`** — package deleted.
 
+### Round-2 review (2026-06-04)
+
+| Commit | Changes |
+|---|---|
+| `fcfc4f7` | Go magic-number elimination + XDG single-source refactor |
+| `8df23c3` | Frontend constants centralization + CSS token additions |
+| `12789e2` | Four spec cut-corners: diffstat counts, sidebar collapse, attach focus, opencode model field |
+
+**Config-centralization pass (fcfc4f7 / 8df23c3):** All Go tuning values are now named package-level `const`s (pty dimensions, timeouts, buffer sizes, file modes, dbus addresses, token sizes, frecency multipliers, event prefixes). Raw `"claude"`/`"opencode"` literals replaced with `model.ToolClaude`/`model.ToolOpencode`. XDG config-dir resolution previously cloned in `internal/config` and `internal/registry` is now single-sourced in `registry.DefaultConfigDir()`; `config.DefaultGlobalPath()` delegates to it; the app-dir name `"perch"` is defined exactly once (`registry.appName`). Frontend: `frontend/src/lib/constants.ts` is the single home for all FE tuning constants; Wails event names are `EVT_*` constants in `wails.ts`. CSS token additions: `--perch-shadow-float`, `--perch-scrim`, the full `--perch-z-*` stacking scale, `--perch-fs-shell`/`--perch-lh-shell`.
+
+**z-index 300/300 collision (8df23c3):** The prior command-palette/undo-toast z-index tie is resolved by the new named scale: `--perch-z-undo-toast: 300`, `--perch-z-command-palette: 310`.
+
+**SettingsPanel wrong-hex fallbacks (8df23c3):** Dead/incorrect hardcoded hex colour values in `SettingsPanel` removed; all colour references go through CSS tokens.
+
+**Four spec cut-corners now implemented (12789e2):**
+- **Diffstat counts §5.3** — sidebar rows + status line display `+N −N` from `DiffStat`, refreshed per-workspace on `fs:changed`.
+- **Sidebar collapse §7.2** — `Ctrl-b` + toggle rail; persisted via `layout.collapsed["sidebar"]`, same pattern as shell drawer.
+- **`perch attach` focus §6.5** — `SingleInstanceLock` in `app/options.go`; second launch → `onSecondInstance` → raises window + emits `"workspace:attach" {query}`; frontend routes by exact `worktreePath` then case-insensitive substring. Second process exits non-zero on Linux (expected).
+- **opencode model field §6.3** — `NewSessionDialog` hides the model input for `agent=opencode` and shows "Selected in the opencode TUI".
+
+**Unchanged / not affected this round:**
+- Spike-4 (`DisableWebViewDrop` + `preventDefault` Wails `OnFileDrop` #3686 mitigation) — confirmed present in `app/options.go:17,44` and `DragDrop.svelte:17,39`; remains a documented accepted deferral exercised in the manual WebKit smoke. Status unchanged.
+
 ---
 
 ## Methodology

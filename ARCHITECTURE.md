@@ -43,6 +43,16 @@ webview inside a GTK window. The Svelte SPA is compiled into the binary at build
 time (`-tags production` embeds the `frontend/dist/` assets). There is no
 separate frontend process and no HTTP server for IPC in production.
 
+**Single-instance lock.** `app/options.go` registers a Wails
+`SingleInstanceLock` (unique id `github.com/Miniature-Pug/perch`). If a second
+`perch` process is launched (including `perch attach <query>`), Wails forwards
+`os.Args` to the already-running instance via `OnSecondInstanceLaunch`
+(`app.onSecondInstance`), which raises the window (`WindowUnminimise` +
+`WindowShow`) and emits the Go→frontend event `"workspace:attach"` with payload
+`{query}`. The second process then exits (non-zero on Linux — expected behaviour
+of the forwarding path). When no perch instance is running, `perch attach`
+simply launches the GUI normally.
+
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  perch process                                           │
@@ -134,6 +144,26 @@ stamping the workspace id and a routable approval `reqID`.
 frontend reacts to mutating actions (create / open / close / remove) optimistically
 so the sidebar stays responsive.
 
+Key Go→frontend events:
+
+| Event name | Payload | Trigger |
+|------------|---------|---------|
+| `agent:event` | `AgentEvent` | Monitor produces a state/usage/approval event |
+| `fs:changed` | — | Per-workspace fsnotify fires (debounced) |
+| `notify` | notification record | `dispatchNotify` emits a blocking/ambient/routine notification |
+| `pty:data:<paneId>` | `[]int` (byte values) | pty bridge read loop |
+| `pty:exit:<paneId>` | `{code}` | pty process exits |
+| `workspace:attach` | `{query}` | Second-instance lock → `onSecondInstance`; frontend routes query to workspace selection |
+
+On each `fs:changed` event the frontend calls `DiffStat(worktreePath)` for the
+affected workspace and aggregates the per-file counts into a `+N −N` display in
+the sidebar row and the status line.
+
+**Sidebar collapse.** The sidebar is collapsible via `Ctrl-b` or a toggle rail
+button. Collapsed state is persisted in the layout store under the key
+`"sidebar"` (the same `layout.collapsed` map used for the shell drawer), so it
+survives across launches.
+
 ---
 
 ## Package Map
@@ -158,6 +188,75 @@ See `docs/diagrams/architecture.mmd` for the component dependency graph.
 | `internal/proc` | `Runner` interface + `ExecRunner` (production) + `FakeRunner` (tests). All shell-outs go through this seam. |
 | `internal/status` | Status-hook helper used by `perch setup` for agent state reporting. |
 | `frontend/` | Svelte 5 (runes) SPA (Vite build); communicates with Go via Wails bindings and events; renders agent terminals via xterm.js. |
+
+---
+
+## Configuration & Constants
+
+### Go named constants
+
+Every tuning value that was formerly a magic number is now a named
+package-level constant (`const`). This covers: pty default cols/rows, read
+buffer sizes, file modes, debounce and poll intervals, hook-listener token
+size, frecency multipliers, dbus notification addresses, event-name prefixes,
+and more. Agent strings (`"claude"`, `"opencode"`) are no longer used as raw
+literals; all comparison and dispatch sites use `model.ToolClaude` and
+`model.ToolOpencode`.
+
+### Single XDG config-dir resolver
+
+The XDG config-dir computation (`$XDG_CONFIG_HOME/perch`, falling back to
+`~/.config/perch`) is single-sourced:
+
+- `registry.DefaultConfigDir()` is the canonical implementation.
+- `config.DefaultGlobalPath()` delegates to it (`filepath.Join(registry.DefaultConfigDir(), "config.toml")`).
+- The application-directory name `"perch"` is defined exactly once as the
+  unexported constant `registry.appName`.
+
+Previously both `internal/config` and `internal/registry` each contained their
+own copy of this resolution logic; they now share a single source.
+
+### Frontend constants (`frontend/src/lib/constants.ts`)
+
+All frontend tuning values are centralized in `frontend/src/lib/constants.ts`:
+
+- **Timers** — `AMBIENT_DISMISS_MS`, `ROUTINE_DISMISS_MS`,
+  `LAYOUT_SAVE_DEBOUNCE_MS`, `UNDO_REMOVE_DELAY_MS`.
+- **Limits** — `CMD_RECENCY_MAX`, `TERMINAL_SCROLLBACK`, `PTY_MAX_DIM`.
+- **Layout defaults & resize clamps** — sidebar/shell default sizes and min/max
+  bounds.
+- **Settings defaults** — default theme, density, font, agent, and model.
+  These mirror the Go source of truth in `app/app.go` (`GetSettings`
+  absent-file branch). The duplication across the IPC boundary is inherent —
+  there is no shared module between Go and the Svelte SPA — so the two sides
+  must be kept in sync manually.
+- **Option lists** — `THEMES`, `DENSITIES`, `FONTS` arrays (used by
+  `SettingsPanel`).
+- **Drag MIME types** — `MIME_FILE`, `MIME_SESSION`, `MIME_HUNK`.
+- **`@mention` protocol prefix** and **localStorage keys**.
+
+Wails event names (`EVT_AGENT`, `EVT_FS_CHANGED`, `EVT_NOTIFY`,
+`EVT_PTY_DATA_PREFIX`, `EVT_PTY_EXIT_PREFIX`, `EVT_WORKSPACE_ATTACH`) are
+named `EVT_*` constants in `frontend/src/lib/wails.ts` (the IPC seam), kept
+separate from non-IPC tuning values.
+
+### CSS design-token additions
+
+`frontend/src/tokens/tokens.css` was extended with:
+
+- `--perch-shadow-float` — shared shadow for floating surfaces (previously
+  inlined in 7 components).
+- `--perch-scrim` — overlay backdrop colour (previously inlined in 5
+  components).
+- `--perch-z-*` stacking scale — a complete named z-index ladder
+  (`--perch-z-editor-send` through `--perch-z-command-palette`). The previous
+  z-index 300/300 collision between the command palette and the undo toast is
+  resolved: `--perch-z-undo-toast: 300`, `--perch-z-command-palette: 310`.
+- `--perch-fs-shell` / `--perch-lh-shell` — shell font-size and line-height
+  tokens; `Terminal.svelte` reads these instead of hardcoding `13px`/`1.5`.
+
+`SettingsPanel`'s dead/wrong hex fallbacks were removed; all colour references
+now use the token system.
 
 ---
 

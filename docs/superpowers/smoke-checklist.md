@@ -59,6 +59,24 @@ Verify each of these against a real `opencode`:
 - [ ] The changed-file list shows the written file
 - [ ] Click a file → hunk view renders `+` lines
 - [ ] Stage stages the hunk; Discard reverts it
+- [ ] Glanceable diffstat: the sidebar row AND the status line for the active
+      workspace show `+N −N` counts; they update live after a file changes
+      (this is the §5.3 count, computed per-workspace off the fs:changed event)
+
+## Layout — collapse (only the keybind/persist path is automated)
+- [ ] `Ctrl-b` collapses the sidebar to zero width; the always-visible toggle
+      rail (▶) re-expands it; the collapsed state survives a restart
+- [ ] `Ctrl-\` collapses/expands the shell drawer; state persists
+
+## Single-instance & attach (cross-process — no automated coverage)
+The Wails `SingleInstanceLock` + `perch attach` path crosses two processes and a
+D-Bus message; only this manual step proves the real round-trip.
+- [ ] With a perch window already open, run `perch attach <repo-name-or-path>` in
+      a second terminal → the EXISTING window raises/focuses and selects the
+      matching workspace; NO second window opens. (On Linux the forwarding
+      process exits non-zero — this is expected, a Wails behaviour.)
+- [ ] A bare `perch` launched while one is running raises the existing window
+      instead of opening a second cockpit
 
 ## Settings & theme
 - [ ] Open Settings (menu ▸ Settings… or the `settings:open` command)
