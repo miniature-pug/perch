@@ -89,12 +89,12 @@ func (m *ClaudeMonitor) TailTranscript(ctx context.Context, transcriptPath strin
 			if len(line) > 0 {
 				pending.WriteString(line)
 			}
-			switch {
-			case rerr == nil:
+			switch rerr {
+			case nil:
 				// A complete line (newline-terminated) is available.
 				m.emitTranscriptUsage(ctx, strings.TrimRight(pending.String(), "\r\n"))
 				pending.Reset()
-			case rerr == io.EOF:
+			case io.EOF:
 				// Reached the current end of the file. The transcript keeps growing
 				// as the session progresses, so wait and re-read appended lines
 				// (tail -f). A partial trailing line (not yet newline-terminated)
