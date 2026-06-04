@@ -6,6 +6,13 @@ real pty, real desktop notifications, a real agent).
 
 > NOTE: On a headless/VM display you may need `WEBKIT_DISABLE_COMPOSITING_MODE=1 bin/perch`.
 
+> ALSO RUN (not in this checklist, but required pre-release): the Playwright e2e
+> suite — `cd frontend && npm run test:e2e` — on a Playwright-supported OS. It
+> runs headless against `npm run preview` (no WebKit/agent needed) and includes
+> the CSS-token bundle guard (`theme-tokens.spec.ts`, `styled.spec.ts`) that
+> catches token/stylesheet regressions in the real Vite bundle. The Go headless
+> full-loop test also requires its build tag: `go test -tags integration ./app/`.
+
 ## Environment
 - [ ] Linux with WebKit2GTK + GTK3 installed
 - [ ] `claude` or `opencode` installed and authenticated
@@ -34,6 +41,18 @@ real pty, real desktop notifications, a real agent).
 - [ ] Click Allow → the agent continues; the file is written on disk
 - [ ] Sidebar status returns to idle/done
 - [ ] (Keyboard) Command palette / approval is reachable and operable by keyboard
+
+## Workspace + turn loop (opencode) — only mock-covered, verify on a real binary
+The entire opencode side-channel is validated by httptest mocks against a
+source-read of the v1.15.12 contract; there is no automated real-binary test.
+Verify each of these against a real `opencode`:
+- [ ] New Session with agent `opencode` → the pane runs `opencode serve` then `opencode attach`; the TUI appears and accepts input (the serve+attach launch incantation actually submits and connects)
+- [ ] While the agent works, the sidebar shows **running**; when the turn ends it shows **done** (busy→idle ⇒ StateDone) — and an ambient "Turn complete" notification fires
+- [ ] Opening the workspace does NOT fire a spurious "Turn complete" toast before any turn runs (idle-at-connect stays steady, not done)
+- [ ] A tool call surfaces an ApprovalCard; Allow lets it proceed; the token/cost meter updates (opencode reports both natively)
+- [ ] "Always allow" a specific tool input → the *same* input auto-approves next time, but a *different* input of the same tool still prompts (hash-based match, not prefix)
+- [ ] Deny a tool call → the agent reports the rejection (the `/permission/:id/reply` POST reached the server)
+- [ ] Resume: reopen the workspace → it attaches to the prior session (`--session <id>`)
 
 ## Diff view
 - [ ] Switch to Diff view (View ▸ Diff or the keybinding)
