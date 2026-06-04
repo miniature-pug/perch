@@ -1,13 +1,12 @@
 flowchart TD
     subgraph Config["global config.toml"]
         roots["roots []string\n(scan root directories)"]
-        blacklist["blacklist []string\n(**-glob hide filter)"]
     end
 
     subgraph DiscoveryPipeline["Discovery pipeline — internal/discover"]
         scan["Scan each root\n(WalkDir, bounded depth)\nfind dirs with .git entry\nprune node_modules / vendor / .git"]
         worktrees["git worktree list\nper candidate repo\n(internal/git)"]
-        filter["blacklist filter\n(post-walk, hide from GUI)"]
+        frecency["frecency ranking\n(rank × recency multiplier;\ncold-start → alphabetical)"]
         candidates["project + worktree list"]
     end
 
@@ -24,9 +23,8 @@ flowchart TD
 
     roots --> scan
     scan --> worktrees
-    worktrees --> filter
-    blacklist --> filter
-    filter --> candidates
+    worktrees --> frecency
+    frecency --> candidates
     candidates -->|"feeds GUI sidebar"| gui_list["GUI workspace list"]
 
     workspacesjson -->|"List() known workspaces"| gui_list

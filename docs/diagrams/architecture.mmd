@@ -18,22 +18,18 @@ flowchart TD
 
     subgraph CLIFlows["CLI sub-commands"]
         setup["perch setup\ninstall agent hooks/plugins"]
-        attach["perch attach &lt;query&gt;\nregistry lookup (no tmux)"]
+        attach["perch attach &lt;query&gt;\nsingle-instance lock → raises\nrunning window; routes workspace:attach"]
         doctor["internal/doctor\nperch doctor"]
     end
 
     subgraph DataLayer["Data & config"]
         registry["internal/registry\nworkspaces.json (XDG)\n~/.config/perch/"]
-        config["internal/config\nglobal config.toml\n+ project .perch.toml"]
+        config["internal/config\nglobal config.toml (XDG)\nroots only"]
         model["internal/model\nshared domain types"]
     end
 
     subgraph Discovery["Discovery"]
-        discover["internal/discover\ngit repo scanner"]
-    end
-
-    subgraph Worktrees["Worktrees"]
-        worktree["internal/worktree\nfile seeding + lifecycle hooks\n(present, not wired into the cockpit)"]
+        discover["internal/discover\ngit repo scanner + frecency"]
         fs["internal/fs\nfile tree + change watcher\n(Node.Modified/Untracked from git status)"]
     end
 
@@ -70,8 +66,7 @@ flowchart TD
     hooklistener <-->|"PreToolUse blocks; Decide()"| claudeagent
     opencodemon -->|"serve+attach on loopback; SSE GET /event (Basic auth);\npermission.asked → POST /permission/:id/reply"| opencodeagent
 
-    attach -->|"read"| registry
+    attach -.->|"2nd launch forwards args\n(single-instance lock)"| apppkg
 
-    worktree -->|"hooks via"| proc
     git -->|"uses"| proc
     monitor -->|"uses"| model
