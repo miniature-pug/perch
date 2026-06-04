@@ -5,12 +5,14 @@
 
   let {
     workspaces, activeId, onSelect, onNew, onReorder,
+    diffStats = {},
   }: {
     workspaces: WorkspaceVM[];
     activeId: string | null;
     onSelect: (id: string) => void;
     onNew: () => void;
     onReorder?: (draggedId: string, targetId: string) => void;
+    diffStats?: Record<string, { added: number; removed: number }>;
   } = $props();
 
   const STATUS = {
@@ -52,6 +54,7 @@
   <ul class="workspace-list">
     {#each workspaces as ws (ws.id)}
       {@const st = STATUS[ws.state as keyof typeof STATUS] ?? { icon: "?", label: ws.state }}
+      {@const ds = diffStats[ws.id]}
       <li
         class:active={ws.id === activeId}
         class:drag-over={dragOverId === ws.id}
@@ -69,6 +72,12 @@
           <span class="status-icon status-{ws.state}" aria-hidden="true">{st.icon}</span>
           <span class="workspace-title">{ws.title}</span>
           <span class="workspace-branch dim">{ws.branch}</span>
+          {#if ds && (ds.added > 0 || ds.removed > 0)}
+            <span class="sidebar-diffstat" aria-label="+{ds.added} minus {ds.removed}">
+              <span class="diff-added">+{ds.added}</span>
+              <span class="diff-removed">&minus;{ds.removed}</span>
+            </span>
+          {/if}
           <span class="status-label">{st.label}</span>
         </button>
       </li>
@@ -216,6 +225,17 @@
     flex-shrink: 0;
     max-width: 60px;
   }
+
+  /* ── Diffstat per-row ────────────────────────────────────────── */
+  .sidebar-diffstat {
+    display: flex;
+    gap: var(--perch-sp-1);
+    font-size: var(--perch-fs-caption);
+    font-family: var(--perch-font-mono);
+    flex-shrink: 0;
+  }
+  .diff-added   { color: var(--perch-ok); }
+  .diff-removed { color: var(--perch-err); }
 
   /* ── Status label ─────────────────────────────────────────────── */
   .status-label {

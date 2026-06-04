@@ -26,6 +26,7 @@ import (
 	"github.com/Miniature-Pug/perch/internal/proc"
 	internalpty "github.com/Miniature-Pug/perch/internal/pty"
 	"github.com/Miniature-Pug/perch/internal/registry"
+	"github.com/wailsapp/wails/v2/pkg/options"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -177,6 +178,30 @@ func (a *App) startup(ctx context.Context) {
 	// startup is called are not overwritten (tests never call startup directly).
 	if a.notifier == nil {
 		a.notifier = notify.New()
+	}
+}
+
+// onSecondInstance fires (in a Wails-owned goroutine) when a second `perch`
+// process launches while one is already running. Raise the window and, if the
+// launch carried a workspace query/path, route it to the frontend for selection.
+func (a *App) onSecondInstance(data options.SecondInstanceData) {
+	if a.ctx == nil {
+		return // startup not complete; shouldn't happen but be safe
+	}
+	wailsruntime.WindowUnminimise(a.ctx)
+	wailsruntime.WindowShow(a.ctx)
+
+	// Derive query from the second process's os.Args[1:].
+	var query string
+	switch {
+	case len(data.Args) >= 1 && data.Args[0] == "attach":
+		query = strings.TrimSpace(strings.Join(data.Args[1:], " "))
+	case len(data.Args) >= 1 && !strings.HasPrefix(data.Args[0], "-"):
+		query = strings.TrimSpace(data.Args[0])
+	}
+
+	if query != "" {
+		a.emit("workspace:attach", map[string]any{"query": query})
 	}
 }
 

@@ -99,11 +99,12 @@ export const setWindowFocus  = (focused: boolean)                               
 
 // Event name constants — MUST match Go's ptyDataEventPrefix / ptyExitEventPrefix in app/app.go.
 // Any rename here requires a matching rename on the Go side.
-export const EVT_AGENT           = "agent:event";
-export const EVT_FS_CHANGED      = "fs:changed";
-export const EVT_NOTIFY          = "notify";
-export const EVT_PTY_DATA_PREFIX = "pty:data:"; // append paneId to form full event name
-export const EVT_PTY_EXIT_PREFIX = "pty:exit:"; // append paneId to form full event name
+export const EVT_AGENT            = "agent:event";
+export const EVT_FS_CHANGED       = "fs:changed";
+export const EVT_NOTIFY           = "notify";
+export const EVT_PTY_DATA_PREFIX  = "pty:data:"; // append paneId to form full event name
+export const EVT_PTY_EXIT_PREFIX  = "pty:exit:"; // append paneId to form full event name
+export const EVT_WORKSPACE_ATTACH = "workspace:attach";
 
 // Event helpers — colon-separated names match the frozen Wails event table.
 export function onPtyData(paneId: string, cb: (bytes: Uint8Array) => void): () => void {
@@ -122,4 +123,7 @@ export function onNotify(
   cb: (p: { tier: "blocking"|"ambient"|"routine"; title: string; body: string; workspaceId: string }) => void,
 ): () => void {
   return window.runtime.EventsOn(EVT_NOTIFY, cb);
+}
+export function onWorkspaceAttach(cb: (p: { query: string }) => void): () => void {
+  return window.runtime.EventsOn(EVT_WORKSPACE_ATTACH, cb);
 }

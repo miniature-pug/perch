@@ -20,6 +20,11 @@ const (
 	appTitle            = "perch"
 	defaultWindowWidth  = 1280
 	defaultWindowHeight = 800
+
+	// singleInstanceID is the stable unique identifier passed to
+	// options.SingleInstanceLock. It must never change between releases so the
+	// lock file stays consistent across upgrades.
+	singleInstanceID = "github.com/Miniature-Pug/perch"
 )
 
 // Run launches the Wails desktop app. assets is the embedded SPA (from the repo
@@ -48,6 +53,10 @@ func Run(assets embed.FS, roots []string) error {
 		},
 		DragAndDrop: &options.DragAndDrop{
 			DisableWebViewDrop: disableWebViewDropForSpike4,
+		},
+		SingleInstanceLock: &options.SingleInstanceLock{
+			UniqueId:               singleInstanceID,
+			OnSecondInstanceLaunch: app.onSecondInstance,
 		},
 	})
 }

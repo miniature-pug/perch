@@ -281,15 +281,30 @@ func TestRun_NoArgs_CallsLaunchGUI(t *testing.T) {
 }
 
 func TestRun_Attach_FocusesWorkspace(t *testing.T) {
-	cfgDir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", cfgDir)
+	// attach <query> must call launchGUI (which the SingleInstanceLock will
+	// forward to a running instance, or start a fresh GUI when none is running).
+	orig := launchGUI
+	t.Cleanup(func() { launchGUI = orig })
+	launched := false
+	launchGUI = func(_ []string) error { launched = true; return nil }
 
-	_, stderr, code := callRun([]string{"attach", "my-feature"})
-	if code != 1 {
-		t.Errorf("attach with no match: want exit 1, got %d", code)
+	_, _, code := callRun([]string{"attach", "my-feature"})
+	if code != 0 {
+		t.Errorf("attach with query: want exit 0, got %d", code)
 	}
-	if !strings.Contains(stderr, "no workspace") {
-		t.Errorf("attach with no match: want 'no workspace' on stderr; got %q", stderr)
+	if !launched {
+		t.Error("attach must call launchGUI to forward to a running instance or start a fresh GUI")
+	}
+}
+
+func TestRun_Attach_NoArgs_Exit2(t *testing.T) {
+	// attach with no query must print usage and return 2.
+	_, stderr, code := callRun([]string{"attach"})
+	if code != 2 {
+		t.Errorf("attach with no args: want exit 2, got %d", code)
+	}
+	if !strings.Contains(stderr, "Usage") {
+		t.Errorf("attach with no args: want Usage on stderr; got %q", stderr)
 	}
 }
 

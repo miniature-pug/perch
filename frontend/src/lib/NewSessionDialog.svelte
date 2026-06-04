@@ -59,10 +59,17 @@
           {#each branches as b}<option value={b}>{b}</option>{/each}
         </select>
       </label>
-      <label class="setting-row">
-        <span class="setting-label">Model</span>
-        <input class="field-input" type="text" aria-label="model" value={model} onchange={(e) => { model = (e.target as HTMLInputElement).value; }} />
-      </label>
+      {#if agent !== "opencode"}
+        <label class="setting-row">
+          <span class="setting-label">Model</span>
+          <input class="field-input" type="text" aria-label="model" value={model} onchange={(e) => { model = (e.target as HTMLInputElement).value; }} />
+        </label>
+      {:else}
+        <div class="setting-row">
+          <span class="setting-label">Model</span>
+          <span class="setting-note">Selected in the opencode TUI</span>
+        </div>
+      {/if}
       <div class="dialog-actions">
         <button class="btn btn-primary" onclick={handleCreate}>Create</button>
         <button class="btn" onclick={onClose}>Cancel</button>
@@ -120,6 +127,11 @@
     color: var(--perch-text);
     font-size: var(--perch-fs-body);
     flex-shrink: 0;
+  }
+
+  .setting-note {
+    font-size: var(--perch-fs-body);
+    color: var(--perch-text-dim);
   }
 
   /* Select field */

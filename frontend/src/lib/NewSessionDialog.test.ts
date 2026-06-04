@@ -68,3 +68,50 @@ test("changing repo triggers loadBranches with the new repo", async () => {
   await waitFor(() => expect(screen.getByRole("option", { name: "feat/y" })).toBeInTheDocument());
   expect(loadBranches).toHaveBeenCalledWith("/home/user/projB");
 });
+
+// ---------------------------------------------------------------------------
+// Feature 5: model field hidden for opencode agent
+// ---------------------------------------------------------------------------
+
+test("Feature 5: default agent (claude) — model input is present", async () => {
+  const { default: NewSessionDialog } = await import("./NewSessionDialog.svelte");
+  render(NewSessionDialog, { props: {
+    open: true, repos: ["/home/user/proj"],
+    loadBranches: vi.fn(async () => ["main"]),
+    onCreate: vi.fn(), onClose: () => {},
+  }});
+  await waitFor(() => screen.getByRole("dialog", { name: /new session/i }));
+
+  // claude is the default agent — model input must be rendered
+  expect(screen.getByRole("textbox", { name: /model/i })).toBeInTheDocument();
+  expect(screen.queryByText(/selected in the opencode tui/i)).not.toBeInTheDocument();
+});
+
+test("Feature 5: switching agent to opencode hides model input and shows note", async () => {
+  const { default: NewSessionDialog } = await import("./NewSessionDialog.svelte");
+  render(NewSessionDialog, { props: {
+    open: true, repos: ["/home/user/proj"],
+    loadBranches: vi.fn(async () => ["main"]),
+    onCreate: vi.fn(), onClose: () => {},
+  }});
+  await waitFor(() => screen.getByRole("dialog", { name: /new session/i }));
+
+  // Start with claude — model input present
+  expect(screen.getByRole("textbox", { name: /model/i })).toBeInTheDocument();
+
+  // Switch agent to opencode
+  await fireEvent.change(screen.getByLabelText(/agent/i), { target: { value: "opencode" } });
+  await waitFor(() => {
+    // Model input must be gone
+    expect(screen.queryByRole("textbox", { name: /model/i })).not.toBeInTheDocument();
+    // Note explaining why is shown
+    expect(screen.getByText(/selected in the opencode tui/i)).toBeInTheDocument();
+  });
+
+  // Switching back to claude restores the model input
+  await fireEvent.change(screen.getByLabelText(/agent/i), { target: { value: "claude" } });
+  await waitFor(() => {
+    expect(screen.getByRole("textbox", { name: /model/i })).toBeInTheDocument();
+    expect(screen.queryByText(/selected in the opencode tui/i)).not.toBeInTheDocument();
+  });
+});

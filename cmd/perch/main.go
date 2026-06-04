@@ -18,7 +18,6 @@ import (
 	"github.com/Miniature-Pug/perch/internal/discover"
 	"github.com/Miniature-Pug/perch/internal/doctor"
 	"github.com/Miniature-Pug/perch/internal/proc"
-	"github.com/Miniature-Pug/perch/internal/registry"
 )
 
 // version is injected at build time via ldflags:
@@ -184,43 +183,21 @@ func handlePathArg(arg string, stdout, stderr io.Writer) int {
 	return handleLaunch(arg, stdout, stderr)
 }
 
-// handleAttach focuses an existing workspace by fuzzy-matching the query against
-// workspace titles and worktree paths in the registry. The GUI owns actual focus;
-// this is a registry-backed informational command in v1.
+// handleAttach implements `perch attach <query>`. When a perch window is already
+// running, the Wails SingleInstanceLock forwards os.Args[1:] to it automatically
+// (raising the window and routing the query to workspace selection via the
+// workspace:attach event) and this process exits. When no perch instance is
+// running, a fresh GUI is launched instead (the query is best-effort ignored in
+// that case — acceptable for v1).
+//
+// Note: on Linux the forwarding process exits non-zero — this is expected and
+// does not indicate an error.
 func handleAttach(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 || strings.TrimSpace(strings.Join(args, " ")) == "" {
 		_, _ = fmt.Fprintln(stderr, "Usage: perch attach <query>")
 		return 2
 	}
-	query := strings.Join(args, " ")
-
-	store, err := registry.Load(registry.DefaultConfigDir())
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "perch attach: %v\n", err)
-		return 1
-	}
-	var matched []registry.Workspace
-	for _, w := range store.List() {
-		if strings.Contains(strings.ToLower(w.Title), strings.ToLower(query)) ||
-			strings.Contains(strings.ToLower(w.WorktreePath), strings.ToLower(query)) {
-			matched = append(matched, w)
-		}
-	}
-	switch len(matched) {
-	case 0:
-		_, _ = fmt.Fprintf(stderr, "no workspace matches %q\n", query)
-		return 1
-	case 1:
-		_, _ = fmt.Fprintf(stdout, "workspace: %s (%s)\n", matched[0].Title, matched[0].WorktreePath)
-		_, _ = fmt.Fprintln(stdout, "Open perch GUI to focus this workspace.")
-		return 0
-	default:
-		_, _ = fmt.Fprintf(stderr, "ambiguous query %q; matches:\n", query)
-		for _, w := range matched {
-			_, _ = fmt.Fprintf(stderr, "  %s  %s\n", w.Title, w.WorktreePath)
-		}
-		return 2
-	}
+	return handleLaunch("", stdout, stderr)
 }
 
 // printUsage writes the usage summary to w.

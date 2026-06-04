@@ -24,7 +24,7 @@
   import ApprovalCard       from "./lib/ApprovalCard.svelte";
   import NotificationHub    from "./lib/NotificationHub.svelte";
   import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead } from "./lib/stores/notifications.svelte";
-  import { listWorkspaces, createWorkspace, removeWorkspace, openWorkspace, closeWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, approve, branches, readFile, setWindowFocus, writeToPty, discoverRepos } from "./lib/wails";
+  import { listWorkspaces, createWorkspace, removeWorkspace, openWorkspace, closeWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, onWorkspaceAttach, approve, branches, readFile, setWindowFocus, writeToPty, discoverRepos, diffStat } from "./lib/wails";
   import type { WorkspaceVM, ApprovalReq } from "./lib/wails";
   import { UNDO_REMOVE_DELAY_MS, SIDEBAR_MIN_W, SIDEBAR_MAX_W, SHELL_MIN_H, SHELL_MAX_H, RESIZE_STEP_PX, THEMES, MIME_SESSION, MENTION_PREFIX } from "./lib/constants";
 
@@ -35,6 +35,7 @@
   let approvals       = $state<Record<string, ApprovalReq>>({});
   let fsVersion  = $state<Record<string, number>>({});
   let usage      = $state<Record<string, { tokens: number; cost: number }>>({});
+  let wsDiffStats = $state<Record<string, { added: number; removed: number }>>({});
 
   // Repo discovery — populated lazily when the New Session dialog opens.
   let discoveredRepoPaths = $state<string[]>([]);
@@ -122,14 +123,28 @@
   const visibleWorkspaces = $derived(workspaces.filter(w => !pendingRemovalIds.has(w.id)));
 
   // Off-functions captured from wails event subscriptions (subscribed synchronously in onMount).
-  let offAgentEvent: (() => void) | null = null;
-  let offNotify:     (() => void) | null = null;
-  let offFsChanged:  (() => void) | null = null;
+  let offAgentEvent:        (() => void) | null = null;
+  let offNotify:            (() => void) | null = null;
+  let offFsChanged:         (() => void) | null = null;
+  let offWorkspaceAttach:   (() => void) | null = null;
 
   // Window focus/blur handlers — report focus state to the backend so it can gate
   // OS desktop notifications (only fire when the window is unfocused).
   function onWindowFocus() { setWindowFocus(true).catch(() => {}); }
   function onWindowBlur()  { setWindowFocus(false).catch(() => {}); }
+
+  // Feature §5.3: aggregate +N −N diffstat per workspace.
+  // A missing or non-git worktree must not throw; catch suppresses errors silently.
+  async function refreshDiffStat(ws: WorkspaceVM) {
+    try {
+      const files = await diffStat(ws.worktreePath);
+      let added = 0, removed = 0;
+      for (const f of files) { added += f.added; removed += f.removed; }
+      wsDiffStats = { ...wsDiffStats, [ws.id]: { added, removed } };
+    } catch {
+      // non-git or missing worktree — leave any existing entry untouched
+    }
+  }
 
   // H-11: capture-phase pointerdown on the app root — when in terminal mode and the
   // click target is NOT inside a .terminal / [data-terminal-zone] element, leave
@@ -170,16 +185,34 @@
 
     offFsChanged = onFsChanged((p) => {
       fsVersion[p.workspaceId] = (fsVersion[p.workspaceId] ?? 0) + 1;
+      const ws = workspaces.find(w => w.id === p.workspaceId);
+      if (ws) refreshDiffStat(ws);
+    });
+
+    offWorkspaceAttach = onWorkspaceAttach((p) => {
+      // Find by exact worktreePath first, then fuzzy match on title/branch/path.
+      const q = p.query;
+      const exact = workspaces.find(w => w.worktreePath === q);
+      const fuzzy = workspaces.find(w =>
+        w.worktreePath.toLowerCase().includes(q.toLowerCase()) ||
+        w.title.toLowerCase().includes(q.toLowerCase()) ||
+        w.branch.toLowerCase().includes(q.toLowerCase())
+      );
+      const target = exact ?? fuzzy ?? null;
+      if (target) onSelect(target.id);
     });
 
     await Promise.all([settings.load(), layout.restore()]);
     workspaces = await listWorkspaces();
+    // Refresh diffstats for all loaded workspaces (fire-and-forget, event-driven updates thereafter).
+    for (const ws of workspaces) refreshDiffStat(ws);
   });
 
   onDestroy(() => {
     offAgentEvent?.();
     offNotify?.();
     offFsChanged?.();
+    offWorkspaceAttach?.();
     window.removeEventListener("focus", onWindowFocus);
     window.removeEventListener("blur",  onWindowBlur);
     // Cancel any pending deferred removals to avoid use-after-unmount calls.
@@ -440,6 +473,13 @@
         }
         break;
       }
+      case "b": {
+        if (e.ctrlKey) {
+          e.preventDefault();
+          layout.setCollapsed("sidebar", !layout.collapsed["sidebar"]);
+        }
+        break;
+      }
       case "/": {
         e.preventDefault();
         filtering    = true;
@@ -525,7 +565,18 @@
     <MenuBar onCommand={(id) => runCommand(id)} {unreadCount} />
 
     <div class="main-area">
-      <aside data-zone="sidebar" class="sidebar-zone" style:width="{layout.sidebarW}px">
+      <!-- Sidebar toggle rail — always visible, survives collapsed state -->
+      <button
+        class="sidebar-toggle-rail"
+        class:sidebar-collapsed={layout.collapsed["sidebar"]}
+        aria-expanded={!layout.collapsed["sidebar"]}
+        aria-label="Toggle sidebar"
+        onclick={() => layout.setCollapsed("sidebar", !layout.collapsed["sidebar"])}
+      >{layout.collapsed["sidebar"] ? "▶" : "◀"}</button>
+
+      <aside data-zone="sidebar" class="sidebar-zone"
+             style:width={layout.collapsed["sidebar"] ? "0" : `${layout.sidebarW}px`}
+             inert={layout.collapsed["sidebar"] ? true : undefined}>
         {#if filtering}
           <input
             class="filter-input"
@@ -540,14 +591,15 @@
             }}
           />
         {/if}
-        <Sidebar workspaces={shownWorkspaces} {activeId} onSelect={onSelect} onNew={openNewSession} onReorder={handleReorder} />
+        <Sidebar workspaces={shownWorkspaces} {activeId} onSelect={onSelect} onNew={openNewSession} onReorder={handleReorder} diffStats={wsDiffStats} />
       </aside>
 
       <div class="divider divider-v" role="slider" aria-label="Resize sidebar"
            aria-orientation="vertical" aria-valuenow={layout.sidebarW} aria-valuemin={SIDEBAR_MIN_W} aria-valuemax={SIDEBAR_MAX_W}
            tabindex="0"
            onmousedown={startResizeSidebar}
-           onkeydown={keyResizeSidebar}></div>
+           onkeydown={keyResizeSidebar}
+           style:display={layout.collapsed["sidebar"] ? "none" : undefined}></div>
 
       <div class="center-column">
         <div data-zone="stage" class="stage-zone" role="region" aria-label="stage"
@@ -695,6 +747,14 @@
             <span class="status-branch">{active.branch}</span>
             <span class="status-sep" aria-hidden="true">·</span>
             <span class="status-state">{active.state}</span>
+            {@const ds = wsDiffStats[active.id]}
+            {#if ds && (ds.added > 0 || ds.removed > 0)}
+              <span class="status-sep" aria-hidden="true">·</span>
+              <span class="status-diffstat" aria-label="+{ds.added} minus {ds.removed}">
+                <span class="status-diff-added">+{ds.added}</span>
+                <span class="status-diff-removed">&minus;{ds.removed}</span>
+              </span>
+            {/if}
           {/if}
           <span class="status-spacer"></span>
           {#if active}
@@ -821,7 +881,31 @@
   .status-session    { color: var(--perch-text); font-weight: 500; }
   .status-branch     { font-family: var(--perch-font-mono); font-size: var(--perch-fs-caption); }
   .status-state      { color: var(--perch-text-dim); }
+  .status-diffstat   { display: flex; gap: var(--perch-sp-1);
+                       font-family: var(--perch-font-mono); font-size: var(--perch-fs-caption); }
+  .status-diff-added   { color: var(--perch-ok); }
+  .status-diff-removed { color: var(--perch-err); }
   .status-spacer     { flex: 1; }
+
+  /* Sidebar collapse toggle rail */
+  .sidebar-toggle-rail {
+    display: flex; align-items: center; justify-content: center;
+    width: var(--perch-sp-2);
+    flex-shrink: 0;
+    background: var(--perch-surface);
+    border: none;
+    border-right: 1px solid var(--perch-border);
+    color: var(--perch-text-dim);
+    font-size: var(--perch-fs-caption);
+    cursor: pointer;
+    transition: color var(--perch-dur) var(--perch-ease),
+                background var(--perch-dur) var(--perch-ease);
+    z-index: 1;
+  }
+  .sidebar-toggle-rail:hover { color: var(--perch-text); background: color-mix(in srgb, var(--perch-accent) 10%, transparent); }
+  .sidebar-toggle-rail:focus-visible { outline: 2px solid var(--perch-accent); outline-offset: -2px; }
+  /* When sidebar is collapsed the rail keeps its border but the aside is width:0 */
+  .sidebar-toggle-rail.sidebar-collapsed { border-right: 1px solid var(--perch-border); }
 
   /* First-run empty state */
   .empty-state {

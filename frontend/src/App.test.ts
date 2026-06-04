@@ -56,9 +56,10 @@ vi.mock("./lib/Preview.svelte", async () => ({
 
 // Captured callbacks for the wails event helpers — reset in beforeEach.
 const captured = {
-  agent:     [] as Array<(ev: any) => void>,
-  notify:    [] as Array<(n: any)  => void>,
-  fsChanged: [] as Array<(p: any)  => void>,
+  agent:           [] as Array<(ev: any) => void>,
+  notify:          [] as Array<(n: any)  => void>,
+  fsChanged:       [] as Array<(p: any)  => void>,
+  workspaceAttach: [] as Array<(p: any)  => void>,
 };
 
 vi.mock("./lib/wails", () => ({
@@ -87,6 +88,19 @@ vi.mock("./lib/wails", () => ({
   onAgentEvent:    vi.fn((cb) => { captured.agent.push(cb);     return () => {}; }),
   onNotify:        vi.fn((cb) => { captured.notify.push(cb);    return () => {}; }),
   onFsChanged:     vi.fn((cb) => { captured.fsChanged.push(cb); return () => {}; }),
+  onWorkspaceAttach: vi.fn((cb) => { captured.workspaceAttach.push(cb); return () => {}; }),
+  diffStat:        vi.fn(async (worktreePath: string) => {
+    // Return 2 files summing to +5 −2 for /tmp/alpha; empty for all others.
+    // This keeps existing tests unaffected (they don't assert on diffstat values)
+    // while letting Feature 1 tests verify a known non-zero total.
+    if (worktreePath === "/tmp/alpha") {
+      return [
+        { path: "a.ts", added: 3, removed: 1, status: "M" as const },
+        { path: "b.ts", added: 2, removed: 1, status: "M" as const },
+      ];
+    }
+    return [];
+  }),
   setWindowFocus:  vi.fn(async () => {}),
 }));
 
@@ -120,9 +134,10 @@ const fakeWorkspaces = [
 beforeEach(async () => {
   vi.clearAllMocks();
   // Reset captured callback arrays (vi.clearAllMocks does NOT empty them).
-  captured.agent.length     = 0;
-  captured.notify.length    = 0;
-  captured.fsChanged.length = 0;
+  captured.agent.length           = 0;
+  captured.notify.length          = 0;
+  captured.fsChanged.length       = 0;
+  captured.workspaceAttach.length = 0;
   // Reset the real layout singleton to default values before each test.
   const { layout } = await import("./lib/stores/layout.svelte");
   layout.setView("agent");
@@ -2495,5 +2510,193 @@ describe("notifications.svelte.ts L-22: auto-dismiss non-blocking tiers", () => 
     expect(after.find((x) => x.id === n.id)?.read).toBe(true);
 
     vi.useRealTimers();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FEATURE 1 (§5.3): diffstat counts — Sidebar row +/− and status-line diffstat
+// ---------------------------------------------------------------------------
+describe("App.svelte Feature 1: diffstat counts in Sidebar and status line", () => {
+  it("Sidebar row for /tmp/alpha shows +5 and −2 after workspaces load", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    // Wait for workspaces to load and diffStats to be computed
+    await screen.findByRole("button", { name: "Alpha" });
+
+    // diffStat for /tmp/alpha returns 2 files → +5 −2 total
+    await waitFor(() => {
+      const alphaBtn = screen.getByRole("button", { name: "Alpha" });
+      expect(alphaBtn.textContent).toContain("+5");
+      expect(alphaBtn.textContent).toContain("2");
+    });
+  });
+
+  it("Sidebar row for /tmp/beta has NO diffstat span (diffStat returns [])", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    await screen.findByRole("button", { name: "Beta" });
+    // Allow time for diffstat to settle; Beta gets [] so no span should appear
+    await tick();
+    await tick();
+
+    const betaBtn = screen.getByRole("button", { name: "Beta" });
+    expect(betaBtn.querySelector(".sidebar-diffstat")).toBeNull();
+  });
+
+  it("status line shows active workspace diffstat when Alpha is selected", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    await tick();
+
+    // Status line diffstat should appear for the active workspace
+    await waitFor(() => {
+      const statusDiffstat = document.querySelector(".status-diffstat");
+      expect(statusDiffstat).toBeInTheDocument();
+      expect(statusDiffstat!.textContent).toContain("+5");
+    });
+  });
+
+  it("onFsChanged for ws-1 re-calls diffStat with /tmp/alpha", async () => {
+    const { listWorkspaces, diffStat } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    // Wait for workspaces to load (initial diffStat calls happen here)
+    await screen.findByRole("button", { name: "Alpha" });
+    await tick();
+
+    // Clear call count after initial load
+    vi.mocked(diffStat).mockClear();
+
+    // Fire fs:changed for ws-1 (/tmp/alpha)
+    const cb = captured.fsChanged.at(-1)!;
+    cb({ workspaceId: "ws-1", path: "/tmp/alpha/changed.ts" });
+    await tick();
+
+    // diffStat must be re-called with the alpha worktreePath
+    await waitFor(() =>
+      expect(diffStat).toHaveBeenCalledWith("/tmp/alpha")
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FEATURE 2 (§7.7): sidebar collapse via Ctrl-b and toggle rail button
+// ---------------------------------------------------------------------------
+describe("App.svelte Feature 2: sidebar collapse via Ctrl-b and toggle rail", () => {
+  it("Ctrl-b in NORMAL mode toggles layout.collapsed['sidebar'] from false to true", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await tick();
+
+    expect(layout.collapsed["sidebar"]).toBeFalsy();
+
+    await fireEvent.keyDown(document.body, { key: "b", ctrlKey: true });
+    await tick();
+
+    expect(layout.collapsed["sidebar"]).toBe(true);
+
+    // Second Ctrl-b → back to false
+    await fireEvent.keyDown(document.body, { key: "b", ctrlKey: true });
+    await tick();
+
+    expect(layout.collapsed["sidebar"]).toBe(false);
+  });
+
+  it("clicking the Toggle sidebar rail button flips layout.collapsed['sidebar']", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await tick();
+
+    expect(layout.collapsed["sidebar"]).toBeFalsy();
+
+    const railBtn = screen.getByRole("button", { name: "Toggle sidebar" });
+    await fireEvent.click(railBtn);
+    await tick();
+
+    expect(layout.collapsed["sidebar"]).toBe(true);
+
+    // aria-expanded reflects collapsed state
+    expect(railBtn).toHaveAttribute("aria-expanded", "false");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FEATURE 4: workspace attach routing via onWorkspaceAttach
+// ---------------------------------------------------------------------------
+describe("App.svelte Feature 4: onWorkspaceAttach routes to matching workspace", () => {
+  it("attach callback with query matching a workspace title calls openWorkspace with that id", async () => {
+    const { listWorkspaces, openWorkspace } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    // Wait for workspaces to load (onWorkspaceAttach is subscribed in onMount)
+    await screen.findByRole("button", { name: "Alpha" });
+    await tick();
+
+    vi.mocked(openWorkspace).mockClear();
+
+    // Fire the attach callback with a query that matches "Alpha" by title
+    const cb = captured.workspaceAttach.at(-1)!;
+    cb({ query: "Alpha" });
+    await tick();
+
+    expect(openWorkspace).toHaveBeenCalledWith("ws-1");
+  });
+
+  it("attach callback with query matching a worktreePath substring calls openWorkspace", async () => {
+    const { listWorkspaces, openWorkspace } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    await screen.findByRole("button", { name: "Beta" });
+    await tick();
+
+    vi.mocked(openWorkspace).mockClear();
+
+    // "beta" matches ws-2's worktreePath "/tmp/beta" case-insensitively
+    const cb = captured.workspaceAttach.at(-1)!;
+    cb({ query: "beta" });
+    await tick();
+
+    expect(openWorkspace).toHaveBeenCalledWith("ws-2");
+  });
+
+  it("attach callback with a query matching nothing does NOT call openWorkspace", async () => {
+    const { listWorkspaces, openWorkspace } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    await screen.findByRole("button", { name: "Alpha" });
+    await tick();
+
+    vi.mocked(openWorkspace).mockClear();
+
+    const cb = captured.workspaceAttach.at(-1)!;
+    cb({ query: "xyzzy-no-match" });
+    await tick();
+
+    expect(openWorkspace).not.toHaveBeenCalled();
   });
 });

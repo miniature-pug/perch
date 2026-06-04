@@ -116,3 +116,45 @@ test("dropping a session onto its own row does NOT call onReorder", async () => 
   await fireEvent.drop(selfLi, { dataTransfer: dt });
   expect(onReorder).not.toHaveBeenCalled();
 });
+
+// ---------------------------------------------------------------------------
+// Feature 1: diffStats prop — +/− render in sidebar rows
+// ---------------------------------------------------------------------------
+
+test("diffStats prop: row with nonzero added/removed shows .sidebar-diffstat with +N and −N", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  const diffStats = {
+    ws_a: { added: 5, removed: 2 },
+  };
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {}, diffStats } });
+  await waitFor(() => screen.getByText("feat-auth"));
+
+  const featAuthBtn = screen.getByRole("button", { name: /feat-auth/ });
+  const diffstatSpan = featAuthBtn.querySelector(".sidebar-diffstat");
+  expect(diffstatSpan).toBeInTheDocument();
+  expect(diffstatSpan!.querySelector(".diff-added")!.textContent).toContain("+5");
+  expect(diffstatSpan!.querySelector(".diff-removed")!.textContent).toContain("2");
+});
+
+test("diffStats prop: row with added=0 removed=0 does NOT render .sidebar-diffstat", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  const diffStats = {
+    ws_a: { added: 0, removed: 0 },
+  };
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {}, diffStats } });
+  await waitFor(() => screen.getByText("feat-auth"));
+
+  const featAuthBtn = screen.getByRole("button", { name: /feat-auth/ });
+  expect(featAuthBtn.querySelector(".sidebar-diffstat")).toBeNull();
+});
+
+test("diffStats prop: row without a diffStats entry does NOT render .sidebar-diffstat", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  // ws_b has no entry in diffStats
+  const diffStats = { ws_a: { added: 3, removed: 1 } };
+  render(Sidebar, { props: { workspaces, activeId: "ws_b", onSelect: () => {}, onNew: () => {}, diffStats } });
+  await waitFor(() => screen.getByText("feat-core"));
+
+  const featCoreBtn = screen.getByRole("button", { name: /feat-core/ });
+  expect(featCoreBtn.querySelector(".sidebar-diffstat")).toBeNull();
+});
