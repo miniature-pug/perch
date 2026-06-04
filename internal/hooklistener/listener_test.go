@@ -4,18 +4,20 @@ package hooklistener_test
 import (
 	"context"
 	"fmt"
+	"github.com/Miniature-Pug/perch/internal/hooklistener"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
-	"github.com/Miniature-Pug/perch/internal/hooklistener"
 )
 
 func TestListenerAddrAndToken(t *testing.T) {
 	t.Parallel()
 	l, err := hooklistener.New()
-	if err != nil { t.Fatalf("New: %v", err) }
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	defer func() { _ = l.Close() }()
 	if !strings.HasPrefix(l.Addr(), "127.0.0.1:") {
 		t.Errorf("want 127.0.0.1:PORT, got %q", l.Addr())
@@ -28,11 +30,15 @@ func TestListenerAddrAndToken(t *testing.T) {
 func TestListenerUnauthorized(t *testing.T) {
 	t.Parallel()
 	l, err := hooklistener.New()
-	if err != nil { t.Fatalf("New: %v", err) }
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	defer func() { _ = l.Close() }()
 	resp, err := http.Post(fmt.Sprintf("http://%s/hook", l.Addr()),
 		"application/json", strings.NewReader(`{}`))
-	if err != nil { t.Fatalf("POST: %v", err) }
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("want 401, got %d", resp.StatusCode)
@@ -42,7 +48,9 @@ func TestListenerUnauthorized(t *testing.T) {
 func TestStopEventArrives(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	l, err := hooklistener.New()
-	if err != nil { t.Fatalf("New: %v", err) }
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	defer func() { _ = l.Close() }()
 
 	body := `{"hook_event_name":"Stop","session_id":"s1","transcript_path":"/t.jsonl","cwd":"/p"}`
@@ -50,9 +58,13 @@ func TestStopEventArrives(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+l.Token())
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
-	if err != nil { t.Fatalf("POST: %v", err) }
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK { t.Fatalf("want 200, got %d", resp.StatusCode) }
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
 
 	select {
 	case ev := <-l.Events():
@@ -67,7 +79,9 @@ func TestStopEventArrives(t *testing.T) {
 func TestPreToolUse_ClientCancelDoesNotHang(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	l, err := hooklistener.New()
-	if err != nil { t.Fatalf("New: %v", err) }
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	defer func() { _ = l.Close() }()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -79,14 +93,18 @@ func TestPreToolUse_ClientCancelDoesNotHang(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		resp, _ := http.DefaultClient.Do(req)
-		if resp != nil { _ = resp.Body.Close() }
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
 		close(done)
 	}()
 
 	// Wait until the approval is parked (event delivered), then cancel.
 	select {
 	case ev := <-l.Events():
-		if ev.Type != "PreToolUse" { t.Errorf("unexpected event: %+v", ev) }
+		if ev.Type != "PreToolUse" {
+			t.Errorf("unexpected event: %+v", ev)
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("event never delivered (was it dropped?)")
 	}
@@ -195,14 +213,20 @@ func TestStopEventNotDroppedUnderBackpressure(t *testing.T) {
 }
 
 func TestPreToolUseAllowDeny(t *testing.T) {
-	for _, tc := range []struct{ name string; allow bool; want string }{
+	for _, tc := range []struct {
+		name  string
+		allow bool
+		want  string
+	}{
 		{"allow", true, "allow"}, {"deny", false, "deny"},
 	} {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())
 			l, err := hooklistener.New()
-			if err != nil { t.Fatalf("New: %v", err) }
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
 			defer func() { _ = l.Close() }()
 
 			payload := `{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Bash","tool_input":{"command":"ls"}}`
@@ -210,11 +234,17 @@ func TestPreToolUseAllowDeny(t *testing.T) {
 			req.Header.Set("Authorization", "Bearer "+l.Token())
 			req.Header.Set("Content-Type", "application/json")
 
-			type result struct{ body string; code int }
+			type result struct {
+				body string
+				code int
+			}
 			ch := make(chan result, 1)
 			go func() {
 				resp, err := http.DefaultClient.Do(req)
-				if err != nil { ch <- result{code: -1}; return }
+				if err != nil {
+					ch <- result{code: -1}
+					return
+				}
 				defer func() { _ = resp.Body.Close() }()
 				b, _ := io.ReadAll(resp.Body)
 				ch <- result{body: strings.TrimSpace(string(b)), code: resp.StatusCode}
@@ -224,7 +254,9 @@ func TestPreToolUseAllowDeny(t *testing.T) {
 			defer cancel()
 			select {
 			case ev := <-l.Events():
-				if ev.Type != "PreToolUse" || ev.ReqID == "" { t.Errorf("bad event: %+v", ev) }
+				if ev.Type != "PreToolUse" || ev.ReqID == "" {
+					t.Errorf("bad event: %+v", ev)
+				}
 				l.Decide(ev.ReqID, hooklistener.Decision{Allow: tc.allow})
 			case <-ctx.Done():
 				t.Fatal("timeout waiting for event")
@@ -232,9 +264,13 @@ func TestPreToolUseAllowDeny(t *testing.T) {
 
 			select {
 			case r := <-ch:
-				if r.code != http.StatusOK { t.Errorf("want 200, got %d", r.code) }
+				if r.code != http.StatusOK {
+					t.Errorf("want 200, got %d", r.code)
+				}
 				want := `"permissionDecision":"` + tc.want + `"`
-				if !strings.Contains(r.body, want) { t.Errorf("body %q missing %q", r.body, want) }
+				if !strings.Contains(r.body, want) {
+					t.Errorf("body %q missing %q", r.body, want)
+				}
 			case <-ctx.Done():
 				t.Fatal("timeout waiting for response")
 			}

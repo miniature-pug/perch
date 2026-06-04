@@ -2,8 +2,8 @@
 package agent_test
 
 import (
-	"testing"
 	"github.com/Miniature-Pug/perch/internal/agent"
+	"testing"
 )
 
 func TestNewMonitorDispatch(t *testing.T) {
@@ -15,13 +15,21 @@ func TestNewMonitorDispatch(t *testing.T) {
 		}
 	}
 	_, err := agent.NewMonitor("unknown", agent.NewClaude())
-	if err == nil { t.Error("want error for unknown tool") }
+	if err == nil {
+		t.Error("want error for unknown tool")
+	}
 }
 
 func TestNewMonitorNilSafe(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	m, err := agent.NewMonitor("claude", agent.NewClaude())
-	if err != nil { t.Fatalf("NewMonitor: %v", err) }
-	if m.Events() == nil { t.Error("Events() channel must not be nil") }
-	if err := m.Teardown(); err != nil { t.Errorf("Teardown: %v", err) }
+	if err != nil {
+		t.Fatalf("NewMonitor: %v", err)
+	}
+	if m.Events() == nil {
+		t.Error("Events() channel must not be nil")
+	}
+	if err := m.Teardown(); err != nil {
+		t.Errorf("Teardown: %v", err)
+	}
 }

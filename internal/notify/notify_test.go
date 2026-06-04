@@ -2,8 +2,8 @@
 package notify_test
 
 import (
-	"testing"
 	"github.com/Miniature-Pug/perch/internal/notify"
+	"testing"
 )
 
 func TestFakeNotifierRecordsCalls(t *testing.T) {

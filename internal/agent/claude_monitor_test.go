@@ -24,7 +24,9 @@ func newMonitorWithTestListener(t *testing.T) (*agent.ClaudeMonitor, *hooklisten
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	l, err := hooklistener.New()
-	if err != nil { t.Fatalf("listener: %v", err) }
+	if err != nil {
+		t.Fatalf("listener: %v", err)
+	}
 	m := agent.NewClaudeMonitorWithListener(agent.NewClaude(), l)
 	return m, l, func() { _ = l.Close() }
 }
@@ -42,8 +44,12 @@ func TestClaudeMonitorPrepare(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(claudeDir, "settings.json"), []byte(foreign), 0o644)
 
 	cmd, err := m.Prepare(context.Background(), "ws1", worktree, "", "")
-	if err != nil { t.Fatalf("Prepare: %v", err) }
-	if !strings.HasPrefix(cmd, "claude") { t.Errorf("unexpected cmd: %q", cmd) }
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if !strings.HasPrefix(cmd, "claude") {
+		t.Errorf("unexpected cmd: %q", cmd)
+	}
 
 	data, _ := os.ReadFile(filepath.Join(claudeDir, "settings.json"))
 	var s map[string]any
@@ -51,7 +57,9 @@ func TestClaudeMonitorPrepare(t *testing.T) {
 	hooks, _ := s["hooks"].(map[string]any)
 	for _, ev := range []string{"PreToolUse", "Stop", "StopFailure", "SessionStart"} {
 		arr, _ := hooks[ev].([]any)
-		if len(arr) == 0 { t.Errorf("hooks[%q] missing after Prepare", ev) }
+		if len(arr) == 0 {
+			t.Errorf("hooks[%q] missing after Prepare", ev)
+		}
 	}
 	// Foreign Stop hook must still be present.
 	stopArr, _ := hooks["Stop"].([]any)
@@ -61,10 +69,14 @@ func TestClaudeMonitorPrepare(t *testing.T) {
 		hs, _ := g["hooks"].([]any)
 		for _, h := range hs {
 			hm, _ := h.(map[string]any)
-			if strings.Contains(fmt.Sprint(hm["command"]), "foreign-tool") { found = true }
+			if strings.Contains(fmt.Sprint(hm["command"]), "foreign-tool") {
+				found = true
+			}
 		}
 	}
-	if !found { t.Error("foreign Stop hook was removed by Prepare") }
+	if !found {
+		t.Error("foreign Stop hook was removed by Prepare")
+	}
 
 	// Teardown must remove perch hooks but leave foreign ones.
 	_ = m.Teardown()
@@ -79,26 +91,34 @@ func TestClaudeMonitorPrepare(t *testing.T) {
 		hs, _ := g["hooks"].([]any)
 		for _, h := range hs {
 			hm, _ := h.(map[string]any)
-			if strings.Contains(fmt.Sprint(hm["command"]), "foreign-tool") { foreignStillThere = true }
+			if strings.Contains(fmt.Sprint(hm["command"]), "foreign-tool") {
+				foreignStillThere = true
+			}
 			if strings.Contains(fmt.Sprint(hm["command"]), "perch-monitor-hook") {
 				t.Error("perch hook survived Teardown")
 			}
 		}
 	}
-	if !foreignStillThere { t.Error("foreign Stop hook missing after Teardown") }
+	if !foreignStillThere {
+		t.Error("foreign Stop hook missing after Teardown")
+	}
 }
 
 func TestClaudeMonitorSettingsFileMode(t *testing.T) {
 	m, _, cleanup := newMonitorWithTestListener(t)
 	defer cleanup()
 	worktree := filepath.Join(os.Getenv("HOME"), "repo-mode")
-	if err := os.MkdirAll(worktree, 0o755); err != nil { t.Fatal(err) }
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	// No pre-existing .claude/settings.json → Prepare creates it fresh.
 	if _, err := m.Prepare(context.Background(), "wsM", worktree, "", ""); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
 	fi, err := os.Stat(filepath.Join(worktree, ".claude", "settings.json"))
-	if err != nil { t.Fatalf("stat: %v", err) }
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
 	if perm := fi.Mode().Perm(); perm != 0o600 {
 		t.Errorf("settings.json mode = %o, want 600 (carries bearer token)", perm)
 	}
@@ -163,7 +183,9 @@ func TestClaudeMonitorTranscriptTail(t *testing.T) {
 		select {
 		case ev := <-m.Events():
 			if ev.Kind == "usage" {
-				if ev.Tokens != 15 { t.Errorf("want tokens=15 (10+5), got %d", ev.Tokens) }
+				if ev.Tokens != 15 {
+					t.Errorf("want tokens=15 (10+5), got %d", ev.Tokens)
+				}
 				return
 			}
 		case <-deadline:
@@ -292,7 +314,9 @@ func TestClaudeMonitorEventTranslation(t *testing.T) {
 		req.Header.Set("Authorization", "Bearer "+l.Token())
 		req.Header.Set("Content-Type", "application/json")
 		resp, _ := http.DefaultClient.Do(req)
-		if resp != nil { _ = resp.Body.Close() }
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
 	}
 	post(`{"hook_event_name":"SessionStart","session_id":"sid-A","transcript_path":"/t.jsonl","cwd":"/p"}`)
 	post(`{"hook_event_name":"Stop","session_id":"sid-A","transcript_path":"/t.jsonl","cwd":"/p"}`)
@@ -301,12 +325,18 @@ func TestClaudeMonitorEventTranslation(t *testing.T) {
 	var got []agent.Event
 	for len(got) < 2 {
 		select {
-		case ev := <-m.Events(): got = append(got, ev)
-		case <-deadline: t.Fatalf("timeout after %d events", len(got))
+		case ev := <-m.Events():
+			got = append(got, ev)
+		case <-deadline:
+			t.Fatalf("timeout after %d events", len(got))
 		}
 	}
-	if got[0].Kind != "state" || got[0].State != agent.StateRunning { t.Errorf("ev[0]: %+v", got[0]) }
-	if got[1].Kind != "state" || got[1].State != agent.StateDone { t.Errorf("ev[1]: %+v", got[1]) }
+	if got[0].Kind != "state" || got[0].State != agent.StateRunning {
+		t.Errorf("ev[0]: %+v", got[0])
+	}
+	if got[1].Kind != "state" || got[1].State != agent.StateDone {
+		t.Errorf("ev[1]: %+v", got[1])
+	}
 
 	// State tracking: after the Stop event drained, CurrentState reflects done.
 	// (translateAndEmit sets m.state BEFORE the channel send, so this is race-free.)

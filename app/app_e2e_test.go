@@ -5,15 +5,16 @@
 // hooklistener without launching any real claude/opencode binary.
 //
 // BUG locks:
-//   1 (pty wire): OpenWorkspace passes dataEvent == "pty:data:pane-<id>" so the
-//      backend emits on exactly the channel WorkspaceVM.PaneID ("pane-<id>") that
-//      the frontend Terminal subscribes to. The fake spawnPty captures and asserts
-//      the event name; it also fires the emit callback once to exercise the path.
-//      NOTE: the true cross-process round-trip (real pty bytes → WebKit → xterm)
-//      is verified by the manual smoke checklist, since this test uses a fake bridge.
-//   2+3: ListWorkspaces populates PaneID, LastActive, Branch (covered in seam_bugs_test.go; re-verified here by round-trip through CreateWorkspace).
-//   4: OpenWorkspace stamps WorkspaceID on every forwarded agent:event.
-//   5: OpenWorkspace composes Approval.ReqID as "<raw>:<wsID>"; Approve parses it back correctly.
+//
+//	1 (pty wire): OpenWorkspace passes dataEvent == "pty:data:pane-<id>" so the
+//	   backend emits on exactly the channel WorkspaceVM.PaneID ("pane-<id>") that
+//	   the frontend Terminal subscribes to. The fake spawnPty captures and asserts
+//	   the event name; it also fires the emit callback once to exercise the path.
+//	   NOTE: the true cross-process round-trip (real pty bytes → WebKit → xterm)
+//	   is verified by the manual smoke checklist, since this test uses a fake bridge.
+//	2+3: ListWorkspaces populates PaneID, LastActive, Branch (covered in seam_bugs_test.go; re-verified here by round-trip through CreateWorkspace).
+//	4: OpenWorkspace stamps WorkspaceID on every forwarded agent:event.
+//	5: OpenWorkspace composes Approval.ReqID as "<raw>:<wsID>"; Approve parses it back correctly.
 package app
 
 import (

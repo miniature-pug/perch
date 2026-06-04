@@ -59,4 +59,3 @@ type Session struct {
 	// Updated is the last-activity timestamp as unix seconds.
 	Updated int64
 }
-

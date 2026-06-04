@@ -37,4 +37,3 @@ func TestRevealInFiles_CallsXdgOpen(t *testing.T) {
 		t.Errorf("expected dir /home/user/project, got %s", cmd[1])
 	}
 }
-

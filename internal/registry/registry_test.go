@@ -24,12 +24,12 @@ func TestRoundTrip(t *testing.T) {
 
 	now := time.Now().Truncate(time.Second)
 	w := registry.Workspace{
-		ID:           "ws-abc123",
-		WorktreePath: "/tmp/repo",
-		Agent:        "claude",
+		ID:            "ws-abc123",
+		WorktreePath:  "/tmp/repo",
+		Agent:         "claude",
 		LastSessionID: "ses_xyz",
-		Title:        "my workspace",
-		LastActive:   now,
+		Title:         "my workspace",
+		LastActive:    now,
 	}
 	if err := s.Upsert(w); err != nil {
 		t.Fatalf("Upsert: %v", err)
