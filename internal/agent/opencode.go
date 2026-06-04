@@ -114,11 +114,6 @@ func (o Opencode) NewArgs(opts NewOpts) []string {
 	return args
 }
 
-// InstallStatusHook is a no-op for opencode. opencode exposes session status
-// natively via SSE events (OpencodeMonitor), so no plugin file is needed.
-// The method exists only to satisfy the Adapter interface.
-func (o Opencode) InstallStatusHook(_ bool) error { return nil }
-
 // ── session enumeration ──────────────────────────────────────────────────────────
 
 // sessionJSON mirrors one element of `opencode session list --format json`. The

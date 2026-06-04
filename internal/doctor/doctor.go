@@ -6,8 +6,6 @@
 package doctor
 
 import (
-	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -18,7 +16,6 @@ import (
 	"text/tabwriter"
 
 	perch "github.com/Miniature-Pug/perch"
-	"github.com/Miniature-Pug/perch/internal/agent"
 	"github.com/Miniature-Pug/perch/internal/model"
 )
 
@@ -219,60 +216,6 @@ type checkResult struct {
 	isHard  bool   // if true and tag != "[ok]", hard failure
 }
 
-// ── Hooks checks ──────────────────────────────────────────────────────────────
-
-// claudeHooksOk inspects ~/.claude/settings.json and returns (ok, message).
-// Returns (false, reason) when the file is absent, malformed, or lacks a perch hook.
-// Degrades gracefully on all error conditions — never panics.
-func claudeHooksOk(sys system) (bool, string) {
-	home, err := sys.homeDir()
-	if err != nil {
-		return false, "claude hooks: could not determine home directory"
-	}
-	path := home + "/.claude/" + agent.ClaudeSettingsFile
-	data, err := sys.readFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return false, "claude hooks not installed — run 'perch setup'"
-	}
-	if err != nil {
-		return false, fmt.Sprintf("claude hooks: could not read settings.json: %v", err)
-	}
-	// Parse the JSON loosely — we only need to check whether any string value
-	// contains "perch". Marshal-back and string-search is the simplest approach
-	// that avoids assuming the exact settings schema.
-	var raw interface{}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return false, "claude hooks: settings.json malformed — run 'perch setup'"
-	}
-	// Walk the JSON tree looking for any string containing "perch".
-	if containsPerchHook(raw) {
-		return true, ""
-	}
-	return false, "claude hooks not installed — run 'perch setup'"
-}
-
-// containsPerchHook recursively walks a decoded JSON value looking for any
-// string that contains the word "perch".
-func containsPerchHook(v interface{}) bool {
-	switch val := v.(type) {
-	case string:
-		return strings.Contains(val, "perch")
-	case []interface{}:
-		for _, item := range val {
-			if containsPerchHook(item) {
-				return true
-			}
-		}
-	case map[string]interface{}:
-		for _, item := range val {
-			if containsPerchHook(item) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // ── Main Run function ─────────────────────────────────────────────────────────
 
 // Run executes the doctor health check, writes a human-readable report to w,
@@ -287,7 +230,6 @@ func Run(version string, w io.Writer, sys system) int {
 	var results []checkResult
 	hardFail := false
 	warnings := 0
-	hookWarnings := 0
 
 	// Track agent presence for the one-of-agents rule.
 	agentsPresent := 0
@@ -326,16 +268,6 @@ func Run(version string, w io.Writer, sys system) int {
 		})
 	}
 
-	// ── Hooks checks (warnings only — never affect exit code) ─────────────────
-	if ok, msg := claudeHooksOk(sys); !ok {
-		results = append(results, checkResult{
-			name:    "hooks",
-			tag:     "[warn]",
-			version: msg,
-		})
-		warnings++
-		hookWarnings++
-	}
 	// ── Render ────────────────────────────────────────────────────────────────
 	_, _ = fmt.Fprintf(w, "\nperch %s\n\n", version)
 
@@ -358,13 +290,7 @@ func Run(version string, w io.Writer, sys system) int {
 		if warnings == 1 {
 			noun = "warning"
 		}
-		// Only mention 'perch setup' when hook warnings are actually present,
-		// since setup won't help with missing agents or go drift.
-		if hookWarnings > 0 {
-			_, _ = fmt.Fprintf(w, "%d %s. Run 'perch setup' to fix hook issues.\n", warnings, noun)
-		} else {
-			_, _ = fmt.Fprintf(w, "%d %s.\n", warnings, noun)
-		}
+		_, _ = fmt.Fprintf(w, "%d %s.\n", warnings, noun)
 	}
 
 	if hardFail {

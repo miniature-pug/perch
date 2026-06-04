@@ -4,6 +4,8 @@ package agent
 import (
 	"context"
 	"fmt"
+
+	modelpkg "github.com/Miniature-Pug/perch/internal/model"
 )
 
 type State string
@@ -83,9 +85,9 @@ type Monitor interface {
 
 func NewMonitor(tool string, adapter Adapter) (Monitor, error) {
 	switch tool {
-	case "claude":
+	case string(modelpkg.ToolClaude):
 		return newClaudeMonitor(adapter), nil
-	case "opencode":
+	case string(modelpkg.ToolOpencode):
 		return newOpencodeMonitor(adapter), nil
 	default:
 		return nil, fmt.Errorf("agent.NewMonitor: unknown tool %q", tool)

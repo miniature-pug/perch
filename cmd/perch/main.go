@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Miniature-Pug/perch/internal/agent"
 	"github.com/Miniature-Pug/perch/internal/discover"
 	"github.com/Miniature-Pug/perch/internal/doctor"
 	"github.com/Miniature-Pug/perch/internal/proc"
@@ -39,8 +38,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	switch args[0] {
-	case "setup":
-		return handleSetup(args[1:], stdout, stderr)
 	case "doctor":
 		return doctor.Run(version, stdout, doctor.RealSystem())
 	case "version":
@@ -72,69 +69,6 @@ func handleLaunch(root string, stdout, stderr io.Writer) int {
 	}
 	if err := launchGUI(guiRoots(root)); err != nil {
 		_, _ = fmt.Fprintf(stderr, "perch: %v\n", err)
-		return 1
-	}
-	return 0
-}
-
-// setupMessage returns the human-readable success line for a tool install. It
-// is a pure function so it can be tested without I/O seams.
-func setupMessage(name string, replace bool) string {
-	verb := "installed"
-	if replace {
-		verb = "replaced"
-	}
-	switch name {
-	case "claude":
-		return fmt.Sprintf("setup: claude hooks %s (~/.claude/settings.json)", verb)
-	case "opencode":
-		return fmt.Sprintf("setup: opencode %s (no plugin needed — status via SSE)", verb)
-	default:
-		return fmt.Sprintf("setup: %s hooks %s", name, verb)
-	}
-}
-
-// handleSetup implements `perch setup [--replace]`. It detects installed AI
-// coding tools and calls InstallStatusHook on each, reporting the result to
-// stdout. Without --replace the operation is additive and idempotent — existing
-// third-party hooks are never touched and re-running is safe. With --replace,
-// any stale perch-owned hook entries are overwritten with the current block
-// while all foreign configuration is preserved unchanged.
-func handleSetup(args []string, stdout, stderr io.Writer) int {
-	replace := false
-	for _, a := range args {
-		if a == "--replace" {
-			replace = true
-		}
-	}
-
-	adapters := []agent.Adapter{
-		agent.NewClaude(),
-		agent.NewOpencode(),
-	}
-
-	anyError := false
-	anyInstalled := false
-
-	for _, a := range adapters {
-		if !a.Detect() {
-			_, _ = fmt.Fprintf(stdout, "setup: %s not found — skipped\n", a.Name())
-			continue
-		}
-		if err := a.InstallStatusHook(replace); err != nil {
-			_, _ = fmt.Fprintf(stderr, "setup: %s: %v\n", a.Name(), err)
-			anyError = true
-			continue
-		}
-		anyInstalled = true
-		_, _ = fmt.Fprintln(stdout, setupMessage(a.Name(), replace))
-	}
-
-	if !anyInstalled && !anyError {
-		_, _ = fmt.Fprintln(stdout, "setup: no supported tools found — nothing installed")
-	}
-
-	if anyError {
 		return 1
 	}
 	return 0
@@ -205,7 +139,6 @@ func handleAttach(args []string, stdout, stderr io.Writer) int {
 func printUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "Usage: perch [path]")
 	_, _ = fmt.Fprintln(w, "       perch attach <query>")
-	_, _ = fmt.Fprintln(w, "       perch setup [--replace]")
 	_, _ = fmt.Fprintln(w, "       perch doctor")
 	_, _ = fmt.Fprintln(w, "       perch version")
 }

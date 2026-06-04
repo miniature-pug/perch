@@ -1,14 +1,11 @@
 package doctor
 
 import (
-	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"strings"
 	"testing"
-
-	"github.com/Miniature-Pug/perch/internal/agent"
 )
 
 // ── fakeSystem ────────────────────────────────────────────────────────────────
@@ -82,15 +79,6 @@ func (f *fakeSystem) readFile(path string) ([]byte, error) {
 // fullSystem returns a fakeSystem where everything is present and healthy.
 // Tests override individual fields to simulate failures.
 func fullSystem(home string) *fakeSystem {
-	claudeSettingsPath := home + "/.claude/settings.json"
-	claudeSettingsContent, _ := json.Marshal(map[string]interface{}{
-		"hooks": map[string]interface{}{
-			"Notification": []interface{}{
-				map[string]interface{}{"command": "perch status set done"},
-			},
-		},
-	})
-
 	return &fakeSystem{
 		home: home,
 		paths: map[string]string{
@@ -104,12 +92,6 @@ func fullSystem(home string) *fakeSystem {
 			"git --version":      {out: []byte("git version 2.43.0")},
 			"claude --version":   {out: []byte("2.1.158")},
 			"opencode --version": {out: []byte("1.15.12")},
-		},
-		statPaths: map[string]bool{
-			claudeSettingsPath: true,
-		},
-		readFiles: map[string][]byte{
-			claudeSettingsPath: claudeSettingsContent,
 		},
 	}
 }
@@ -355,86 +337,12 @@ func TestRunDrift_OlderInstalled_Warn(t *testing.T) {
 	}
 }
 
-// ── Hooks checks ──────────────────────────────────────────────────────────────
-
-func TestRunHooks_ClaudeSettingsMissing(t *testing.T) {
-	sys := fullSystem("/home/tester")
-	home := "/home/tester"
-	claudeSettingsPath := home + "/.claude/settings.json"
-	delete(sys.statPaths, claudeSettingsPath)
-	delete(sys.readFiles, claudeSettingsPath)
-
-	var out strings.Builder
-	Run("v0.1.0-dev", &out, sys)
-	output := out.String()
-	if !strings.Contains(output, "claude hooks") {
-		t.Errorf("expected claude hooks warning when settings.json absent; got:\n%s", output)
-	}
-}
-
-func TestRunHooks_ClaudeSettingsMalformed(t *testing.T) {
-	sys := fullSystem("/home/tester")
-	home := "/home/tester"
-	claudeSettingsPath := home + "/.claude/settings.json"
-	sys.statPaths[claudeSettingsPath] = true
-	sys.readFiles[claudeSettingsPath] = []byte("this is not json {{{")
-
-	var out strings.Builder
-	Run("v0.1.0-dev", &out, sys)
-	output := out.String()
-	if !strings.Contains(output, "claude hooks") {
-		t.Errorf("expected claude hooks warning when settings.json malformed; got:\n%s", output)
-	}
-}
-
-func TestRunHooks_ClaudeSettingsPresent_NoPerch(t *testing.T) {
-	sys := fullSystem("/home/tester")
-	home := "/home/tester"
-	claudeSettingsPath := home + "/.claude/settings.json"
-	// Valid JSON but no perch hook reference.
-	data, _ := json.Marshal(map[string]interface{}{"theme": "dark"})
-	sys.readFiles[claudeSettingsPath] = data
-
-	var out strings.Builder
-	Run("v0.1.0-dev", &out, sys)
-	output := out.String()
-	if !strings.Contains(output, "claude hooks") {
-		t.Errorf("expected claude hooks warning when settings.json has no perch hook; got:\n%s", output)
-	}
-}
-
-func TestRunHooks_ClaudeSettingsOk(t *testing.T) {
-	sys := fullSystem("/home/tester")
-	// fullSystem already sets up a valid perch-containing settings.json.
-	var out strings.Builder
-	Run("v0.1.0-dev", &out, sys)
-	output := out.String()
-	// Should NOT have a claude hooks warning.
-	lines := strings.Split(output, "\n")
-	for _, l := range lines {
-		if strings.Contains(l, "[warn]") && strings.Contains(l, "claude hooks") {
-			t.Errorf("unexpected claude hooks warn when perch hook present: %s", l)
-		}
-	}
-}
-
 // ── Summary warning count ─────────────────────────────────────────────────────
 
 func TestRunSummary_DynamicWarnCount(t *testing.T) {
-	// Trigger exactly one warning (opencode missing) + none of the hook warnings.
-	// We craft a system where hooks are OK but opencode is absent.
-	home := "/home/tester"
-	claudeSettingsPath := home + "/.claude/settings.json"
-	claudeSettingsContent, _ := json.Marshal(map[string]interface{}{
-		"hooks": map[string]interface{}{
-			"Notification": []interface{}{
-				map[string]interface{}{"command": "perch status set done"},
-			},
-		},
-	})
-
+	// Trigger exactly one warning: opencode absent, everything else healthy.
 	sys := &fakeSystem{
-		home: home,
+		home: "/home/tester",
 		paths: map[string]string{
 			"go":     "/usr/local/go/bin/go",
 			"git":    "/usr/bin/git",
@@ -446,25 +354,15 @@ func TestRunSummary_DynamicWarnCount(t *testing.T) {
 			"git --version":    {out: []byte("git version 2.43.0")},
 			"claude --version": {out: []byte("2.1.158")},
 		},
-		statPaths: map[string]bool{
-			claudeSettingsPath: true,
-		},
-		readFiles: map[string][]byte{
-			claudeSettingsPath: claudeSettingsContent,
-		},
 	}
 
 	var out strings.Builder
 	Run("v0.1.0-dev", &out, sys)
 	output := out.String()
 
-	// Summary line should mention "1 warning". No hook warnings → no "perch setup" suffix.
+	// Summary line should mention "1 warning".
 	if !strings.Contains(output, "1 warning") {
 		t.Errorf("expected '1 warning' in summary; got:\n%s", output)
-	}
-	// No hook warnings present, so setup suffix should not appear.
-	if strings.Contains(output, "perch setup") {
-		t.Errorf("unexpected 'perch setup' suffix when no hook warnings; got:\n%s", output)
 	}
 }
 
@@ -497,27 +395,5 @@ func TestRunOutput_ContainsPaths(t *testing.T) {
 	output := out.String()
 	if !strings.Contains(output, "/usr/bin/git") {
 		t.Errorf("expected git path in output; got:\n%s", output)
-	}
-}
-
-// ── Doctor-setup agreement ────────────────────────────────────────────────────
-
-// TestDoctorSetupAgreement proves that after agent.Claude.InstallStatusHook writes to
-// a sandboxed home, the doctor's claudeHooksOk function recognises the installed artefacts.
-// Both setup and doctor must flow through $HOME so the HOME redirect fully
-// sandboxes and ties them together.
-func TestDoctorSetupAgreement(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("CLAUDE_CONFIG_DIR", "") // prevent CLAUDE_CONFIG_DIR from escaping sandbox
-
-	// Install hooks via the claude adapter — writes to the sandboxed HOME.
-	if err := agent.NewClaude().InstallStatusHook(false); err != nil {
-		t.Fatalf("claude InstallStatusHook: %v", err)
-	}
-
-	// Doctor checks via RealSystem — also reads from $HOME.
-	sys := RealSystem()
-	if ok, msg := claudeHooksOk(sys); !ok {
-		t.Errorf("claudeHooksOk after install: false (%s)", msg)
 	}
 }

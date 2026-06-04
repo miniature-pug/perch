@@ -47,83 +47,6 @@ func TestRun_FilePath_Exit2(t *testing.T) {
 	}
 }
 
-// ── setup ─────────────────────────────────────────────────────────────────────
-
-func TestRun_Setup_Exit0(t *testing.T) {
-	// Redirect HOME so InstallStatusHook writes to a temp dir, not the real home.
-	// Detection succeeds/fails based on PATH; either way the handler exits 0.
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("CLAUDE_CONFIG_DIR", "")
-	out, _, code := callRun([]string{"setup"})
-	if code != 0 {
-		t.Errorf("expected exit 0 for setup, got %d", code)
-	}
-	if !strings.Contains(out, "setup") {
-		t.Errorf("expected output mentioning 'setup'; got: %q", out)
-	}
-}
-
-func TestRun_Setup_ContainsSetupPrefix(t *testing.T) {
-	// PATH-independent: regardless of whether claude/opencode are installed,
-	// the handler always exits 0 and always emits at least one "setup:" line.
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("CLAUDE_CONFIG_DIR", "")
-	out, _, code := callRun([]string{"setup"})
-	if code != 0 {
-		t.Errorf("expected exit 0 for setup, got %d", code)
-	}
-	if !strings.Contains(out, "setup:") {
-		t.Errorf("expected 'setup:' prefix in output; got: %q", out)
-	}
-}
-
-func TestRun_Setup_Replace_Exit0(t *testing.T) {
-	// setup --replace must exit 0 and report "replaced" (or "not found") for each
-	// tool — the old "not supported" stub must be gone.
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("CLAUDE_CONFIG_DIR", "")
-	out, _, code := callRun([]string{"setup", "--replace"})
-	if code != 0 {
-		t.Errorf("expected exit 0 for setup --replace, got %d", code)
-	}
-	// The stub message must never appear.
-	if strings.Contains(out, "--replace not supported") {
-		t.Errorf("stub '--replace not supported' message still present; got: %q", out)
-	}
-	// Output must still mention "setup:" (at least one tool line or "no tools").
-	if !strings.Contains(out, "setup:") {
-		t.Errorf("expected 'setup:' prefix in output; got: %q", out)
-	}
-}
-
-// TestSetupMessage tests the pure setupMessage helper that generates
-// human-readable setup output. This directly verifies the "replaced" vs
-// "installed" message divergence without PATH-dependent detection.
-func TestSetupMessage_Claude(t *testing.T) {
-	got := setupMessage("claude", false)
-	if !strings.Contains(got, "installed") || strings.Contains(got, "replaced") {
-		t.Errorf("additive claude message: want 'installed', got: %q", got)
-	}
-	got = setupMessage("claude", true)
-	if !strings.Contains(got, "replaced") || strings.Contains(got, "installed") {
-		t.Errorf("replace claude message: want 'replaced', got: %q", got)
-	}
-	if !strings.Contains(got, "~/.claude/settings.json") {
-		t.Errorf("replace claude message missing path: %q", got)
-	}
-}
-
-func TestSetupMessage_Opencode(t *testing.T) {
-	got := setupMessage("opencode", false)
-	if !strings.Contains(got, "installed") {
-		t.Errorf("additive opencode message: want 'installed', got: %q", got)
-	}
-	got = setupMessage("opencode", true)
-	if !strings.Contains(got, "replaced") {
-		t.Errorf("replace opencode message: want 'replaced', got: %q", got)
-	}
-}
-
 // ── version ───────────────────────────────────────────────────────────────────
 
 func TestRun_Version_Exit0(t *testing.T) {
@@ -235,12 +158,12 @@ func TestRun_DebugNoSubcommand_Exit2(t *testing.T) {
 
 func TestPrintUsage_NoDebug(t *testing.T) {
 	_, errOut, _ := callRun([]string{"doctr"})
-	for _, hidden := range []string{"debug", "resurrect", "status"} {
+	for _, hidden := range []string{"debug", "resurrect", "status", "setup"} {
 		if strings.Contains(errOut, hidden) {
 			t.Errorf("printUsage must not mention %q; stderr: %q", hidden, errOut)
 		}
 	}
-	for _, visible := range []string{"setup", "doctor", "version", "attach"} {
+	for _, visible := range []string{"doctor", "version", "attach"} {
 		if !strings.Contains(errOut, visible) {
 			t.Errorf("printUsage must mention surviving verb %q; stderr: %q", visible, errOut)
 		}
@@ -330,12 +253,12 @@ func TestRun_StatusRemoved_Exit2(t *testing.T) {
 
 func TestPrintUsage_ShowsAttach(t *testing.T) {
 	_, errOut, _ := callRun([]string{"doctr"}) // unknown arg → usage
-	for _, must := range []string{"setup", "doctor", "version", "attach"} {
+	for _, must := range []string{"doctor", "version", "attach"} {
 		if !strings.Contains(errOut, must) {
 			t.Errorf("printUsage must mention %q; stderr: %q", must, errOut)
 		}
 	}
-	for _, hidden := range []string{"resurrect", "status", "debug"} {
+	for _, hidden := range []string{"resurrect", "status", "debug", "setup"} {
 		if strings.Contains(errOut, hidden) {
 			t.Errorf("printUsage must not mention %q; stderr: %q", hidden, errOut)
 		}

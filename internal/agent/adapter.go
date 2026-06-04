@@ -55,18 +55,6 @@ type Adapter interface {
 	// session, configured by opts. Fields in opts that do not apply to this
 	// tool are silently ignored.
 	NewArgs(opts NewOpts) []string
-
-	// InstallStatusHook merges perch's status hooks into the tool's
-	// configuration on disk. When replace is false the operation is additive and
-	// idempotent: existing third-party hooks are never modified, and re-running
-	// never produces duplicate perch entries. When replace is true, any existing
-	// perch-owned hook entries are removed and the current perchHooks block is
-	// re-installed; all foreign configuration is preserved unchanged. In both
-	// modes the write is atomic (temp+rename), mode-preserving, and
-	// refuse-malformed. Paths are derived from os.UserHomeDir() so that
-	// t.Setenv("HOME", t.TempDir()) fully sandboxes tests. Returns an error if
-	// the configuration file cannot be read, merged, or written.
-	InstallStatusHook(replace bool) error
 }
 
 // NewOpts carries the per-session configuration for a fresh launch.
