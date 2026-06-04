@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/Miniature-Pug/perch/internal/agent"
+	"github.com/Miniature-Pug/perch/internal/discover"
 	fspkg "github.com/Miniature-Pug/perch/internal/fs"
 	gitpkg "github.com/Miniature-Pug/perch/internal/git"
 	"github.com/Miniature-Pug/perch/internal/notify"
@@ -893,6 +894,93 @@ func (a *App) DiscardHunk(worktree, file string, index int) error {
 		return err
 	}
 	return gitpkg.DiscardHunk(context.Background(), a.runner(), worktree, file, index)
+}
+
+// RepoInfo is a frontend-friendly summary of a discovered git repository.
+// JSON tags are frozen — do not rename.
+type RepoInfo struct {
+	// Path is the absolute path to the repository root (main worktree).
+	Path string `json:"path"`
+	// Name is the display name (base directory name of the main worktree).
+	Name string `json:"name"`
+	// Branch is the branch checked out in the main worktree, or "" when
+	// the repository has no commits yet.
+	Branch string `json:"branch"`
+	// Worktrees lists all non-bare working trees (main + linked worktrees).
+	// Head is always "" because model.Tree does not carry the commit SHA;
+	// the dialog does not need it for a fresh-install selection list.
+	Worktrees []gitpkg.WorktreeInfo `json:"worktrees"`
+}
+
+// DiscoverRepos discovers git repositories under all configured roots and
+// returns a deduplicated, frontend-ready slice ordered by frecency (cold
+// start → alphabetical). It is intended for the New Session dialog on a
+// fresh install when there are no existing workspaces.
+//
+// Best-effort: per-root errors are silently skipped. An error is returned only
+// when every root failed. An empty (non-nil) slice is returned when no
+// repositories are found.
+func (a *App) DiscoverRepos() ([]RepoInfo, error) {
+	// byPath deduplicates across multiple roots.
+	byPath := make(map[string]struct{})
+	out := make([]RepoInfo, 0)
+
+	var lastErr error
+	okCount := 0
+
+	for _, root := range a.roots {
+		pts, err := discover.Projects(
+			context.Background(),
+			a.runner(),
+			root,
+			discover.Options{},
+			map[string]discover.ProjectStat{},
+			time.Now().Unix(),
+		)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		okCount++
+
+		for _, pt := range pts {
+			if _, seen := byPath[pt.Project.Path]; seen {
+				continue
+			}
+			byPath[pt.Project.Path] = struct{}{}
+
+			// Extract the branch from the main working tree.
+			var branch string
+			for _, tr := range pt.Trees {
+				if tr.IsMain {
+					branch = tr.Branch
+					break
+				}
+			}
+
+			// Map model.Tree → gitpkg.WorktreeInfo (Head is not available
+			// from ProjectTrees; it is left as the zero value "").
+			wts := make([]gitpkg.WorktreeInfo, 0, len(pt.Trees))
+			for _, tr := range pt.Trees {
+				wts = append(wts, gitpkg.WorktreeInfo{
+					Path:   tr.Path,
+					Branch: tr.Branch,
+				})
+			}
+
+			out = append(out, RepoInfo{
+				Path:      pt.Project.Path,
+				Name:      pt.Project.Name,
+				Branch:    branch,
+				Worktrees: wts,
+			})
+		}
+	}
+
+	if okCount == 0 && lastErr != nil {
+		return nil, lastErr
+	}
+	return out, nil
 }
 
 // agentAdapter returns the Adapter for a known tool name, or nil for unknown.

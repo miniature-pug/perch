@@ -1634,3 +1634,86 @@ func TestApp_Watcher_NoEmitAfterClose(t *testing.T) {
 		t.Errorf("fs:changed emitted after CloseWorkspace: before=%d after=%d — goroutine leak", before, after)
 	}
 }
+
+// TestApp_DiscoverRepos_FindsReposUnderRoots verifies that DiscoverRepos
+// returns RepoInfo entries for real git repositories placed under App.roots.
+// The existing initGitRepo helper creates a "repo" subdirectory inside the
+// supplied root, so we use two separate temp dirs as parent containers.
+func TestApp_DiscoverRepos_FindsReposUnderRoots(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	// Each call to initGitRepo creates <parent>/repo; use two parents so
+	// we get two distinct repos under a single scan root.
+	root := t.TempDir()
+	parent1 := filepath.Join(root, "alpha")
+	parent2 := filepath.Join(root, "beta")
+	if err := os.MkdirAll(parent1, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(parent2, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	repo1 := initGitRepo(t, parent1) // returns parent1/repo
+	repo2 := initGitRepo(t, parent2) // returns parent2/repo
+
+	a := &App{roots: []string{root}}
+
+	repos, err := a.DiscoverRepos()
+	if err != nil {
+		t.Fatalf("DiscoverRepos: unexpected error: %v", err)
+	}
+
+	// Build a set of discovered paths (EvalSymlinks-normalised to handle /tmp
+	// symlinks on some systems).
+	found := make(map[string]RepoInfo, len(repos))
+	for _, ri := range repos {
+		norm, nerr := filepath.EvalSymlinks(ri.Path)
+		if nerr != nil {
+			norm = ri.Path
+		}
+		found[norm] = ri
+	}
+
+	for _, want := range []string{repo1, repo2} {
+		norm, nerr := filepath.EvalSymlinks(want)
+		if nerr != nil {
+			norm = want
+		}
+		ri, ok := found[norm]
+		if !ok {
+			t.Errorf("repo %q not found in DiscoverRepos result; got %v", want, repos)
+			continue
+		}
+		if ri.Name == "" {
+			t.Errorf("repo %q: Name is empty", want)
+		}
+		if ri.Branch == "" {
+			t.Errorf("repo %q: Branch is empty (expected a branch after initial commit)", want)
+		}
+		if len(ri.Worktrees) == 0 {
+			t.Errorf("repo %q: Worktrees is empty", want)
+		}
+	}
+}
+
+// TestApp_DiscoverRepos_EmptyWhenNoRepos verifies that when App.roots point
+// at a directory that contains no git repositories, DiscoverRepos returns a
+// non-nil empty slice and no error.
+func TestApp_DiscoverRepos_EmptyWhenNoRepos(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	root := t.TempDir() // empty directory — no git repos inside
+
+	a := &App{roots: []string{root}}
+
+	repos, err := a.DiscoverRepos()
+	if err != nil {
+		t.Fatalf("DiscoverRepos: unexpected error: %v", err)
+	}
+	if repos == nil {
+		t.Fatal("DiscoverRepos returned nil slice; want non-nil empty slice")
+	}
+	if len(repos) != 0 {
+		t.Errorf("DiscoverRepos returned %d repos; want 0 (empty dir)", len(repos))
+	}
+}

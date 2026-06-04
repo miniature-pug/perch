@@ -34,15 +34,20 @@ func NewOpencodeMonitorWithServer(a Adapter, serverURL, pw string) *OpencodeMoni
 func (m *OpencodeMonitor) Events() <-chan Event { return m.events }
 func (m *OpencodeMonitor) Capabilities() Caps  { return Caps{Approvals: true, Attention: true, Tokens: true} }
 
-// Prepare returns the opencode serve+attach launch command. The resumeID and
-// model params are accepted for interface conformance but are not yet wired:
-// opencode launches via serve+attach rather than per-session argv, so threading
-// model (--model) and session resume (--session) requires reshaping the attach
-// command and surfacing a session id from the SSE stream — a separate task.
-func (m *OpencodeMonitor) Prepare(_ context.Context, _, cwd, _, _ string) (string, error) {
-	return fmt.Sprintf(
-		"OPENCODE_SERVER_PASSWORD=%s opencode serve & opencode attach $OPENCODE_URL",
-		m.password), nil
+// Prepare returns the opencode serve+attach launch command. When resumeID is
+// non-empty the attach subcommand is extended with --session <resumeID> so
+// opencode resumes the identified session (opencode attach --session is
+// supported since v1.x and a v1.1.1 regression was fixed in issue #7149).
+// The model param is accepted for interface conformance but is not yet wired —
+// opencode's default model selection handles that path for now.
+func (m *OpencodeMonitor) Prepare(_ context.Context, _, cwd, resumeID, _ string) (string, error) {
+	attach := "opencode attach $OPENCODE_URL"
+	if resumeID != "" {
+		// resumeID charset is [A-Za-z0-9_-] (validated upstream), so plain
+		// concatenation is safe as a single shell token; no quoting needed.
+		attach += " --session " + resumeID
+	}
+	return fmt.Sprintf("OPENCODE_SERVER_PASSWORD=%s opencode serve & %s", m.password, attach), nil
 }
 
 func (m *OpencodeMonitor) Teardown() error { return nil }
@@ -72,6 +77,7 @@ func (m *OpencodeMonitor) Start(ctx context.Context) {
 
 type sseFrame struct {
 	Type         string `json:"type"`
+	SessionID    string `json:"sessionId"`
 	PermissionID string `json:"permissionId"`
 	Tool         string `json:"tool"`
 	Error        string `json:"error"`
@@ -93,7 +99,10 @@ func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
 	var ev Event
 	switch f.Type {
 	case "session.next.step.started":
-		ev = Event{Kind: "state", State: StateRunning}
+		// Mirror ClaudeMonitor's SessionStart: carry SessionID so the app layer
+		// can persist it as LastSessionID and pass it back as resumeID on the
+		// next OpenWorkspace call (app.go:527–530).
+		ev = Event{Kind: "state", State: StateRunning, SessionID: f.SessionID}
 	case "session.next.step.ended":
 		if f.Step == nil || f.Step.Tokens == nil {
 			return
