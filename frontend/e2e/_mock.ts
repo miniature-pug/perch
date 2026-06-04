@@ -153,6 +153,10 @@ export function buildInitScriptContent(opts: MockOptions = {}): string {
           record('SaveLayout', [json]);
           return Promise.resolve();
         },
+        SetWindowFocus: function(focused) {
+          record('SetWindowFocus', [focused]);
+          return Promise.resolve();
+        },
         CreateWorkspace: function(agent, repo, branch, model) {
           record('CreateWorkspace', [agent, repo, branch, model]);
           return Promise.resolve({

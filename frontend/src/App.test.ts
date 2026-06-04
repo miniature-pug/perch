@@ -55,6 +55,7 @@ vi.mock("./lib/wails", () => ({
   onAgentEvent:    vi.fn((cb) => { captured.agent.push(cb);     return () => {}; }),
   onNotify:        vi.fn((cb) => { captured.notify.push(cb);    return () => {}; }),
   onFsChanged:     vi.fn((cb) => { captured.fsChanged.push(cb); return () => {}; }),
+  setWindowFocus:  vi.fn(async () => {}),
 }));
 
 // NOTE: layout and mode stores are NOT mocked — we use the real $state runes stores.
@@ -1468,6 +1469,36 @@ describe("App.svelte 4.25.6c: unread badge on MenuBar bell", () => {
       expect(badge).toBeInTheDocument();
       expect(badge!.textContent).toBe(String(expectedCount));
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// OS notification focus wiring
+// ---------------------------------------------------------------------------
+
+describe("App.svelte: SetWindowFocus wiring on focus/blur", () => {
+  it("calls setWindowFocus(true) on window focus and setWindowFocus(false) on window blur", async () => {
+    const { setWindowFocus, listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await tick();
+
+    const sfMock = setWindowFocus as ReturnType<typeof vi.fn>;
+    // Clear any calls made during mount (initial hasFocus report).
+    sfMock.mockClear();
+
+    // Simulate the window losing focus (blur).
+    window.dispatchEvent(new Event("blur"));
+    await tick();
+    expect(sfMock).toHaveBeenCalledWith(false);
+
+    sfMock.mockClear();
+
+    // Simulate the window gaining focus.
+    window.dispatchEvent(new Event("focus"));
+    await tick();
+    expect(sfMock).toHaveBeenCalledWith(true);
   });
 });
 

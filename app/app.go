@@ -20,6 +20,7 @@ import (
 	"github.com/Miniature-Pug/perch/internal/agent"
 	fspkg "github.com/Miniature-Pug/perch/internal/fs"
 	gitpkg "github.com/Miniature-Pug/perch/internal/git"
+	"github.com/Miniature-Pug/perch/internal/notify"
 	internalpty "github.com/Miniature-Pug/perch/internal/pty"
 	"github.com/Miniature-Pug/perch/internal/proc"
 	"github.com/Miniature-Pug/perch/internal/registry"
@@ -68,6 +69,17 @@ type App struct {
 
 	settingsPath string
 	layoutPath   string
+
+	// notifier delivers OS desktop notifications. Constructed via notify.New() in
+	// startup; tests inject a *notify.FakeNotifier. nil means no OS notifications
+	// (safe — all call sites guard with notifier != nil).
+	notifier notify.Notifier
+
+	// focused tracks whether the Wails window currently has OS focus.
+	// Default true (set in NewApp): OS notifications are suppressed while focused.
+	// Updated by SetWindowFocus (bound method called by the frontend on window
+	// focus/blur events).
+	focused bool
 }
 
 // NewApp builds the production App.
@@ -86,6 +98,7 @@ func NewApp(store *registry.Store, roots []string) *App {
 		debounce:     150 * time.Millisecond,
 		settingsPath: filepath.Join(registry.DefaultConfigDir(), "settings.json"),
 		layoutPath:   filepath.Join(registry.DefaultConfigDir(), "layout.json"),
+		focused:      true, // default: assume focused until the frontend reports otherwise
 	}
 }
 
@@ -104,6 +117,20 @@ func (a *App) startup(ctx context.Context) {
 	a.emit = func(event string, data ...any) {
 		wailsruntime.EventsEmit(ctx, event, data...)
 	}
+	// Construct the OS notifier lazily so tests that set a.notifier before
+	// startup is called are not overwritten (tests never call startup directly).
+	if a.notifier == nil {
+		a.notifier = notify.New()
+	}
+}
+
+// SetWindowFocus is a bound method called by the frontend whenever the Wails
+// window gains or loses OS focus. It guards OS desktop notifications: they are
+// suppressed while the window is focused and enabled when it is unfocused.
+func (a *App) SetWindowFocus(focused bool) {
+	a.mu.Lock()
+	a.focused = focused
+	a.mu.Unlock()
 }
 
 // shutdown cancels every workspace pump, closes every Bridge, and tears down
@@ -513,30 +540,45 @@ func (a *App) OpenWorkspace(id string) error {
 }
 
 // dispatchNotify translates an agent.Event into a "notify" Wails event at the
-// appropriate tier.
+// appropriate tier and, for blocking-tier events when the window is unfocused,
+// also fires an OS desktop notification. Per SPEC §8, Do-Not-Disturb mutes only
+// tiers 2–3 (ambient + routine) and never tier 1 (blocking); since only blocking
+// events fire an OS notification, DND has no bearing on the OS-notify path.
 func (a *App) dispatchNotify(evt agent.Event) {
+	var tier, title, body string
 	switch {
 	case evt.Kind == "state" && evt.State == agent.StateAwaitingApproval:
-		a.emit("notify", map[string]any{
-			"tier":        "blocking",
-			"title":       "Approval needed",
-			"body":        "An agent is waiting for your decision.",
-			"workspaceId": evt.WorkspaceID,
-		})
+		tier, title, body = "blocking", "Approval needed", "An agent is waiting for your decision."
 	case evt.Kind == "state" && evt.State == agent.StateDone:
-		a.emit("notify", map[string]any{
-			"tier":        "ambient",
-			"title":       "Turn complete",
-			"body":        "Agent finished a turn.",
-			"workspaceId": evt.WorkspaceID,
-		})
+		tier, title, body = "ambient", "Turn complete", "Agent finished a turn."
 	case evt.Kind == "state" && evt.State == agent.StateErrored:
-		a.emit("notify", map[string]any{
-			"tier":        "blocking",
-			"title":       "Agent error",
-			"body":        evt.Err,
-			"workspaceId": evt.WorkspaceID,
-		})
+		tier, title, body = "blocking", "Agent error", evt.Err
+	default:
+		return
+	}
+
+	// Always emit the in-app Wails notification event unconditionally.
+	a.emit("notify", map[string]any{
+		"tier":        tier,
+		"title":       title,
+		"body":        body,
+		"workspaceId": evt.WorkspaceID,
+	})
+
+	// OS desktop notification: only for blocking-tier events and only when the
+	// window is unfocused. DND is deliberately NOT consulted here — SPEC §8 says
+	// DND never mutes blocking (tier 1), and only blocking fires an OS notification.
+	if tier != "blocking" {
+		return
+	}
+	a.mu.Lock()
+	focused := a.focused
+	a.mu.Unlock()
+	if focused {
+		return
+	}
+	if a.notifier != nil {
+		_ = a.notifier.Notify(title, body)
 	}
 }
 

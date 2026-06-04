@@ -50,6 +50,7 @@ interface App {
   SaveLayout(layoutJSON: string): Promise<void>;
   GetSettings(): Promise<AppSettings>;
   SaveSettings(s: AppSettings): Promise<void>;
+  SetWindowFocus(focused: boolean): Promise<void>;
 }
 
 declare global {
@@ -87,10 +88,12 @@ export const writeFile    = (absPath: string, content: string)                  
 export const revealInFiles = (absPath: string)                                    => app().RevealInFiles(absPath);
 export const copyPath      = (absPath: string)                                    => app().CopyPath(absPath);
 // Layout & Settings
-export const getLayout    = ()                                                    => app().GetLayout();
-export const saveLayout   = (layoutJSON: string)                                  => app().SaveLayout(layoutJSON);
-export const getSettings  = ()                                                    => app().GetSettings();
-export const saveSettings = (s: AppSettings)                                      => app().SaveSettings(s);
+export const getLayout       = ()                                                    => app().GetLayout();
+export const saveLayout      = (layoutJSON: string)                                  => app().SaveLayout(layoutJSON);
+export const getSettings     = ()                                                    => app().GetSettings();
+export const saveSettings    = (s: AppSettings)                                      => app().SaveSettings(s);
+// Window focus reporting
+export const setWindowFocus  = (focused: boolean)                                   => app().SetWindowFocus(focused);
 
 // Event helpers — colon-separated names match the frozen Wails event table.
 export function onPtyData(paneId: string, cb: (bytes: Uint8Array) => void): () => void {

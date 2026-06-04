@@ -59,6 +59,7 @@ vi.mock("./lib/wails", () => ({
   onAgentEvent:    vi.fn((cb) => { captured.agent.push(cb);     return () => {}; }),
   onNotify:        vi.fn((cb) => { captured.notify.push(cb);    return () => {}; }),
   onFsChanged:     vi.fn((cb) => { captured.fsChanged.push(cb); return () => {}; }),
+  setWindowFocus:  vi.fn(async () => {}),
 }));
 
 // Mirror App.test.ts: mock settings (real settings.load() is unverified in jsdom).

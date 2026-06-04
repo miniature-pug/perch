@@ -24,7 +24,7 @@
   import ApprovalCard       from "./lib/ApprovalCard.svelte";
   import NotificationHub    from "./lib/NotificationHub.svelte";
   import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead } from "./lib/stores/notifications.svelte";
-  import { listWorkspaces, createWorkspace, removeWorkspace, openWorkspace, closeWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, approve, branches, readFile } from "./lib/wails";
+  import { listWorkspaces, createWorkspace, removeWorkspace, openWorkspace, closeWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, approve, branches, readFile, setWindowFocus } from "./lib/wails";
   import type { WorkspaceVM, ApprovalReq } from "./lib/wails";
 
   let workspaces      = $state<WorkspaceVM[]>([]);
@@ -82,7 +82,17 @@
   let offNotify:     (() => void) | null = null;
   let offFsChanged:  (() => void) | null = null;
 
+  // Window focus/blur handlers — report focus state to the backend so it can gate
+  // OS desktop notifications (only fire when the window is unfocused).
+  function onWindowFocus() { setWindowFocus(true).catch(() => {}); }
+  function onWindowBlur()  { setWindowFocus(false).catch(() => {}); }
+
   onMount(async () => {
+    // Report initial focus state and register focus/blur listeners.
+    setWindowFocus(document.hasFocus()).catch(() => {});
+    window.addEventListener("focus", onWindowFocus);
+    window.addEventListener("blur",  onWindowBlur);
+
     // Subscribe synchronously BEFORE any await so off-fns are always captured.
     offAgentEvent = onAgentEvent((ev) => {
       const ws = workspaces.find(w => w.id === ev.workspaceId);
@@ -112,6 +122,8 @@
     offAgentEvent?.();
     offNotify?.();
     offFsChanged?.();
+    window.removeEventListener("focus", onWindowFocus);
+    window.removeEventListener("blur",  onWindowBlur);
   });
 
   async function onSelect(id: string) {

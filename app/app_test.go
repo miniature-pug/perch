@@ -13,6 +13,7 @@ import (
 
 	"github.com/Miniature-Pug/perch/internal/agent"
 	fspkg "github.com/Miniature-Pug/perch/internal/fs"
+	"github.com/Miniature-Pug/perch/internal/notify"
 	internalpty "github.com/Miniature-Pug/perch/internal/pty"
 	"github.com/Miniature-Pug/perch/internal/registry"
 )
@@ -1423,6 +1424,174 @@ func TestApp_ListDir_HonorsGitignore(t *testing.T) {
 	}
 	if !found {
 		t.Error("main.go should be present (not gitignored)")
+	}
+}
+
+// ── OS notification tests ─────────────────────────────────────────────────────
+
+// newNotifyTestApp builds a minimal App wired for OS-notification tests.
+// It injects a FakeNotifier and a settingsPath in a temp dir so GetSettings works.
+func newNotifyTestApp(t *testing.T, focused bool, dnd bool) (*App, *notify.FakeNotifier) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+
+	fn := &notify.FakeNotifier{}
+	a := &App{
+		store:        store,
+		roots:        []string{t.TempDir()},
+		emit:         func(string, ...any) {},
+		bridges:      map[string]*internalpty.Bridge{},
+		monitors:     map[string]agent.Monitor{},
+		notifier:     fn,
+		focused:      focused,
+		settingsPath: filepath.Join(cfgDir, "settings.json"),
+	}
+	// Persist DND setting.
+	_ = a.SaveSettings(Settings{DND: dnd})
+	return a, fn
+}
+
+// TestApp_DispatchNotify_OSFires_WhenUnfocusedAndDNDOff asserts that an OS
+// notification is sent for a blocking-tier event when the window is unfocused
+// and DND is disabled.
+func TestApp_DispatchNotify_OSFires_WhenUnfocusedAndDNDOff(t *testing.T) {
+	a, fn := newNotifyTestApp(t, false /*focused*/, false /*dnd*/)
+
+	a.dispatchNotify(agent.Event{
+		Kind:        "state",
+		State:       agent.StateAwaitingApproval,
+		WorkspaceID: "ws-1",
+	})
+
+	if len(fn.Calls) != 1 {
+		t.Fatalf("expected 1 OS notify call, got %d", len(fn.Calls))
+	}
+	if fn.Calls[0].Title != "Approval needed" {
+		t.Errorf("title = %q, want %q", fn.Calls[0].Title, "Approval needed")
+	}
+}
+
+// TestApp_DispatchNotify_OSFires_ErroredTier asserts that an errored-state event
+// (also blocking tier) fires an OS notification when unfocused + DND off.
+func TestApp_DispatchNotify_OSFires_ErroredTier(t *testing.T) {
+	a, fn := newNotifyTestApp(t, false /*focused*/, false /*dnd*/)
+
+	a.dispatchNotify(agent.Event{
+		Kind:        "state",
+		State:       agent.StateErrored,
+		Err:         "something broke",
+		WorkspaceID: "ws-1",
+	})
+
+	if len(fn.Calls) != 1 {
+		t.Fatalf("expected 1 OS notify call, got %d", len(fn.Calls))
+	}
+	if fn.Calls[0].Title != "Agent error" {
+		t.Errorf("title = %q, want 'Agent error'", fn.Calls[0].Title)
+	}
+}
+
+// TestApp_DispatchNotify_OSSuppressed_WhenFocused asserts that no OS notification
+// fires when the window is focused, even for a blocking-tier event.
+func TestApp_DispatchNotify_OSSuppressed_WhenFocused(t *testing.T) {
+	a, fn := newNotifyTestApp(t, true /*focused*/, false /*dnd*/)
+
+	a.dispatchNotify(agent.Event{
+		Kind:        "state",
+		State:       agent.StateAwaitingApproval,
+		WorkspaceID: "ws-1",
+	})
+
+	if len(fn.Calls) != 0 {
+		t.Errorf("expected 0 OS notify calls when focused, got %d", len(fn.Calls))
+	}
+}
+
+// TestApp_DispatchNotify_OSFires_BlockingDespiteDND asserts that a blocking-tier
+// OS notification STILL fires when DND is enabled (unfocused). Per SPEC §8, DND
+// mutes only tiers 2–3 (ambient + routine) and never tier 1 (blocking); since
+// only blocking events fire an OS notification, DND must not suppress them.
+func TestApp_DispatchNotify_OSFires_BlockingDespiteDND(t *testing.T) {
+	a, fn := newNotifyTestApp(t, false /*focused*/, true /*dnd*/)
+
+	a.dispatchNotify(agent.Event{
+		Kind:        "state",
+		State:       agent.StateAwaitingApproval,
+		WorkspaceID: "ws-1",
+	})
+
+	if len(fn.Calls) != 1 {
+		t.Fatalf("expected 1 OS notify call (DND must not mute blocking), got %d", len(fn.Calls))
+	}
+	if fn.Calls[0].Title != "Approval needed" {
+		t.Errorf("title = %q, want %q", fn.Calls[0].Title, "Approval needed")
+	}
+}
+
+// TestApp_DispatchNotify_OSSuppressed_AmbientTier asserts that ambient-tier events
+// (e.g. StateDone) never fire an OS notification.
+func TestApp_DispatchNotify_OSSuppressed_AmbientTier(t *testing.T) {
+	a, fn := newNotifyTestApp(t, false /*focused*/, false /*dnd*/)
+
+	a.dispatchNotify(agent.Event{
+		Kind:        "state",
+		State:       agent.StateDone,
+		WorkspaceID: "ws-1",
+	})
+
+	if len(fn.Calls) != 0 {
+		t.Errorf("expected 0 OS notify calls for ambient tier, got %d", len(fn.Calls))
+	}
+}
+
+// TestApp_DispatchNotify_NilNotifier_NoPanic proves that a nil notifier (the
+// no-op fallback path when OS notifications are unavailable) never panics.
+func TestApp_DispatchNotify_NilNotifier_NoPanic(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+
+	a := &App{
+		store:        store,
+		roots:        []string{t.TempDir()},
+		emit:         func(string, ...any) {},
+		bridges:      map[string]*internalpty.Bridge{},
+		monitors:     map[string]agent.Monitor{},
+		notifier:     nil, // explicit no-op / unavailable
+		focused:      false,
+		settingsPath: filepath.Join(cfgDir, "settings.json"),
+	}
+	_ = a.SaveSettings(Settings{DND: false})
+
+	// Must not panic.
+	a.dispatchNotify(agent.Event{
+		Kind:        "state",
+		State:       agent.StateAwaitingApproval,
+		WorkspaceID: "ws-nil",
+	})
+}
+
+// TestApp_SetWindowFocus_UpdatesState asserts that SetWindowFocus correctly
+// stores the focused state under the mutex.
+func TestApp_SetWindowFocus_UpdatesState(t *testing.T) {
+	a := &App{focused: true}
+
+	a.SetWindowFocus(false)
+	a.mu.Lock()
+	got := a.focused
+	a.mu.Unlock()
+	if got {
+		t.Error("SetWindowFocus(false) did not update focused to false")
+	}
+
+	a.SetWindowFocus(true)
+	a.mu.Lock()
+	got = a.focused
+	a.mu.Unlock()
+	if !got {
+		t.Error("SetWindowFocus(true) did not update focused to true")
 	}
 }
 
