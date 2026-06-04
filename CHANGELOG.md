@@ -170,6 +170,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   writes the hook config (listener URL + random Bearer token) into the worktree's
   `.claude/settings.json`. No global setup step is needed or exists.
 
+- **Dead adapter API** — the `Adapter.ListSessions` and `Adapter.ForkInto`
+  interface methods (and their claude/opencode implementations, the
+  `ErrForkUnsupported` sentinel, the now-orphaned transcript/session-list
+  parsing helpers, the `model.Session` type, and the dead `Claude.Home` /
+  `Opencode.Dir` struct fields) had zero production callers — vestigial
+  session-enumeration/fork surface from the TUI design. Removed. The cockpit
+  uses `NewArgs` and `ResumeArgs` only.
+
 ### Changed
 
 - **Go magic-number elimination** — every former magic number and hardcoded
@@ -208,3 +216,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **SettingsPanel wrong hex fallbacks removed** — dead/incorrect hardcoded hex
   colour values in `SettingsPanel` that were not reachable through the token
   system were removed; all colour references now go through CSS tokens.
+
+- **WCAG AA contrast for secondary text** — `--perch-text-dim` was below the
+  4.5:1 ratio when rendered on `--perch-surface` panels (dialogs, notifications)
+  in 7 themes. The dim value was raised (hue-preserving) in tokyo-night,
+  catppuccin, dracula, nord, rose-pine, one-dark, and perch-cyan; all 9 themes
+  now pass AA ≥4.60:1 on both `--perch-bg` and `--perch-surface`.
+
+- **Modal keyboard accessibility** — Settings, Help, Confirm, and New-session
+  dialogs now receive focus on open (via the shared `focusOnMount` action in
+  `frontend/src/lib/actions.ts`) so Escape (and Enter, where applicable) work
+  immediately instead of only after the user tabs into the dialog. Confirm and
+  New-session gained explicit Escape handlers.
+
+- **Drag-to-split persistence** — dropping a session onto the stage to open a
+  split now persists via `layout.setSplit(true)` instead of a non-saving
+  `layout.split = true` assignment, so the split survives a restart.
