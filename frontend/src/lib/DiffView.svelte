@@ -2,7 +2,13 @@
 <script lang="ts">
   import { diffStat, hunks as fetchHunks, stageHunk, discardHunk, type FileDiff, type Hunk } from "./wails";
 
-  let { worktree }: { worktree: string } = $props();
+  let {
+    worktree,
+    onSendToAgent,
+  }: {
+    worktree: string;
+    onSendToAgent?: (text: string) => void;
+  } = $props();
 
   const STATUS_LABELS: Record<string, { icon: string; label: string }> = {
     M: { icon: "✎", label: "modified" },
@@ -38,6 +44,14 @@
   async function discard(h: Hunk) {
     await discardHunk(worktree, h.file, h.index);
     expanded = { ...expanded, [h.file]: await fetchHunks(worktree, h.file) };
+  }
+
+  function hunkText(h: Hunk): string {
+    return h.lines.map((l) => l.text).join("\n");
+  }
+
+  function sendHunk(h: Hunk) {
+    onSendToAgent?.(hunkText(h));
   }
 </script>
 
@@ -80,6 +94,13 @@
                 <div class="hunk-header">
                   <span class="hunk-header-text">{h.header}</span>
                   <div class="hunk-actions">
+                    {#if onSendToAgent}
+                      <button
+                        class="btn btn-send"
+                        aria-label="Send hunk to agent"
+                        onclick={() => sendHunk(h)}
+                      >↗ send</button>
+                    {/if}
                     <button class="btn" onclick={() => stage(h)}>Stage</button>
                     <button class="btn btn-danger" onclick={() => discard(h)}>Discard</button>
                   </div>
@@ -292,4 +313,12 @@
   }
   .btn-danger:hover { background: color-mix(in srgb, var(--perch-err) 12%, var(--perch-bg)); }
   .btn-danger:focus-visible { outline-color: var(--perch-err); }
+
+  .btn-send {
+    color: var(--perch-accent);
+    border-color: var(--perch-accent);
+    font-family: var(--perch-font-mono);
+  }
+  .btn-send:hover { background: color-mix(in srgb, var(--perch-accent) 12%, var(--perch-bg)); }
+  .btn-send:focus-visible { outline-color: var(--perch-accent); }
 </style>

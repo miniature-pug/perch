@@ -53,3 +53,99 @@ test("mounts the git change gutter for a changed file", async () => {
     expect(document.querySelector(".perch-git-gutter")).not.toBeNull()
   );
 });
+
+// --- Feature 1: search extension ---
+
+test("search extension is active: openSearchPanel renders .cm-search panel", async () => {
+  const { default: Editor } = await import("./Editor.svelte");
+  const { openSearchPanel } = await import("@codemirror/search");
+  const { EditorView } = await import("@codemirror/view");
+  const w = await import("./wails");
+  vi.mocked(w.readFile).mockResolvedValueOnce("hello world\nfoo bar\n");
+  vi.mocked(w.hunks).mockResolvedValueOnce([]);
+
+  render(Editor, { props: { path: "/wt/src/main.go", worktree: "/wt" } });
+  // Wait for the CM editor to mount
+  await waitFor(() => expect(document.querySelector(".cm-editor")).not.toBeNull());
+
+  // Retrieve the live EditorView from the DOM
+  const cmEditor = document.querySelector(".cm-editor") as HTMLElement;
+  const editorView = EditorView.findFromDOM(cmEditor);
+  expect(editorView).not.toBeNull();
+
+  // Open the search panel programmatically
+  openSearchPanel(editorView!);
+
+  // The search panel should appear in the DOM
+  await waitFor(() =>
+    expect(document.querySelector(".cm-search")).not.toBeNull(),
+    { timeout: 2000 }
+  );
+});
+
+// --- Feature 3: send-to-agent affordance ---
+
+test("send-to-agent button is hidden when no selection", async () => {
+  const { default: Editor } = await import("./Editor.svelte");
+  const spy = vi.fn();
+  render(Editor, { props: { path: "/wt/src/main.go", worktree: "/wt", onSendToAgent: spy } });
+  await waitFor(() => expect(document.querySelector(".cm-editor")).not.toBeNull());
+  // No selection yet — button must not appear
+  expect(screen.queryByRole("button", { name: /send to agent/i })).toBeNull();
+});
+
+test("send-to-agent button appears after selection and calls spy with selected text", async () => {
+  const { default: Editor } = await import("./Editor.svelte");
+  const { EditorView } = await import("@codemirror/view");
+  const { EditorSelection } = await import("@codemirror/state");
+  const spy = vi.fn();
+  const w = await import("./wails");
+  vi.mocked(w.readFile).mockResolvedValueOnce("hello world\n");
+  vi.mocked(w.hunks).mockResolvedValueOnce([]);
+
+  render(Editor, { props: { path: "/wt/src/main.go", worktree: "/wt", onSendToAgent: spy } });
+
+  await waitFor(() => expect(document.querySelector(".cm-editor")).not.toBeNull());
+
+  const cmEditor = document.querySelector(".cm-editor") as HTMLElement;
+  const editorView = EditorView.findFromDOM(cmEditor);
+  expect(editorView).not.toBeNull();
+
+  // Programmatically select "hello world" (chars 0-11)
+  editorView!.dispatch({
+    selection: EditorSelection.single(0, 11),
+  });
+
+  // Button should appear
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: /send to agent/i })).toBeInTheDocument()
+  );
+
+  // Click the button
+  await fireEvent.click(screen.getByRole("button", { name: /send to agent/i }));
+
+  // Spy should have been called with the selected text
+  expect(spy).toHaveBeenCalledWith("hello world");
+});
+
+test("send-to-agent button does not render when onSendToAgent prop is absent", async () => {
+  const { default: Editor } = await import("./Editor.svelte");
+  const { EditorView } = await import("@codemirror/view");
+  const { EditorSelection } = await import("@codemirror/state");
+  const w = await import("./wails");
+  vi.mocked(w.readFile).mockResolvedValueOnce("hello world\n");
+  vi.mocked(w.hunks).mockResolvedValueOnce([]);
+
+  // No onSendToAgent prop provided
+  render(Editor, { props: { path: "/wt/src/main.go", worktree: "/wt" } });
+
+  await waitFor(() => expect(document.querySelector(".cm-editor")).not.toBeNull());
+
+  const cmEditor = document.querySelector(".cm-editor") as HTMLElement;
+  const editorView = EditorView.findFromDOM(cmEditor);
+  editorView!.dispatch({ selection: EditorSelection.single(0, 5) });
+
+  // Even with a selection, the button should not appear without the prop
+  await new Promise((r) => setTimeout(r, 50));
+  expect(screen.queryByRole("button", { name: /send to agent/i })).toBeNull();
+});

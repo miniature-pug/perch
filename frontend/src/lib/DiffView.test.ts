@@ -40,3 +40,36 @@ test("Stage button calls stageHunk", async () => {
   await fireEvent.click(screen.getByRole("button", { name: /stage/i }));
   await waitFor(() => expect(w.stageHunk).toHaveBeenCalledWith("/wt", "src/main.go", 0));
 });
+
+// --- Feature 3: per-hunk send-to-agent button ---
+
+test("send hunk to agent button not rendered when onSendToAgent prop is absent", async () => {
+  const { default: DiffView } = await import("./DiffView.svelte");
+  render(DiffView, { props: { worktree: "/wt" } });
+  await waitFor(() => screen.getByText("src/main.go"));
+  // Expand src/main.go
+  await fireEvent.click(screen.getByRole("button", { name: /src\/main\.go/ }));
+  await waitFor(() => screen.getByRole("button", { name: /stage/i }));
+  // No send button without the prop
+  expect(screen.queryByRole("button", { name: /send hunk to agent/i })).toBeNull();
+});
+
+test("send hunk to agent button calls onSendToAgent with hunk lines joined", async () => {
+  const { default: DiffView } = await import("./DiffView.svelte");
+  const spy = vi.fn();
+
+  render(DiffView, { props: { worktree: "/wt", onSendToAgent: spy } });
+  await waitFor(() => screen.getByText("src/main.go"));
+
+  // Expand src/main.go to show its hunk
+  await fireEvent.click(screen.getByRole("button", { name: /src\/main\.go/ }));
+  await waitFor(() => screen.getByRole("button", { name: /send hunk to agent/i }));
+
+  // Click the send button
+  await fireEvent.click(screen.getByRole("button", { name: /send hunk to agent/i }));
+
+  // The spy should be called with the hunk's lines joined by "\n"
+  const expectedText = fakeHunks[0].lines.map((l) => l.text).join("\n");
+  expect(spy).toHaveBeenCalledWith(expectedText);
+  expect(spy).toHaveBeenCalledTimes(1);
+});

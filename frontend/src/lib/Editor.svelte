@@ -5,6 +5,7 @@
   import { EditorState, StateField, StateEffect } from "@codemirror/state";
   import { defaultKeymap, indentWithTab } from "@codemirror/commands";
   import { bracketMatching } from "@codemirror/language";
+  import { search, searchKeymap, highlightSelectionMatches } from "@codemirror/search";
   import { javascript } from "@codemirror/lang-javascript";
   import { css }        from "@codemirror/lang-css";
   import { html }       from "@codemirror/lang-html";
@@ -13,12 +14,23 @@
   import { python }     from "@codemirror/lang-python";
   import { go }         from "@codemirror/lang-go";
   import { readFile, writeFile, hunks as fetchHunks, type Hunk } from "./wails";
-  import { changedLinesFromHunks } from "./gutter";
+  import { gutterChangesFromHunks } from "./gutter";
 
-  let { path, worktree }: { path: string | null; worktree: string } = $props();
+  let {
+    path,
+    worktree,
+    onSendToAgent,
+  }: {
+    path: string | null;
+    worktree: string;
+    onSendToAgent?: (text: string) => void;
+  } = $props();
 
   let container = $state<HTMLDivElement | null>(null);
   let view = $state<EditorView | null>(null);
+
+  // Selection tracking for send-to-agent affordance
+  let selectionText = $state<string>("");
 
   // ---------------------------------------------------------------------------
   // Language detection by filename extension
@@ -64,10 +76,14 @@
     }
   }
 
-  // Git gutter
-  const setChangedLines = StateEffect.define<Set<number>>();
-  const changedLinesField = StateField.define<Set<number>>({
-    create: () => new Set(),
+  // ---------------------------------------------------------------------------
+  // Git gutter — change tracking (added and deleted lines)
+  // ---------------------------------------------------------------------------
+  interface GutterState { changed: Set<number>; deleted: Set<number>; }
+
+  const setChangedLines = StateEffect.define<GutterState>();
+  const changedLinesField = StateField.define<GutterState>({
+    create: () => ({ changed: new Set(), deleted: new Set() }),
     update(val, tr) {
       for (const e of tr.effects) if (e.is(setChangedLines)) return e.value;
       return val;
@@ -93,32 +109,50 @@
   const addedMarker   = new AddedMarker();
   const deletedMarker = new DeletedMarker();
 
-  // changedLinesFromHunks returns Set<number> of added/modified lines only.
-  // All lines in the set are additions; we show them with the ok (green) marker.
-  // The deletedMarker is defined for future use when the gutter helper can
-  // distinguish add vs delete lines.
   const changedGutter = gutter({
     class: "perch-git-gutter",
     lineMarker(v, line) {
       const no = v.state.doc.lineAt(line.from).number;
-      return v.state.field(changedLinesField).has(no) ? addedMarker : null;
+      const gs = v.state.field(changedLinesField);
+      if (gs.deleted.has(no)) return deletedMarker;
+      if (gs.changed.has(no)) return addedMarker;
+      return null;
     },
   });
+
+  // ---------------------------------------------------------------------------
+  // Selection listener for send-to-agent affordance
+  // ---------------------------------------------------------------------------
+  const selectionListener = EditorView.updateListener.of((update) => {
+    if (update.selectionSet || update.docChanged) {
+      const { from, to } = update.state.selection.main;
+      selectionText = from === to ? "" : update.state.sliceDoc(from, to);
+    }
+  });
+
+  function handleSendToAgent() {
+    if (onSendToAgent && selectionText) {
+      onSendToAgent(selectionText);
+    }
+  }
 
   async function load(p: string) {
     const [content, hunkList] = await Promise.all([
       readFile(p),
       fetchHunks(worktree, p).catch(() => [] as Hunk[]),
     ]);
-    const changed = changedLinesFromHunks(hunkList);
+    const gutterState = gutterChangesFromHunks(hunkList);
 
     const state = EditorState.create({
       doc: content,
       extensions: [
         changedLinesField,
         changedGutter,
-        keymap.of([...defaultKeymap, indentWithTab]),
+        search({ top: true }),
+        highlightSelectionMatches(),
+        keymap.of([...searchKeymap, ...defaultKeymap, indentWithTab]),
         bracketMatching(),
+        selectionListener,
         languageForPath(p),
         EditorView.lineWrapping,
         EditorView.theme({
@@ -150,6 +184,39 @@
             fontSize:   "var(--perch-fs-code)",
             lineHeight: "var(--perch-lh-code)",
           },
+          // Search panel styling using perch tokens
+          ".cm-search": {
+            background:  "var(--perch-bg-elev)",
+            borderTop:   "1px solid var(--perch-border)",
+            padding:     "4px 8px",
+            fontFamily:  "var(--perch-font-mono)",
+            fontSize:    "var(--perch-fs-code)",
+            color:       "var(--perch-text)",
+          },
+          ".cm-search input": {
+            background:  "var(--perch-bg)",
+            color:       "var(--perch-text)",
+            border:      "1px solid var(--perch-border)",
+            borderRadius: "3px",
+            padding:     "1px 4px",
+            fontFamily:  "var(--perch-font-mono)",
+            fontSize:    "var(--perch-fs-code)",
+          },
+          ".cm-search button": {
+            background:  "var(--perch-bg)",
+            color:       "var(--perch-text)",
+            border:      "1px solid var(--perch-border)",
+            borderRadius: "3px",
+            padding:     "1px 6px",
+            cursor:      "pointer",
+          },
+          ".cm-searchMatch": {
+            background: "color-mix(in srgb, var(--perch-warn) 30%, transparent)",
+            outline:    "1px solid var(--perch-warn)",
+          },
+          ".cm-searchMatch-selected": {
+            background: "color-mix(in srgb, var(--perch-accent) 40%, transparent)",
+          },
         }),
       ],
     });
@@ -158,7 +225,9 @@
     } else if (container) {
       view = new EditorView({ state, parent: container });
     }
-    if (changed.size > 0) view?.dispatch({ effects: setChangedLines.of(changed) });
+    if (gutterState.changed.size > 0 || gutterState.deleted.size > 0) {
+      view?.dispatch({ effects: setChangedLines.of(gutterState) });
+    }
   }
 
   async function save() {
@@ -183,6 +252,13 @@
 {#if path}
   <section aria-label="editor" class="editor-wrap">
     <div bind:this={container} class="cm-host"></div>
+    {#if onSendToAgent && selectionText}
+      <button
+        class="send-to-agent-btn"
+        aria-label="Send to agent"
+        onclick={handleSendToAgent}
+      >Send to agent ↗</button>
+    {/if}
   </section>
 {/if}
 
@@ -194,6 +270,7 @@
     min-height: 0;
     min-width: 0;
     overflow: hidden;
+    position: relative;
   }
 
   .cm-host {
@@ -212,5 +289,33 @@
   :global(.perch-git-gutter) {
     width: 6px;
     min-width: 6px;
+  }
+
+  .send-to-agent-btn {
+    position: absolute;
+    bottom: var(--perch-sp-2);
+    right: var(--perch-sp-2);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    background: var(--perch-bg-elev);
+    color: var(--perch-accent);
+    border: 1px solid var(--perch-accent);
+    border-radius: 4px;
+    font-family: var(--perch-font-mono);
+    font-size: var(--perch-fs-code);
+    cursor: pointer;
+    transition:
+      background var(--perch-dur) var(--perch-ease),
+      color var(--perch-dur) var(--perch-ease);
+    z-index: 10;
+  }
+  .send-to-agent-btn:hover {
+    background: color-mix(in srgb, var(--perch-accent) 15%, var(--perch-bg-elev));
+  }
+  .send-to-agent-btn:focus-visible {
+    outline: 2px solid var(--perch-accent);
+    outline-offset: 2px;
   }
 </style>
