@@ -149,3 +149,101 @@ test("send-to-agent button does not render when onSendToAgent prop is absent", a
   await new Promise((r) => setTimeout(r, 50));
   expect(screen.queryByRole("button", { name: /send to agent/i })).toBeNull();
 });
+
+// --- N-10: dirty/unsaved indicator ---
+
+test("dirty dot is absent immediately after load (file is clean)", async () => {
+  const { default: Editor } = await import("./Editor.svelte");
+  const w = await import("./wails");
+  vi.mocked(w.readFile).mockResolvedValueOnce("some content\n");
+  vi.mocked(w.hunks).mockResolvedValueOnce([]);
+
+  render(Editor, { props: { path: "/wt/src/main.go", worktree: "/wt" } });
+  await waitFor(() => expect(document.querySelector(".cm-editor")).not.toBeNull());
+  // Allow any async microtasks to flush
+  await new Promise((r) => setTimeout(r, 20));
+  expect(document.querySelector(".dirty-dot")).toBeNull();
+});
+
+test("dirty dot appears after editing the document", async () => {
+  const { default: Editor } = await import("./Editor.svelte");
+  const { EditorView } = await import("@codemirror/view");
+  const w = await import("./wails");
+  vi.mocked(w.readFile).mockResolvedValueOnce("original\n");
+  vi.mocked(w.hunks).mockResolvedValueOnce([]);
+
+  render(Editor, { props: { path: "/wt/src/main.go", worktree: "/wt" } });
+  await waitFor(() => expect(document.querySelector(".cm-editor")).not.toBeNull());
+
+  const cmEditor = document.querySelector(".cm-editor") as HTMLElement;
+  const editorView = EditorView.findFromDOM(cmEditor);
+  expect(editorView).not.toBeNull();
+
+  // Insert a character to make the document dirty
+  editorView!.dispatch({
+    changes: { from: 0, to: 0, insert: "X" },
+  });
+
+  await waitFor(() =>
+    expect(document.querySelector(".dirty-dot")).not.toBeNull()
+  );
+});
+
+test("dirty dot disappears after Ctrl-S save", async () => {
+  const { default: Editor } = await import("./Editor.svelte");
+  const { EditorView } = await import("@codemirror/view");
+  const w = await import("./wails");
+  vi.mocked(w.readFile).mockResolvedValueOnce("original\n");
+  vi.mocked(w.hunks).mockResolvedValueOnce([]);
+
+  render(Editor, { props: { path: "/wt/src/main.go", worktree: "/wt" } });
+  await waitFor(() => expect(document.querySelector(".cm-editor")).not.toBeNull());
+
+  const cmEditor = document.querySelector(".cm-editor") as HTMLElement;
+  const editorView = EditorView.findFromDOM(cmEditor);
+  // Make dirty
+  editorView!.dispatch({ changes: { from: 0, to: 0, insert: "Y" } });
+  await waitFor(() => expect(document.querySelector(".dirty-dot")).not.toBeNull());
+
+  // Save
+  await fireEvent.keyDown(document, { key: "s", ctrlKey: true });
+  await waitFor(() => expect(document.querySelector(".dirty-dot")).toBeNull());
+});
+
+// --- N-24: send-to-agent button drag affordance ---
+
+test("send-to-agent button is draggable and sets perch text MIME on dragstart", async () => {
+  const { default: Editor } = await import("./Editor.svelte");
+  const { EditorView } = await import("@codemirror/view");
+  const { EditorSelection } = await import("@codemirror/state");
+  const w = await import("./wails");
+  vi.mocked(w.readFile).mockResolvedValueOnce("hello world\n");
+  vi.mocked(w.hunks).mockResolvedValueOnce([]);
+  const spy = vi.fn();
+
+  render(Editor, { props: { path: "/wt/src/main.go", worktree: "/wt", onSendToAgent: spy } });
+  await waitFor(() => expect(document.querySelector(".cm-editor")).not.toBeNull());
+
+  const cmEditor = document.querySelector(".cm-editor") as HTMLElement;
+  const editorView = EditorView.findFromDOM(cmEditor);
+  // Select "hello world"
+  editorView!.dispatch({ selection: EditorSelection.single(0, 11) });
+
+  const btn = await waitFor(() => screen.getByRole("button", { name: /send to agent/i }));
+
+  // Verify draggable attribute
+  expect(btn).toHaveAttribute("draggable", "true");
+
+  // Simulate dragstart with a mock dataTransfer
+  const mockDataTransfer: Partial<DataTransfer> = {
+    effectAllowed: "none" as DataTransfer["effectAllowed"],
+    items: [] as unknown as DataTransferItemList,
+    setData: vi.fn(),
+  };
+  await fireEvent.dragStart(btn, { dataTransfer: mockDataTransfer });
+
+  expect(mockDataTransfer.setData).toHaveBeenCalledWith(
+    "application/x-perch-text",
+    "hello world"
+  );
+});

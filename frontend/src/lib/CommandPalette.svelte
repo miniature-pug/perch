@@ -11,6 +11,27 @@
   // Svelte action: focus the node immediately on mount (avoids the a11y autofocus warning).
   function focusOnMount(node: HTMLElement) { node.focus(); }
 
+  // Track command invocation recency: id → last-invoked timestamp.
+  // Persisted to localStorage so recency survives palette re-opens within a session.
+  const RECENCY_KEY = "perch:cmd-recents";
+  function loadRecents(): Map<string, number> {
+    try {
+      const raw = localStorage.getItem(RECENCY_KEY);
+      if (raw) return new Map(JSON.parse(raw) as [string, number][]);
+    } catch { /* ignore */ }
+    return new Map();
+  }
+  function saveRecent(id: string) {
+    const map = loadRecents();
+    map.set(id, Date.now());
+    // Keep at most 20 entries
+    if (map.size > 20) {
+      const oldest = [...map.entries()].sort((a, b) => a[1] - b[1])[0][0];
+      map.delete(oldest);
+    }
+    try { localStorage.setItem(RECENCY_KEY, JSON.stringify([...map.entries()])); } catch { /* ignore */ }
+  }
+
   function fuzzyScore(label: string, q: string): number {
     if (!q) return 1;
     const lbl = label.toLowerCase(); const ql = q.toLowerCase();
@@ -23,12 +44,22 @@
     return score;
   }
 
-  let filtered = $derived(
-    query
-      ? commands.map((c) => ({ c, score: fuzzyScore(c.label, query) }))
-          .filter((x) => x.score > 0).sort((a, b) => b.score - a.score).map((x) => x.c)
-      : commands
-  );
+  // When the query is empty, surface recently-used commands first in a "Recent" group,
+  // then show remaining commands in their normal groups below.
+  let filtered = $derived((() => {
+    if (query) {
+      return commands.map((c) => ({ c, score: fuzzyScore(c.label, query) }))
+        .filter((x) => x.score > 0).sort((a, b) => b.score - a.score).map((x) => x.c);
+    }
+    // No query: sort by recency (most-recent first) for the initial list
+    const recents = loadRecents();
+    return [...commands].sort((a, b) => {
+      const ta = recents.get(a.id) ?? 0;
+      const tb = recents.get(b.id) ?? 0;
+      if (ta !== tb) return tb - ta; // more recent → earlier
+      return 0; // preserve insertion order for equal timestamps
+    });
+  })());
 
   // Reset active whenever filtered list changes (query change)
   $effect(() => {
@@ -37,14 +68,31 @@
     active = 0;
   });
 
-  let grouped = $derived(
-    filtered.reduce<{ group: string; items: Command[] }[]>((acc, c) => {
-      const last = acc[acc.length - 1];
+  let grouped = $derived((() => {
+    if (query) {
+      // When filtering, group normally
+      return filtered.reduce<{ group: string; items: Command[] }[]>((acc, c) => {
+        const last = acc[acc.length - 1];
+        if (last && last.group === c.group) last.items.push(c);
+        else acc.push({ group: c.group, items: [c] });
+        return acc;
+      }, []);
+    }
+    // No query: put recently-used commands first in a "Recent" group, rest below
+    const recents = loadRecents();
+    const recentIds = new Set(recents.keys());
+    const recentCmds = filtered.filter((c) => recentIds.has(c.id));
+    const otherCmds  = filtered.filter((c) => !recentIds.has(c.id));
+    const result: { group: string; items: Command[] }[] = [];
+    if (recentCmds.length > 0) result.push({ group: "Recent", items: recentCmds });
+    // Group remaining by their normal group
+    for (const c of otherCmds) {
+      const last = result[result.length - 1];
       if (last && last.group === c.group) last.items.push(c);
-      else acc.push({ group: c.group, items: [c] });
-      return acc;
-    }, [])
-  );
+      else result.push({ group: c.group, items: [c] });
+    }
+    return result;
+  })());
 
   // Compute active option id for aria-activedescendant
   let activeId = $derived(filtered.length > 0 ? `palette-option-${active}` : undefined);
@@ -57,7 +105,9 @@
       e.preventDefault();
       active = Math.max(active - 1, 0);
     } else if (e.key === "Enter" && filtered.length > 0) {
-      onRun(filtered[active].id);
+      const id = filtered[active].id;
+      saveRecent(id);
+      onRun(id);
     } else if (e.key === "Escape") {
       onClose();
     }
@@ -82,8 +132,8 @@
               aria-selected={flatIndex === active}
               class="palette-item {flatIndex === active ? 'is-active' : ''}"
               tabindex="-1"
-              onclick={() => onRun(c.id)}
-              onkeydown={(e) => e.key === "Enter" && onRun(c.id)}>
+              onclick={() => { saveRecent(c.id); onRun(c.id); }}
+              onkeydown={(e) => { if (e.key === "Enter") { saveRecent(c.id); onRun(c.id); } }}>
               <span class="item-label">{c.label}</span>
               {#if c.keybinding}<kbd class="item-kbd">{c.keybinding}</kbd>{/if}
             </li>

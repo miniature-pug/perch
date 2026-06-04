@@ -17,8 +17,12 @@
 </script>
 
 <div role="status" class="token-meter" aria-label="token usage">
-  <span class="token-count">{formattedTokens} tok</span>
-  <span class="token-cost">{formattedCost}</span>
+  {#if capsTokens}
+    <span class="token-count">{formattedTokens} tok</span>
+    <span class="token-cost">{formattedCost}</span>
+  {:else}
+    <span class="token-count token-unsupported">— tok</span>
+  {/if}
 </div>
 
 <style>
@@ -37,5 +41,10 @@
   /* "·" separator injected before the cost with no markup change */
   .token-cost::before {
     content: " · ";
+  }
+
+  /* When token reporting is unsupported, show a muted dash */
+  .token-unsupported {
+    opacity: 0.45;
   }
 </style>

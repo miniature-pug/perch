@@ -12,20 +12,20 @@ test("renders formatted token count and cost (large number abbreviation)", async
 
 test("renders with small token count unabbreviated", async () => {
   const { default: TokenMeter } = await import("./TokenMeter.svelte");
-  render(TokenMeter, { props: { tokens: 999, cost: 0.1, capsTokens: false } });
+  render(TokenMeter, { props: { tokens: 999, cost: 0.1, capsTokens: true } });
   expect(screen.getByRole("status")).toBeInTheDocument();
   expect(screen.getByText(/999 tok/)).toBeInTheDocument();
 });
 
 test("abbreviates exactly 1000 as 1k (no trailing .0)", async () => {
   const { default: TokenMeter } = await import("./TokenMeter.svelte");
-  render(TokenMeter, { props: { tokens: 1000, cost: 0.0, capsTokens: false } });
+  render(TokenMeter, { props: { tokens: 1000, cost: 0.0, capsTokens: true } });
   expect(screen.getByText(/^1k tok$/)).toBeInTheDocument();
 });
 
 test("abbreviates 1200000 as 1.2M", async () => {
   const { default: TokenMeter } = await import("./TokenMeter.svelte");
-  render(TokenMeter, { props: { tokens: 1_200_000, cost: 1.5, capsTokens: false } });
+  render(TokenMeter, { props: { tokens: 1_200_000, cost: 1.5, capsTokens: true } });
   expect(screen.getByText(/^1\.2M tok$/)).toBeInTheDocument();
 });
 
@@ -34,4 +34,14 @@ test("meter is always in dim color — never has at-cap class", async () => {
   render(TokenMeter, { props: { tokens: 0, cost: 0, capsTokens: true } });
   const el = screen.getByRole("status");
   expect(el.classList.contains("at-cap")).toBe(false);
+});
+
+// L-13: when capsTokens is false, show '—' instead of token counts
+test("L-13: capsTokens=false renders dash placeholder instead of counts", async () => {
+  const { default: TokenMeter } = await import("./TokenMeter.svelte");
+  render(TokenMeter, { props: { tokens: 9999, cost: 5.0, capsTokens: false } });
+  const el = screen.getByRole("status");
+  expect(el.textContent).toContain("—");
+  expect(el.textContent).not.toContain("9999");
+  expect(el.textContent).not.toContain("$5");
 });

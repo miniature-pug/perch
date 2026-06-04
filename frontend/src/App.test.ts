@@ -2153,3 +2153,347 @@ describe("App.svelte session reorder (behavior 4b)", () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// H-8: FileTree "@mention:" prefix routed to sendToAgent (not codePath)
+// ---------------------------------------------------------------------------
+describe("App.svelte H-8: FileTree @mention prefix routes to sendToAgent", () => {
+  const codeWs = [
+    {
+      id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
+      worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
+      caps: { approvals: false, attention: false, tokens: false },
+    },
+  ];
+
+  it("FileTree onOpen with '@mention:/some/file.ts' sends '@/some/file.ts ' via writeToPty, not readFile", async () => {
+    const { listWorkspaces, writeToPty, readFile } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(codeWs);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    layout.setView("code");
+    await tick();
+
+    // Click the "@mention" button that FileTreeProbe exposes.
+    // It calls onOpen("@mention:/some/file.ts") which App routes to sendToAgent.
+    vi.mocked(writeToPty).mockClear();
+    vi.mocked(readFile).mockClear();
+    const mentionBtn = screen.getByRole("button", { name: "mention file" });
+    await fireEvent.click(mentionBtn);
+    await tick();
+
+    // @mention path → writeToPty with "@/some/file.ts " (leading '@', trailing space)
+    await waitFor(() => {
+      expect(writeToPty).toHaveBeenCalledTimes(1);
+      const [paneId, bytes] = vi.mocked(writeToPty).mock.calls[0];
+      expect(paneId).toBe("p1");
+      expect(new TextDecoder().decode(new Uint8Array(bytes as number[]))).toBe("@/some/file.ts ");
+    });
+
+    // readFile must NOT be called — @mention does not set codePath
+    expect(readFile).not.toHaveBeenCalled();
+  });
+
+  it("FileTree onOpen without '@mention:' prefix updates codePath, does NOT call writeToPty", async () => {
+    const { listWorkspaces, writeToPty } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(codeWs);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    layout.setView("code");
+    await tick();
+
+    vi.mocked(writeToPty).mockClear();
+    const openBtn = screen.getByRole("button", { name: "open file" });
+    await fireEvent.click(openBtn);
+    await tick();
+
+    // Normal path: editor receives the path
+    await waitFor(() => {
+      expect(screen.getByTestId("editor").dataset.path).toBe("/some/file.ts");
+    });
+
+    // writeToPty must NOT have been called for a normal path open
+    expect(writeToPty).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M-17: onDecision deletes by owning workspace, not activeId
+// ---------------------------------------------------------------------------
+describe("App.svelte M-17: onDecision keys deletion by reqId owner, not activeId", () => {
+  it("allow on ws-2 card while active switches to ws-1 mid-await: only ws-2 cleared (race-proof)", async () => {
+    // This test exercises the async race:
+    //   1. Beta active → click Allow on req-ws2 → approve() deferred (won't resolve yet)
+    //   2. While awaiting → click Alpha (activeId becomes ws-1)
+    //   3. Resolve approve() → onDecision finishes
+    //   Buggy code:  deletes approvals[activeId] = approvals["ws-1"] → Alpha task gone (wrong)
+    //   Fixed code:  deletes approvals[owner("req-ws2")] = approvals["ws-2"] → Beta gone, Alpha intact
+    const { listWorkspaces, approve } = await import("./lib/wails");
+
+    // Deferred approve: caller controls when the promise resolves
+    let resolveApprove!: () => void;
+    vi.mocked(approve).mockImplementation(
+      () => new Promise<void>((res) => { resolveApprove = res; })
+    );
+
+    const ws1 = {
+      id: "ws-1", title: "Alpha", branch: "main", state: "awaiting-approval" as const,
+      worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
+      caps: { approvals: true, attention: false, tokens: false },
+    };
+    const ws2 = {
+      id: "ws-2", title: "Beta", branch: "feat", state: "awaiting-approval" as const,
+      worktreePath: "/tmp/beta", agent: "claude", paneId: "p2", lastActive: "",
+      caps: { approvals: true, attention: false, tokens: false },
+    };
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([ws1, ws2]);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    // Inject approvals for both workspaces
+    await screen.findByRole("button", { name: "Alpha" });
+    const cb = captured.agent.at(-1)!;
+    cb({ workspaceId: "ws-1", kind: "approval", state: "awaiting-approval",
+         approval: { reqId: "req-ws1", tool: "bash", summary: "Alpha task" } });
+    cb({ workspaceId: "ws-2", kind: "approval", state: "awaiting-approval",
+         approval: { reqId: "req-ws2", tool: "bash", summary: "Beta task" } });
+    await tick();
+
+    // Step 1: activate Beta, confirm its card is visible
+    const betaBtn = screen.getByRole("button", { name: "Beta" });
+    await fireEvent.click(betaBtn);
+    await tick();
+    await waitFor(() => expect(screen.getByText("Beta task")).toBeInTheDocument());
+
+    // Step 2: click Allow on Beta's card → approve() called but NOT resolved yet
+    const allowBtn = screen.getByRole("button", { name: "Allow" });
+    await fireEvent.click(allowBtn);
+    await tick();
+    expect(approve).toHaveBeenCalledWith("req-ws2", "allow");
+
+    // Step 3: switch active workspace to Alpha BEFORE approve resolves
+    await fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
+    await tick();
+    // Alpha's card is now visible (activeId changed mid-await)
+    await waitFor(() => expect(screen.getByText("Alpha task")).toBeInTheDocument());
+
+    // Step 4: now resolve the approve promise
+    resolveApprove();
+    await tick();
+    await tick(); // extra tick for promise continuation + Svelte reactivity
+
+    // Fixed: Beta task disappears (ws-2 approval cleared by owner lookup)
+    await waitFor(() => expect(screen.queryByText("Beta task")).not.toBeInTheDocument());
+
+    // Critical: Alpha's task must still be here (activeId-keyed deletion would have removed it)
+    expect(screen.getByText("Alpha task")).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// L-14: session:close cleans up approvals/fsVersion/usage
+// ---------------------------------------------------------------------------
+describe("App.svelte L-14: session:close cleans up per-workspace frontend state", () => {
+  it("after closeWorkspace resolves, approvals/fsVersion/usage for that id are removed", async () => {
+    const { listWorkspaces, closeWorkspace } = await import("./lib/wails");
+    (closeWorkspace as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
+        worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
+        caps: { approvals: true, attention: false, tokens: true },
+      },
+    ]);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    await tick();
+
+    // Inject approval and usage events for ws-1
+    const cb = captured.agent.at(-1)!;
+    cb({ workspaceId: "ws-1", kind: "approval", state: "awaiting-approval",
+         approval: { reqId: "req-cleanup", tool: "bash", summary: "Cleanup test" } });
+    cb({ workspaceId: "ws-1", kind: "usage", tokens: 100, cost: 0.01 });
+    await tick();
+
+    // Approval card and token meter should be visible
+    await waitFor(() => expect(screen.getByText("Cleanup test")).toBeInTheDocument());
+    await waitFor(() => {
+      const meter = screen.getByRole("status", { name: "token usage" });
+      expect(meter.textContent).toContain("100");
+    });
+
+    // Close the session
+    const sessionMenu = screen.getByRole("menuitem", { name: "Session" });
+    await fireEvent.click(sessionMenu);
+    await tick();
+    const closeItem = screen.getByRole("menuitem", { name: "Close session" });
+    await fireEvent.click(closeItem);
+    await tick();
+
+    // closeWorkspace must have been called
+    await waitFor(() => expect(closeWorkspace).toHaveBeenCalledWith("ws-1"));
+
+    // Approval card disappears (approvals cleaned up)
+    await waitFor(() =>
+      expect(screen.queryByText("Cleanup test")).not.toBeInTheDocument()
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// L-21: gt/gT view cycling
+// ---------------------------------------------------------------------------
+describe("App.svelte L-21: g-prefix gt/gT cycles views", () => {
+  beforeEach(async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+  });
+
+  it("gt from 'agent' → 'code'", async () => {
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await tick();
+
+    layout.setView("agent");
+    await fireEvent.keyDown(document.body, { key: "g" });
+    await tick();
+    await fireEvent.keyDown(document.body, { key: "t" });
+    await tick();
+    expect(layout.view).toBe("code");
+  });
+
+  it("gt from 'code' → 'diff'", async () => {
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await tick();
+
+    layout.setView("code");
+    await fireEvent.keyDown(document.body, { key: "g" });
+    await tick();
+    await fireEvent.keyDown(document.body, { key: "t" });
+    await tick();
+    expect(layout.view).toBe("diff");
+  });
+
+  it("gt from 'diff' → 'agent' (wrap-around)", async () => {
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await tick();
+
+    layout.setView("diff");
+    await fireEvent.keyDown(document.body, { key: "g" });
+    await tick();
+    await fireEvent.keyDown(document.body, { key: "t" });
+    await tick();
+    expect(layout.view).toBe("agent");
+  });
+
+  it("gT from 'agent' → 'diff' (reverse wrap-around)", async () => {
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await tick();
+
+    layout.setView("agent");
+    await fireEvent.keyDown(document.body, { key: "g" });
+    await tick();
+    await fireEvent.keyDown(document.body, { key: "T" });
+    await tick();
+    expect(layout.view).toBe("diff");
+  });
+
+  it("gT from 'code' → 'agent'", async () => {
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await tick();
+
+    layout.setView("code");
+    await fireEvent.keyDown(document.body, { key: "g" });
+    await tick();
+    await fireEvent.keyDown(document.body, { key: "T" });
+    await tick();
+    expect(layout.view).toBe("agent");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// L-22: auto-dismiss notifications
+// ---------------------------------------------------------------------------
+describe("notifications.svelte.ts L-22: auto-dismiss non-blocking tiers", () => {
+  it("ambient notification is marked read after ~6s (fake timers)", async () => {
+    vi.useFakeTimers();
+    const { addAmbient, getItems } = await import("./lib/stores/notifications.svelte");
+    const before = getItems().length;
+
+    addAmbient("ws-1", "Done", "Build succeeded");
+    const items = getItems();
+    expect(items.length).toBe(before + 1);
+    const n = items.find((x) => x.title === "Done")!;
+    expect(n).toBeDefined();
+    expect(n.read).toBe(false);
+
+    // Advance 6 seconds
+    vi.advanceTimersByTime(6000);
+    await tick();
+
+    const after = getItems();
+    expect(after.find((x) => x.id === n.id)?.read).toBe(true);
+
+    vi.useRealTimers();
+  });
+
+  it("blocking notification is NEVER auto-dismissed", async () => {
+    vi.useFakeTimers();
+    const { addBlocking, getItems } = await import("./lib/stores/notifications.svelte");
+    const before = getItems().length;
+
+    addBlocking("ws-1", "Error", "Something broke");
+    const items = getItems();
+    const n = items.find((x) => x.title === "Error")!;
+    expect(n).toBeDefined();
+
+    // Advance a long time — blocking should still NOT be read
+    vi.advanceTimersByTime(60000);
+    await tick();
+
+    const after = getItems();
+    expect(after.find((x) => x.id === n.id)?.read).toBe(false);
+
+    vi.useRealTimers();
+  });
+
+  it("routine notification is marked read after ~3s (fake timers)", async () => {
+    vi.useFakeTimers();
+    const { addRoutine, getItems } = await import("./lib/stores/notifications.svelte");
+    const before = getItems().length;
+
+    addRoutine("ws-1", "Info", "Synced");
+    const items = getItems();
+    const n = items.find((x) => x.title === "Info")!;
+    expect(n).toBeDefined();
+    expect(n.read).toBe(false);
+
+    vi.advanceTimersByTime(3000);
+    await tick();
+
+    const after = getItems();
+    expect(after.find((x) => x.id === n.id)?.read).toBe(true);
+
+    vi.useRealTimers();
+  });
+});

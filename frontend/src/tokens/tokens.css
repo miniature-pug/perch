@@ -2,6 +2,8 @@
 :root {
   --perch-font-sans: "Geist", "IBM Plex Sans", "Inter", system-ui, sans-serif;
   --perch-font-mono: "Geist Mono", "IBM Plex Mono", "Fira Code", ui-monospace, monospace;
+  --perch-fs-h1: 24px;       --perch-lh-h1: 1.3;
+  --perch-fs-h2: 20px;       --perch-lh-h2: 1.35;
   --perch-fs-code: 14px;    --perch-lh-code: 1.55;
   --perch-fs-shell: 13px;   --perch-lh-shell: 1.5;
   --perch-fs-body: 13px;    --perch-fs-caption: 12px;   --perch-fs-label: 11px;

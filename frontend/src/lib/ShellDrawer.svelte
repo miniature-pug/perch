@@ -4,8 +4,19 @@
   import Terminal from "./Terminal.svelte";
   import { openShell } from "./wails";
 
-  let { paneId, cwd }: { paneId: string; cwd: string } = $props();
-  let collapsed = $state(false);
+  // collapsed is driven by layout.collapsed['shell'] via App.svelte;
+  // onToggleCollapse lets the in-drawer button call back to the authoritative store.
+  let {
+    paneId,
+    cwd,
+    collapsed = false,
+    onToggleCollapse,
+  }: {
+    paneId: string;
+    cwd: string;
+    collapsed?: boolean;
+    onToggleCollapse?: () => void;
+  } = $props();
 
   onMount(() => { openShell(paneId, cwd); });
 </script>
@@ -14,9 +25,9 @@
   <div class="shell-header">
     <span class="shell-title">Shell — {cwd}</span>
     {#if collapsed}
-      <button onclick={() => (collapsed = false)} aria-label="expand shell">▲ Expand</button>
+      <button onclick={() => onToggleCollapse?.()} aria-label="expand shell">▲ Expand</button>
     {:else}
-      <button onclick={() => (collapsed = true)} aria-label="collapse shell">▼ Collapse</button>
+      <button onclick={() => onToggleCollapse?.()} aria-label="collapse shell">▼ Collapse</button>
     {/if}
   </div>
   {#if !collapsed}

@@ -1,7 +1,8 @@
 // frontend/src/lib/ShellDrawer.test.ts
 import { render, screen, waitFor } from "@testing-library/svelte";
 import { fireEvent } from "@testing-library/svelte";
-import { vi } from "vitest";
+import { vi, expect } from "vitest";
+import { tick } from "svelte";
 
 vi.mock("./wails", () => ({ openShell: vi.fn(async () => {}) }));
 vi.mock("./Terminal.svelte", async () => ({
@@ -15,13 +16,34 @@ test("calls openShell on mount", async () => {
   await waitFor(() => expect(w.openShell).toHaveBeenCalledWith("shell-1", "/wt"));
 });
 
-test("collapse toggle hides the shell region", async () => {
+// M-16: collapsed is now a prop; onToggleCollapse is called when the button is clicked.
+test("collapse toggle calls onToggleCollapse when button clicked", async () => {
   const { default: ShellDrawer } = await import("./ShellDrawer.svelte");
-  render(ShellDrawer, { props: { paneId: "shell-1", cwd: "/wt" } });
+  const onToggleCollapse = vi.fn();
+  render(ShellDrawer, { props: { paneId: "shell-1", cwd: "/wt", collapsed: false, onToggleCollapse } });
   await waitFor(() => screen.getByRole("button", { name: /collapse/i }));
   expect(screen.getByRole("region", { name: /shell/i })).toBeInTheDocument();
+
   await fireEvent.click(screen.getByRole("button", { name: /collapse/i }));
+  await tick();
+  // onToggleCollapse must have been called — App.svelte is the one that changes collapsed
+  expect(onToggleCollapse).toHaveBeenCalledTimes(1);
+});
+
+test("collapsed=true prop hides the shell region; collapsed=false shows it", async () => {
+  const { default: ShellDrawer } = await import("./ShellDrawer.svelte");
+  // Start expanded
+  const { rerender } = render(ShellDrawer, { props: { paneId: "shell-1", cwd: "/wt", collapsed: false } });
+  expect(screen.getByRole("region", { name: /shell/i })).toBeInTheDocument();
+
+  // Switch to collapsed via prop
+  await rerender({ props: { paneId: "shell-1", cwd: "/wt", collapsed: true } });
+  await tick();
   expect(screen.queryByRole("region", { name: /shell/i })).toBeNull();
-  await fireEvent.click(screen.getByRole("button", { name: /expand/i }));
+  expect(screen.getByRole("button", { name: /expand/i })).toBeInTheDocument();
+
+  // Switch back to expanded
+  await rerender({ props: { paneId: "shell-1", cwd: "/wt", collapsed: false } });
+  await tick();
   await waitFor(() => expect(screen.getByRole("region", { name: /shell/i })).toBeInTheDocument());
 });

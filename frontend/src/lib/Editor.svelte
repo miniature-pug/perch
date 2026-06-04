@@ -5,6 +5,7 @@
   import { EditorState, StateField, StateEffect } from "@codemirror/state";
   import { defaultKeymap, indentWithTab } from "@codemirror/commands";
   import { bracketMatching } from "@codemirror/language";
+  import { perchSyntaxHighlighting } from "./highlight";
   import { search, searchKeymap, highlightSelectionMatches } from "@codemirror/search";
   import { javascript } from "@codemirror/lang-javascript";
   import { css }        from "@codemirror/lang-css";
@@ -31,6 +32,9 @@
 
   // Selection tracking for send-to-agent affordance
   let selectionText = $state<string>("");
+
+  // N-10: dirty/unsaved state — true when document has been modified since last load/save
+  let dirty = $state<boolean>(false);
 
   // ---------------------------------------------------------------------------
   // Language detection by filename extension
@@ -128,6 +132,10 @@
       const { from, to } = update.state.selection.main;
       selectionText = from === to ? "" : update.state.sliceDoc(from, to);
     }
+    // N-10: mark dirty on any user-driven document change
+    if (update.docChanged) {
+      dirty = true;
+    }
   });
 
   function handleSendToAgent() {
@@ -152,6 +160,8 @@
         highlightSelectionMatches(),
         keymap.of([...searchKeymap, ...defaultKeymap, indentWithTab]),
         bracketMatching(),
+        // H-9: syntax highlighting via perch CSS-variable-mapped HighlightStyle
+        perchSyntaxHighlighting,
         selectionListener,
         languageForPath(p),
         EditorView.lineWrapping,
@@ -225,6 +235,9 @@
     } else if (container) {
       view = new EditorView({ state, parent: container });
     }
+    // N-10: setState/new EditorView fires docChanged via the update listener;
+    // overwrite immediately so the freshly-loaded file starts clean.
+    dirty = false;
     if (gutterState.changed.size > 0 || gutterState.deleted.size > 0) {
       view?.dispatch({ effects: setChangedLines.of(gutterState) });
     }
@@ -233,10 +246,20 @@
   async function save() {
     if (!path || !view) return;
     await writeFile(path, view.state.doc.toString());
+    // N-10: clear dirty flag after successful save
+    dirty = false;
   }
 
   function handleKeyDown(e: KeyboardEvent) {
     if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); save(); }
+  }
+
+  // N-24: drag selected text as application/x-perch-text (matches DragDrop.svelte MIME)
+  function handleDragStart(e: DragEvent) {
+    if (!selectionText || !e.dataTransfer) return;
+    e.dataTransfer.effectAllowed = "copy";
+    e.dataTransfer.setData("application/x-perch-text", selectionText);
+    e.dataTransfer.setData("text/plain", selectionText);
   }
 
   $effect(() => { if (path) load(path); });
@@ -252,11 +275,20 @@
 {#if path}
   <section aria-label="editor" class="editor-wrap">
     <div bind:this={container} class="cm-host"></div>
+
+    {#if dirty}
+      <!-- N-10: unsaved indicator dot -->
+      <span class="dirty-dot" aria-label="Unsaved changes" title="Unsaved changes">●</span>
+    {/if}
+
     {#if onSendToAgent && selectionText}
+      <!-- N-24: draggable with application/x-perch-text; button also acts as drag affordance -->
       <button
         class="send-to-agent-btn"
         aria-label="Send to agent"
+        draggable={true}
         onclick={handleSendToAgent}
+        ondragstart={handleDragStart}
       >Send to agent ↗</button>
     {/if}
   </section>
@@ -289,6 +321,19 @@
   :global(.perch-git-gutter) {
     width: 6px;
     min-width: 6px;
+  }
+
+  /* N-10: unsaved indicator */
+  .dirty-dot {
+    position: absolute;
+    top: var(--perch-sp-1, 4px);
+    right: var(--perch-sp-2, 8px);
+    font-size: 10px;
+    line-height: 1;
+    color: var(--perch-warn);
+    pointer-events: none;
+    z-index: 20;
+    user-select: none;
   }
 
   .send-to-agent-btn {

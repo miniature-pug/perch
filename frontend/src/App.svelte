@@ -130,6 +130,20 @@
   function onWindowFocus() { setWindowFocus(true).catch(() => {}); }
   function onWindowBlur()  { setWindowFocus(false).catch(() => {}); }
 
+  // H-11: capture-phase pointerdown on the app root — when in terminal mode and the
+  // click target is NOT inside a .terminal / [data-terminal-zone] element, leave
+  // terminal mode and return to NORMAL.  We use capture so this fires before any
+  // child handler, but we NEVER preventDefault/stopPropagation so other handlers
+  // (menus, buttons, xterm) still receive the event.
+  function onAppPointerDown(e: PointerEvent) {
+    if (mode.current !== "terminal") return;
+    const target = e.target as Element | null;
+    if (!target) return;
+    // Stay in terminal mode if the click is inside the terminal zone
+    if (target.closest("[data-terminal-zone]")) return;
+    mode.leaveTerminal();
+  }
+
   onMount(async () => {
     // Report initial focus state and register focus/blur listeners.
     setWindowFocus(document.hasFocus()).catch(() => {});
@@ -281,17 +295,26 @@
   const commands: Command[] = [
     // Session
     { id: "session:new",    group: "Session", label: "New session",        run: () => openNewSession() },
-    { id: "session:close",  group: "Session", label: "Close session",      run: () => { if (active) closeWorkspace(active.id); } },
+    { id: "session:close",  group: "Session", label: "Close session",      run: () => {
+        if (!active) return;
+        const id = active.id;
+        closeWorkspace(id).then(() => {
+          // L-14: clean up per-workspace frontend state on close
+          const { [id]: _a, ...restA } = approvals; approvals = restA;
+          const { [id]: _f, ...restF } = fsVersion;  fsVersion = restF;
+          const { [id]: _u, ...restU } = usage;       usage = restU;
+        }).catch(() => {});
+      } },
     { id: "session:remove", group: "Session", label: "Remove session",     run: () => { if (active) requestRemove(active); } },
     // Worktree
-    { id: "worktree:open",   group: "Worktree", label: "Open worktree",    run: () => { if (active) openWorkspace(active.id); } },
+    { id: "worktree:open",   group: "Worktree", label: "Open worktree",    keybinding: "Enter",       run: () => { if (active) openWorkspace(active.id); } },
     { id: "worktree:reveal", group: "Worktree", label: "Reveal in Files",  run: () => { if (active) revealInFiles(active.worktreePath); } },
     // View
-    { id: "view:agent", group: "View", label: "Agent view",  keybinding: "1", run: () => layout.setView("agent") },
-    { id: "view:code",  group: "View", label: "Code view",   keybinding: "2", run: () => layout.setView("code")  },
-    { id: "view:diff",  group: "View", label: "Diff view",   keybinding: "3", run: () => layout.setView("diff")  },
+    { id: "view:agent", group: "View", label: "Agent view",  keybinding: "1",  run: () => layout.setView("agent") },
+    { id: "view:code",  group: "View", label: "Code view",   keybinding: "2",  run: () => layout.setView("code")  },
+    { id: "view:diff",  group: "View", label: "Diff view",   keybinding: "3",  run: () => layout.setView("diff")  },
     { id: "view:split", group: "View", label: "Split",       keybinding: "\\", run: () => layout.toggleSplit()   },
-    { id: "view:theme", group: "View", label: "Cycle theme",                  run: () => {
+    { id: "view:theme", group: "View", label: "Cycle theme",                   run: () => {
         const idx = THEMES.indexOf(settings.theme);
         settings.setTheme(THEMES[(idx + 1) % THEMES.length]);
       },
@@ -300,13 +323,13 @@
     { id: "agent:approve-all", group: "Agent", label: "Approve all pending", run: () => decideAll("allow") },
     { id: "agent:deny-all",    group: "Agent", label: "Deny all pending",    run: () => decideAll("deny")  },
     // Notifications
-    { id: "notifications:open", group: "Notifications", label: "Open notifications", run: () => { notifOpen = !notifOpen; } },
+    { id: "notifications:open", group: "Notifications", label: "Open notifications",    run: () => { notifOpen = !notifOpen; } },
     { id: "notifications:dnd",  group: "Notifications", label: "Toggle Do Not Disturb", run: () => setDnd(!getDnd()) },
     // Help
     { id: "help:shortcuts", group: "Help", label: "Keyboard shortcuts", run: () => { helpOpen = true; } },
     { id: "help:about",     group: "Help", label: "About perch",        run: () => { helpOpen = true; } },
     // Settings
-    { id: "settings:open", group: "Settings", label: "Settings…",       run: () => { settingsOpen = true; } },
+    { id: "settings:open", group: "Settings", label: "Settings…", run: () => { settingsOpen = true; } },
   ];
 
   function runCommand(id: string) {
@@ -354,11 +377,25 @@
       }
     }
 
-    // g-prefix resolution must come first so gd/ge work correctly.
+    // g-prefix resolution must come first so gd/ge/gt/gT work correctly.
     if (pendingG) {
       pendingG = false;
       if (e.key === "d") { e.preventDefault(); layout.setView("diff"); }
       else if (e.key === "e") { e.preventDefault(); layout.setView("code"); }
+      else if (e.key === "t") {
+        // L-21: gt → cycle to the next view (agent → code → diff → agent)
+        e.preventDefault();
+        const views: import("./lib/stores/layout.svelte").View[] = ["agent", "code", "diff"];
+        const idx = views.indexOf(layout.view);
+        layout.setView(views[(idx + 1) % views.length]);
+      }
+      else if (e.key === "T") {
+        // L-21: gT → cycle to the previous view (agent → diff → code → agent)
+        e.preventDefault();
+        const views: import("./lib/stores/layout.svelte").View[] = ["agent", "code", "diff"];
+        const idx = views.indexOf(layout.view);
+        layout.setView(views[(idx - 1 + views.length) % views.length]);
+      }
       // any other key: cancel prefix silently (no action)
       return;
     }
@@ -447,8 +484,14 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Send selected text to the active agent pane as an @mention (spec §7.3/§7.7).
-  // Uses the same encoding as DragDrop: text → UTF-8 bytes → writeToPty.
+  // Send text to the active agent pane via writeToPty (spec §7.3/§7.7).
+  //
+  // @mention convention (matches DragDrop.svelte):
+  //   • File/path references arrive as '@'+path+' ' (the leading '@' and trailing
+  //     space are already present in the string that callers pass).
+  //   • Arbitrary selected text (from Editor.onSendToAgent) is sent as-is.
+  //
+  // Callers must format the text themselves — sendToAgent is a raw pass-through.
   // ---------------------------------------------------------------------------
   function sendToAgent(text: string) {
     if (!active?.paneId) return;
@@ -458,23 +501,28 @@
 
   // ---------------------------------------------------------------------------
   // Approval decision handler — called by ApprovalCard docked chrome.
+  // M-17: key deletion by the workspace that owns reqId, not necessarily activeId
+  // (the approval queue may hold entries from non-active workspaces).
   // ---------------------------------------------------------------------------
   async function onDecision(reqId: string, decision: "allow" | "deny" | "always") {
-    if (!activeId) return;
+    // Find which workspace owns this reqId
+    const ownerEntry = Object.entries(approvals).find(([, req]) => req.reqId === reqId);
+    const ownerWsId = ownerEntry?.[0] ?? activeId;
+    if (!ownerWsId) return;
     try {
       await approve(reqId, decision);
-      const { [activeId]: _, ...rest } = approvals;
+      const { [ownerWsId]: _, ...rest } = approvals;
       approvals = rest;
     } catch (e) {
-      addBlocking(activeId, "Approval failed", String(e));
+      addBlocking(ownerWsId, "Approval failed", String(e));
     }
   }
 </script>
 
 <svelte:window onkeydown={onKeyDown} />
 
-<ThemeProvider theme={settings.theme} density={settings.density}>
-  <div class="app-root">
+<ThemeProvider theme={settings.theme} density={settings.density} font={settings.font}>
+  <div class="app-root" onpointerdowncapture={onAppPointerDown}>
     <MenuBar onCommand={(id) => runCommand(id)} {unreadCount} />
 
     <div class="main-area">
@@ -525,13 +573,30 @@
             {#snippet primary()}
               {#if active}
                 {#if layout.view === "agent"}
-                  <DragDrop paneId={active.paneId} fileDrop={true}>
-                    <Terminal paneId={active.paneId} cwd={active.worktreePath} />
-                  </DragDrop>
+                  <!-- H-10: clicking the terminal area while in NORMAL enters TERMINAL mode.
+                       The wrapper is a flex container that fills the pane; onpointerdown fires
+                       before xterm processes the event so mode switches promptly.
+                       We do NOT preventDefault/stopPropagation to preserve xterm text selection. -->
+                  <div class="terminal-zone" data-terminal-zone role="group" aria-label="agent terminal"
+                       onpointerdown={() => { if (mode.current === "normal") mode.enterTerminal(); }}>
+                    <DragDrop paneId={active.paneId} fileDrop={true}>
+                      <Terminal paneId={active.paneId} cwd={active.worktreePath} />
+                    </DragDrop>
+                  </div>
                 {:else if layout.view === "code"}
                   {#key fsVersion[active.id] ?? 0}
                     <div class="code-layout">
-                      <FileTree root={active.worktreePath} onOpen={(p) => { codePath = p; }} />
+                      <FileTree root={active.worktreePath} onOpen={(p) => {
+                        // H-8: FileTree may send '@mention:'+path for "Send to agent".
+                        // Route to sendToAgent; otherwise treat as a regular file open.
+                        if (p.startsWith("@mention:")) {
+                          const path = p.slice("@mention:".length);
+                          // Format matches DragDrop: '@'+path+' '
+                          sendToAgent("@" + path + " ");
+                        } else {
+                          codePath = p;
+                        }
+                      }} />
                       {#if isPreviewable(codePath)}
                         <Preview path={codePath ?? ""} kind={previewKind(codePath ?? "")} content={previewContent} />
                       {:else}
@@ -616,7 +681,9 @@
              style:display={layout.collapsed["shell"] ? "none" : undefined}>
           {#if active}
             {#key active.id}
-              <ShellDrawer paneId="{active.id}:shell" cwd={active.worktreePath} />
+              <ShellDrawer paneId="{active.id}:shell" cwd={active.worktreePath}
+                collapsed={layout.collapsed["shell"] ?? false}
+                onToggleCollapse={() => layout.setCollapsed("shell", !layout.collapsed["shell"])} />
             {/key}
           {/if}
         </div>
@@ -726,6 +793,7 @@
   .center-column    { display: flex; flex-direction: column; flex: 1; min-width: 0; }
   .stage-zone       { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .code-layout      { display: flex; flex-direction: row; flex: 1; min-height: 0; min-width: 0; }
+  .terminal-zone    { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
   .shell-drawer-zone { flex-shrink: 0; overflow: hidden; border-top: 1px solid var(--perch-border); }
   .filter-input      { display: block; width: 100%; box-sizing: border-box;
                        padding: 0.25rem 0.5rem; border: none; border-bottom: 1px solid var(--perch-border);

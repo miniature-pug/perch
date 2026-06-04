@@ -45,4 +45,41 @@
   .pane                { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
   .stage-content.split [data-pane="primary"]   { border-right: 1px solid var(--perch-border); }
   .stage-content.split [data-pane="secondary"] { }
+
+  /* Toolbar buttons — match app-wide toolbar style */
+  .stage-bar button {
+    display: inline-flex;
+    align-items: center;
+    height: 22px;
+    padding: 0 var(--perch-sp-1);
+    background: transparent;
+    color: var(--perch-text-dim);
+    border: 1px solid transparent;
+    border-radius: 4px;
+    font-family: var(--perch-font-sans);
+    font-size: var(--perch-fs-caption);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: color var(--perch-dur) var(--perch-ease),
+                border-color var(--perch-dur) var(--perch-ease),
+                background var(--perch-dur) var(--perch-ease);
+  }
+
+  .stage-bar button:hover {
+    color: var(--perch-text);
+    border-color: var(--perch-border);
+    background: color-mix(in srgb, var(--perch-text) 8%, transparent);
+  }
+
+  .stage-bar button:focus-visible {
+    outline: 2px solid var(--perch-accent);
+    outline-offset: 2px;
+  }
+
+  /* Active view segment */
+  .stage-bar button[aria-pressed="true"] {
+    color: var(--perch-accent);
+    background: color-mix(in srgb, var(--perch-accent) 14%, transparent);
+    border-color: var(--perch-accent);
+  }
 </style>
