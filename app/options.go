@@ -23,8 +23,15 @@ const (
 
 	// singleInstanceID is the stable unique identifier passed to
 	// options.SingleInstanceLock. It must never change between releases so the
-	// lock file stays consistent across upgrades.
-	singleInstanceID = "github.com/Miniature-Pug/perch"
+	// lock stays consistent across upgrades.
+	//
+	// MUST be D-Bus-safe: on Linux, Wails builds the bus name
+	// "org.wails_app_<id>.SingleInstance", replacing only "-" and "." with "_"
+	// (see vendor/.../linux/single_instance.go) — it does NOT sanitize "/".
+	// A bus-name element accepts only [A-Za-z0-9_], so any "/" yields an invalid
+	// name; RequestName then fails silently and single-instance/attach is a
+	// no-op. Keep this a dotted reverse-DNS string with no slashes.
+	singleInstanceID = "com.miniature-pug.perch"
 )
 
 // Run launches the Wails desktop app. assets is the embedded SPA (from the repo

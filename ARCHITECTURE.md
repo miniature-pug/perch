@@ -44,7 +44,9 @@ time (`-tags production` embeds the `frontend/dist/` assets). There is no
 separate frontend process and no HTTP server for IPC in production.
 
 **Single-instance lock.** `app/options.go` registers a Wails
-`SingleInstanceLock` (unique id `github.com/Miniature-Pug/perch`). If a second
+`SingleInstanceLock` (unique id `com.miniature-pug.perch` — a D-Bus-safe
+reverse-DNS string; on Linux Wails folds it into the bus name and only sanitizes
+`-`/`.`, not `/`). If a second
 `perch` process is launched (including `perch attach <query>`), Wails forwards
 `os.Args` to the already-running instance via `OnSecondInstanceLaunch`
 (`app.onSecondInstance`), which raises the window (`WindowUnminimise` +
