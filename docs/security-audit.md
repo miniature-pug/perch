@@ -1,5 +1,16 @@
 # perch — Security Audit (M10 + GUI pivot)
 
+> **⚠ STALE — pre-cockpit.** This ledger audits the earlier tmux + Bubble Tea **TUI**
+> architecture (`internal/tui`, `internal/tmux`, `internal/resurrect`, the
+> `attach`/`status` flows, and the `internal/trust` TOFU gate). The cockpit rebuild
+> (Wails + Svelte direct-pty) **removed** those surfaces: there is no tmux, no TUI, no
+> `internal/trust`, and the cockpit does not execute `.perch.toml` lifecycle hooks
+> (the `worktree/hooks.go` `sh -c` sink referenced below is present but unwired — it
+> has no caller). Findings keyed to deleted code (e.g. V1's `internal/trust` fix,
+> `KillSession`/`OpenTerminal`) no longer describe the shipping product. A fresh
+> security audit of the cockpit architecture is pending and tracked separately; do
+> not treat this document as the current posture.
+
 > Threat model: (a) a malicious/untrusted **repo** opened in perch (its `.perch.toml` is
 > attacker-controlled), (b) malicious **agent output** rendered into the TUI, (c) malicious
 > **tmux/env** state, (d) **supply chain**. perch routes every shell-out through one Runner

@@ -33,7 +33,7 @@ flowchart TD
     end
 
     subgraph Worktrees["Worktrees"]
-        worktree["internal/worktree\ngit worktree add + path derivation"]
+        worktree["internal/worktree\nfile seeding + lifecycle hooks\n(present, not wired into the cockpit)"]
         fs["internal/fs\nfile tree + change watcher"]
     end
 

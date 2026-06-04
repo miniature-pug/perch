@@ -158,7 +158,7 @@ See `docs/diagrams/architecture.mmd` for the component dependency graph.
 | `internal/notify` | Notification tiering (blocking / ambient) for agent lifecycle events. |
 | `internal/proc` | `Runner` interface + `ExecRunner` (production) + `FakeRunner` (tests). All shell-outs go through this seam. |
 | `internal/status` | Status-hook helper used by `perch setup` for agent state reporting. |
-| `internal/worktree` | File seeding (copy/symlink) and lifecycle-hook execution for freshly created git linked worktrees. |
+| `internal/worktree` | File seeding (copy/symlink) and lifecycle-hook (`post_create`/`pre_remove`) helpers. **Not currently wired into the cockpit** — `CreateWorkspace` creates worktrees via `internal/git` directly; these helpers have no caller. |
 | `frontend/` | Svelte 5 (runes) SPA (Vite build); communicates with Go via Wails bindings and events; renders agent terminals via xterm.js. |
 
 ---
