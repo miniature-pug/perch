@@ -45,3 +45,74 @@ test("New session button calls onNew", async () => {
   await fireEvent.click(screen.getByRole("button", { name: /new session/i }));
   expect(onNew).toHaveBeenCalled();
 });
+
+// --- Behavior 4a+4b: session drag-to-reorder ---
+
+test("dragstart on a session row sets application/x-perch-session to the workspace id", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {} } });
+  await waitFor(() => screen.getByText("feat-auth"));
+
+  // Get the <li> that wraps feat-auth (draggable element)
+  const btn = screen.getByRole("button", { name: /feat-auth/ });
+  const li  = btn.closest("li") as HTMLElement;
+  expect(li).toBeTruthy();
+
+  const store = new Map<string, string>();
+  const dt = {
+    setData: vi.fn((type: string, value: string) => { store.set(type, value); }),
+    getData: (type: string) => store.get(type) ?? "",
+    effectAllowed: "uninitialized" as string,
+    files: [],
+    types: [] as string[],
+  };
+  await fireEvent.dragStart(li, { dataTransfer: dt });
+  expect(dt.setData).toHaveBeenCalledWith("application/x-perch-session", "ws_a");
+  expect(dt.effectAllowed).toBe("move");
+});
+
+test("dropping session A onto session B's row calls onReorder(A, B)", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  const onReorder = vi.fn();
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {}, onReorder } });
+  await waitFor(() => screen.getByText("feat-core"));
+
+  const targetBtn = screen.getByRole("button", { name: /feat-core/ });
+  const targetLi  = targetBtn.closest("li") as HTMLElement;
+
+  // Simulate a session drop carrying ws_a onto ws_b's row
+  const store = new Map<string, string>([["application/x-perch-session", "ws_a"]]);
+  const dt = {
+    setData: vi.fn(),
+    getData: (type: string) => store.get(type) ?? "",
+    types: ["application/x-perch-session"],
+    files: [],
+    effectAllowed: "move" as string,
+    dropEffect: "none" as string,
+  };
+  await fireEvent.dragOver(targetLi, { dataTransfer: dt });
+  await fireEvent.drop(targetLi, { dataTransfer: dt });
+  expect(onReorder).toHaveBeenCalledWith("ws_a", "ws_b");
+});
+
+test("dropping a session onto its own row does NOT call onReorder", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  const onReorder = vi.fn();
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {}, onReorder } });
+  await waitFor(() => screen.getByText("feat-auth"));
+
+  const selfBtn = screen.getByRole("button", { name: /feat-auth/ });
+  const selfLi  = selfBtn.closest("li") as HTMLElement;
+
+  const store = new Map<string, string>([["application/x-perch-session", "ws_a"]]);
+  const dt = {
+    setData: vi.fn(),
+    getData: (type: string) => store.get(type) ?? "",
+    types: ["application/x-perch-session"],
+    files: [],
+    effectAllowed: "move" as string,
+    dropEffect: "none" as string,
+  };
+  await fireEvent.drop(selfLi, { dataTransfer: dt });
+  expect(onReorder).not.toHaveBeenCalled();
+});

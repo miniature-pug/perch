@@ -127,9 +127,11 @@ beforeEach(async () => {
   const { layout } = await import("./lib/stores/layout.svelte");
   layout.setView("agent");
   layout.split = false as any;
+  (layout as any).splitId   = null;
   (layout as any).sidebarW  = 240;
   (layout as any).shellH    = 200;
   (layout as any).collapsed = {};
+  (layout as any).order     = [];
   // Reset the real mode singleton — must be "normal" for keymap guard to work.
   const { mode } = await import("./lib/stores/mode.svelte");
   mode.leaveCommand();
@@ -361,7 +363,7 @@ describe("App.svelte Stage content routing (4.25.2)", () => {
     });
   });
 
-  it("split mode: view='agent' + split=true → two TerminalProbes rendered", async () => {
+  it("split mode: view='agent' + split=true + splitId set → two independent TerminalProbes with distinct paneIds", async () => {
     const { listWorkspaces } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
     const { layout } = await import("./lib/stores/layout.svelte");
@@ -370,15 +372,21 @@ describe("App.svelte Stage content routing (4.25.2)", () => {
     // Wait for workspaces to load (restore() has run by now)
     const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
     await fireEvent.click(alphaBtn);
-    // Set agent view and enable split
+    // Set agent view, enable split, and assign splitId to the second workspace (ws-2)
     layout.setView("agent");
     layout.toggleSplit(); // false → true
+    layout.setSplitId("ws-2");
     await tick();
     // Both primary and secondary slots should have a TerminalProbe
     await waitFor(() => {
       const terminals = screen.getAllByTestId("terminal");
       expect(terminals).toHaveLength(2);
     });
+    // Primary pane shows Alpha (paneId=p1), secondary pane shows Beta (paneId=p2)
+    const primaryPane   = document.querySelector("[data-pane='primary']") as HTMLElement;
+    const secondaryPane = document.querySelector("[data-pane='secondary']") as HTMLElement;
+    expect(within(primaryPane).getByTestId("terminal").dataset.paneId).toBe("p1");
+    expect(within(secondaryPane).getByTestId("terminal").dataset.paneId).toBe("p2");
   });
 });
 
@@ -1965,5 +1973,183 @@ describe("App.svelte Feature 2: deferred remove — hides workspace + shows undo
       expect(screen.queryByTestId("undo-toast")).not.toBeInTheDocument()
     );
     expect(removeWorkspace).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SPEC §7.2: independent secondary pane (splitId)
+// ---------------------------------------------------------------------------
+
+describe("App.svelte §7.2 split secondary pane", () => {
+  it("split=true + splitId=ws-2 → secondary pane shows Beta terminal (paneId p2), primary shows Alpha (paneId p1)", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    // Select Alpha as active
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    layout.setView("agent");
+    layout.toggleSplit();
+    layout.setSplitId("ws-2");
+    await tick();
+
+    await waitFor(() => {
+      const primaryPane   = document.querySelector("[data-pane='primary']") as HTMLElement;
+      const secondaryPane = document.querySelector("[data-pane='secondary']") as HTMLElement;
+      expect(within(primaryPane).getByTestId("terminal").dataset.paneId).toBe("p1");
+      expect(within(secondaryPane).getByTestId("terminal").dataset.paneId).toBe("p2");
+    });
+  });
+
+  it("split=true + splitId=null → secondary pane renders the session-picker placeholder, no terminal in secondary", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    // Select Alpha as active
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    layout.setView("agent");
+    layout.toggleSplit(); // splitId remains null
+    await tick();
+
+    await waitFor(() => {
+      const secondaryPane = document.querySelector("[data-pane='secondary']") as HTMLElement;
+      expect(secondaryPane).toBeInTheDocument();
+      // Placeholder shown
+      expect(within(secondaryPane).getByTestId("split-picker")).toBeInTheDocument();
+      // No terminal in secondary
+      expect(within(secondaryPane).queryByTestId("terminal")).not.toBeInTheDocument();
+    });
+  });
+
+  it("split=true + splitId=null → session-picker lists other workspaces (Beta, not Alpha)", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    // Select Alpha as active
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    layout.setView("agent");
+    layout.toggleSplit();
+    await tick();
+
+    await waitFor(() => {
+      const select = screen.getByRole("combobox", { name: "secondary session" }) as HTMLSelectElement;
+      const optionTexts = Array.from(select.options).map(o => o.text);
+      expect(optionTexts).toContain("Beta");
+      expect(optionTexts).not.toContain("Alpha");
+    });
+  });
+});
+
+// --- Behavior 5: session→split via stage-level drop ---
+describe("App.svelte drag-to-split (behavior 5)", () => {
+  it("dropping a session id onto the stage sets layout.split=true and layout.splitId to that id", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const spy = vi.spyOn(layout, "setSplitId");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    // Select a workspace so the stage is active
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    layout.setView("agent");
+    await tick();
+
+    // Find the stage-zone drop target
+    const stageZone = document.querySelector("[data-zone='stage']") as HTMLElement;
+    expect(stageZone).toBeTruthy();
+
+    // Simulate a session drop onto the stage
+    const store = new Map<string, string>([["application/x-perch-session", "ws-2"]]);
+    const dt = {
+      setData: vi.fn(),
+      getData: (type: string) => store.get(type) ?? "",
+      types: ["application/x-perch-session"],
+      files: [],
+      effectAllowed: "move" as string,
+      dropEffect: "none" as string,
+    };
+    await fireEvent.dragOver(stageZone, { dataTransfer: dt });
+    await fireEvent.drop(stageZone, { dataTransfer: dt });
+
+    await waitFor(() => {
+      expect(layout.split).toBe(true);
+      expect(spy).toHaveBeenCalledWith("ws-2");
+    });
+  });
+
+  it("dropping a text payload onto the stage does NOT set split (wrong MIME)", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const spy = vi.spyOn(layout, "setSplitId");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    await tick();
+
+    const stageZone = document.querySelector("[data-zone='stage']") as HTMLElement;
+    const store = new Map<string, string>([["application/x-perch-text", "@/foo.go "]]);
+    const dt = {
+      setData: vi.fn(),
+      getData: (type: string) => store.get(type) ?? "",
+      types: ["application/x-perch-text"],
+      files: [],
+      effectAllowed: "copy" as string,
+      dropEffect: "none" as string,
+    };
+    await fireEvent.drop(stageZone, { dataTransfer: dt });
+    await new Promise(r => setTimeout(r, 50));
+    expect(layout.split).toBe(false);
+    expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+// --- Behavior 4b: handleReorder wired in App ---
+describe("App.svelte session reorder (behavior 4b)", () => {
+  it("onReorder callback from Sidebar updates layout.order", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const spy = vi.spyOn(layout, "setOrder");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await screen.findByRole("button", { name: "Alpha" });
+
+    // Simulate dragging ws-2 onto ws-1 in the Sidebar
+    // The workspace list rows are <li draggable> elements
+    const betaBtn  = screen.getByRole("button", { name: "Beta" });
+    const betaLi   = betaBtn.closest("li") as HTMLElement;
+    const alphaBtn = screen.getByRole("button", { name: "Alpha" });
+    const alphaLi  = alphaBtn.closest("li") as HTMLElement;
+
+    const store = new Map<string, string>([["application/x-perch-session", "ws-2"]]);
+    const dt = {
+      setData: vi.fn(),
+      getData: (type: string) => store.get(type) ?? "",
+      types: ["application/x-perch-session"],
+      files: [],
+      effectAllowed: "move" as string,
+      dropEffect: "none" as string,
+    };
+    await fireEvent.dragStart(betaLi, { dataTransfer: dt });
+    await fireEvent.dragOver(alphaLi, { dataTransfer: dt });
+    await fireEvent.drop(alphaLi, { dataTransfer: dt });
+
+    await waitFor(() =>
+      expect(spy).toHaveBeenCalledWith(expect.arrayContaining(["ws-2"]))
+    );
   });
 });

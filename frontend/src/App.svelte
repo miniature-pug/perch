@@ -77,13 +77,37 @@
   const unreadCount     = $derived(getItems().filter(n => !n.read).length);
   const approvalQueue   = $derived(Object.values(approvals).filter(Boolean) as import("./lib/wails").ApprovalReq[]);
 
+  // Apply user-defined order: ids in layout.order come first (in that order),
+  // remaining workspaces (not yet in order) follow in backend order.
+  const orderedWorkspaces = $derived((() => {
+    const order = layout.order;
+    if (!order.length) return visibleWorkspaces;
+    const indexed = new Map(visibleWorkspaces.map((w, i) => [w.id, { w, i }]));
+    const head = order.map(id => indexed.get(id)?.w).filter(Boolean) as typeof visibleWorkspaces;
+    const headSet = new Set(order);
+    const tail = visibleWorkspaces.filter(w => !headSet.has(w.id));
+    return [...head, ...tail];
+  })());
+
   // Filtered workspace list for Sidebar (j/k also operate on this list when filtering).
-  // Uses visibleWorkspaces so optimistically-removed items are excluded immediately.
+  // Uses orderedWorkspaces so optimistically-removed items are excluded immediately.
   const shownWorkspaces = $derived(
     filtering && filterQuery
-      ? visibleWorkspaces.filter(w => w.title.toLowerCase().includes(filterQuery.toLowerCase()))
-      : visibleWorkspaces
+      ? orderedWorkspaces.filter(w => w.title.toLowerCase().includes(filterQuery.toLowerCase()))
+      : orderedWorkspaces
   );
+
+  // Reorder callback from Sidebar: move draggedId to the position of targetId.
+  function handleReorder(draggedId: string, targetId: string) {
+    const ids = orderedWorkspaces.map(w => w.id);
+    const from = ids.indexOf(draggedId);
+    const to   = ids.indexOf(targetId);
+    if (from === -1 || to === -1 || from === to) return;
+    const next = [...ids];
+    next.splice(from, 1);
+    next.splice(to, 0, draggedId);
+    layout.setOrder(next);
+  }
 
   // Derived repo list for NewSessionDialog — union of workspace-derived paths and
   // any paths returned by discoverRepos() (populated lazily on dialog open).
@@ -469,7 +493,7 @@
             }}
           />
         {/if}
-        <Sidebar workspaces={shownWorkspaces} {activeId} onSelect={onSelect} onNew={openNewSession} />
+        <Sidebar workspaces={shownWorkspaces} {activeId} onSelect={onSelect} onNew={openNewSession} onReorder={handleReorder} />
       </aside>
 
       <div class="divider divider-v" role="slider" aria-label="Resize sidebar"
@@ -479,7 +503,22 @@
            onkeydown={keyResizeSidebar}></div>
 
       <div class="center-column">
-        <div data-zone="stage" class="stage-zone">
+        <div data-zone="stage" class="stage-zone" role="region" aria-label="stage"
+             ondragover={(e) => {
+               if (typeof e.dataTransfer?.types?.includes === "function" &&
+                   e.dataTransfer.types.includes("application/x-perch-session")) {
+                 e.preventDefault();
+               }
+             }}
+             ondrop={(e) => {
+               if (typeof e.dataTransfer?.getData !== "function") return;
+               const id = e.dataTransfer.getData("application/x-perch-session");
+               if (!id) return;
+               e.preventDefault();
+               layout.split = true as any;
+               layout.setSplitId(id);
+             }}
+        >
           <Stage view={layout.view} split={layout.split}
                  onView={(v) => layout.setView(v)}
                  onSplit={() => layout.toggleSplit()}>
@@ -536,24 +575,30 @@
               {/if}
             {/snippet}
             {#snippet secondary()}
-              {#if layout.split && active}
-                {#if layout.view === "agent"}
-                  <Terminal paneId={active.paneId} cwd={active.worktreePath} />
-                {:else if layout.view === "code"}
-                  {#key fsVersion[active.id] ?? 0}
-                    <div class="code-layout">
-                      <FileTree root={active.worktreePath} onOpen={(p) => { codePath = p; }} />
-                      {#if isPreviewable(codePath)}
-                        <Preview path={codePath ?? ""} kind={previewKind(codePath ?? "")} content={previewContent} />
-                      {:else}
-                        <Editor path={codePath} worktree={active.worktreePath} onSendToAgent={sendToAgent} />
-                      {/if}
-                    </div>
-                  {/key}
-                {:else if layout.view === "diff"}
-                  {#key fsVersion[active.id] ?? 0}
-                    <DiffView worktree={active.worktreePath} onSendToAgent={sendToAgent} />
-                  {/key}
+              {#if layout.split}
+                {@const splitWs = workspaces.find(w => w.id === layout.splitId) ?? null}
+                {#if splitWs}
+                  <DragDrop paneId={splitWs.paneId} fileDrop={true}>
+                    <Terminal paneId={splitWs.paneId} cwd={splitWs.worktreePath} />
+                  </DragDrop>
+                {:else}
+                  <div class="split-picker" data-testid="split-picker">
+                    <p class="split-picker-hint">Pick a session for this pane</p>
+                    <select
+                      class="split-picker-select"
+                      aria-label="secondary session"
+                      value=""
+                      onchange={(e) => {
+                        const v = (e.currentTarget as HTMLSelectElement).value;
+                        if (v) layout.setSplitId(v);
+                      }}
+                    >
+                      <option value="" disabled>— choose a session —</option>
+                      {#each workspaces.filter(w => w.id !== activeId) as ws (ws.id)}
+                        <option value={ws.id}>{ws.title}</option>
+                      {/each}
+                    </select>
+                  </div>
                 {/if}
               {/if}
             {/snippet}
@@ -771,6 +816,25 @@
   .empty-state-btn-template:focus-visible {
     outline: 2px solid var(--perch-accent); outline-offset: 2px;
   }
+
+  /* Split pane session picker */
+  .split-picker {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    flex: 1; height: 100%; gap: var(--perch-sp-2);
+    background: var(--perch-bg);
+  }
+  .split-picker-hint {
+    margin: 0;
+    font-size: var(--perch-fs-caption); color: var(--perch-text-dim);
+  }
+  .split-picker-select {
+    padding: 4px 8px;
+    background: var(--perch-surface); color: var(--perch-text);
+    border: 1px solid var(--perch-border); border-radius: 4px;
+    font-family: var(--perch-font-sans); font-size: var(--perch-fs-body);
+    cursor: pointer;
+  }
+  .split-picker-select:focus { outline: 1px solid var(--perch-accent); }
 
   /* Undo toast — stacked at bottom-right */
   .undo-toast-stack {

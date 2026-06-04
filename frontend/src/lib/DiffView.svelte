@@ -2,6 +2,14 @@
 <script lang="ts">
   import { diffStat, hunks as fetchHunks, stageHunk, discardHunk, type FileDiff, type Hunk } from "./wails";
 
+  const MIME_TEXT = "application/x-perch-text";
+
+  function handleHunkDragStart(e: DragEvent, h: Hunk) {
+    if (!e.dataTransfer) return;
+    e.dataTransfer.setData(MIME_TEXT, hunkText(h));
+    e.dataTransfer.effectAllowed = "copy";
+  }
+
   let {
     worktree,
     onSendToAgent,
@@ -90,7 +98,7 @@
         {#each files as f (f.path)}
           {#if expanded[f.path]}
             {#each expanded[f.path] as h (h.index)}
-              <div class="hunk">
+              <div class="hunk" role="group" aria-label={h.header} draggable="true" ondragstart={(e) => handleHunkDragStart(e, h)}>
                 <div class="hunk-header">
                   <span class="hunk-header-text">{h.header}</span>
                   <div class="hunk-actions">
@@ -230,7 +238,10 @@
 
   .hunk {
     border-bottom: 1px solid var(--perch-border);
+    transition: opacity 100ms var(--perch-ease);
   }
+  .hunk[draggable="true"] { cursor: grab; }
+  .hunk[draggable="true"]:active { opacity: 0.7; }
 
   .hunk-header {
     display: flex;

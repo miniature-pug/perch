@@ -2,6 +2,9 @@
 <script lang="ts">
   import { writeToPty } from "./wails";
 
+  export const MIME_TEXT    = "application/x-perch-text";
+  export const MIME_SESSION = "application/x-perch-session";
+
   let {
     paneId,
     fileDrop,
@@ -15,10 +18,21 @@
     dragActive = false;
     if (!fileDrop || !e.dataTransfer) return;
     const files = Array.from(e.dataTransfer.files) as (File & { path?: string })[];
-    for (const f of files) {
-      const p = (f as any).path ?? f.name;
-      const bytes = Array.from(new TextEncoder().encode(`@${p} `));
-      await writeToPty(paneId, bytes);
+    if (files.length > 0) {
+      // OS file drop — encode each file path as an @mention
+      for (const f of files) {
+        const p = (f as any).path ?? f.name;
+        const bytes = Array.from(new TextEncoder().encode(`@${p} `));
+        await writeToPty(paneId, bytes);
+      }
+    } else {
+      // In-app text drop (behavior a/b/c) — send raw text to the pty
+      const text = e.dataTransfer.getData(MIME_TEXT);
+      if (text) {
+        const bytes = Array.from(new TextEncoder().encode(text));
+        await writeToPty(paneId, bytes);
+      }
+      // MIME_SESSION drops are intentionally ignored here (handled at Stage level)
     }
   }
 
@@ -45,7 +59,7 @@
 >
   {#if dragActive}
     <div class="drop-overlay" aria-hidden="true">
-      <span class="drop-label">Drop files here</span>
+      <span class="drop-label">Drop here</span>
     </div>
   {/if}
 

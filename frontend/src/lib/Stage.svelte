@@ -40,6 +40,9 @@
   .stage         { display: flex; flex-direction: column; flex: 1; min-height: 0; }
   .stage-bar     { display: flex; align-items: center; gap: 4px; padding: 0 8px;
                    background: var(--perch-surface); border-bottom: 1px solid var(--perch-border); }
-  .stage-content { display: flex; flex: 1; min-height: 0; }
-  .pane          { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+  .stage-content       { display: flex; flex: 1; min-height: 0; }
+  .stage-content.split { flex-direction: row; }
+  .pane                { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+  .stage-content.split [data-pane="primary"]   { border-right: 1px solid var(--perch-border); }
+  .stage-content.split [data-pane="secondary"] { }
 </style>

@@ -83,3 +83,42 @@ test("context menu Escape closes the menu", async () => {
   await fireEvent.keyDown(openItem, { key: "Escape" });
   expect(screen.queryByRole("menuitem", { name: /open/i })).toBeNull();
 });
+
+// --- Behavior 2: file node dragstart sets @mention payload ---
+
+test("dragstart on a file node sets application/x-perch-text to @<path>+space", async () => {
+  const { default: FileTree } = await import("./FileTree.svelte");
+  render(FileTree, { props: { root: "/wt", onOpen: () => {} } });
+  await waitFor(() => screen.getByText("README.md"));
+  const btn = screen.getByRole("button", { name: /README\.md/ });
+  // Build a fake DataTransfer that records setData calls
+  const store = new Map<string, string>();
+  const dt = {
+    setData: vi.fn((type: string, value: string) => { store.set(type, value); }),
+    getData: (type: string) => store.get(type) ?? "",
+    effectAllowed: "uninitialized" as string,
+    files: [],
+    types: [] as string[],
+  };
+  await fireEvent.dragStart(btn, { dataTransfer: dt });
+  expect(dt.setData).toHaveBeenCalledWith("application/x-perch-text", "@/wt/README.md ");
+  expect(dt.effectAllowed).toBe("copy");
+});
+
+test("dragstart on a dir node sets application/x-perch-text to @<path>+space", async () => {
+  const { default: FileTree } = await import("./FileTree.svelte");
+  render(FileTree, { props: { root: "/wt", onOpen: () => {} } });
+  await waitFor(() => screen.getByText("src"));
+  const btn = screen.getByRole("button", { name: /src/ });
+  const store = new Map<string, string>();
+  const dt = {
+    setData: vi.fn((type: string, value: string) => { store.set(type, value); }),
+    getData: (type: string) => store.get(type) ?? "",
+    effectAllowed: "uninitialized" as string,
+    files: [],
+    types: [] as string[],
+  };
+  await fireEvent.dragStart(btn, { dataTransfer: dt });
+  expect(dt.setData).toHaveBeenCalledWith("application/x-perch-text", "@/wt/src ");
+  expect(dt.effectAllowed).toBe("copy");
+});

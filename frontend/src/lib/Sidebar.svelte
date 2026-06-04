@@ -2,13 +2,16 @@
 <script lang="ts">
   import type { WorkspaceVM } from "./wails";
 
+  const MIME_SESSION = "application/x-perch-session";
+
   let {
-    workspaces, activeId, onSelect, onNew,
+    workspaces, activeId, onSelect, onNew, onReorder,
   }: {
     workspaces: WorkspaceVM[];
     activeId: string | null;
     onSelect: (id: string) => void;
     onNew: () => void;
+    onReorder?: (draggedId: string, targetId: string) => void;
   } = $props();
 
   const STATUS = {
@@ -18,13 +21,47 @@
     done:                { icon: "✓", label: "done" },
     errored:             { icon: "✗", label: "error" },
   } as const;
+
+  let dragOverId = $state<string | null>(null);
+
+  function handleSessionDragStart(e: DragEvent, id: string) {
+    if (!e.dataTransfer) return;
+    e.dataTransfer.setData(MIME_SESSION, id);
+    e.dataTransfer.effectAllowed = "move";
+  }
+
+  function handleSessionDragOver(e: DragEvent, id: string) {
+    e.preventDefault();
+    dragOverId = id;
+  }
+
+  function handleSessionDragLeave() {
+    dragOverId = null;
+  }
+
+  function handleSessionDrop(e: DragEvent, targetId: string) {
+    e.preventDefault();
+    dragOverId = null;
+    if (!e.dataTransfer) return;
+    const draggedId = e.dataTransfer.getData(MIME_SESSION);
+    if (!draggedId || draggedId === targetId) return;
+    onReorder?.(draggedId, targetId);
+  }
 </script>
 
 <nav aria-label="sessions" class="sidebar">
   <ul class="workspace-list">
     {#each workspaces as ws (ws.id)}
       {@const st = STATUS[ws.state as keyof typeof STATUS] ?? { icon: "?", label: ws.state }}
-      <li class:active={ws.id === activeId}>
+      <li
+        class:active={ws.id === activeId}
+        class:drag-over={dragOverId === ws.id}
+        draggable="true"
+        ondragstart={(e) => handleSessionDragStart(e, ws.id)}
+        ondragover={(e) => handleSessionDragOver(e, ws.id)}
+        ondragleave={handleSessionDragLeave}
+        ondrop={(e) => handleSessionDrop(e, ws.id)}
+      >
         <button class="workspace-row"
           aria-current={ws.id === activeId ? "page" : undefined}
           onclick={() => onSelect(ws.id)}
@@ -87,10 +124,15 @@
   .workspace-list > li {
     display: block;
     border-bottom: 1px solid var(--perch-border);
+    transition: border-color 100ms var(--perch-ease);
   }
 
   .workspace-list > li:last-child {
     border-bottom: none;
+  }
+
+  .workspace-list > li.drag-over {
+    border-top: 2px solid var(--perch-accent);
   }
 
   /* ── Session row button ───────────────────────────────────────── */

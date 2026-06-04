@@ -2,6 +2,14 @@
 <script lang="ts">
   import { listDir, revealInFiles, copyPath, type FsNode } from "./wails";
 
+  const MIME_TEXT = "application/x-perch-text";
+
+  function handleDragStart(e: DragEvent, node: TreeNode) {
+    if (!e.dataTransfer) return;
+    e.dataTransfer.setData(MIME_TEXT, `@${node.path} `);
+    e.dataTransfer.effectAllowed = "copy";
+  }
+
   let { root, onOpen }: { root: string; onOpen: (path: string) => void } = $props();
 
   type TreeNode = FsNode & { children?: TreeNode[]; expanded?: boolean };
@@ -66,6 +74,8 @@
             class="tree-node {node.isDir ? 'is-dir' : 'is-file'} {node.modified ? 'is-modified' : ''} {node.untracked ? 'is-untracked' : ''}"
             style="padding-left: calc(var(--perch-sp-2) + {depth} * var(--perch-sp-2))"
             aria-expanded={node.isDir ? node.expanded ?? false : undefined}
+            draggable="true"
+            ondragstart={(e) => handleDragStart(e, node)}
             onclick={() => node.isDir ? toggle(node) : onOpen(node.path)}
             oncontextmenu={(e) => openMenu(e, node)}
           >
@@ -164,6 +174,12 @@
   .tree-node:hover {
     background: color-mix(in srgb, var(--perch-accent) 10%, transparent);
   }
+  .tree-node[draggable="true"] {
+    cursor: grab;
+    transition: background var(--perch-dur) var(--perch-ease),
+                opacity   100ms var(--perch-ease);
+  }
+  .tree-node[draggable="true"]:active { opacity: 0.7; }
   .tree-node:focus-visible {
     outline: 2px solid var(--perch-accent);
     outline-offset: -2px;

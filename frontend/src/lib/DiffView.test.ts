@@ -73,3 +73,34 @@ test("send hunk to agent button calls onSendToAgent with hunk lines joined", asy
   expect(spy).toHaveBeenCalledWith(expectedText);
   expect(spy).toHaveBeenCalledTimes(1);
 });
+
+// --- Behavior 3: hunk row dragstart sets application/x-perch-text ---
+
+test("dragstart on a hunk row sets application/x-perch-text to the hunk text", async () => {
+  const { default: DiffView } = await import("./DiffView.svelte");
+  render(DiffView, { props: { worktree: "/wt" } });
+  await waitFor(() => screen.getByText("src/main.go"));
+
+  // Expand src/main.go to reveal the hunk
+  await fireEvent.click(screen.getByRole("button", { name: /src\/main\.go/ }));
+  await waitFor(() => screen.getByText("@@ -1,3 +1,4 @@"));
+
+  // The hunk div is the nearest draggable ancestor of the header text
+  const hunkHeader = screen.getByText("@@ -1,3 +1,4 @@");
+  const hunkEl = hunkHeader.closest("[draggable]") as HTMLElement;
+  expect(hunkEl).toBeTruthy();
+
+  const store = new Map<string, string>();
+  const dt = {
+    setData: vi.fn((type: string, value: string) => { store.set(type, value); }),
+    getData: (type: string) => store.get(type) ?? "",
+    effectAllowed: "uninitialized" as string,
+    files: [],
+    types: [] as string[],
+  };
+  await fireEvent.dragStart(hunkEl, { dataTransfer: dt });
+
+  const expectedText = fakeHunks[0].lines.map((l) => l.text).join("\n");
+  expect(dt.setData).toHaveBeenCalledWith("application/x-perch-text", expectedText);
+  expect(dt.effectAllowed).toBe("copy");
+});
