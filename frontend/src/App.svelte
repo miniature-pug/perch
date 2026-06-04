@@ -24,7 +24,7 @@
   import ApprovalCard       from "./lib/ApprovalCard.svelte";
   import NotificationHub    from "./lib/NotificationHub.svelte";
   import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead } from "./lib/stores/notifications.svelte";
-  import { listWorkspaces, createWorkspace, removeWorkspace, openWorkspace, closeWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, approve, branches, readFile, setWindowFocus } from "./lib/wails";
+  import { listWorkspaces, createWorkspace, removeWorkspace, openWorkspace, closeWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, approve, branches, readFile, setWindowFocus, writeToPty } from "./lib/wails";
   import type { WorkspaceVM, ApprovalReq } from "./lib/wails";
 
   let workspaces      = $state<WorkspaceVM[]>([]);
@@ -63,8 +63,9 @@
   let helpOpen        = $state(false);
   let settingsOpen    = $state(false);
 
-  const active       = $derived(workspaces.find(w => w.id === activeId) ?? null);
-  const unreadCount  = $derived(getItems().filter(n => !n.read).length);
+  const active          = $derived(workspaces.find(w => w.id === activeId) ?? null);
+  const unreadCount     = $derived(getItems().filter(n => !n.read).length);
+  const approvalQueue   = $derived(Object.values(approvals).filter(Boolean) as import("./lib/wails").ApprovalReq[]);
 
   // Filtered workspace list for Sidebar (j/k also operate on this list when filtering).
   const shownWorkspaces = $derived(
@@ -353,6 +354,16 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Send selected text to the active agent pane as an @mention (spec §7.3/§7.7).
+  // Uses the same encoding as DragDrop: text → UTF-8 bytes → writeToPty.
+  // ---------------------------------------------------------------------------
+  function sendToAgent(text: string) {
+    if (!active?.paneId) return;
+    const bytes = Array.from(new TextEncoder().encode(text));
+    writeToPty(active.paneId, bytes);
+  }
+
+  // ---------------------------------------------------------------------------
   // Approval decision handler — called by ApprovalCard docked chrome.
   // ---------------------------------------------------------------------------
   async function onDecision(reqId: string, decision: "allow" | "deny" | "always") {
@@ -416,13 +427,13 @@
                       {#if isPreviewable(codePath)}
                         <Preview path={codePath ?? ""} kind={previewKind(codePath ?? "")} content={previewContent} />
                       {:else}
-                        <Editor path={codePath} worktree={active.worktreePath} />
+                        <Editor path={codePath} worktree={active.worktreePath} onSendToAgent={sendToAgent} />
                       {/if}
                     </div>
                   {/key}
                 {:else if layout.view === "diff"}
                   {#key fsVersion[active.id] ?? 0}
-                    <DiffView worktree={active.worktreePath} />
+                    <DiffView worktree={active.worktreePath} onSendToAgent={sendToAgent} />
                   {/key}
                 {/if}
               {:else}
@@ -440,13 +451,13 @@
                       {#if isPreviewable(codePath)}
                         <Preview path={codePath ?? ""} kind={previewKind(codePath ?? "")} content={previewContent} />
                       {:else}
-                        <Editor path={codePath} worktree={active.worktreePath} />
+                        <Editor path={codePath} worktree={active.worktreePath} onSendToAgent={sendToAgent} />
                       {/if}
                     </div>
                   {/key}
                 {:else if layout.view === "diff"}
                   {#key fsVersion[active.id] ?? 0}
-                    <DiffView worktree={active.worktreePath} />
+                    <DiffView worktree={active.worktreePath} onSendToAgent={sendToAgent} />
                   {/key}
                 {/if}
               {/if}
@@ -502,9 +513,11 @@
       <div data-zone="approval-dock" class="approval-dock">
         <ApprovalCard
           req={approvals[active.id]}
-          queue={[approvals[active.id]]}
+          queue={approvalQueue}
           caps={active.caps}
           {onDecision}
+          onApproveAll={() => decideAll("allow")}
+          onDenyAll={() => decideAll("deny")}
         />
       </div>
     {/if}

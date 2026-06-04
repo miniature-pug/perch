@@ -12,9 +12,38 @@ vi.mock("./lib/ShellDrawer.svelte", async () => ({
 vi.mock("./lib/Terminal.svelte", async () => ({
   default: (await import("./lib/__stubs__/TerminalProbe.svelte")).default,
 }));
-vi.mock("./lib/Editor.svelte", async () => ({
-  default: (await import("./lib/__stubs__/EditorProbe.svelte")).default,
-}));
+
+// Editor stub: renders the standard probe div AND exposes a "send to agent" button
+// so App.test.ts can verify that onSendToAgent prop is wired and writeToPty fires.
+// Uses svelte/internal/client APIs (from_html) so DOM nodes are properly tracked for
+// unmount — from_html's factory calls assign_nodes which registers start/end nodes
+// with the active Svelte effect, enabling correct {#if} branch teardown.
+let _editorSendToAgent: ((text: string) => void) | undefined;
+vi.mock("./lib/Editor.svelte", async () => {
+  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+  // @ts-ignore — svelte/internal/client is a private module with no type declarations.
+  const $ = await import("svelte/internal/client");
+  // Root template: a div containing a trigger button.
+  // from_html returns a factory; each call clones the template and calls assign_nodes.
+  const editorRoot = $.from_html(
+    `<div data-testid="editor"><button>send to agent</button></div>`,
+  );
+  return {
+    default: function MockEditor($$anchor: any, $$props: any) {
+      $.push($$props, true);
+      _editorSendToAgent = $$props.onSendToAgent;
+      const div = editorRoot() as HTMLElement;
+      const btn = div.querySelector("button")!;
+      btn.onclick = () => ($$props.onSendToAgent as any)?.("hello from editor");
+      $.template_effect(() => {
+        $.set_attribute(div, "data-path", $$props.path ?? "");
+        $.set_attribute(div, "data-worktree", $$props.worktree ?? "");
+      });
+      $.append($$anchor, div);
+      $.pop();
+    },
+  };
+});
 vi.mock("./lib/DiffView.svelte", async () => ({
   default: (await import("./lib/__stubs__/DiffProbe.svelte")).default,
 }));
@@ -1537,5 +1566,150 @@ describe("App.svelte 4.25.6d: HelpDialog opens via help:shortcuts command", () =
     await waitFor(() =>
       expect(screen.queryByRole("dialog", { name: "help" })).not.toBeInTheDocument()
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Feature A (SPEC §8): Approval batching — "Approve all / Deny all" buttons
+// ---------------------------------------------------------------------------
+
+describe("App.svelte Feature A: approval batch buttons (SPEC §8)", () => {
+  const twoApprovalWs = [
+    {
+      id: "ws-1", title: "Alpha", branch: "main", state: "awaiting-approval" as const,
+      worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
+      caps: { approvals: true, attention: false, tokens: false },
+    },
+    {
+      id: "ws-2", title: "Beta", branch: "feat/beta", state: "awaiting-approval" as const,
+      worktreePath: "/tmp/beta", agent: "claude", paneId: "p2", lastActive: "",
+      caps: { approvals: true, attention: false, tokens: false },
+    },
+  ];
+
+  it("with TWO pending approvals: batch buttons render, clicking Approve all calls approve for both", async () => {
+    const { listWorkspaces, approve } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(twoApprovalWs);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    // Inject approval events for both workspaces
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const cb = captured.agent.at(-1)!;
+    cb({ workspaceId: "ws-1", kind: "approval", state: "awaiting-approval",
+         approval: { reqId: "req-a", tool: "bash", summary: "Alpha task" } });
+    cb({ workspaceId: "ws-2", kind: "approval", state: "awaiting-approval",
+         approval: { reqId: "req-b", tool: "bash", summary: "Beta task" } });
+    await tick();
+
+    // Select Alpha so the approval card appears (active.id = ws-1, approvals[ws-1] exists)
+    await fireEvent.click(alphaBtn);
+    await tick();
+
+    // With two pending approvals (approvalQueue.length === 2), batch buttons must render
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /approve all/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /deny all/i })).toBeInTheDocument();
+    });
+
+    // Click Approve all → decideAll("allow") → approve called for both req IDs
+    await fireEvent.click(screen.getByRole("button", { name: /approve all/i }));
+    await waitFor(() => {
+      expect(approve).toHaveBeenCalledWith("req-a", "allow");
+      expect(approve).toHaveBeenCalledWith("req-b", "allow");
+    });
+  });
+
+  it("with ONE pending approval: batch buttons do NOT render", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([twoApprovalWs[0]]);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const cb = captured.agent.at(-1)!;
+    cb({ workspaceId: "ws-1", kind: "approval", state: "awaiting-approval",
+         approval: { reqId: "req-solo", tool: "bash", summary: "Solo task" } });
+    await tick();
+    await fireEvent.click(alphaBtn);
+    await tick();
+
+    // Card must render (Allow button visible)
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument()
+    );
+
+    // Batch buttons must NOT be present for a single-item queue
+    expect(screen.queryByRole("button", { name: /approve all/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /deny all/i })).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Feature B (SPEC §7.3/§7.7): selection→agent via onSendToAgent
+// ---------------------------------------------------------------------------
+
+describe("App.svelte Feature B: sendToAgent wires Editor→writeToPty (SPEC §7.3/§7.7)", () => {
+  const codeWs = [
+    {
+      id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
+      worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
+      caps: { approvals: false, attention: false, tokens: false },
+    },
+  ];
+
+  it("Editor's onSendToAgent calls writeToPty with active paneId and UTF-8 encoded text", async () => {
+    const { listWorkspaces, writeToPty } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(codeWs);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    // Select Alpha and switch to code view so EditorProbe mounts
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    layout.setView("code");
+    await tick();
+
+    // EditorProbe (our custom mock) renders a "send to agent" button
+    await waitFor(() =>
+      expect(screen.getByTestId("editor")).toBeInTheDocument()
+    );
+
+    const sendBtn = screen.getByRole("button", { name: "send to agent" });
+    await fireEvent.click(sendBtn);
+    await tick();
+
+    // writeToPty must have been called with the active paneId and UTF-8 bytes of "hello from editor"
+    await waitFor(() => {
+      expect(writeToPty).toHaveBeenCalled();
+      const calls = (writeToPty as ReturnType<typeof vi.fn>).mock.calls;
+      const call = calls.find(([paneId]) => paneId === "p1");
+      expect(call).toBeDefined();
+      const [, bytes] = call!;
+      const decoded = new TextDecoder().decode(new Uint8Array(bytes));
+      expect(decoded).toBe("hello from editor");
+    });
+  });
+
+  it("sendToAgent does nothing when no workspace is active (no paneId)", async () => {
+    const { listWorkspaces, writeToPty } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(codeWs);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    // DON'T select any workspace — no active session
+    await screen.findByRole("button", { name: "Alpha" });
+    layout.setView("code");
+    await tick();
+
+    // No editor visible (no active workspace)
+    expect(screen.queryByTestId("editor")).not.toBeInTheDocument();
+
+    // If sendToAgent were called, writeToPty must NOT have been called
+    // Verify by directly checking _editorSendToAgent is not set (editor not mounted)
+    expect(screen.queryByRole("button", { name: "send to agent" })).not.toBeInTheDocument();
+    expect(writeToPty).not.toHaveBeenCalled();
   });
 });

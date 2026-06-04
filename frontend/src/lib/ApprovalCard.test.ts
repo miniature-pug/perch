@@ -36,3 +36,33 @@ test("hidden when Caps.approvals is false", async () => {
   render(ApprovalCard, { props: { req: singleReq, queue: [singleReq], caps: capsOff, onDecision: () => {} } });
   expect(screen.queryByRole("region", { name: /approval/i })).toBeNull();
 });
+
+test("batch buttons NOT rendered when queue has only one item", async () => {
+  const { default: ApprovalCard } = await import("./ApprovalCard.svelte");
+  render(ApprovalCard, { props: { req: singleReq, queue: [singleReq], caps: capsOn, onDecision: vi.fn() } });
+  await waitFor(() => screen.getByRole("button", { name: /^allow$/i }));
+  expect(screen.queryByRole("button", { name: /approve all/i })).toBeNull();
+  expect(screen.queryByRole("button", { name: /deny all/i })).toBeNull();
+});
+
+test("batch Approve all invokes onApproveAll prop when provided", async () => {
+  const { default: ApprovalCard } = await import("./ApprovalCard.svelte");
+  const onApproveAll = vi.fn();
+  const onDecision   = vi.fn();
+  render(ApprovalCard, { props: { req: batchQueue[0], queue: batchQueue, caps: capsOn, onDecision, onApproveAll } });
+  await waitFor(() => screen.getByRole("button", { name: /approve all/i }));
+  await fireEvent.click(screen.getByRole("button", { name: /approve all/i }));
+  expect(onApproveAll).toHaveBeenCalledTimes(1);
+  expect(onDecision).not.toHaveBeenCalled();
+});
+
+test("batch Deny all invokes onDenyAll prop when provided", async () => {
+  const { default: ApprovalCard } = await import("./ApprovalCard.svelte");
+  const onDenyAll  = vi.fn();
+  const onDecision = vi.fn();
+  render(ApprovalCard, { props: { req: batchQueue[0], queue: batchQueue, caps: capsOn, onDecision, onDenyAll } });
+  await waitFor(() => screen.getByRole("button", { name: /deny all/i }));
+  await fireEvent.click(screen.getByRole("button", { name: /deny all/i }));
+  expect(onDenyAll).toHaveBeenCalledTimes(1);
+  expect(onDecision).not.toHaveBeenCalled();
+});

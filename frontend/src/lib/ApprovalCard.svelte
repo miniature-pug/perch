@@ -3,16 +3,24 @@
   import type { ApprovalReq, AgentCaps } from "./wails";
 
   let {
-    req, queue, caps, onDecision,
+    req, queue, caps, onDecision, onApproveAll, onDenyAll,
   }: {
     req: ApprovalReq;
     queue: ApprovalReq[];
     caps: AgentCaps;
     onDecision: (reqId: string, decision: "allow" | "deny" | "always") => void;
+    onApproveAll?: () => void;
+    onDenyAll?: () => void;
   } = $props();
 
-  function approveAll() { for (const r of queue) onDecision(r.reqId, "allow"); }
-  function denyAll()    { for (const r of queue) onDecision(r.reqId, "deny");  }
+  function approveAll() {
+    if (onApproveAll) { onApproveAll(); return; }
+    for (const r of queue) onDecision(r.reqId, "allow");
+  }
+  function denyAll() {
+    if (onDenyAll) { onDenyAll(); return; }
+    for (const r of queue) onDecision(r.reqId, "deny");
+  }
 </script>
 
 {#if caps.approvals}
