@@ -122,9 +122,6 @@ func TestSetupMessage_Opencode(t *testing.T) {
 	if !strings.Contains(got, "replaced") {
 		t.Errorf("replace opencode message: want 'replaced', got: %q", got)
 	}
-	if !strings.Contains(got, "perch-status.ts") {
-		t.Errorf("replace opencode message missing plugin path: %q", got)
-	}
 }
 
 // ── version ───────────────────────────────────────────────────────────────────

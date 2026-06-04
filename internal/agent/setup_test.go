@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Miniature-Pug/perch/resources"
 )
 
 // ── mergeClaudeHooks (pure, no I/O) ──────────────────────────────────────────
@@ -360,55 +359,6 @@ func TestClaude_InstallStatusHook_Idempotent(t *testing.T) {
 	}
 }
 
-// ── Opencode.InstallStatusHook (filesystem, HOME-sandboxed) ───────────────────
-
-func TestOpencode_InstallStatusHook_WritesPlugin(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-
-	o := NewOpencode()
-	if err := o.InstallStatusHook(false); err != nil {
-		t.Fatalf("InstallStatusHook: %v", err)
-	}
-
-	home, _ := os.UserHomeDir()
-	path := filepath.Join(home, ".config", "opencode", "plugins", "perch-status.ts")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("perch-status.ts not written: %v", err)
-	}
-	if string(data) != resources.PerchStatusTS {
-		t.Errorf("perch-status.ts content mismatch:\ngot: %q\nwant: %q", string(data), resources.PerchStatusTS)
-	}
-}
-
-func TestOpencode_InstallStatusHook_PreservesSiblingPlugin(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-
-	home, _ := os.UserHomeDir()
-	dir := filepath.Join(home, ".config", "opencode", "plugins")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	sibling := filepath.Join(dir, "other-plugin.ts")
-	siblingContent := []byte("// some other plugin\n")
-	if err := os.WriteFile(sibling, siblingContent, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	o := NewOpencode()
-	if err := o.InstallStatusHook(false); err != nil {
-		t.Fatalf("InstallStatusHook: %v", err)
-	}
-
-	got, err := os.ReadFile(sibling)
-	if err != nil {
-		t.Fatalf("sibling plugin was removed: %v", err)
-	}
-	if string(got) != string(siblingContent) {
-		t.Errorf("sibling plugin content changed: got %q", got)
-	}
-}
-
 // ── mergeClaudeHooks: type-guard error cases ──────────────────────────────────
 
 func TestMergeClaudeHooks_HooksIsArray_ReturnsError(t *testing.T) {
@@ -735,52 +685,6 @@ func TestClaude_InstallStatusHook_Replace_RemovesStaleKeepsForeign(t *testing.T)
 	fi, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("stat settings.json: %v", err)
-	}
-	if got := fi.Mode().Perm(); got != 0o640 {
-		t.Errorf("file mode after replace: got %04o, want 0640", got)
-	}
-}
-
-// ── Opencode.InstallStatusHook: replace mode (filesystem) ────────────────────
-
-// TestOpencode_InstallStatusHook_Replace_OverwritesAndPreservesMode ensures
-// replace=true overwrites perch-status.ts with the current embedded content
-// and preserves the existing file mode.
-func TestOpencode_InstallStatusHook_Replace_OverwritesAndPreservesMode(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-
-	home, _ := os.UserHomeDir()
-	dir := filepath.Join(home, ".config", "opencode", "plugins")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(dir, "perch-status.ts")
-
-	// Write stale content with a custom mode.
-	staleContent := []byte("// stale content\n")
-	if err := os.WriteFile(path, staleContent, 0o640); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(path, 0o640); err != nil {
-		t.Fatal(err)
-	}
-
-	o := NewOpencode()
-	if err := o.InstallStatusHook(true); err != nil {
-		t.Fatalf("InstallStatusHook(replace=true): %v", err)
-	}
-
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read perch-status.ts after replace: %v", err)
-	}
-	if string(got) != resources.PerchStatusTS {
-		t.Errorf("perch-status.ts content mismatch after replace:\ngot: %q\nwant: %q", string(got), resources.PerchStatusTS)
-	}
-
-	fi, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("stat perch-status.ts: %v", err)
 	}
 	if got := fi.Mode().Perm(); got != 0o640 {
 		t.Errorf("file mode after replace: got %04o, want 0640", got)

@@ -83,7 +83,6 @@ func (f *fakeSystem) readFile(path string) ([]byte, error) {
 // Tests override individual fields to simulate failures.
 func fullSystem(home string) *fakeSystem {
 	claudeSettingsPath := home + "/.claude/settings.json"
-	opencodePluginPath := home + "/.config/opencode/plugins/perch-status.ts"
 	claudeSettingsContent, _ := json.Marshal(map[string]interface{}{
 		"hooks": map[string]interface{}{
 			"Notification": []interface{}{
@@ -108,7 +107,6 @@ func fullSystem(home string) *fakeSystem {
 		},
 		statPaths: map[string]bool{
 			claudeSettingsPath: true,
-			opencodePluginPath: true,
 		},
 		readFiles: map[string][]byte{
 			claudeSettingsPath: claudeSettingsContent,
@@ -420,20 +418,6 @@ func TestRunHooks_ClaudeSettingsOk(t *testing.T) {
 	}
 }
 
-func TestRunHooks_OpencodePluginMissing(t *testing.T) {
-	sys := fullSystem("/home/tester")
-	home := "/home/tester"
-	opencodePluginPath := home + "/.config/opencode/plugins/perch-status.ts"
-	delete(sys.statPaths, opencodePluginPath)
-
-	var out strings.Builder
-	Run("v0.1.0-dev", &out, sys)
-	output := out.String()
-	if !strings.Contains(output, "perch-status.ts") {
-		t.Errorf("expected opencode plugin warning; got:\n%s", output)
-	}
-}
-
 // ── Summary warning count ─────────────────────────────────────────────────────
 
 func TestRunSummary_DynamicWarnCount(t *testing.T) {
@@ -441,7 +425,6 @@ func TestRunSummary_DynamicWarnCount(t *testing.T) {
 	// We craft a system where hooks are OK but opencode is absent.
 	home := "/home/tester"
 	claudeSettingsPath := home + "/.claude/settings.json"
-	opencodePluginPath := home + "/.config/opencode/plugins/perch-status.ts"
 	claudeSettingsContent, _ := json.Marshal(map[string]interface{}{
 		"hooks": map[string]interface{}{
 			"Notification": []interface{}{
@@ -465,7 +448,6 @@ func TestRunSummary_DynamicWarnCount(t *testing.T) {
 		},
 		statPaths: map[string]bool{
 			claudeSettingsPath: true,
-			opencodePluginPath: true,
 		},
 		readFiles: map[string][]byte{
 			claudeSettingsPath: claudeSettingsContent,
@@ -520,29 +502,22 @@ func TestRunOutput_ContainsPaths(t *testing.T) {
 
 // ── Doctor-setup agreement ────────────────────────────────────────────────────
 
-// TestDoctorSetupAgreement proves that after agent.InstallStatusHook writes to
-// a sandboxed home, the doctor's real claudeHooksOk and opencodePluginOk
-// functions (which use os.UserHomeDir()) recognise the installed artefacts.
+// TestDoctorSetupAgreement proves that after agent.Claude.InstallStatusHook writes to
+// a sandboxed home, the doctor's claudeHooksOk function recognises the installed artefacts.
 // Both setup and doctor must flow through $HOME so the HOME redirect fully
 // sandboxes and ties them together.
 func TestDoctorSetupAgreement(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("CLAUDE_CONFIG_DIR", "") // prevent CLAUDE_CONFIG_DIR from escaping sandbox
 
-	// Install hooks via real adapters — writes to the sandboxed HOME.
+	// Install hooks via the claude adapter — writes to the sandboxed HOME.
 	if err := agent.NewClaude().InstallStatusHook(false); err != nil {
 		t.Fatalf("claude InstallStatusHook: %v", err)
-	}
-	if err := agent.NewOpencode().InstallStatusHook(false); err != nil {
-		t.Fatalf("opencode InstallStatusHook: %v", err)
 	}
 
 	// Doctor checks via RealSystem — also reads from $HOME.
 	sys := RealSystem()
 	if ok, msg := claudeHooksOk(sys); !ok {
 		t.Errorf("claudeHooksOk after install: false (%s)", msg)
-	}
-	if ok, msg := opencodePluginOk(sys); !ok {
-		t.Errorf("opencodePluginOk after install: false (%s)", msg)
 	}
 }

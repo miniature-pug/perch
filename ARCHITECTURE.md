@@ -246,8 +246,9 @@ Non-`PreToolUse` hook events (`SessionStart`, `Stop`, `StopFailure`,
 read from the transcript. For **opencode**, the equivalent events arrive over
 the `opencode serve` SSE stream.
 
-`perch setup [--replace]` installs the agent status hooks/plugins
-(`~/.claude/settings.json`, `~/.config/opencode/plugins/perch-status.ts`).
+`perch setup [--replace]` installs the agent status hooks
+(`~/.claude/settings.json`). opencode exposes session status natively via
+its SSE stream (`opencode serve`), so no plugin file is needed for opencode.
 
 ---
 

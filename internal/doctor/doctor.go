@@ -273,22 +273,6 @@ func containsPerchHook(v interface{}) bool {
 	return false
 }
 
-// opencodePluginOk checks whether the opencode perch-status.ts plugin exists.
-func opencodePluginOk(sys system) (bool, string) {
-	home, err := sys.homeDir()
-	if err != nil {
-		return false, "opencode plugin: could not determine home directory"
-	}
-	path := home + "/.config/opencode/plugins/" + agent.PerchStatusPlugin
-	if err := sys.stat(path); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return false, "perch-status.ts not installed — run 'perch setup'"
-		}
-		return false, fmt.Sprintf("opencode plugin: stat error: %v", err)
-	}
-	return true, ""
-}
-
 // ── Main Run function ─────────────────────────────────────────────────────────
 
 // Run executes the doctor health check, writes a human-readable report to w,
@@ -352,16 +336,6 @@ func Run(version string, w io.Writer, sys system) int {
 		warnings++
 		hookWarnings++
 	}
-	if ok, msg := opencodePluginOk(sys); !ok {
-		results = append(results, checkResult{
-			name:    "hooks",
-			tag:     "[warn]",
-			version: msg,
-		})
-		warnings++
-		hookWarnings++
-	}
-
 	// ── Render ────────────────────────────────────────────────────────────────
 	_, _ = fmt.Fprintf(w, "\nperch %s\n\n", version)
 

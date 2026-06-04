@@ -89,7 +89,7 @@ func setupMessage(name string, replace bool) string {
 	case "claude":
 		return fmt.Sprintf("setup: claude hooks %s (~/.claude/settings.json)", verb)
 	case "opencode":
-		return fmt.Sprintf("setup: opencode plugin %s (~/.config/opencode/plugins/perch-status.ts)", verb)
+		return fmt.Sprintf("setup: opencode %s (no plugin needed — status via SSE)", verb)
 	default:
 		return fmt.Sprintf("setup: %s hooks %s", name, verb)
 	}

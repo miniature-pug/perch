@@ -45,10 +45,10 @@ forward-design — only `Model` is set in the cockpit path).
 - L-23 / N-17 / N-18 — `FakeMonitor`/`FakeNotifier`/`*WithServer` test doubles live in production package source but are excluded from the production binary by dead-code elimination; relocation to a dedicated `internal/agenttest` package is deferred as higher-risk/low-value near release.
 - N-6 — `maybeAutoApprove` reads settings from disk per request; not cached (approval frequency is low and a cache would complicate the `settingsMu` invariant).
 
-**Open — pending user decision (NOT resolved):**
-- **H-5 / M-11** — `resources/perch-status.ts` shells an unrouted `perch status set` verb. Needs a decision on the opencode status-reporting strategy (route the verb, switch IPC, or remove the plugin).
-- **M-23 / L-26 / N-22** — `config.Config` unread fields, `config.Validate`, `AgentBinary`/`agentBins` are all dead **only because** `internal/worktree` is unwired. Their fate follows the worktree decision below; `config.go` cleanup is deliberately deferred so it is done as one unit after that call.
-- **`internal/worktree`** (umbrella) — the package is fully orphaned (zero production importers). Decision: wire the `.perch.toml` lifecycle-hooks + trust flow (a security-sensitive feature) **or** delete the package and its dependent config fields.
+**Resolved after audit:**
+- **H-5 / M-11** — `resources/perch-status.ts` removed; `Opencode.InstallStatusHook` replaced with a no-op; `opencodePluginOk` check removed from doctor. opencode status flows via SSE through `OpencodeMonitor` (unaffected).
+- **M-23 / L-26 / N-22** — `internal/worktree` deleted (zero production importers confirmed); dead `config.Config` fields (`SortOrder`, `RefreshMs`, `Agent`, `StartupCommand`, `Theme`, `BaseBranch`, `WorktreeDir`, `Files`, `PostCreate`, `PreRemove`, `Wildcards`) plus `config.Validate` and `config.AgentBinary`/`agentBins` removed.
+- **`internal/worktree`** — package deleted.
 
 ---
 

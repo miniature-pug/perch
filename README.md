@@ -152,8 +152,9 @@ An opencode workspace launches `opencode serve` and the `OpencodeMonitor`
 consumes its Server-Sent-Events stream (`/event`) over an authenticated HTTP
 connection to surface lifecycle, token, and approval events.
 
-`perch setup` installs the opencode status plugin at
-`~/.config/opencode/plugins/perch-status.ts`.
+`perch setup` installs the claude status hooks (`~/.claude/settings.json`).
+opencode exposes session status natively via its SSE stream, so no plugin
+file is required for opencode.
 
 ---
 
