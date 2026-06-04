@@ -24,7 +24,7 @@
   import ApprovalCard       from "./lib/ApprovalCard.svelte";
   import NotificationHub    from "./lib/NotificationHub.svelte";
   import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead } from "./lib/stores/notifications.svelte";
-  import { listWorkspaces, createWorkspace, removeWorkspace, openWorkspace, closeWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, approve, branches, readFile, setWindowFocus, writeToPty } from "./lib/wails";
+  import { listWorkspaces, createWorkspace, removeWorkspace, openWorkspace, closeWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, approve, branches, readFile, setWindowFocus, writeToPty, discoverRepos } from "./lib/wails";
   import type { WorkspaceVM, ApprovalReq } from "./lib/wails";
 
   let workspaces      = $state<WorkspaceVM[]>([]);
@@ -34,6 +34,15 @@
   let approvals       = $state<Record<string, ApprovalReq>>({});
   let fsVersion  = $state<Record<string, number>>({});
   let usage      = $state<Record<string, { tokens: number; cost: number }>>({});
+
+  // Repo discovery — populated lazily when the New Session dialog opens.
+  let discoveredRepoPaths = $state<string[]>([]);
+
+  // Pending removals — each entry is an optimistically-hidden workspace with a
+  // scheduled real removeWorkspace call.  Using an array lets us handle multiple
+  // concurrent removals without any special-case logic.
+  interface PendingRemoval { ws: WorkspaceVM; timer: ReturnType<typeof setTimeout>; }
+  let pendingRemovals = $state<PendingRemoval[]>([]);
 
   // Keymap state machine helpers
   let pendingG     = $state(false);
@@ -57,26 +66,35 @@
   function focusOnMount(node: HTMLElement) { node.focus(); }
 
   // Dialog / overlay state
-  let newSessionOpen  = $state(false);
-  let confirmRemove   = $state<WorkspaceVM | null>(null);
-  let notifOpen       = $state(false);
-  let helpOpen        = $state(false);
-  let settingsOpen    = $state(false);
+  let newSessionOpen        = $state(false);
+  let newSessionInitialAgent = $state<string | null>(null);
+  let confirmRemove         = $state<WorkspaceVM | null>(null);
+  let notifOpen             = $state(false);
+  let helpOpen              = $state(false);
+  let settingsOpen          = $state(false);
 
   const active          = $derived(workspaces.find(w => w.id === activeId) ?? null);
   const unreadCount     = $derived(getItems().filter(n => !n.read).length);
   const approvalQueue   = $derived(Object.values(approvals).filter(Boolean) as import("./lib/wails").ApprovalReq[]);
 
   // Filtered workspace list for Sidebar (j/k also operate on this list when filtering).
+  // Uses visibleWorkspaces so optimistically-removed items are excluded immediately.
   const shownWorkspaces = $derived(
     filtering && filterQuery
-      ? workspaces.filter(w => w.title.toLowerCase().includes(filterQuery.toLowerCase()))
-      : workspaces
+      ? visibleWorkspaces.filter(w => w.title.toLowerCase().includes(filterQuery.toLowerCase()))
+      : visibleWorkspaces
   );
 
-  // Derived repo list for NewSessionDialog — uses distinct worktreePaths from known workspaces.
-  // branches() from the wails seam resolves all repo branches from any worktree path.
-  const repos = $derived([...new Set(workspaces.map(w => w.worktreePath))]);
+  // Derived repo list for NewSessionDialog — union of workspace-derived paths and
+  // any paths returned by discoverRepos() (populated lazily on dialog open).
+  const repos = $derived([...new Set([
+    ...workspaces.map(w => w.worktreePath),
+    ...discoveredRepoPaths,
+  ])]);
+
+  // Visible workspaces — excludes any that are pending an optimistic removal.
+  const pendingRemovalIds = $derived(new Set(pendingRemovals.map(p => p.ws.id)));
+  const visibleWorkspaces = $derived(workspaces.filter(w => !pendingRemovalIds.has(w.id)));
 
   // Off-functions captured from wails event subscriptions (subscribed synchronously in onMount).
   let offAgentEvent: (() => void) | null = null;
@@ -125,6 +143,8 @@
     offFsChanged?.();
     window.removeEventListener("focus", onWindowFocus);
     window.removeEventListener("blur",  onWindowBlur);
+    // Cancel any pending deferred removals to avoid use-after-unmount calls.
+    for (const p of pendingRemovals) clearTimeout(p.timer);
   });
 
   async function onSelect(id: string) {
@@ -132,8 +152,16 @@
     await openWorkspace(id);
   }
 
-  function openNewSession() {
+  function openNewSession(initialAgent?: string) {
     newSessionOpen = true;
+    // Lazily discover repos each time the dialog opens — runs in background,
+    // merges with workspace-derived paths (deduped in the repos $derived).
+    discoverRepos()
+      .then((list) => { discoveredRepoPaths = list.map(r => r.path); })
+      .catch(() => {}); // non-fatal — fresh-install still sees workspace paths
+    // Guard: only accept a genuine string (Sidebar passes this as onclick which
+    // injects a MouseEvent; we must not treat that as an agent name).
+    newSessionInitialAgent = typeof initialAgent === "string" ? initialAgent : null;
   }
 
   async function handleCreate(agent: string, repo: string, branch: string, model: string) {
@@ -147,13 +175,54 @@
     confirmRemove = ws;
   }
 
-  async function handleConfirmRemove() {
+  function handleConfirmRemove() {
     if (!confirmRemove) return;
-    const id = confirmRemove.id;
+    const wsToRemove = confirmRemove;
     confirmRemove = null;
-    await removeWorkspace(id);
-    workspaces = await listWorkspaces();
-    if (activeId === id) activeId = workspaces[0]?.id ?? null;
+
+    // Finalize any existing pending removal for the same id (edge-case guard).
+    finalizePendingRemoval(wsToRemove.id);
+
+    // Optimistically hide the workspace immediately — visibleWorkspaces $derived
+    // filters by pendingRemovalIds so no listWorkspaces() refresh is needed yet.
+    if (activeId === wsToRemove.id) {
+      const remaining = visibleWorkspaces.filter(w => w.id !== wsToRemove.id);
+      activeId = remaining[0]?.id ?? null;
+    }
+
+    const timer = setTimeout(async () => {
+      // Time's up — commit the removal for real.
+      pendingRemovals = pendingRemovals.filter(p => p.ws.id !== wsToRemove.id);
+      try {
+        await removeWorkspace(wsToRemove.id);
+        workspaces = await listWorkspaces();
+        if (activeId === wsToRemove.id) activeId = workspaces[0]?.id ?? null;
+      } catch {
+        // If the backend call fails, put the workspace back.
+        workspaces = await listWorkspaces();
+      }
+    }, 6000);
+
+    pendingRemovals = [...pendingRemovals, { ws: wsToRemove, timer }];
+  }
+
+  /** Cancel a pending deferred removal and return the workspace to the visible list. */
+  function handleUndoRemove(id: string) {
+    const entry = pendingRemovals.find(p => p.ws.id === id);
+    if (!entry) return;
+    clearTimeout(entry.timer);
+    pendingRemovals = pendingRemovals.filter(p => p.ws.id !== id);
+    // workspace is already in `workspaces`; visibleWorkspaces $derived will restore it.
+  }
+
+  /** Force-commit a pending removal without waiting for the timer. */
+  function finalizePendingRemoval(id: string) {
+    const entry = pendingRemovals.find(p => p.ws.id === id);
+    if (!entry) return;
+    clearTimeout(entry.timer);
+    pendingRemovals = pendingRemovals.filter(p => p.ws.id !== id);
+    // Fire-and-forget — do not await so we don't block the caller.
+    removeWorkspace(id).then(() => listWorkspaces()).then(ws => { workspaces = ws; }).catch(() => {});
   }
 
   function handleCancelRemove() {
@@ -437,7 +506,33 @@
                   {/key}
                 {/if}
               {:else}
-                <div class="empty-state">No session selected</div>
+                <div class="empty-state" data-testid="empty-state">
+                  <div class="empty-state-card">
+                    <h2 class="empty-state-title">Welcome to perch</h2>
+                    <p class="empty-state-hint">Start an AI coding session in any local git repo.</p>
+                    <button
+                      class="empty-state-btn empty-state-btn-primary"
+                      onclick={() => openNewSession()}
+                    >
+                      New Session
+                    </button>
+                    <div class="empty-state-templates">
+                      <span class="empty-state-templates-label">Quick start</span>
+                      <button
+                        class="empty-state-btn empty-state-btn-template"
+                        onclick={() => openNewSession("claude")}
+                      >
+                        Claude session
+                      </button>
+                      <button
+                        class="empty-state-btn empty-state-btn-template"
+                        onclick={() => openNewSession("opencode")}
+                      >
+                        Opencode session
+                      </button>
+                    </div>
+                  </div>
+                </div>
               {/if}
             {/snippet}
             {#snippet secondary()}
@@ -539,7 +634,8 @@
       {repos}
       loadBranches={(repo) => branches(repo)}
       onCreate={handleCreate}
-      onClose={() => { newSessionOpen = false; }}
+      onClose={() => { newSessionOpen = false; newSessionInitialAgent = null; }}
+      initialAgent={newSessionInitialAgent}
     />
 
     <ConfirmDialog
@@ -555,6 +651,22 @@
     <HelpDialog open={helpOpen} onClose={() => { helpOpen = false; }} />
 
     <SettingsPanel open={settingsOpen} onClose={() => { settingsOpen = false; }} />
+
+    {#if pendingRemovals.length > 0}
+      <div class="undo-toast-stack" aria-live="polite">
+        {#each pendingRemovals as pending (pending.ws.id)}
+          <div class="undo-toast" role="status" data-testid="undo-toast">
+            <span class="undo-toast-msg">Session removed</span>
+            <button
+              class="undo-toast-btn"
+              onclick={() => handleUndoRemove(pending.ws.id)}
+            >
+              Undo
+            </button>
+          </div>
+        {/each}
+      </div>
+    {/if}
   </div>
 </ThemeProvider>
 
@@ -598,4 +710,99 @@
   .status-branch     { font-family: var(--perch-font-mono); font-size: var(--perch-fs-caption); }
   .status-state      { color: var(--perch-text-dim); }
   .status-spacer     { flex: 1; }
+
+  /* First-run empty state */
+  .empty-state {
+    display: flex; align-items: center; justify-content: center;
+    flex: 1; height: 100%;
+    background: var(--perch-bg);
+  }
+  .empty-state-card {
+    display: flex; flex-direction: column; align-items: center; gap: var(--perch-sp-3);
+    padding: var(--perch-sp-4);
+    border: 1px solid var(--perch-border);
+    border-radius: 8px;
+    background: var(--perch-surface);
+    max-width: 360px; text-align: center;
+  }
+  .empty-state-title {
+    margin: 0;
+    font-size: var(--perch-fs-body);
+    font-weight: 600;
+    color: var(--perch-text);
+  }
+  .empty-state-hint {
+    margin: 0;
+    font-size: var(--perch-fs-caption);
+    color: var(--perch-text-dim);
+  }
+  .empty-state-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 6px 20px;
+    border-radius: 4px;
+    font-family: var(--perch-font-sans); font-size: var(--perch-fs-body);
+    cursor: pointer;
+    transition: filter var(--perch-dur) var(--perch-ease),
+                border-color var(--perch-dur) var(--perch-ease);
+  }
+  .empty-state-btn-primary {
+    background: var(--perch-accent); color: var(--perch-accent-fg);
+    border: 1px solid var(--perch-accent);
+    font-weight: 600;
+  }
+  .empty-state-btn-primary:hover { filter: brightness(1.1); }
+  .empty-state-btn-primary:active { filter: brightness(0.92); }
+  .empty-state-templates {
+    display: flex; flex-direction: column; align-items: center; gap: var(--perch-sp-1);
+    width: 100%;
+  }
+  .empty-state-templates-label {
+    font-size: var(--perch-fs-caption); color: var(--perch-text-dim); text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .empty-state-btn-template {
+    background: var(--perch-bg); color: var(--perch-text);
+    border: 1px solid var(--perch-border);
+    width: 100%;
+  }
+  .empty-state-btn-template:hover {
+    border-color: var(--perch-accent); color: var(--perch-accent);
+  }
+  .empty-state-btn-template:focus-visible {
+    outline: 2px solid var(--perch-accent); outline-offset: 2px;
+  }
+
+  /* Undo toast — stacked at bottom-right */
+  .undo-toast-stack {
+    position: fixed; bottom: var(--perch-sp-3); right: var(--perch-sp-3);
+    z-index: 300;
+    display: flex; flex-direction: column; gap: var(--perch-sp-1);
+  }
+  .undo-toast {
+    display: flex; align-items: center; gap: var(--perch-sp-2);
+    padding: var(--perch-sp-1) var(--perch-sp-2);
+    background: var(--perch-surface);
+    border: 1px solid var(--perch-border);
+    border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+    font-family: var(--perch-font-sans); font-size: var(--perch-fs-body);
+    color: var(--perch-text);
+    min-width: 220px;
+    animation: toast-in var(--perch-dur) var(--perch-ease);
+  }
+  @keyframes toast-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .undo-toast-msg { flex: 1; }
+  .undo-toast-btn {
+    padding: 3px 10px;
+    background: var(--perch-accent); color: var(--perch-accent-fg);
+    border: none; border-radius: 4px;
+    font-family: var(--perch-font-sans); font-size: var(--perch-fs-body);
+    cursor: pointer;
+    transition: filter var(--perch-dur) var(--perch-ease);
+  }
+  .undo-toast-btn:hover { filter: brightness(1.1); }
+  .undo-toast-btn:focus-visible { outline: 2px solid var(--perch-accent); outline-offset: 2px; }
 </style>

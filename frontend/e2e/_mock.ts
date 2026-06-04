@@ -238,6 +238,23 @@ export function buildInitScriptContent(opts: MockOptions = {}): string {
           record('Worktrees', [repo]);
           return Promise.resolve([]);
         },
+        DiscoverRepos: function() {
+          record('DiscoverRepos', []);
+          return Promise.resolve([
+            {
+              path: '/home/user/perch',
+              name: 'perch',
+              branch: 'main',
+              worktrees: [{ path: '/home/user/perch', branch: 'main', head: 'abc1234' }],
+            },
+            {
+              path: '/home/user/my-project',
+              name: 'my-project',
+              branch: 'feat/v2',
+              worktrees: [],
+            },
+          ]);
+        },
       },
     },
   };

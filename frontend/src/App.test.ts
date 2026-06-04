@@ -81,6 +81,9 @@ vi.mock("./lib/wails", () => ({
   removeWorkspace: vi.fn(async () => {}),
   writeToPty:      vi.fn(async () => {}),
   branches:        vi.fn(async (_repo: string) => ["main", "feat/x"]),
+  discoverRepos:   vi.fn(async () => [
+    { path: "/discovered/repo-a", name: "repo-a", branch: "main", worktrees: [] },
+  ]),
   onAgentEvent:    vi.fn((cb) => { captured.agent.push(cb);     return () => {}; }),
   onNotify:        vi.fn((cb) => { captured.notify.push(cb);    return () => {}; }),
   onFsChanged:     vi.fn((cb) => { captured.fsChanged.push(cb); return () => {}; }),
@@ -859,7 +862,7 @@ describe("App.svelte NewSessionDialog (4.25.6a)", () => {
 });
 
 describe("App.svelte ConfirmDialog (workspace remove) (4.25.6a)", () => {
-  it("session:remove command shows ConfirmDialog; confirming calls removeWorkspace(id)", async () => {
+  it("session:remove command shows ConfirmDialog; confirming hides workspace + shows undo toast (no immediate removeWorkspace)", async () => {
     const { listWorkspaces, removeWorkspace } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([
       {
@@ -899,13 +902,23 @@ describe("App.svelte ConfirmDialog (workspace remove) (4.25.6a)", () => {
     await fireEvent.click(confirmBtn);
     await tick();
 
-    // removeWorkspace called with the active workspace id
-    expect(removeWorkspace).toHaveBeenCalledWith("ws-1");
-
-    // Dialog closes
+    // Dialog closes immediately
     await waitFor(() =>
       expect(screen.queryByRole("dialog", { name: "confirm" })).not.toBeInTheDocument()
     );
+
+    // Workspace disappears from sidebar immediately (optimistic hide)
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Alpha" })).not.toBeInTheDocument()
+    );
+
+    // Undo toast appears
+    await waitFor(() =>
+      expect(screen.getByTestId("undo-toast")).toBeInTheDocument()
+    );
+
+    // removeWorkspace must NOT have been called yet
+    expect(removeWorkspace).not.toHaveBeenCalled();
   });
 });
 
@@ -1711,5 +1724,246 @@ describe("App.svelte Feature B: sendToAgent wires Editor→writeToPty (SPEC §7.
     // Verify by directly checking _editorSendToAgent is not set (editor not mounted)
     expect(screen.queryByRole("button", { name: "send to agent" })).not.toBeInTheDocument();
     expect(writeToPty).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FEATURE 1 (SPEC §7.7): Repo discovery + first-run empty state
+// ---------------------------------------------------------------------------
+
+describe("App.svelte Feature 1: discoverRepos called on dialog open; discovered repos appear in dialog", () => {
+  it("opening the New Session dialog calls discoverRepos and discovered path appears as an option", async () => {
+    const { listWorkspaces, discoverRepos } = await import("./lib/wails");
+    // Fresh install — no existing workspaces
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (discoverRepos as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { path: "/discovered/my-repo", name: "my-repo", branch: "main", worktrees: [] },
+    ]);
+
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await tick();
+
+    // discoverRepos must NOT have been called yet (dialog not open)
+    expect(discoverRepos).not.toHaveBeenCalled();
+
+    // Open the New Session dialog via the Sidebar button
+    const newBtn = screen.getByRole("button", { name: "New session" });
+    await fireEvent.click(newBtn);
+    await tick();
+
+    // Dialog opens
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "new session" })).toBeInTheDocument()
+    );
+
+    // discoverRepos must have been called when dialog opened
+    expect(discoverRepos).toHaveBeenCalled();
+
+    // The discovered repo path must appear as an option in the Repo select
+    await waitFor(() => {
+      const repoSelect = screen.getByLabelText(/repo/i) as HTMLSelectElement;
+      const optionValues = Array.from(repoSelect.options).map(o => o.value);
+      expect(optionValues).toContain("/discovered/my-repo");
+    });
+  });
+
+  it("first-run empty state (no workspaces) renders a 'New Session' CTA button", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await tick();
+
+    // Wait for initial load
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Alpha" })).not.toBeInTheDocument()
+    );
+
+    // The empty state must be present
+    const emptyState = document.querySelector("[data-testid='empty-state']");
+    expect(emptyState).toBeInTheDocument();
+
+    // A "New Session" primary button must be in the empty state
+    const newSessionBtn = within(emptyState as HTMLElement).getByRole("button", { name: "New Session" });
+    expect(newSessionBtn).toBeInTheDocument();
+  });
+
+  it("clicking the empty-state 'New Session' button opens the New Session dialog", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await tick();
+
+    const emptyState = await screen.findByTestId("empty-state");
+    const newSessionBtn = within(emptyState).getByRole("button", { name: "New Session" });
+    await fireEvent.click(newSessionBtn);
+    await tick();
+
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "new session" })).toBeInTheDocument()
+    );
+  });
+
+  it("clicking a quick-start template button opens dialog and pre-selects the agent", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await tick();
+
+    const emptyState = await screen.findByTestId("empty-state");
+    const opencodeBtn = within(emptyState).getByRole("button", { name: "Opencode session" });
+    await fireEvent.click(opencodeBtn);
+    await tick();
+
+    // Dialog must open
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "new session" })).toBeInTheDocument()
+    );
+
+    // Agent select must be pre-set to "opencode"
+    await waitFor(() => {
+      const agentSelect = screen.getByLabelText(/agent/i) as HTMLSelectElement;
+      expect(agentSelect.value).toBe("opencode");
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FEATURE 2 (SPEC §8): Deferred removal + undo toast
+// ---------------------------------------------------------------------------
+
+describe("App.svelte Feature 2: deferred remove — hides workspace + shows undo toast without calling removeWorkspace", () => {
+  const removeWs = [
+    {
+      id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
+      worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
+      caps: { approvals: false, attention: false, tokens: false },
+    },
+  ];
+
+  it("confirming remove hides workspace from sidebar and shows undo toast; removeWorkspace NOT called", async () => {
+    const { listWorkspaces, removeWorkspace } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(removeWs);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    await tick();
+
+    // Trigger remove via Sidebar context: open command palette → session:remove
+    await fireEvent.keyDown(document.body, { key: ":" });
+    await tick();
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "command palette" })).toBeInTheDocument()
+    );
+    await fireEvent.click(screen.getByRole("option", { name: /remove session/i }));
+    await tick();
+
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "confirm" })).toBeInTheDocument()
+    );
+    await fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    await tick();
+
+    // Workspace hidden immediately
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Alpha" })).not.toBeInTheDocument()
+    );
+
+    // Undo toast visible
+    await waitFor(() =>
+      expect(screen.getByTestId("undo-toast")).toBeInTheDocument()
+    );
+
+    // removeWorkspace NOT called yet
+    expect(removeWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("clicking Undo restores the workspace and removeWorkspace is never called", async () => {
+    const { listWorkspaces, removeWorkspace } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(removeWs);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    await tick();
+
+    // Trigger remove
+    await fireEvent.keyDown(document.body, { key: ":" });
+    await tick();
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "command palette" })).toBeInTheDocument()
+    );
+    await fireEvent.click(screen.getByRole("option", { name: /remove session/i }));
+    await tick();
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "confirm" })).toBeInTheDocument()
+    );
+    await fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    await tick();
+
+    // Toast appears
+    const toast = await screen.findByTestId("undo-toast");
+    expect(toast).toBeInTheDocument();
+
+    // Click Undo
+    const undoBtn = within(toast).getByRole("button", { name: "Undo" });
+    await fireEvent.click(undoBtn);
+    await tick();
+
+    // Workspace restored in sidebar
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Alpha" })).toBeInTheDocument()
+    );
+
+    // Toast gone
+    await waitFor(() =>
+      expect(screen.queryByTestId("undo-toast")).not.toBeInTheDocument()
+    );
+
+    // removeWorkspace must NEVER have been called
+    expect(removeWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("undo toast disappears after the undo action and removeWorkspace is never called", async () => {
+    const { listWorkspaces, removeWorkspace } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(removeWs);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    await tick();
+
+    await fireEvent.keyDown(document.body, { key: ":" });
+    await tick();
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "command palette" })).toBeInTheDocument()
+    );
+    await fireEvent.click(screen.getByRole("option", { name: /remove session/i }));
+    await tick();
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "confirm" })).toBeInTheDocument()
+    );
+    await fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    await tick();
+
+    const toast = await screen.findByTestId("undo-toast");
+    const undoBtn = within(toast).getByRole("button", { name: "Undo" });
+    await fireEvent.click(undoBtn);
+    await tick();
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("undo-toast")).not.toBeInTheDocument()
+    );
+    expect(removeWorkspace).not.toHaveBeenCalled();
   });
 });

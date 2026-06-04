@@ -1,12 +1,13 @@
 <!-- frontend/src/lib/NewSessionDialog.svelte -->
 <script lang="ts">
   let {
-    open, repos, loadBranches, onCreate, onClose,
+    open, repos, loadBranches, onCreate, onClose, initialAgent = null,
   }: {
     open: boolean; repos: string[];
     loadBranches: (repo: string) => Promise<string[]>;
     onCreate: (agent: string, repo: string, branch: string, model: string) => void;
     onClose: () => void;
+    initialAgent?: string | null;
   } = $props();
 
   let agent    = $state("claude");
@@ -16,7 +17,7 @@
   let branches = $state<string[]>([]);
 
   // Reset dialog fields when opened; load branches per selected repo.
-  $effect(() => { if (open) { agent = "claude"; repo = repos[0] ?? ""; model = "claude-sonnet-4-5"; } });
+  $effect(() => { if (open) { agent = initialAgent ?? "claude"; repo = repos[0] ?? ""; model = "claude-sonnet-4-5"; } });
 
   // Load branches whenever repo changes (and is non-empty).
   $effect(() => {

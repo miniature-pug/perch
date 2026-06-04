@@ -24,6 +24,7 @@ export interface AppSettings {
   theme: string; density: string; font: string; dnd: boolean; alwaysRules: AlwaysRule[];
 }
 export interface WorktreeInfo { path: string; branch: string; head: string; }
+export interface RepoInfo { path: string; name: string; branch: string; worktrees: WorktreeInfo[]; }
 
 interface App {
   ListWorkspaces(): Promise<WorkspaceVM[]>;
@@ -46,6 +47,7 @@ interface App {
   CopyPath(absPath: string): Promise<void>;
   Branches(repo: string): Promise<string[]>;
   Worktrees(repo: string): Promise<WorktreeInfo[]>;
+  DiscoverRepos(): Promise<RepoInfo[]>;
   GetLayout(): Promise<string>;
   SaveLayout(layoutJSON: string): Promise<void>;
   GetSettings(): Promise<AppSettings>;
@@ -79,8 +81,9 @@ export const diffStat    = (worktree: string)                                   
 export const hunks       = (worktree: string, file: string)                       => app().Hunks(worktree, file);
 export const stageHunk   = (worktree: string, file: string, index: number)       => app().StageHunk(worktree, file, index);
 export const discardHunk = (worktree: string, file: string, index: number)       => app().DiscardHunk(worktree, file, index);
-export const branches    = (repo: string)                                         => app().Branches(repo);
-export const worktrees   = (repo: string)                                         => app().Worktrees(repo);
+export const branches      = (repo: string)                                       => app().Branches(repo);
+export const worktrees     = (repo: string)                                       => app().Worktrees(repo);
+export const discoverRepos = ()                                                   => app().DiscoverRepos();
 // FS
 export const listDir      = (absDir: string)                                      => app().ListDir(absDir);
 export const readFile     = (absPath: string)                                     => app().ReadFile(absPath);
