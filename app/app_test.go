@@ -832,10 +832,10 @@ func TestApp_Approve_AlwaysPersistsRule(t *testing.T) {
 	fm := agent.NewFakeMonitor(nil)
 
 	a := &App{
-		store:        store,
-		emit:         func(string, ...any) {},
-		bridges:      map[string]*internalpty.Bridge{},
-		monitors:     map[string]agent.Monitor{"ws-alw": fm},
+		store:    store,
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{"ws-alw": fm},
 		// Seed the pending approval the pump would have registered. tool+input
 		// are resolved from here (backend-authoritative), not from the frontend.
 		pending:      map[string]agent.ApprovalReq{"req-002:ws-alw": {ReqID: "req-002", Tool: "Bash", Input: "rm -rf /tmp/x"}},

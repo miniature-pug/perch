@@ -320,10 +320,10 @@ func TestSecFix_M12_ConcurrentApproveAlways_BothRulesPersisted(t *testing.T) {
 
 			settingsPath := filepath.Join(cfgDir, "settings.json")
 			a := &App{
-				store:   store,
-				roots:   []string{wt},
-				emit:    func(string, ...any) {},
-				bridges: map[string]*internalpty.Bridge{},
+				store:    store,
+				roots:    []string{wt},
+				emit:     func(string, ...any) {},
+				bridges:  map[string]*internalpty.Bridge{},
 				monitors: map[string]agent.Monitor{"ws-m12": fm},
 				pending: map[string]agent.ApprovalReq{
 					"req-A:ws-m12": {ReqID: "req-A", Tool: "Bash", Input: "echo alpha"},

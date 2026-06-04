@@ -170,4 +170,3 @@ func parseSessionList(raw []byte) ([]model.Session, error) {
 	}
 	return sessions, nil
 }
-
