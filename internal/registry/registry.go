@@ -11,6 +11,15 @@ import (
 	"time"
 )
 
+const (
+	// appName is the application subdirectory name used under XDG config dirs.
+	appName = "perch"
+	// workspacesFile is the filename of the persistent workspace registry.
+	workspacesFile = "workspaces.json"
+	// configDirMode is the permission bits used when creating the perch config directory.
+	configDirMode = 0o700
+)
+
 // Workspace is the persistent record for one perch workspace.
 // JSON tags are frozen — do not rename. New fields may be added.
 // Missing fields in stored JSON default to the Go zero value on load
@@ -40,20 +49,20 @@ func DefaultConfigDir() string {
 	if base == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return filepath.Join(".config", "perch")
+			return filepath.Join(".config", appName)
 		}
 		base = filepath.Join(home, ".config")
 	}
-	return filepath.Join(base, "perch")
+	return filepath.Join(base, appName)
 }
 
 // Load reads workspaces.json from configDir. A missing file is not an error
 // and returns an empty store. configDir is created if it does not exist.
 func Load(configDir string) (*Store, error) {
-	if err := os.MkdirAll(configDir, 0o700); err != nil {
+	if err := os.MkdirAll(configDir, configDirMode); err != nil {
 		return nil, fmt.Errorf("registry: mkdir %s: %w", configDir, err)
 	}
-	path := filepath.Join(configDir, "workspaces.json")
+	path := filepath.Join(configDir, workspacesFile)
 	s := &Store{path: path, items: make(map[string]Workspace)}
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {

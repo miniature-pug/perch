@@ -2,13 +2,24 @@
 package notify
 
 import (
-	"os/exec"
 	"github.com/godbus/dbus/v5"
+	"os/exec"
 )
 
-type Notifier interface{ Notify(title, body string) error }
+const (
+	dbusNotifyService    = "org.freedesktop.Notifications"
+	dbusNotifyObjectPath = "/org/freedesktop/Notifications"
+	dbusNotifyTimeoutMS  = int32(5000)
+	dbusNoReplaceID      = uint32(0) // 0 = new notification
+)
 
-type FakeNotifier struct{ Calls []struct{ Title, Body string } }
+type Notifier interface {
+	Notify(title, body string) error
+}
+
+type FakeNotifier struct {
+	Calls []struct{ Title, Body string }
+}
 
 func (f *FakeNotifier) Notify(title, body string) error {
 	f.Calls = append(f.Calls, struct{ Title, Body string }{title, body})
@@ -29,10 +40,10 @@ func (d dbusNotifier) Notify(title, body string) error {
 	if err := conn.Auth(nil); err != nil {
 		return err
 	}
-	obj := conn.Object("org.freedesktop.Notifications", "/org/freedesktop/Notifications")
-	return obj.Call("org.freedesktop.Notifications.Notify", 0,
-		"perch", uint32(0), "", title, body,
-		[]string{}, map[string]dbus.Variant{}, int32(5000)).Err
+	obj := conn.Object(dbusNotifyService, dbus.ObjectPath(dbusNotifyObjectPath))
+	return obj.Call(dbusNotifyService+".Notify", 0,
+		"perch", dbusNoReplaceID, "", title, body,
+		[]string{}, map[string]dbus.Variant{}, dbusNotifyTimeoutMS).Err
 }
 
 type runnerNotifier struct{ run RunFunc }

@@ -37,10 +37,10 @@ type ClaudeMonitor struct {
 }
 
 func newClaudeMonitor(a Adapter) *ClaudeMonitor {
-	return &ClaudeMonitor{adapter: a, events: make(chan Event, 64)}
+	return &ClaudeMonitor{adapter: a, events: make(chan Event, monitorEventChanBuf)}
 }
 func NewClaudeMonitorWithListener(a Adapter, l *hooklistener.Listener) *ClaudeMonitor {
-	return &ClaudeMonitor{adapter: a, listener: l, events: make(chan Event, 64)}
+	return &ClaudeMonitor{adapter: a, listener: l, events: make(chan Event, monitorEventChanBuf)}
 }
 func (m *ClaudeMonitor) Events() <-chan Event { return m.events }
 
@@ -48,7 +48,9 @@ func (m *ClaudeMonitor) Events() <-chan Event { return m.events }
 // TailTranscript tails the JSONL transcript and emits usage events per turn.
 // NOTE (M-29): Claude's JSONL transcript carries input/output token counts but
 // NOT cost, so usage events have Cost=0. This is correct — do not fake a cost.
-func (m *ClaudeMonitor) Capabilities() Caps { return Caps{Approvals: true, Attention: true, Tokens: true} }
+func (m *ClaudeMonitor) Capabilities() Caps {
+	return Caps{Approvals: true, Attention: true, Tokens: true}
+}
 
 func (m *ClaudeMonitor) Start(ctx context.Context) {
 	go func() {
@@ -77,7 +79,6 @@ func (m *ClaudeMonitor) TailTranscript(ctx context.Context, transcriptPath strin
 		defer func() { _ = f.Close() }()
 		r := bufio.NewReader(f)
 		var pending strings.Builder
-		const pollInterval = 500 * time.Millisecond
 		for {
 			select {
 			case <-ctx.Done():
@@ -101,7 +102,7 @@ func (m *ClaudeMonitor) TailTranscript(ctx context.Context, transcriptPath strin
 				select {
 				case <-ctx.Done():
 					return
-				case <-time.After(pollInterval):
+				case <-time.After(transcriptPollInterval):
 				}
 			default:
 				// Unexpected read error: stop tailing.
@@ -172,7 +173,7 @@ func (m *ClaudeMonitor) translateAndEmit(ctx context.Context, he hooklistener.Ho
 	// signal. Removing the dead case keeps the code honest.
 	case "PreToolUse":
 		sum := he.ToolName
-		if len(he.ToolInput) > 0 && len(he.ToolInput) < 120 {
+		if len(he.ToolInput) > 0 && len(he.ToolInput) < toolInputSummaryCutoff {
 			sum += ": " + string(he.ToolInput)
 		}
 		fullInput := string(he.ToolInput)
@@ -225,6 +226,27 @@ func (m *ClaudeMonitor) LastApprovalTool() string {
 	return m.lastTool
 }
 
+// monitorEventChanBuf is the shared event-channel buffer size used by both
+// ClaudeMonitor and OpencodeMonitor. Sized to absorb bursts without blocking
+// the emitter goroutine.
+const monitorEventChanBuf = 64
+
+// transcriptPollInterval is how long TailTranscript sleeps between read
+// attempts when it hits EOF (tail -f behaviour).
+const transcriptPollInterval = 500 * time.Millisecond
+
+// toolInputSummaryCutoff is the maximum raw ToolInput byte length that is
+// included verbatim in the approval-event Summary. Inputs at or above this
+// threshold are omitted from the summary (the full input is still hashed).
+const toolInputSummaryCutoff = 120
+
+// claudeMonitorDirMode is the directory mode used when creating .claude/.
+const claudeMonitorDirMode = 0o755
+
+// tokenFileMode is the file mode enforced on any temp file that carries a
+// Bearer token. 0600 = owner read/write only; no group/world exposure.
+const tokenFileMode = 0o600
+
 const perchMonitorSentinel = "perch-monitor-hook"
 
 var perchMonitorEvents = []string{"PreToolUse", "Stop", "StopFailure", "SessionStart"}
@@ -268,7 +290,7 @@ func (m *ClaudeMonitor) writeHooks(cwd string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, claudeMonitorDirMode); err != nil {
 		return err
 	}
 	return atomicWrite(path, merged)
@@ -391,7 +413,7 @@ func atomicWrite(path string, data []byte) error {
 	// Set 0600 on the temp file before writing so there is no window where the
 	// token-bearing content is readable by group/world. os.CreateTemp already
 	// uses 0600, but we set it explicitly to document the invariant.
-	if err := os.Chmod(name, 0o600); err != nil {
+	if err := os.Chmod(name, tokenFileMode); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(name)
 		return err

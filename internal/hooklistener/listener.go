@@ -13,6 +13,15 @@ import (
 	"sync"
 )
 
+const (
+	// listenerTokenBytes is the number of random bytes used for the auth token.
+	listenerTokenBytes = 32
+	// hookEventChanBuf is the buffer size of the hook event channel.
+	hookEventChanBuf = 64
+	// reqIDBytes is the number of random bytes used for per-request IDs.
+	reqIDBytes = 8
+)
+
 type Decision struct {
 	Allow  bool `json:"allow"`
 	Always bool `json:"always"`
@@ -45,7 +54,7 @@ func New() (*Listener, error) {
 	if err != nil {
 		return nil, fmt.Errorf("hooklistener.New: %w", err)
 	}
-	raw := make([]byte, 32)
+	raw := make([]byte, listenerTokenBytes)
 	if _, err := rand.Read(raw); err != nil {
 		_ = ln.Close()
 		return nil, err
@@ -53,7 +62,7 @@ func New() (*Listener, error) {
 	l := &Listener{
 		ln:     ln,
 		token:  hex.EncodeToString(raw),
-		events: make(chan HookEvent, 64),
+		events: make(chan HookEvent, hookEventChanBuf),
 		reqs:   make(map[string]*pending),
 	}
 	mux := http.NewServeMux()
@@ -105,7 +114,7 @@ func (l *Listener) handleHook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// PreToolUse blocks until Decide() supplies a verdict.
-	reqBytes := make([]byte, 8)
+	reqBytes := make([]byte, reqIDBytes)
 	_, _ = rand.Read(reqBytes)
 	ev.ReqID = hex.EncodeToString(reqBytes)
 	p := &pending{ch: make(chan Decision, 1)}

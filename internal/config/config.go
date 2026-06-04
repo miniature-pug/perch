@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/Miniature-Pug/perch/internal/registry"
 )
 
 // configFileName is the name of the global configuration file.
@@ -37,16 +39,10 @@ type Config struct {
 // DefaultGlobalPath returns the canonical path for the global config.toml
 // following the XDG Base Directory spec: $XDG_CONFIG_HOME/perch/config.toml,
 // falling back to ~/.config/perch/config.toml when XDG_CONFIG_HOME is unset.
+// The XDG resolution is delegated to registry.DefaultConfigDir so the app-dir
+// name "perch" is defined in exactly one place.
 func DefaultGlobalPath() (string, error) {
-	base := os.Getenv("XDG_CONFIG_HOME")
-	if base == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("config: resolve home dir for default global path: %w", err)
-		}
-		base = filepath.Join(home, ".config")
-	}
-	return filepath.Join(base, "perch", configFileName), nil
+	return filepath.Join(registry.DefaultConfigDir(), configFileName), nil
 }
 
 // Load assembles a Config from the global config.toml at globalPath.

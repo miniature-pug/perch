@@ -16,6 +16,12 @@ import (
 // false and remove the corresponding frontend listeners.
 const disableWebViewDropForSpike4 = true
 
+const (
+	appTitle            = "perch"
+	defaultWindowWidth  = 1280
+	defaultWindowHeight = 800
+)
+
 // Run launches the Wails desktop app. assets is the embedded SPA (from the repo
 // root package). Production builds expose NO listening TCP port: IPC travels over
 // the WebKit2GTK script-message channel and assets are served via the wails://
@@ -29,9 +35,9 @@ func Run(assets embed.FS, roots []string) error {
 	}
 	app := NewApp(store, roots)
 	return wails.Run(&options.App{
-		Title:  "perch",
-		Width:  1280,
-		Height: 800,
+		Title:  appTitle,
+		Width:  defaultWindowWidth,
+		Height: defaultWindowHeight,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

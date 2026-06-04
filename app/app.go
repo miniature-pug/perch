@@ -21,11 +21,52 @@ import (
 	"github.com/Miniature-Pug/perch/internal/discover"
 	fspkg "github.com/Miniature-Pug/perch/internal/fs"
 	gitpkg "github.com/Miniature-Pug/perch/internal/git"
+	modelpkg "github.com/Miniature-Pug/perch/internal/model"
 	"github.com/Miniature-Pug/perch/internal/notify"
-	internalpty "github.com/Miniature-Pug/perch/internal/pty"
 	"github.com/Miniature-Pug/perch/internal/proc"
+	internalpty "github.com/Miniature-Pug/perch/internal/pty"
 	"github.com/Miniature-Pug/perch/internal/registry"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
+)
+
+// Named constants for values used in multiple places or formerly magic numbers.
+const (
+	// pty defaults — used identically by OpenWorkspace and OpenShell.
+	defaultPtyCols = 220
+	defaultPtyRows = 50
+
+	// fsChangeChanBuf is the buffer size of the internal fs-change signal channel.
+	fsChangeChanBuf = 64
+
+	// Persistent-file names relative to the config directory.
+	perchSettingsFile = "settings.json"
+	perchLayoutFile   = "layout.json"
+
+	// pty event-name prefixes; the full event name is prefix + paneID.
+	ptyDataEventPrefix = "pty:data:"
+	ptyExitEventPrefix = "pty:exit:"
+
+	// File-permission modes.
+	configDirMode    = 0o700
+	settingsFileMode = 0o600
+
+	// UUIDv4 byte masks applied in newWorkspaceID.
+	// RFC 4122 §4.4: version nibble = 0100 (0x40), cleared with 0x0f;
+	// variant bits = 10xx (0x80), cleared with 0x3f.
+	uuidVersion4    = 0x40
+	uuidVersionMask = 0x0f
+	uuidVariantRFC  = 0x80
+	uuidVariantMask = 0x3f
+)
+
+// fsDebounce is the coalescing window for fs:changed events emitted to the frontend.
+const fsDebounce = 150 * time.Millisecond
+
+// Settings defaults — source of truth for settings defaults; frontend mirrors these in frontend/src/lib/constants.ts.
+const (
+	defaultTheme   = "gruvbox"
+	defaultDensity = "dense"
+	defaultFont    = "geist"
 )
 
 // spawnPtyFunc and newMonitorFunc are injectable seams (real funcs in NewApp,
@@ -110,9 +151,9 @@ func NewApp(store *registry.Store, roots []string) *App {
 		spawnPty:     internalpty.Spawn,
 		newMonitor:   agent.NewMonitor,
 		newWatcher:   fspkg.Watch,
-		debounce:     150 * time.Millisecond,
-		settingsPath: filepath.Join(registry.DefaultConfigDir(), "settings.json"),
-		layoutPath:   filepath.Join(registry.DefaultConfigDir(), "layout.json"),
+		debounce:     fsDebounce,
+		settingsPath: filepath.Join(registry.DefaultConfigDir(), perchSettingsFile),
+		layoutPath:   filepath.Join(registry.DefaultConfigDir(), perchLayoutFile),
 		focused:      true, // default: assume focused until the frontend reports otherwise
 	}
 }
@@ -184,7 +225,6 @@ func (a *App) putBridge(paneID string, b *internalpty.Bridge) {
 		_ = old.Close()
 	}
 }
-
 
 const maxSessionIDLen = 128
 
@@ -269,8 +309,8 @@ func newWorkspaceID() (string, error) {
 	if _, err := rand.Read(b[:]); err != nil {
 		return "", err
 	}
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
+	b[6] = (b[6] & uuidVersionMask) | uuidVersion4
+	b[8] = (b[8] & uuidVariantMask) | uuidVariantRFC
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:]), nil
 }
 
@@ -355,7 +395,7 @@ func (a *App) CreateWorkspace(agentName, repoPath, branch, model string) (Worksp
 		return WorkspaceVM{}, fmt.Errorf("invalid branch: %w", err)
 	}
 	// Gate 3: agent must be known.
-	if agentName != "claude" && agentName != "opencode" {
+	if agentName != string(modelpkg.ToolClaude) && agentName != string(modelpkg.ToolOpencode) {
 		return WorkspaceVM{}, fmt.Errorf("unknown agent %q", agentName)
 	}
 
@@ -424,13 +464,13 @@ func (a *App) OpenWorkspace(id string) error {
 		return fmt.Errorf("unknown workspace %q", id)
 	}
 
-	paneID := "pane-" + id
-	event := "pty:data:" + paneID
-	exitEvent := "pty:exit:" + paneID
+	paneID := paneIDFor(id)
+	event := ptyDataEventPrefix + paneID
+	exitEvent := ptyExitEventPrefix + paneID
 
 	wctx, cancel := context.WithCancel(context.Background())
 
-	br, err := a.spawnPty(wctx, w.WorktreePath, internalpty.LoginShellArgv(), event, exitEvent, a.emit, 220, 50)
+	br, err := a.spawnPty(wctx, w.WorktreePath, internalpty.LoginShellArgv(), event, exitEvent, a.emit, defaultPtyCols, defaultPtyRows)
 	if err != nil {
 		cancel()
 		return fmt.Errorf("spawn pty: %w", err)
@@ -460,7 +500,7 @@ func (a *App) OpenWorkspace(id string) error {
 	// fails OpenWorkspace.
 	var watcher *fspkg.Watcher
 	if a.newWatcher != nil {
-		changes := make(chan string, 64)
+		changes := make(chan string, fsChangeChanBuf)
 
 		// Debounce goroutine: coalesces raw onChange signals into a single
 		// fs:changed emit per debounce window, bound to wctx lifetime.
@@ -508,7 +548,12 @@ func (a *App) OpenWorkspace(id string) error {
 	a.monitors[id] = mon
 	// Composite cancel: cancels the wctx (stopping all goroutines) and closes
 	// the watcher. Rides CloseWorkspace, re-open displacement, and shutdown.
-	a.cancels[id] = func() { cancel(); if watcher != nil { _ = watcher.Close() } }
+	a.cancels[id] = func() {
+		cancel()
+		if watcher != nil {
+			_ = watcher.Close()
+		}
+	}
 	a.mu.Unlock()
 
 	if oldCancel != nil {
@@ -598,7 +643,7 @@ func (a *App) maybeAutoApprove(workspaceID, rawReqID string, req agent.ApprovalR
 	if req.Tool == "" || req.Input == "" {
 		return false
 	}
-	agentName := "claude"
+	agentName := string(modelpkg.ToolClaude)
 	if w, ok := a.store.Get(workspaceID); ok && w.Agent != "" {
 		agentName = w.Agent
 	}
@@ -729,7 +774,7 @@ func (a *App) CloseWorkspace(id string) error {
 	if err := validateSessionID(id); err != nil {
 		return fmt.Errorf("invalid workspace id: %w", err)
 	}
-	paneID := "pane-" + id
+	paneID := paneIDFor(id)
 	a.mu.Lock()
 	br := a.bridges[paneID]
 	delete(a.bridges, paneID)
@@ -788,10 +833,10 @@ func (a *App) OpenShell(paneID, cwd string) error {
 	if err := validateWorktreeUnderRoots(cwd, a.roots); err != nil {
 		return fmt.Errorf("invalid shell cwd: %w", err)
 	}
-	event := "pty:data:" + paneID
-	exitEvent := "pty:exit:" + paneID
+	event := ptyDataEventPrefix + paneID
+	exitEvent := ptyExitEventPrefix + paneID
 	ctx := context.Background()
-	br, err := a.spawnPty(ctx, cwd, internalpty.LoginShellArgv(), event, exitEvent, a.emit, 220, 50)
+	br, err := a.spawnPty(ctx, cwd, internalpty.LoginShellArgv(), event, exitEvent, a.emit, defaultPtyCols, defaultPtyRows)
 	if err != nil {
 		return fmt.Errorf("OpenShell spawn: %w", err)
 	}
@@ -804,7 +849,8 @@ func (a *App) GetSettings() (Settings, error) {
 	data, err := os.ReadFile(a.settingsPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return Settings{Theme: "gruvbox", Density: "dense", Font: "geist"}, nil
+			// source of truth for settings defaults; frontend mirrors these in frontend/src/lib/constants.ts
+			return Settings{Theme: defaultTheme, Density: defaultDensity, Font: defaultFont}, nil
 		}
 		return Settings{}, err
 	}
@@ -848,7 +894,7 @@ func (a *App) SaveLayout(layoutJSON string) error {
 // so the invariant is auditable and consistent with claude_monitor.go's atomicWrite.
 func atomicWriteApp(path string, data []byte) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := os.MkdirAll(dir, configDirMode); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(dir, ".tmp-")
@@ -856,9 +902,9 @@ func atomicWriteApp(path string, data []byte) error {
 		return err
 	}
 	tmpName := tmp.Name()
-	// Set 0600 before writing so there is no window where content is readable
+	// Set settingsFileMode before writing so there is no window where content is readable
 	// at a looser mode. Mirror the same invariant as claude_monitor.go atomicWrite.
-	if err := os.Chmod(tmpName, 0o600); err != nil {
+	if err := os.Chmod(tmpName, settingsFileMode); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpName)
 		return err
@@ -1025,7 +1071,7 @@ func (a *App) Approve(reqID, decision string) error {
 	a.mu.Unlock()
 
 	if d.Always && hadPending && req.Tool != "" && req.Input != "" {
-		agentName := "claude"
+		agentName := string(modelpkg.ToolClaude)
 		if w, ok := a.store.Get(workspaceID); ok && w.Agent != "" {
 			agentName = w.Agent
 		}
@@ -1046,8 +1092,8 @@ func (a *App) Approve(reqID, decision string) error {
 			s.AlwaysRules = append(s.AlwaysRules, AlwaysRule{
 				Agent:   agentName,
 				Tool:    req.Tool,
-				Pattern: req.Input,       // truncated display value
-				Hash:    req.InputHash,   // M-13: hash of full input, authoritative match key
+				Pattern: req.Input,     // truncated display value
+				Hash:    req.InputHash, // M-13: hash of full input, authoritative match key
 			})
 			_ = a.SaveSettings(s)
 		}
@@ -1189,9 +1235,9 @@ func (a *App) DiscoverRepos() ([]RepoInfo, error) {
 // agentAdapter returns the Adapter for a known tool name, or nil for unknown.
 func agentAdapter(tool string) agent.Adapter {
 	switch tool {
-	case "claude":
+	case string(modelpkg.ToolClaude):
 		return agent.NewClaude()
-	case "opencode":
+	case string(modelpkg.ToolOpencode):
 		return agent.NewOpencode()
 	default:
 		return nil

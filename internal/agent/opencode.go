@@ -34,6 +34,11 @@ type Opencode struct {
 // including for the zero value (methods must not panic on nil seams).
 var _ Adapter = Opencode{}
 
+// msPerSecond converts unix milliseconds to unix seconds (integer division).
+// opencode's session list reports Updated as a unix-ms timestamp; model.Session
+// stores unix seconds.
+const msPerSecond = 1000
+
 // NewOpencode returns an Opencode with production defaults filled in. Set Dir to
 // scope the listing to a specific project directory.
 func NewOpencode() Opencode {
@@ -165,7 +170,7 @@ func parseSessionList(raw []byte) ([]model.Session, error) {
 			Tool:      model.ToolOpencode,
 			Directory: r.Directory,
 			Title:     r.Title,
-			Updated:   r.Updated / 1000, // unix ms → unix seconds
+			Updated:   r.Updated / msPerSecond,
 		})
 	}
 	return sessions, nil

@@ -62,13 +62,16 @@ func (b *Bridge) Close() error {
 	return c()
 }
 
-const maxChunk = 16 * 1024
+const (
+	maxChunk     = 16 * 1024
+	defaultShell = "/bin/bash"
+)
 
 // LoginShellArgv returns [$SHELL, "-l"], falling back to ["/bin/bash", "-l"].
 func LoginShellArgv() []string {
 	sh := os.Getenv("SHELL")
 	if sh == "" {
-		sh = "/bin/bash"
+		sh = defaultShell
 	}
 	return []string{sh, "-l"}
 }

@@ -42,10 +42,53 @@ type OpencodeMonitor struct {
 	lastTool   string
 }
 
+const (
+	// loopbackServerURLFmt is the format string used to build the opencode serve
+	// URL from a free loopback port number.
+	loopbackServerURLFmt = "http://127.0.0.1:%d"
+
+	// randomTokenBytes is the number of cryptographically-random bytes used when
+	// generating the Basic-auth password for opencode serve.
+	randomTokenBytes = 16
+
+	// opencodeBasicAuthUser is the fixed HTTP Basic-auth username opencode's
+	// server expects (v1.15.12 server/auth.ts).
+	opencodeBasicAuthUser = "opencode"
+
+	// firstConnectDeadline bounds the initial connection attempt to the opencode
+	// server before the monitor reports StateErrored.
+	firstConnectDeadline = 30 * time.Second
+
+	// sseRetryBackoff is the sleep between SSE reconnect attempts.
+	sseRetryBackoff = 500 * time.Millisecond
+
+	// sseScannerInitBuf is the initial bufio.Scanner buffer capacity for the SSE
+	// reader.
+	sseScannerInitBuf = 64 * 1024
+
+	// sseScannerMaxBuf is the maximum token size the SSE scanner will accept.
+	sseScannerMaxBuf = 1024 * 1024
+
+	// approveTimeout bounds the HTTP POST used to reply to a permission request.
+	approveTimeout = 10 * time.Second
+
+	// serveAndAttachFmt is the shell incantation Prepare returns. It backgrounds
+	// `opencode serve`, polls until the port is listening (budget: 50×0.2s≈10s),
+	// then exec's `opencode attach`. Arguments (in order): password, portStr,
+	// serverURL, attach. The leading space keeps the password out of
+	// history-ignoring shells. The 50-iteration / 0.2 s values are baked into
+	// the shell command and must not be changed without updating the comment above
+	// that documents the ~10 s budget.
+	serveAndAttachFmt = " ( export OPENCODE_SERVER_PASSWORD=%s;" +
+		" opencode serve --port %s --hostname 127.0.0.1 >/dev/null 2>&1 &" +
+		" i=0; while [ $i -lt 50 ]; do curl -s -o /dev/null %s && break; i=$((i+1)); sleep 0.2; done;" +
+		" exec %s )\n"
+)
+
 func newOpencodeMonitor(a Adapter) *OpencodeMonitor {
 	// serverURL/password stay empty here and are self-assigned in Prepare so the
 	// free port is grabbed as late as possible (smallest bind→serve race window).
-	return &OpencodeMonitor{adapter: a, events: make(chan Event, 64), httpClient: &http.Client{}}
+	return &OpencodeMonitor{adapter: a, events: make(chan Event, monitorEventChanBuf), httpClient: &http.Client{}}
 }
 
 // NewOpencodeMonitorWithServer injects a server URL + password instead of
@@ -53,7 +96,7 @@ func newOpencodeMonitor(a Adapter) *OpencodeMonitor {
 // httptest server. Production goes through newOpencodeMonitor + Prepare.
 func NewOpencodeMonitorWithServer(a Adapter, serverURL, pw string) *OpencodeMonitor {
 	return &OpencodeMonitor{adapter: a, serverURL: serverURL, password: pw,
-		events: make(chan Event, 64), httpClient: &http.Client{}}
+		events: make(chan Event, monitorEventChanBuf), httpClient: &http.Client{}}
 }
 
 func (m *OpencodeMonitor) Events() <-chan Event { return m.events }
@@ -92,7 +135,7 @@ func (m *OpencodeMonitor) Prepare(_ context.Context, _, _, resumeID, _ string) (
 		if err != nil {
 			return "", fmt.Errorf("OpencodeMonitor.Prepare: gen password: %w", err)
 		}
-		m.serverURL = fmt.Sprintf("http://127.0.0.1:%d", port)
+		m.serverURL = fmt.Sprintf(loopbackServerURLFmt, port)
 		m.password = pw
 	}
 
@@ -123,11 +166,7 @@ func (m *OpencodeMonitor) Prepare(_ context.Context, _, _, resumeID, _ string) (
 	// Leading space keeps the password out of history-ignoring shells. The poll
 	// caps at ~10s (50 × 0.2s) then falls through to attach, which will surface
 	// its own error if serve never came up.
-	cmd := fmt.Sprintf(
-		" ( export OPENCODE_SERVER_PASSWORD=%s;"+
-			" opencode serve --port %s --hostname 127.0.0.1 >/dev/null 2>&1 &"+
-			" i=0; while [ $i -lt 50 ]; do curl -s -o /dev/null %s && break; i=$((i+1)); sleep 0.2; done;"+
-			" exec %s )\n",
+	cmd := fmt.Sprintf(serveAndAttachFmt,
 		m.password, portStr, m.serverURL, attach)
 	return cmd, nil
 }
@@ -146,10 +185,10 @@ func freeLoopbackPort() (int, error) {
 	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
-// randomToken returns 16 cryptographically-random bytes as hex (shell-safe,
-// needs no quoting).
+// randomToken returns randomTokenBytes cryptographically-random bytes as hex
+// (shell-safe, needs no quoting).
 func randomToken() (string, error) {
-	b := make([]byte, 16)
+	b := make([]byte, randomTokenBytes)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
@@ -157,10 +196,10 @@ func randomToken() (string, error) {
 }
 
 // authHeader returns the HTTP Basic auth header value opencode expects: the
-// username defaults to the literal "opencode" (v1.15.12 server/auth.ts), the
-// password is the one we generated and exported to `opencode serve`.
+// username is opencodeBasicAuthUser (v1.15.12 server/auth.ts), the password is
+// the one we generated and exported to `opencode serve`.
 func (m *OpencodeMonitor) authHeader() string {
-	return "Basic " + base64.StdEncoding.EncodeToString([]byte("opencode:"+m.password))
+	return "Basic " + base64.StdEncoding.EncodeToString([]byte(opencodeBasicAuthUser+":"+m.password))
 }
 
 // Start consumes the opencode SSE event stream until ctx is cancelled. The first
@@ -172,8 +211,6 @@ func (m *OpencodeMonitor) authHeader() string {
 // workspace (which cancels ctx) reaps it with no leak.
 func (m *OpencodeMonitor) Start(ctx context.Context) {
 	go func() {
-		const firstConnectDeadline = 30 * time.Second
-		const retryBackoff = 500 * time.Millisecond
 		deadline := time.Now().Add(firstConnectDeadline)
 		connectedOnce := false
 
@@ -195,7 +232,7 @@ func (m *OpencodeMonitor) Start(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(retryBackoff):
+			case <-time.After(sseRetryBackoff):
 			}
 		}
 	}()
@@ -221,7 +258,7 @@ func (m *OpencodeMonitor) streamOnce(ctx context.Context) (connected bool) {
 		return false
 	}
 	sc := bufio.NewScanner(resp.Body)
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	sc.Buffer(make([]byte, 0, sseScannerInitBuf), sseScannerMaxBuf)
 	for sc.Scan() {
 		line := sc.Text()
 		// SSE data lines are `data:<json>` (an optional single space after the
@@ -432,7 +469,7 @@ func (m *OpencodeMonitor) Approve(reqID string, d Decision) error {
 		reply = "once"
 	}
 	body, _ := json.Marshal(map[string]string{"reply": reply})
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), approveTimeout)
 	defer cancel()
 	endpoint := m.serverURL + "/permission/" + url.PathEscape(reqID) + "/reply"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))

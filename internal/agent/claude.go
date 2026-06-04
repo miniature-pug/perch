@@ -130,6 +130,13 @@ func (c Claude) NewArgs(opts NewOpts) []string {
 // Both InstallStatusHook and doctor.claudeHooksOk must agree on this name.
 const ClaudeSettingsFile = "settings.json"
 
+// claudeConfigDirMode is the directory mode used when creating ~/.claude/.
+const claudeConfigDirMode = 0o755
+
+// claudeSettingsDefaultMode is the fallback file mode applied to settings.json
+// when no pre-existing file mode can be read from disk.
+const claudeSettingsDefaultMode = 0o644
+
 // InstallStatusHook merges perch's four status hooks into ~/.claude/settings.json.
 // It reads the existing file (treating absence as {}), merges additively and
 // idempotently (replace=false) or replaces any stale perch entries with the
@@ -156,7 +163,7 @@ func (c Claude) InstallStatusHook(replace bool) error {
 		return fmt.Errorf("claude InstallStatusHook: merge: %w", err)
 	}
 
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, claudeConfigDirMode); err != nil {
 		return fmt.Errorf("claude InstallStatusHook: mkdir: %w", err)
 	}
 
@@ -175,7 +182,7 @@ func (c Claude) InstallStatusHook(replace bool) error {
 		_ = os.Remove(tmpName)
 		return fmt.Errorf("claude InstallStatusHook: close temp: %w", err)
 	}
-	mode := os.FileMode(0o644)
+	mode := os.FileMode(claudeSettingsDefaultMode)
 	if fi, err := os.Stat(path); err == nil {
 		mode = fi.Mode().Perm()
 	}

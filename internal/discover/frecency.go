@@ -13,18 +13,23 @@ const (
 	frecencyHour = 3_600
 	frecencyDay  = 86_400
 	frecencyWeek = 604_800
+
+	frecencyMultRecent = 4.0  // accessed within the last hour
+	frecencyMultToday  = 2.0  // accessed within the last day
+	frecencyMultWeek   = 0.5  // accessed within the last week
+	frecencyMultOld    = 0.25 // accessed more than a week ago
 )
 
 func frecencyScore(rank float64, lastAccessed, now int64) float64 {
 	switch d := now - lastAccessed; {
 	case d < frecencyHour:
-		return rank * 4.0
+		return rank * frecencyMultRecent
 	case d < frecencyDay:
-		return rank * 2.0
+		return rank * frecencyMultToday
 	case d < frecencyWeek:
-		return rank * 0.5
+		return rank * frecencyMultWeek
 	default:
-		return rank * 0.25
+		return rank * frecencyMultOld
 	}
 }
 

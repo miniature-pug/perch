@@ -17,6 +17,15 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
+const (
+	// gitStatusTimeout is the deadline for git subprocess calls (rev-parse + status --porcelain).
+	gitStatusTimeout = 5 * time.Second
+	// gitPorcelainMinLen is the minimum valid line length in git status --porcelain output.
+	gitPorcelainMinLen = 4
+	// defaultFileMode is the permission bits applied to new files written by WriteFile.
+	defaultFileMode = 0o644
+)
+
 // Node is one entry in a directory listing.
 // JSON tags are frozen — do not rename.
 type Node struct {
@@ -71,7 +80,7 @@ func ListDir(absDir string, gitignoreAware bool) ([]Node, error) {
 // and Untracked fields accordingly. It is best-effort: any git failure leaves
 // both flags false and the listing is returned normally.
 func enrichGitStatus(absDir string, nodes []Node) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), gitStatusTimeout)
 	defer cancel()
 
 	// Determine the repo root. This also acts as the "is a git repo?" check.
@@ -96,7 +105,7 @@ func enrichGitStatus(absDir string, nodes []Node) {
 	sc := bufio.NewScanner(strings.NewReader(string(statusOut)))
 	for sc.Scan() {
 		line := sc.Text()
-		if len(line) < 4 {
+		if len(line) < gitPorcelainMinLen {
 			continue
 		}
 		xy := line[0:2]   // two status chars
@@ -298,7 +307,7 @@ func RevealInFiles(absPath string) error {
 // If absPath already exists its permission bits are preserved; new files
 // get mode 0o644.
 func WriteFile(absPath string, data []byte) error {
-	mode := os.FileMode(0o644)
+	mode := os.FileMode(defaultFileMode)
 	if info, err := os.Stat(absPath); err == nil {
 		mode = info.Mode().Perm()
 	}
