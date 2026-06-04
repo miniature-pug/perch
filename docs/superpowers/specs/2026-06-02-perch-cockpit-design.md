@@ -104,9 +104,9 @@ A registry selects the adapter by agent type. `Caps` lets the UI light up only w
 - **Capabilities:** approvals ✓, attention ✓ (via Stop), tokens ⚠ (spike).
 
 ### 6.3 `OpencodeAdapter` (serve + SSE + REST)
-- **Spawn:** run `opencode serve` (auth via `OPENCODE_SERVER_PASSWORD`) and attach its TUI in the pane (`opencode attach <url>`), so the user still sees the real TUI while perch consumes the server's stream.
-- **Events:** subscribe to **SSE `/event`** — `session.next.step.started/ended/failed` (with **token+cost**), `permission.v2.asked/replied`, text/shell events, heartbeat. Reconnect by re-opening + reconciling via `GET /question` and the SQLite store.
-- **Approvals:** `permission.v2.asked` (in) → GUI card → `POST` reply `once|always|reject` (out).
+- **Spawn / launch topology:** perch self-assigns a free loopback port `P` + random password `PW`, then the pane runs roughly `export OPENCODE_SERVER_PASSWORD=PW; opencode serve --port P --hostname 127.0.0.1 & <poll until listening>; exec opencode attach http://127.0.0.1:P [--session <id>]`, so the user still sees the real TUI while perch consumes the server's stream. `opencode attach` takes the URL as an explicit positional (there is **no** `$OPENCODE_URL` env var), reads the password from `OPENCODE_SERVER_PASSWORD`, and accepts `--session` for resume but **not** `--model`/`--agent` (model selection stays in the opencode TUI — a documented deviation).
+- **Events:** subscribe to **SSE `GET /event`** behind **HTTP Basic auth** (`Authorization: Basic base64("opencode:"+PW)`). Wire frames are a nested envelope `data: {"id":…,"type":…,"properties":{…}}` carrying `session.next.step.started/ended/failed` (with **token+cost** in `properties.tokens`/`properties.cost`), `permission.asked`/`permission.replied`, text/shell events, heartbeat. Reconnect by re-opening the stream.
+- **Approvals:** `permission.asked` (in) → GUI card → `POST /permission/:id/reply` with body `{reply: once|always|reject}` (Basic auth) (out).
 - **Resume/registry:** `opencode session list --format json`; resume `--session <id>` / `--continue`.
 - **Capabilities:** approvals ✓, attention ✓, tokens ✓ (native). opencode is the *easier* integration; Claude is still primary because it's the daily driver.
 

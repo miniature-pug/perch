@@ -45,7 +45,7 @@ flowchart TD
     subgraph External["External"]
         shell[("login shell\n(direct pty, per pane)")]
         claudeagent["claude agent\n(hooks POST events)"]
-        opencodeagent["opencode serve\n(SSE /event stream)"]
+        opencodeagent["opencode serve + attach\n(SSE GET /event, HTTP Basic auth)"]
     end
 
     main -->|"launch GUI"| apppkg
@@ -69,7 +69,7 @@ flowchart TD
     monitor --> opencodemon
     claudemon -->|"App → ClaudeMonitor → hooklistener"| hooklistener
     hooklistener <-->|"PreToolUse blocks; Decide()"| claudeagent
-    opencodemon -->|"App → OpencodeMonitor → serve/SSE"| opencodeagent
+    opencodemon -->|"serve+attach on loopback; SSE GET /event (Basic auth);\npermission.asked → POST /permission/:id/reply"| opencodeagent
 
     attach -->|"read"| registry
 
