@@ -46,7 +46,7 @@ At least one of **claude** or **opencode** must be installed and on `$PATH`.
 Install the system libraries on Debian/Ubuntu:
 
 ```sh
-sudo apt install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.0-dev
+sudo apt install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
 ```
 
 > **Linux only.** macOS and Windows are not supported because WebKit2GTK is a
@@ -71,13 +71,14 @@ make gui-build
 ./bin/perch
 ```
 
-`make gui-build` runs `npm --prefix frontend install` then
+`make gui-build` runs `npm --prefix frontend ci` then
 `npm --prefix frontend run build` (builds the Svelte SPA into `frontend/dist/`)
-and then `go build -tags production -o bin/perch ./cmd/perch`.
+and then `go build -tags "production webkit2_41" -o bin/perch ./cmd/perch`.
 
-The `-tags production` build tag is **required** — it embeds the compiled
-frontend assets into the binary. Without it the app uses a stub that errors at
-launch; that is expected.
+The `-tags "production webkit2_41"` build tags are **required**: `production`
+embeds the compiled frontend assets into the binary (without it the app uses a
+stub that errors at launch — that is expected), and `webkit2_41` links
+webkit2gtk-4.1 (4.0 is EOL). Use `make gui-build`, never `wails build`.
 
 > The `wails` CLI is **not** used. The repo root is a library package that
 > embeds `frontend/dist`; `main` lives in `cmd/perch`. Build with
@@ -93,6 +94,15 @@ Both targets inject the version string via ldflags
 (`-X main.version=$(git describe --tags --always --dirty)`).
 
 Module path: `github.com/Miniature-Pug/perch`
+
+### Testing
+
+The dev/test workflow is **container-first**: one image, `perch-dev`, built with
+`make image`. Checks run inside it by default — `make test` (Go unit + race),
+`make test-e2e` (Playwright chromium), and `make test-all` (the full gate: unit,
+integration, frontend, lint, vet, vulncheck, e2e). See
+[`containers/README.md`](containers/README.md) for the model and the
+`CONTAINERIZE` toggle.
 
 ---
 

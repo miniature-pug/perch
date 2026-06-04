@@ -1,0 +1,15 @@
+{
+  // perch dev container — the exact same perch-dev image every `make` target
+  // uses (spec §9). It does NOT rebuild the image: initializeCommand runs
+  // `make image` on the host, which fills the version ARGs from .tool-versions /
+  // the lockfile / the Makefile, then this attaches to the image just built.
+  // That reuses the ONE build path, so there is zero duplicate version pinning.
+  "name": "perch-dev",
+  "initializeCommand": "make image",
+  "image": "perch-dev:latest",
+  // Inside the container we ARE the perch-dev environment, so every `make`
+  // target runs natively — never re-enter podman (no nesting).
+  "containerEnv": {
+    "CONTAINERIZE": "0"
+  }
+}

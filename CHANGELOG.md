@@ -159,6 +159,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   instead, reflecting that `opencode attach` does not accept `--model`/`--agent`
   flags (model selection lives in the opencode TUI itself).
 
+- **Container-first test framework** — a single `perch-dev` image
+  (`containers/dev/Containerfile`, built with `make image`) is the dev/test
+  environment, and every check runs inside it by default. New make targets:
+  `make image`, `make shell` (interactive shell), `make test-front` (frontend
+  `tsc` + `vitest`), and `make test-e2e` (Playwright chromium). The
+  `CONTAINERIZE` variable toggles container re-entry (default `1`; `0` runs
+  natively — used inside the image and in pipelines), and `containers/run.sh` is
+  the generic exec. Container runs never mutate the working tree:
+  `frontend/node_modules` and `frontend/dist` are masked with anonymous volumes
+  so the tracked `//go:embed frontend/dist` stub is never clobbered. The
+  `.devcontainer/devcontainer.json` reuses the same image.
+
 ### Removed
 
 - **`perch setup` / global status-hook subsystem** — the vestigial `perch setup`
@@ -204,6 +216,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   inlined in 7 components), `--perch-scrim` (5 components), the full
   `--perch-z-*` stacking scale, `--perch-fs-shell` / `--perch-lh-shell`
   (previously hardcoded in `Terminal.svelte`).
+
+- **Production GUI links webkit2gtk-4.1** — production builds now link
+  webkit2gtk-4.1 via the `webkit2_41` build tag (`-tags "production
+  webkit2_41"` for `build`/`install`/`gui-build`/`cross`); 4.0 is EOL and absent
+  from the container base, while the host links 4.1 natively, so the two link
+  identically. The system dev package is now `libwebkit2gtk-4.1-dev`.
+
+- **Containerized make gates** — `make gui-build` now runs `npm ci` (was
+  `npm install`); `make test-all` is redefined as the full everything-gate
+  (`test test-integration test-front lint vet vulncheck test-e2e`, each in its
+  own container with the correct artifact masks); and `test`,
+  `test-integration`, `lint`, `vet`, and `vulncheck` now run inside the
+  `perch-dev` container by default, with `lint`/`vulncheck` using prebaked
+  pinned binaries (golangci-lint v2.11.4, govulncheck v1.3.0) rather than
+  `go run …@version`.
 
 ### Fixed
 

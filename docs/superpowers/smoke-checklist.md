@@ -7,11 +7,13 @@ real pty, real desktop notifications, a real agent).
 > NOTE: On a headless/VM display you may need `WEBKIT_DISABLE_COMPOSITING_MODE=1 bin/perch`.
 
 > ALSO RUN (not in this checklist, but required pre-release): the Playwright e2e
-> suite — `cd frontend && npm run test:e2e` — on a Playwright-supported OS. It
-> runs headless against `npm run preview` (no WebKit/agent needed) and includes
-> the CSS-token bundle guard (`theme-tokens.spec.ts`, `styled.spec.ts`) that
-> catches token/stylesheet regressions in the real Vite bundle. The Go headless
-> full-loop test also requires its build tag: `go test -tags integration ./app/`.
+> suite — `make test-e2e` — which runs containerized in the `perch-dev` image
+> (61 passing on the noble base; the host distro is too new to run Playwright
+> 1.60.0 natively). It runs headless against `npm run preview` (no WebKit/agent
+> needed) and includes the CSS-token bundle guard (`theme-tokens.spec.ts`,
+> `styled.spec.ts`) that catches token/stylesheet regressions in the real Vite
+> bundle. The Go headless full-loop test also requires its build tag:
+> `go test -tags integration ./app/`.
 
 ## Environment
 - [ ] Linux with WebKit2GTK + GTK3 installed
@@ -19,7 +21,9 @@ real pty, real desktop notifications, a real agent).
 - [ ] `bash scripts/verify-build.sh` exited 0 (valid ELF at `bin/perch`)
 
 ## Launch
-- [ ] `bin/perch` opens a GUI window; no crash in the terminal
+- [ ] `bin/perch` opens a GUI window; no crash in the terminal (this exercises
+      the webkit2gtk-4.1 link — the production binary links 4.1 via the
+      `webkit2_41` build tag; 4.0 is EOL)
 - [ ] Sidebar renders; NORMAL mode visible in the status line
 
 ## Workspace creation (claude)
