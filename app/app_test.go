@@ -13,6 +13,7 @@ import (
 
 	"github.com/Miniature-Pug/perch/internal/agent"
 	fspkg "github.com/Miniature-Pug/perch/internal/fs"
+	git "github.com/Miniature-Pug/perch/internal/git"
 	"github.com/Miniature-Pug/perch/internal/notify"
 	internalpty "github.com/Miniature-Pug/perch/internal/pty"
 	"github.com/Miniature-Pug/perch/internal/registry"
@@ -791,8 +792,15 @@ func TestApp_ListDir_ReturnsDirEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListDir: %v", err)
 	}
-	if len(nodes) == 0 {
-		t.Error("ListDir must return at least the written file")
+	var found *fspkg.Node
+	for i := range nodes {
+		if nodes[i].Name == "a.go" {
+			found = &nodes[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Errorf("ListDir: node with Name==%q not found; got %+v", "a.go", nodes)
 	}
 }
 
@@ -1034,6 +1042,21 @@ func TestApp_DiffStat_ValidateAndDelegate(t *testing.T) {
 		monitors: map[string]agent.Monitor{},
 	}
 
+	// Commit tracked.txt with 3 known lines so git can diff it.
+	trackedPath := filepath.Join(repo, "tracked.txt")
+	if err := os.WriteFile(trackedPath, []byte("line1\nline2\nline3\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", "tracked.txt")
+	runGit(t, repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "add tracked")
+
+	// Modify tracked.txt: remove line2, append line4+line5 → unstaged diff +2/−1.
+	if err := os.WriteFile(trackedPath, []byte("line1\nline3\nline4\nline5\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write an untracked file — git numstat ignores untracked files,
+	// so its Added/Removed will be 0 (that is the documented contract).
 	if err := os.WriteFile(filepath.Join(repo, "hello.txt"), []byte("hi\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1042,8 +1065,45 @@ func TestApp_DiffStat_ValidateAndDelegate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DiffStat: %v", err)
 	}
-	if len(files) == 0 {
-		t.Error("DiffStat must return at least one FileDiff for an unstaged file")
+	t.Logf("DiffStat files: %+v", files)
+
+	// --- tracked.txt: must carry real line counts from git diff --numstat ---
+	var tracked *git.FileDiff
+	for i := range files {
+		if filepath.Base(files[i].Path) == "tracked.txt" {
+			tracked = &files[i]
+			break
+		}
+	}
+	if tracked == nil {
+		t.Fatalf("tracked.txt not found in DiffStat result; got %+v", files)
+	}
+	if tracked.Added != 2 {
+		t.Errorf("tracked.txt Added = %d, want 2", tracked.Added)
+	}
+	if tracked.Removed != 1 {
+		t.Errorf("tracked.txt Removed = %d, want 1", tracked.Removed)
+	}
+	if tracked.Status != "M" {
+		t.Errorf("tracked.txt Status = %q, want \"M\"", tracked.Status)
+	}
+
+	// --- hello.txt: untracked files are not line-counted by git numstat ---
+	// git status --porcelain reports them as "??" but git diff --numstat
+	// never emits a line for them, so Added and Removed stay 0.
+	var untracked *git.FileDiff
+	for i := range files {
+		if filepath.Base(files[i].Path) == "hello.txt" {
+			untracked = &files[i]
+			break
+		}
+	}
+	if untracked == nil {
+		t.Fatalf("hello.txt not found in DiffStat result; got %+v", files)
+	}
+	if untracked.Added != 0 || untracked.Removed != 0 {
+		t.Errorf("hello.txt (untracked) Added=%d Removed=%d, want 0/0 — numstat ignores untracked files",
+			untracked.Added, untracked.Removed)
 	}
 }
 

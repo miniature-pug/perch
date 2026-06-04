@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/Miniature-Pug/perch/internal/agent"
+	git "github.com/Miniature-Pug/perch/internal/git"
 	internalpty "github.com/Miniature-Pug/perch/internal/pty"
 	"github.com/Miniature-Pug/perch/internal/registry"
 )
@@ -331,16 +332,35 @@ func TestE2E_HeadlessFullLoop(t *testing.T) {
 		t.Errorf("bug-4: no terminal agent:event (StateDone, WorkspaceID=%q) after Stop", wsID)
 	}
 
-	// ── ASSERTION 7: DiffStat returns ≥1 entry (the staged hello.go) ─────────
+	// ── ASSERTION 7: DiffStat returns the staged hello.go with correct counts ──
+	// hello.go contains "package main\n" (1 line), staged as a new file (A).
+	// git diff --cached --numstat reports 1 added / 0 removed for it.
 	// DiffStat validates against roots, so pass repo (under root).
 	stat, err := a.DiffStat(repo)
 	if err != nil {
 		t.Fatalf("DiffStat(%q): %v", repo, err)
 	}
-	if len(stat) == 0 {
-		t.Errorf("DiffStat returned 0 entries; expected ≥1 for staged hello.go")
-	}
 	t.Logf("DiffStat: %+v", stat)
+	var helloStat *git.FileDiff
+	for i := range stat {
+		if filepath.Base(stat[i].Path) == "hello.go" {
+			helloStat = &stat[i]
+			break
+		}
+	}
+	if helloStat == nil {
+		t.Errorf("DiffStat: hello.go not found in result; got %+v", stat)
+	} else {
+		if helloStat.Added != 1 {
+			t.Errorf("DiffStat hello.go Added = %d, want 1 (staged new file with 1 line)", helloStat.Added)
+		}
+		if helloStat.Removed != 0 {
+			t.Errorf("DiffStat hello.go Removed = %d, want 0", helloStat.Removed)
+		}
+		if helloStat.Status != "A" {
+			t.Errorf("DiffStat hello.go Status = %q, want \"A\"", helloStat.Status)
+		}
+	}
 
 	t.Logf("composite ReqID format observed: %q", compositeReqID)
 }
