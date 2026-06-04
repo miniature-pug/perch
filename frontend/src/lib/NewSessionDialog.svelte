@@ -1,6 +1,7 @@
 <!-- frontend/src/lib/NewSessionDialog.svelte -->
 <script lang="ts">
   import { DEFAULT_AGENT, DEFAULT_MODEL } from "./constants";
+  import { focusOnMount } from "./actions";
   let {
     open, repos, loadBranches, onCreate, onClose, initialAgent = null,
   }: {
@@ -34,15 +35,20 @@
     if (!repo || !branch) return;
     onCreate(agent, repo, branch, model);
   }
+
+  function handleKey(e: KeyboardEvent) {
+    if (e.key === "Escape") onClose();
+  }
 </script>
 
 {#if open}
-  <div role="dialog" aria-label="new session" class="dialog-overlay">
+  <div role="dialog" aria-label="new session" class="dialog-overlay"
+       tabindex="-1" onkeydown={handleKey}>
     <div class="dialog">
       <h2>New Session</h2>
       <label class="setting-row">
         <span class="setting-label">Agent</span>
-        <select class="field-select" aria-label="agent" bind:value={agent}>
+        <select class="field-select" aria-label="agent" bind:value={agent} use:focusOnMount>
           <option value="claude">Claude</option>
           <option value="opencode">opencode</option>
         </select>

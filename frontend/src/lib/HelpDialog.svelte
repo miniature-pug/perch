@@ -1,5 +1,6 @@
 <!-- frontend/src/lib/HelpDialog.svelte -->
 <script lang="ts">
+  import { focusOnMount } from "./actions";
   let {
     open, onClose,
   }: {
@@ -15,7 +16,7 @@
 {#if open}
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div role="dialog" aria-label="help" class="dialog-overlay"
-       tabindex="-1" onkeydown={handleKey}>
+       tabindex="-1" onkeydown={handleKey} use:focusOnMount>
     <div class="dialog help-dialog">
       <section class="help-section">
         <h2>Keyboard Shortcuts</h2>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { focusOnMount } from "./actions";
   let {
     open, message, confirmLabel = "Confirm", destructive = false, note,
     onConfirm, onCancel,
@@ -6,10 +7,17 @@
     open: boolean; message: string; confirmLabel?: string; destructive?: boolean; note?: string;
     onConfirm?: () => void; onCancel?: () => void;
   } = $props();
+
+  function handleKey(e: KeyboardEvent) {
+    if (e.key === "Escape") onCancel?.();
+    else if (e.key === "Enter") onConfirm?.();
+  }
 </script>
 
 {#if open}
-  <div role="dialog" aria-label="confirm" class="confirm-overlay">
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <div role="dialog" aria-label="confirm" class="confirm-overlay"
+       tabindex="-1" onkeydown={handleKey} use:focusOnMount>
     <div class="confirm-dialog">
       <p class="confirm-message">{message}</p>
       {#if note}<p class="confirm-note">{note}</p>{/if}

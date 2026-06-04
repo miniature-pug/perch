@@ -1,6 +1,7 @@
 <!-- frontend/src/lib/CommandPalette.svelte -->
 <script lang="ts">
   import { CMD_RECENCY_MAX, STORAGE_CMD_RECENTS } from "./constants";
+  import { focusOnMount } from "./actions";
   type Command = { id: string; group: string; label: string; keybinding?: string };
   let {
     open, commands, onRun, onClose,
@@ -8,9 +9,6 @@
 
   let query = $state("");
   let active = $state(0);
-
-  // Svelte action: focus the node immediately on mount (avoids the a11y autofocus warning).
-  function focusOnMount(node: HTMLElement) { node.focus(); }
 
   // Track command invocation recency: id → last-invoked timestamp.
   // Persisted to localStorage so recency survives palette re-opens within a session.
