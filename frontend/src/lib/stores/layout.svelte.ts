@@ -43,6 +43,7 @@ class LayoutStore {
   setShellH(v: number):    void { this.shellH = v;            this.save(); }
   setView(v: View):        void { this.view = v;              this.save(); }
   toggleSplit():           void { this.split = !this.split;   this.save(); }
+  setSplit(v: boolean):    void { this.split = v;             this.save(); }
   setSplitId(id: string | null): void { this.splitId = id;   this.save(); }
   setCollapsed(id: string, v: boolean): void { this.collapsed = { ...this.collapsed, [id]: v }; this.save(); }
   setOrder(ids: string[]): void { this.order = ids;           this.save(); }

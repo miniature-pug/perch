@@ -83,7 +83,7 @@
       </li>
     {/each}
   </ul>
-  <button class="new-session-cta" onclick={onNew} aria-label="New session">+ New session</button>
+  <button class="new-session-cta" onclick={() => onNew()} aria-label="New session">+ New session</button>
 </nav>
 
 <style>

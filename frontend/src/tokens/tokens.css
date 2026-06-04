@@ -16,10 +16,12 @@
   --perch-ease: cubic-bezier(.4,0,.2,1);
   /* Elevation — single source for the repeated float shadow and modal scrim */
   --perch-shadow-float: 0 8px 32px rgba(0, 0, 0, 0.45);
+  --perch-shadow-toast: 0 4px 16px rgba(0, 0, 0, 0.3);
   --perch-scrim: rgba(0, 0, 0, 0.5);
   /* Stacking order — one named scale so layer relationships are explicit.
      command-palette sits above undo-toast so the focused palette is never
      occluded by a transient toast (previously both were 300). */
+  --perch-z-sidebar-rail: 1;
   --perch-z-editor-send: 10;
   --perch-z-editor-dirty: 20;
   --perch-z-drop-overlay: 50;

@@ -260,7 +260,7 @@
     font-family: var(--perch-font-sans);
     font-size: var(--perch-fs-label);
     font-weight: 600;
-    border-radius: 7px;
+    border-radius: 999px;
     display: flex;
     align-items: center;
     justify-content: center;

@@ -614,7 +614,7 @@
                const id = e.dataTransfer.getData(MIME_SESSION);
                if (!id) return;
                e.preventDefault();
-               layout.split = true as any;
+               layout.setSplit(true);
                layout.setSplitId(id);
              }}
         >
@@ -900,7 +900,7 @@
     cursor: pointer;
     transition: color var(--perch-dur) var(--perch-ease),
                 background var(--perch-dur) var(--perch-ease);
-    z-index: 1;
+    z-index: var(--perch-z-sidebar-rail);
   }
   .sidebar-toggle-rail:hover { color: var(--perch-text); background: color-mix(in srgb, var(--perch-accent) 10%, transparent); }
   .sidebar-toggle-rail:focus-visible { outline: 2px solid var(--perch-accent); outline-offset: -2px; }
@@ -999,7 +999,7 @@
     background: var(--perch-surface);
     border: 1px solid var(--perch-border);
     border-radius: 6px;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+    box-shadow: var(--perch-shadow-toast);
     font-family: var(--perch-font-sans); font-size: var(--perch-fs-body);
     color: var(--perch-text);
     min-width: 220px;
