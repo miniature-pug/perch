@@ -43,19 +43,3 @@ type Tree struct {
 	// Project is the owning repository. Nil for non-git trees.
 	Project *Project
 }
-
-// Session is an AI agent conversation. Every session is already bound to a
-// directory by the tool itself; perch reads that binding rather than inventing it.
-// Display metadata (Title, Updated) is populated by the adapters in internal/agent.
-type Session struct {
-	// ID is the session identifier as assigned by the tool.
-	ID string
-	// Tool identifies which agent owns this session.
-	Tool Tool
-	// Directory is the absolute path the tool has bound this session to.
-	Directory string
-	// Title is a short human-readable label for the session.
-	Title string
-	// Updated is the last-activity timestamp as unix seconds.
-	Updated int64
-}

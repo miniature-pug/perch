@@ -1,31 +1,17 @@
 package agent
 
 import (
-	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
 	"os/exec"
-	"strings"
 
 	"github.com/Miniature-Pug/perch/internal/model"
-	"github.com/Miniature-Pug/perch/internal/proc"
 )
 
-// Opencode is the Adapter for the opencode CLI. Unlike claude, opencode exposes
-// a documented listing command, so session enumeration shells out through the
-// proc.Runner seam rather than parsing on-disk files. opencode's session list
-// is scoped to the project that the working directory resolves to (there is no
-// global/all-projects flag), so Dir selects which project's sessions to list;
-// the caller sets it per tree.
+// Opencode is the Adapter for the opencode CLI.
+// All PATH access is funnelled through the LookPath seam so unit tests touch
+// neither real binaries nor the network.
 type Opencode struct {
-	// Runner runs the opencode CLI. Default proc.ExecRunner{}.
-	Runner proc.Runner
 	// Bin is the opencode binary name or path. Default "opencode".
 	Bin string
-	// Dir is the working directory the listing is scoped to (process cwd for the
-	// CLI). Empty means inherit perch's own cwd.
-	Dir string
 	// LookPath resolves a binary on PATH; used by Detect. Default exec.LookPath.
 	LookPath func(string) (string, error)
 }
@@ -34,26 +20,12 @@ type Opencode struct {
 // including for the zero value (methods must not panic on nil seams).
 var _ Adapter = Opencode{}
 
-// msPerSecond converts unix milliseconds to unix seconds (integer division).
-// opencode's session list reports Updated as a unix-ms timestamp; model.Session
-// stores unix seconds.
-const msPerSecond = 1000
-
-// NewOpencode returns an Opencode with production defaults filled in. Set Dir to
-// scope the listing to a specific project directory.
+// NewOpencode returns an Opencode with production defaults filled in.
 func NewOpencode() Opencode {
 	return Opencode{
-		Runner:   proc.ExecRunner{},
 		Bin:      string(model.ToolOpencode),
 		LookPath: exec.LookPath,
 	}
-}
-
-func (o Opencode) runner() proc.Runner {
-	if o.Runner != nil {
-		return o.Runner
-	}
-	return proc.ExecRunner{}
 }
 
 func (o Opencode) lookPath() func(string) (string, error) {
@@ -86,18 +58,6 @@ func (o Opencode) ResumeArgs(sessionID string) []string {
 	return []string{"--session", sessionID}
 }
 
-// ErrForkUnsupported is returned by Opencode.ForkInto. perch v1 deliberately
-// starts a fresh session in the target worktree instead of forking, so callers
-// can errors.Is against this sentinel to take the "start fresh" path. The CLI
-// does expose a --fork flag (with --session/--continue), so enabling forking
-// later is a small, intentional scope change rather than a technical limitation.
-var ErrForkUnsupported = errors.New("opencode: fork into worktree is unsupported in v1 (start a fresh session instead)")
-
-// ForkInto reports that opencode forking is unsupported (see ErrForkUnsupported).
-func (o Opencode) ForkInto(sessionID, targetDir string) ([]string, error) {
-	return nil, ErrForkUnsupported
-}
-
 // NewArgs builds the launch args for a fresh interactive session. opts.SessionID
 // is ignored: opencode assigns its own session ids.
 func (o Opencode) NewArgs(opts NewOpts) []string {
@@ -112,61 +72,4 @@ func (o Opencode) NewArgs(opts NewOpts) []string {
 		args = append(args, "--prompt", opts.Prompt)
 	}
 	return args
-}
-
-// ── session enumeration ──────────────────────────────────────────────────────────
-
-// sessionJSON mirrors one element of `opencode session list --format json`. The
-// CLI emits flat camelCase fields with unix-millisecond timestamps (the DB's
-// snake_case names are not used on the wire).
-type sessionJSON struct {
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	Directory string `json:"directory"`
-	// Created is decoded for wire fidelity only; model.Session carries no
-	// created timestamp, so it is not mapped.
-	Created   int64  `json:"created"`
-	Updated   int64  `json:"updated"`
-	ProjectID string `json:"projectId"`
-}
-
-// ListSessions lists the sessions opencode has for o.Dir's project. A runner or
-// CLI failure is returned as an error (the tool degrades to "unavailable"); the
-// caller decides whether to surface or ignore it.
-func (o Opencode) ListSessions(ctx context.Context) ([]model.Session, error) {
-	stdout, stderr, err := o.runner().RunInDir(ctx, o.Dir, o.bin(), "session", "list", "--format", "json")
-	if err != nil {
-		// Surface stderr: a bare "exit status N" is undebuggable in production.
-		return nil, fmt.Errorf("opencode session list: %w: %s", err, strings.TrimSpace(string(stderr)))
-	}
-	return parseSessionList(stdout)
-}
-
-// parseSessionList decodes `opencode session list --format json` output into
-// sessions. An empty scope prints nothing (zero bytes) rather than "[]", so both
-// empty/whitespace-only input and a literal "[]" map to zero sessions with no
-// error. Malformed JSON returns an error and never panics. Millisecond
-// timestamps are truncated to the unix seconds that model.Session stores.
-func parseSessionList(raw []byte) ([]model.Session, error) {
-	trimmed := strings.TrimSpace(string(raw))
-	if trimmed == "" || trimmed == "[]" {
-		return nil, nil
-	}
-
-	var raws []sessionJSON
-	if err := json.Unmarshal([]byte(trimmed), &raws); err != nil {
-		return nil, err
-	}
-
-	sessions := make([]model.Session, 0, len(raws))
-	for _, r := range raws {
-		sessions = append(sessions, model.Session{
-			ID:        r.ID,
-			Tool:      model.ToolOpencode,
-			Directory: r.Directory,
-			Title:     r.Title,
-			Updated:   r.Updated / msPerSecond,
-		})
-	}
-	return sessions, nil
 }
