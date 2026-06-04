@@ -88,8 +88,6 @@ non-negotiable architectural rule.
 **Never run the real `perch` binary or any code path that writes to real `$HOME`
 config during development or testing.**
 
-- `perch setup` writes to real `~/.claude/settings.json` and
-  `~/.config/opencode/plugins/`. Do not invoke this in tests.
 - When a test must exercise config loading, use `t.Setenv("HOME", t.TempDir())`
   and/or `t.Setenv("XDG_CONFIG_HOME", t.TempDir())` to redirect all writes to a
   throwaway directory that is cleaned up automatically.
@@ -131,5 +129,5 @@ below 80% will block the review gate.
 | Implementation plans | `docs/superpowers/plans/` |
 | Architecture diagrams (Mermaid) | `docs/diagrams/` |
 | Security ledger | `docs/security-audit.md` |
-| Design rationale / internal ADRs | `plan.md` |
+| Design rationale / internal ADRs | `plan.md` (⚠ superseded original TUI spec — see banner at top; current architecture reference is `ARCHITECTURE.md`) |
 | Public architecture overview | `ARCHITECTURE.md` |

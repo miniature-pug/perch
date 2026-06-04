@@ -11,7 +11,7 @@ perch is a worktree-native AI-agent **cockpit**: a desktop GUI for running and
 supervising AI coding agents (`claude`, `opencode`) across git worktrees. The
 default invocation (`perch` or `perch <path>`) launches a **Wails v2 desktop
 window**: a Go backend embedded in a WebKit2GTK webview driving a Svelte 5
-(runes) SPA. A small set of CLI subcommands (`setup`, `attach`, `doctor`,
+(runes) SPA. A small set of CLI subcommands (`attach`, `doctor`,
 `version`) supports scripting and agent-hook integration.
 
 Key properties:
@@ -29,7 +29,7 @@ Key properties:
 - **Go toolchain:** `go1.26.4`
 - **Wails:** v2 / **Frontend:** Svelte 5 (runes) + Vite (in `frontend/`)
 - **Key deps:** `creack/pty` (direct pty bridge), `bmatcuk/doublestar/v4`
-  (glob), `sahilm/fuzzy` (fuzzy match), `BurntSushi/toml` (config)
+  (glob), `BurntSushi/toml` (config)
 - **Linux only** — requires WebKit2GTK + GTK3 system libraries.
 
 ---
@@ -188,7 +188,6 @@ See `docs/diagrams/architecture.mmd` for the component dependency graph.
 | `internal/model` | Shared domain vocabulary (`Tool`, …) — pure data, no I/O. |
 | `internal/notify` | Notification tiering (blocking / ambient) for agent lifecycle events. |
 | `internal/proc` | `Runner` interface + `ExecRunner` (production) + `FakeRunner` (tests). All shell-outs go through this seam. |
-| `internal/status` | Status-hook helper used by `perch setup` for agent state reporting. |
 | `frontend/` | Svelte 5 (runes) SPA (Vite build); communicates with Go via Wails bindings and events; renders agent terminals via xterm.js. |
 
 ---
@@ -234,7 +233,7 @@ All frontend tuning values are centralized in `frontend/src/lib/constants.ts`:
   must be kept in sync manually.
 - **Option lists** — `THEMES`, `DENSITIES`, `FONTS` arrays (used by
   `SettingsPanel`).
-- **Drag MIME types** — `MIME_FILE`, `MIME_SESSION`, `MIME_HUNK`.
+- **Drag MIME types** — `MIME_SESSION = "application/x-perch-session"`, `MIME_TEXT = "application/x-perch-text"`.
 - **`@mention` protocol prefix** and **localStorage keys**.
 
 Wails event names (`EVT_AGENT`, `EVT_FS_CHANGED`, `EVT_NOTIFY`,
@@ -270,6 +269,8 @@ Every shell-out in perch — git operations, hook execution — goes through the
 ```
 type Runner interface {
     Run(ctx context.Context, name string, args ...string) (stdout, stderr []byte, err error)
+    RunInDir(ctx context.Context, dir, name string, args ...string) (stdout, stderr []byte, err error)
+    RunStdin(ctx context.Context, dir string, stdin []byte, name string, args ...string) (stdout, stderr []byte, err error)
 }
 ```
 
@@ -343,9 +344,10 @@ Non-`PreToolUse` hook events (`SessionStart`, `Stop`, `StopFailure`,
 read from the transcript. For **opencode**, the equivalent events arrive over
 the `opencode serve` SSE stream.
 
-`perch setup [--replace]` installs the agent status hooks
-(`~/.claude/settings.json`). opencode exposes session status natively via
-its SSE stream (`opencode serve`), so no plugin file is needed for opencode.
+Claude status reporting is automatic — `ClaudeMonitor` writes the per-session hook
+config (listener URL + token) into the worktree's `.claude/settings.json` when
+the workspace opens. opencode exposes session status natively via its SSE stream
+(`opencode serve`), so no plugin file is needed for opencode.
 
 ---
 

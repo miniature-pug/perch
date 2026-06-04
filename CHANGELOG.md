@@ -114,13 +114,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   resume. Settings (`settings.json`, including `AlwaysRules`) and saved layout
   (`layout.json`) live alongside it.
 
-- **`perch setup [--replace]`** — detects installed AI coding tools (claude,
-  opencode) and installs agent hooks: `~/.claude/settings.json` (claude status
-  hooks). opencode status flows natively via its `opencode serve` SSE stream
-  (`OpencodeMonitor`); no plugin file is needed. Additive and idempotent without
-  `--replace`; with `--replace`, stale perch-owned blocks are overwritten while
-  all foreign config is preserved.
-
 - **`perch attach <query>`** — focuses the running perch window on the
   workspace that best matches the query (exact `worktreePath`, otherwise
   case-insensitive substring of path/title/branch). Uses a Wails
@@ -165,6 +158,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   model input when `agent=opencode` and shows "Selected in the opencode TUI"
   instead, reflecting that `opencode attach` does not accept `--model`/`--agent`
   flags (model selection lives in the opencode TUI itself).
+
+### Removed
+
+- **`perch setup` / global status-hook subsystem** — the vestigial `perch setup`
+  command, `InstallStatusHook`, `internal/status` package, and
+  `resources/claude-hooks.json` have been deleted. These were TUI-era code that
+  wrote to the global `~/.claude/settings.json` to install status hooks invoking
+  a nonexistent `perch status set` subcommand. The live claude status path is the
+  per-session worktree hooklistener: when a workspace opens, `ClaudeMonitor`
+  writes the hook config (listener URL + random Bearer token) into the worktree's
+  `.claude/settings.json`. No global setup step is needed or exists.
 
 ### Changed
 

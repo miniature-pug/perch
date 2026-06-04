@@ -66,7 +66,7 @@ Verify each of these against a real `opencode`:
 ## Layout — collapse (only the keybind/persist path is automated)
 - [ ] `Ctrl-b` collapses the sidebar to zero width; the always-visible toggle
       rail (▶) re-expands it; the collapsed state survives a restart
-- [ ] `Ctrl-\` collapses/expands the shell drawer; state persists
+- [ ] `` Ctrl-` `` collapses/expands the shell drawer; state persists
 
 ## Single-instance & attach (cross-process — no automated coverage)
 The Wails `SingleInstanceLock` + `perch attach` path crosses two processes and a

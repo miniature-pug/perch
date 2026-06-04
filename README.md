@@ -71,9 +71,9 @@ make gui-build
 ./bin/perch
 ```
 
-`make gui-build` runs `npm --prefix frontend run build` (builds the Svelte SPA
-into `frontend/dist/`) and then `go build -tags production -o bin/perch
-./cmd/perch`.
+`make gui-build` runs `npm --prefix frontend install` then
+`npm --prefix frontend run build` (builds the Svelte SPA into `frontend/dist/`)
+and then `go build -tags production -o bin/perch ./cmd/perch`.
 
 The `-tags production` build tag is **required** — it embeds the compiled
 frontend assets into the binary. Without it the app uses a stub that errors at
@@ -104,9 +104,6 @@ perch
 
 # Same, but with an explicit project root
 perch /path/to/projects
-
-# One-time setup: install status hooks/plugins for detected agents
-perch setup
 ```
 
 `perch` (no arguments) opens the desktop GUI. The sidebar lists your workspaces
@@ -123,7 +120,6 @@ from a direct pty the Go app spawned for that pane.
 | `perch` | Open the cockpit GUI; project root = cwd |
 | `perch <path>` | Open the cockpit GUI; project root = given directory |
 | `perch attach <query>` | Focus the running perch window on the workspace matching the query; launches the GUI if no instance is running |
-| `perch setup [--replace]` | Detect installed agents; install status hooks/plugins. `--replace` overwrites stale perch-owned entries |
 | `perch doctor` | Check runtime dependencies and configuration |
 | `perch version` | Print version and build info |
 
@@ -146,19 +142,15 @@ When a claude workspace is opened, its `ClaudeMonitor` writes the hook
 configuration (listener URL + bearer token) into `<worktree>/.claude/settings.json`.
 The claude agent's hooks then POST tool/lifecycle events back to the listener,
 and `PreToolUse` blocks until you approve (see [Security model](#security--trust-model)).
-
-`perch setup` additionally installs the global status hooks into
-`~/.claude/settings.json` for agent state reporting.
+Claude status reporting works automatically — perch injects the per-session hook
+config into the worktree when it opens.
 
 ### opencode — serve + SSE
 
 An opencode workspace launches `opencode serve` and the `OpencodeMonitor`
 consumes its Server-Sent-Events stream (`/event`) over an authenticated HTTP
-connection to surface lifecycle, token, and approval events.
-
-`perch setup` installs the claude status hooks (`~/.claude/settings.json`).
-opencode exposes session status natively via its SSE stream, so no plugin
-file is required for opencode.
+connection to surface lifecycle, token, and approval events. opencode exposes
+session status natively via its SSE stream, so no additional setup is required.
 
 ---
 

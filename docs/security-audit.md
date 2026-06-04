@@ -48,14 +48,14 @@
 | V2 | `.perch.toml` agent-binary / `startup_command` injection | — | MITIGATED | global-only `Agents`; project `agent` validated to enum; `startup_command` dead |
 | V4 | `[files]` copy/symlink traversal; worktree path flag-injection | — | MITIGATED | two-pass EvalSymlinks containment in `seed.go`; paths always absolute |
 | V8 | discovery symlink/loop traversal | — | MITIGATED | `WalkDir` (no symlink follow) + `MaxDepth=8` |
-| V9 | `perch setup` install (atomic/refuse-malformed/mode-preserve/UseNumber) | — | MITIGATED | all four properties verified + tested |
-| V9b | embedded `perch-status.ts` shell injection | — | MITIGATED | only hardcoded enum flows to `$\`perch status set ${state}\`` |
-| V9a | setup write path via `$HOME`/env | LOW | ACCEPTED | intentional (test sandbox via `t.Setenv HOME`); path is `Join(home,…)`; requires pre-owned env |
-| V10 | `perch status set` sink | — | MITIGATED | enum-validated before any tmux write; empty `$TMUX_PANE`→exit 0; argv not shell |
+| V9 | global status-hook install (atomic/refuse-malformed/mode-preserve/UseNumber) | — | ~~MITIGATED~~ **DELETED** | `perch setup` / `internal/status` / `resources/claude-hooks.json` removed; surface no longer exists |
+| V9b | embedded status-hook script shell injection | — | ~~MITIGATED~~ **DELETED** | `perch-status.ts` and the status-set dispatch removed with the global hook subsystem |
+| V9a | setup write path via `$HOME`/env | LOW | ~~ACCEPTED~~ **DELETED** | write path eliminated; hook config is now per-session worktree-local only |
+| V10 | `perch status set` CLI sink | — | ~~MITIGATED~~ **DELETED** | subcommand removed; status flows via per-session hooklistener, not a CLI argv sink |
 | V12 | dependency/vendor integrity | — | CLEAN (1 note) | `go mod verify` ok; Charm v1 locked; `teatest` test-only untagged pseudo (see note) |
 | V13 | build hygiene | — | CLEAN | `-trimpath`, version-only ldflags, no secrets, sane `.gitignore`/`.tool-versions` |
 | V14 | WebKit2GTK rendering engine (dynamically linked; CVE patching via distro apt, not perch) | — | **ACCEPTED** | keep system library current via apt; documented operational dependency |
-| V15 | script-message IPC / bound-method API (untrusted frontend → Go; session/path/ref/enum validation; argv-only tmux) | HIGH | **MITIGATED** | `validateSessionID` allowlist, `validateWorktreeUnderRoots` symlink-escape defeat, `CreateAgent` containment; TOCTOU residual = INFO (out of threat model) |
+| V15 | script-message IPC / bound-method API (untrusted frontend → Go; session/path/ref/enum validation; argv-only git) | HIGH | **MITIGATED** | `validateSessionID` allowlist, `validateWorktreeUnderRoots` symlink-escape defeat, `CreateWorkspace` containment; TOCTOU residual = INFO (out of threat model) |
 | V16 | attach-pty `WriteToPty` (keystroke bytes forwarded verbatim to user's own pty) | — | **ACCEPTED** | documented boundary; confers no privilege beyond the user's own |
 | V17 | CSP + no listening port (restrictive `<meta>` CSP; no TCP port in production build) | — | **MITIGATED** | `connect-src 'self'`, no eval; `ws://` reload socket dev-tag-only; verified in production ELF |
 | V18 | npm/frontend supply chain (exact-pinned, `package-lock.json` committed; 4 MODERATE Svelte advisories) | MEDIUM | **MITIGATED** | advisories non-reachable: no SSR, no `{@html}`, no `<svelte:element>`; re-evaluate if any are added |
@@ -161,7 +161,7 @@ the system library current via `apt upgrade`; perch cannot own the WebKit2GTK pa
 ### V15 — script-message IPC / bound-method API (MITIGATED, TOCTOU=INFO)
 The untrusted Svelte frontend reaches Go only through bound methods over the WebKit2GTK
 script-message channel (no HTTP). The IPC namespace (`window.go.app.App.<Method>`) was verified
-against the vendored Wails binding generator. Every argument is validated before any tmux/git work
+against the vendored Wails binding generator. Every argument is validated before any git work
 (which is always argv, never a shell):
 
 - **`validateSessionID`** — charset allowlist `[A-Za-z0-9_-]`, length 1–128, byte-level (immune to
@@ -169,18 +169,15 @@ against the vendored Wails binding generator. Every argument is validated before
 - **`validateWorktreeUnderRoots`** — requires absolute + clean + existing path; `filepath.EvalSymlinks`
   on path AND roots; trailing-separator prefix check (defeats the `/root` vs `/root-evil` sibling
   trick); rejects symlink-escape by containment.
-- **`CreateAgent` containment** — `containedUnderRoots` confines the derived (not-yet-existing)
+- **`CreateWorkspace` containment** — `containedUnderRoots` confines the derived (not-yet-existing)
   worktree path under a configured root, rejecting absolute or `..` `worktree_dir` config values.
   `branch` is `git.ValidRef`-validated (rejects leading `-` flag-injection); `tool` is an exhaustive
   enum (`claude`/`opencode`). **This mitigates the pre-existing V2′ finding for the GUI create path.**
-- **`KillSession`/`OpenTerminal`** enforce a LIVE allowlist: the kill/attach target is derived from a
-  matched live session's own tmux session/window — the frontend-supplied id never enters argv
-  directly.
 
 Backed by failing-first adversarial tests (`TestValidateSessionID_AdversarialCases`,
-`TestValidateWorktreeUnderRoots_SymlinkEscape`, `TestApp_CreateAgent_ContainmentGuard`,
-`TestApp_CreateAgent_EndToEnd`) and two independent offensive security reviews (validation
-primitives; `CreateAgent`) that found no exploitable bypass.
+`TestValidateWorktreeUnderRoots_SymlinkEscape`, `TestApp_CreateWorkspace_ContainmentGuard`,
+`TestApp_CreateWorkspace_EndToEnd`) and two independent offensive security reviews (validation
+primitives; `CreateWorkspace`) that found no exploitable bypass.
 
 Residual: a same-user TOCTOU gap exists between worktree-path validation and the later `git -C`
 use. **NOT exploitable under the threat model** (local single OS user — such an attacker already

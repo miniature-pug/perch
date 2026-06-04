@@ -17,7 +17,6 @@ flowchart TD
     end
 
     subgraph CLIFlows["CLI sub-commands"]
-        setup["perch setup\ninstall agent hooks/plugins"]
         attach["perch attach &lt;query&gt;\nsingle-instance lock → raises\nrunning window; routes workspace:attach"]
         doctor["internal/doctor\nperch doctor"]
     end
@@ -45,7 +44,6 @@ flowchart TD
     end
 
     main -->|"launch GUI"| apppkg
-    main -->|"sub-cmd"| setup
     main -->|"sub-cmd"| attach
     main -->|"sub-cmd"| doctor
 

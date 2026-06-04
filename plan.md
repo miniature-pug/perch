@@ -1,5 +1,12 @@
 # perch — design & implementation plan
 
+> **HISTORICAL RECORD — SUPERSEDED.**
+> This document is the original TUI design spec (bubbletea / lipgloss / tmux engine,
+> `internal/tui`, `internal/tmux`, `internal/resurrect`). None of the TUI internals
+> described here ship in the current product. The current architecture is the Wails v2
+> cockpit (direct-pty, Svelte 5, no tmux). For the live architecture reference see
+> **[ARCHITECTURE.md](ARCHITECTURE.md)**. This file is retained as historical record only.
+
 > A keyboard-first TUI that orchestrates **Claude Code** and **opencode** sessions
 > across git repos and worktrees, using **tmux** as the engine. perch is a
 > *controller and UI on top of tmux* — it never reimplements a terminal or a
@@ -768,7 +775,7 @@ perch/
 │   ├── opencode/
 │   ├── git/
 │   └── tmux/
-├── resources/                   # perch-status.ts (opencode), claude settings snippet
+├── resources/                   # (empty — original status-hook files removed in cockpit pivot)
 ├── scripts/                     # dev/CI helper scripts (not the user-facing install)
 ├── install.sh                   # user-facing bootstrap script (§21.3)
 ├── .tool-versions               # pinned versions for all external deps (§21.2)
