@@ -300,10 +300,10 @@ func TestE2E_HeadlessFullLoop(t *testing.T) {
 		t.Error("timed out waiting for fake-agent to exit after Approve(allow)")
 	}
 
-	// ── ASSERTION 6 (bug-4 again): wait for terminal StateIdle event with WorkspaceID ──
-	// NOTE on spec: the claude monitor translates Stop → StateIdle (not StateDone).
-	// StateDone appears only in dispatchNotify as a consumer enum; the monitor never
-	// emits it. This is the correct terminal assertion for Stop events via the real ClaudeMonitor.
+	// ── ASSERTION 6 (bug-4 again): wait for terminal StateDone event with WorkspaceID ──
+	// The claude monitor translates a Stop hook → StateDone (H-6): a completed turn
+	// is what drives the §8 ambient "Turn complete" notification in dispatchNotify.
+	// (StateIdle is reserved for steady non-terminal idle, e.g. opencode idle-at-connect.)
 	termDeadline := time.Now().Add(5 * time.Second)
 	termFound := false
 	for time.Now().Before(termDeadline) {
@@ -316,7 +316,7 @@ func TestE2E_HeadlessFullLoop(t *testing.T) {
 			if !ok {
 				continue
 			}
-			if termEv.State == agent.StateIdle && termEv.WorkspaceID == wsID {
+			if termEv.State == agent.StateDone && termEv.WorkspaceID == wsID {
 				termFound = true
 			}
 		}
@@ -327,7 +327,7 @@ func TestE2E_HeadlessFullLoop(t *testing.T) {
 		time.Sleep(30 * time.Millisecond)
 	}
 	if !termFound {
-		t.Errorf("bug-4: no terminal agent:event (StateIdle, WorkspaceID=%q) after Stop", wsID)
+		t.Errorf("bug-4: no terminal agent:event (StateDone, WorkspaceID=%q) after Stop", wsID)
 	}
 
 	// ── ASSERTION 7: DiffStat returns ≥1 entry (the staged hello.go) ─────────
