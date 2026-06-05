@@ -14,6 +14,9 @@ import (
 )
 
 const (
+	// loopbackHost is the single source for the loopback address the hook
+	// listener binds to (127.0.0.1, ephemeral port — never a public interface).
+	loopbackHost = "127.0.0.1"
 	// listenerTokenBytes is the number of random bytes used for the auth token.
 	listenerTokenBytes = 32
 	// hookEventChanBuf is the buffer size of the hook event channel.
@@ -50,7 +53,7 @@ type Listener struct {
 }
 
 func New() (*Listener, error) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := net.Listen("tcp", loopbackHost+":0")
 	if err != nil {
 		return nil, fmt.Errorf("hooklistener.New: %w", err)
 	}

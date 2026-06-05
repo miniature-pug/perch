@@ -187,7 +187,7 @@ func (m *OpencodeMonitor) Teardown() error { return nil }
 // it. There is a small race between release and `opencode serve` binding it; if
 // another process steals the port, serve fails and Start reports StateErrored.
 func freeLoopbackPort() (int, error) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	l, err := net.Listen("tcp", loopbackHost+":0")
 	if err != nil {
 		return 0, err
 	}
