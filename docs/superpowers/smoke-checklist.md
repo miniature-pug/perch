@@ -84,6 +84,12 @@ agent's own pane TUI, and perch must NOT pop an approval card or block the agent
       perch surfaces no approval card and never replies on the question endpoint.
 - [ ] After answering, the feel clears: replying resumes **running**; rejecting/
       cancelling falls back to a steady **idle** (no spurious "Turn complete" toast).
+- [ ] (auto-focus, #4) When the QUESTION arrives on **the active** workspace while
+      the **agent view** is showing, perch enters TERMINAL mode, focuses the pty
+      (you can type the answer immediately, no click), and the agent pane shows a
+      brief emphasis ring. Confirm it does NOT yank focus when: (a) the question is
+      on a *background* workspace (sidebar pulse only), or (b) you are on the
+      *code/diff* view (no forced view switch — guards against losing editor work).
 
 > NOTE: headless/mock tests lock the CONTRACT — the claude PreToolUse `tool_name`
 > branch + internal auto-allow (the agent is never blocked), and the opencode
@@ -119,6 +125,13 @@ Verify each of these against a real `opencode`:
 - [ ] Glanceable diffstat: the sidebar row AND the status line for the active
       workspace show `+N −N` counts; they update live after a file changes
       (this is the §5.3 count, computed per-workspace off the fs:changed event)
+- [ ] Staging a hunk gives its file row a brief **green flash**, and the file
+      drops out of the list once its last hunk is staged (DiffView refetches the
+      file list after each stage/discard — counts must not go stale)
+- [ ] After staging, the sidebar/status `+N −N` counts and the "files to review"
+      pill **animate down** (count-up tween) — proving the stage refreshed the
+      per-workspace diffstat via `onDiffChanged` (staging touches the index, not
+      the working tree, so this does NOT ride the fs:changed path)
 
 ## Layout — collapse (only the keybind/persist path is automated)
 - [ ] `Ctrl-b` collapses the sidebar to zero width; the always-visible toggle
@@ -161,6 +174,16 @@ WebKit and cannot be verified headlessly — only this manual pass proves them.
 - [ ] Hovering a sidebar session row or a notification item gives a small
       **lift**; with OS "reduce motion" on, the lift is suppressed (background
       highlight only).
+- [ ] A session reaching `done` gives its sidebar status icon a one-shot **settle
+      pop**; with "reduce motion" on, no pop.
+- [ ] Each session has a stable **color identity** — a left accent stripe on its
+      sidebar row, and the same color on its notifications in the hub. The color
+      is the same for that worktree across restarts (stable hash, not random).
+- [ ] **Closing ritual:** after at least one session has been working, once every
+      session is idle/done a small glass summary card appears (lines / files /
+      sessions of the run) and dismisses on a click or Escape. It must NOT appear
+      on a fresh launch where everything is already idle, and must not re-pop on
+      its own after dismissal until new work runs.
 
 ## Desktop notification
 - [ ] Background the window; trigger a BLOCKING event (ask the agent to do

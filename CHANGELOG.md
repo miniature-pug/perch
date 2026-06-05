@@ -27,8 +27,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   panes stay fully visible); high-frequency rows (sidebar sessions, notification
   items) get a small hover lift. Tokenized; transforms guarded by
   `prefers-reduced-motion`.
+- **Juicy micro-feedback.** Staging a hunk flashes its file row green; a session
+  reaching `done` gives its status icon a one-shot "settle" pop. CSS-only,
+  centralized as global `@keyframes perch-stage-flash` / `perch-settle-pop` in
+  `tokens.css`, both guarded by `prefers-reduced-motion`.
+- **Animated diffstat count-up.** The `+N −N` counts in the sidebar rows and the
+  status line now tween to their new values via a `countUp` Svelte action (eases
+  to the target; first paint is exact, only changes animate; reads its duration
+  from `--perch-dur-countup`; reduced-motion and non-browser envs jump straight
+  to the final value).
+- **"Files to review" pill (goal gradient).** Each session shows a small count of
+  changed files still to review, which shrinks as you stage — a gentle, attainable
+  to-do cue. NOTE: the original idea was a *hunks*-remaining pill; it ships as a
+  **files** count because a per-workspace hunk total would cost N live git calls
+  per session, whereas the changed-file count is already in hand from the diffstat
+  fetch (`FileDiff[].length`). Cost-driven substitution, reversible after smoke.
+- **Auto-focus the active agent pane on awaiting-input.** When *the active*
+  workspace newly enters `awaiting-input` while the agent view is showing, perch
+  enters TERMINAL mode, focuses the pty, and pulses a brief emphasis ring so you
+  can answer in the agent's TUI without hunting for the pane. Scoped hard (pure
+  `shouldFocusAwaitingInput` edge predicate): never a background workspace (those
+  signal via the sidebar pulse only), never from the editor/diff view (no yanking
+  off unsaved work), never re-fired on a state that was already awaiting-input.
+- **Session-complete closing ritual.** When a run settles (every workspace idle/
+  done, after activity, with at least one `done`) a small glass summary card shows
+  the lines / files / sessions of the run, then dismisses — a calm closure beat.
+  Edge-triggered (`ritualShouldFire`), so it never pops on first load and never
+  re-fires on a reactive tick.
+- **Per-worktree color identity.** Each workspace gets a stable accent color
+  (`worktreeColor` — deterministic djb2 hash into an 8-color theme-agnostic
+  palette in `constants.ts`), shown as a left stripe on its sidebar row and on its
+  notifications, so a session is recognizable at a glance across the UI.
 
 #### Fixed
+
+- **Staging/discarding a hunk left the file list and diffstat counts stale** —
+  `DiffView.stage`/`discard` only refetched that one file's hunks, so the per-file
+  `+/-` counts, the changed-file list, and the per-workspace diffstat did not
+  reflect the stage (staging touches the git index, not the working tree, so the
+  fs watcher does not fire). Both now refetch the file list and call a new
+  `onDiffChanged` callback that refreshes the workspace diffstat — which is what
+  makes the count-up and the goal-gradient pill actually move as you stage.
 
 - **A freshly-created session was selected but dead until a second click** —
   `handleCreate` set `activeId` to the new workspace but never called
