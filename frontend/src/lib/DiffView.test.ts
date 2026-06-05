@@ -41,6 +41,51 @@ test("Stage button calls stageHunk", async () => {
   await waitFor(() => expect(w.stageHunk).toHaveBeenCalledWith("/wt", "src/main.go", 0));
 });
 
+test("stage refreshes file list (diffStat re-called) and fires onDiffChanged", async () => {
+  const { default: DiffView } = await import("./DiffView.svelte");
+  const w = await import("./wails");
+  vi.mocked(w.diffStat).mockClear();
+  const onDiffChanged = vi.fn();
+
+  render(DiffView, { props: { worktree: "/wt", onDiffChanged } });
+  await waitFor(() => screen.getByText("src/main.go"));
+
+  // diffStat already called once for initial load
+  const callsBefore = vi.mocked(w.diffStat).mock.calls.length;
+
+  // Expand and stage
+  await fireEvent.click(screen.getByRole("button", { name: /src\/main\.go/ }));
+  await waitFor(() => screen.getByRole("button", { name: /stage/i }));
+  await fireEvent.click(screen.getByRole("button", { name: /stage/i }));
+
+  await waitFor(() => {
+    expect(vi.mocked(w.diffStat).mock.calls.length).toBeGreaterThan(callsBefore);
+  });
+  expect(onDiffChanged).toHaveBeenCalledTimes(1);
+});
+
+test("discard refreshes file list (diffStat re-called) and fires onDiffChanged", async () => {
+  const { default: DiffView } = await import("./DiffView.svelte");
+  const w = await import("./wails");
+  vi.mocked(w.diffStat).mockClear();
+  const onDiffChanged = vi.fn();
+
+  render(DiffView, { props: { worktree: "/wt", onDiffChanged } });
+  await waitFor(() => screen.getByText("src/main.go"));
+
+  const callsBefore = vi.mocked(w.diffStat).mock.calls.length;
+
+  // Expand and discard
+  await fireEvent.click(screen.getByRole("button", { name: /src\/main\.go/ }));
+  await waitFor(() => screen.getByRole("button", { name: /discard/i }));
+  await fireEvent.click(screen.getByRole("button", { name: /discard/i }));
+
+  await waitFor(() => {
+    expect(vi.mocked(w.diffStat).mock.calls.length).toBeGreaterThan(callsBefore);
+  });
+  expect(onDiffChanged).toHaveBeenCalledTimes(1);
+});
+
 // --- Feature 3: per-hunk send-to-agent button ---
 
 test("send hunk to agent button not rendered when onSendToAgent prop is absent", async () => {

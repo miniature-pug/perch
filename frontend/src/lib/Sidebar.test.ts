@@ -2,20 +2,21 @@
 import { render, screen, waitFor } from "@testing-library/svelte";
 import { fireEvent } from "@testing-library/svelte";
 import { vi } from "vitest";
+import type { WorkspaceVM } from "./wails";
 
-const workspaces = [
+const workspaces: WorkspaceVM[] = [
   { id: "ws_a", worktreePath: "/wt/a", agent: "claude", title: "feat-auth",
-    branch: "feat/auth", state: "running", caps: {}, paneId: "p1", lastActive: "" },
+    branch: "feat/auth", state: "running", caps: { approvals: false, attention: false }, paneId: "p1", lastActive: "" },
   { id: "ws_b", worktreePath: "/wt/b", agent: "claude", title: "feat-core",
-    branch: "feat/core", state: "idle", caps: {}, paneId: "p2", lastActive: "" },
+    branch: "feat/core", state: "idle", caps: { approvals: false, attention: false }, paneId: "p2", lastActive: "" },
   { id: "ws_c", worktreePath: "/wt/c", agent: "claude", title: "bug-fix",
-    branch: "fix/crash", state: "awaiting-approval", caps: {}, paneId: "p3", lastActive: "" },
+    branch: "fix/crash", state: "awaiting-approval", caps: { approvals: true, attention: false }, paneId: "p3", lastActive: "" },
   { id: "ws_d", worktreePath: "/wt/d", agent: "claude", title: "done-work",
-    branch: "feat/done", state: "done", caps: {}, paneId: "p4", lastActive: "" },
+    branch: "feat/done", state: "done", caps: { approvals: false, attention: false }, paneId: "p4", lastActive: "" },
   { id: "ws_e", worktreePath: "/wt/e", agent: "claude", title: "errored-work",
-    branch: "feat/err", state: "errored", caps: {}, paneId: "p5", lastActive: "" },
+    branch: "feat/err", state: "errored", caps: { approvals: false, attention: false }, paneId: "p5", lastActive: "" },
   { id: "ws_q", worktreePath: "/wt/q", agent: "claude", title: "asking-work",
-    branch: "feat/ask", state: "awaiting-input", caps: {}, paneId: "p6", lastActive: "" },
+    branch: "feat/ask", state: "awaiting-input", caps: { approvals: false, attention: true }, paneId: "p6", lastActive: "" },
 ];
 
 test("renders status icon+label for all states", async () => {
@@ -181,4 +182,88 @@ test("diffStats prop: row without a diffStats entry does NOT render .sidebar-dif
 
   const featCoreBtn = screen.getByRole("button", { name: /feat-core/ });
   expect(featCoreBtn.querySelector(".sidebar-diffstat")).toBeNull();
+});
+
+// ---------------------------------------------------------------------------
+// Feature: count-up — final values in diffstat
+// ---------------------------------------------------------------------------
+
+test("diffStats countUp: diff-added and diff-removed inner spans show final numeric values on mount", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  const diffStats = { ws_a: { added: 12, removed: 4 } };
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {}, diffStats } });
+  await waitFor(() => screen.getByText("feat-auth"));
+
+  const btn = screen.getByRole("button", { name: /feat-auth/ });
+  const diffstatSpan = btn.querySelector(".sidebar-diffstat")!;
+  const addedInner = diffstatSpan.querySelector(".diff-added span")!;
+  const removedInner = diffstatSpan.querySelector(".diff-removed span")!;
+  expect(addedInner.textContent).toBe("12");
+  expect(removedInner.textContent).toBe("4");
+});
+
+// ---------------------------------------------------------------------------
+// Feature: review pill — files count
+// ---------------------------------------------------------------------------
+
+test("review pill renders when files > 0 and shows the file count", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  const diffStats = { ws_a: { added: 5, removed: 2, files: 3 } };
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {}, diffStats } });
+  await waitFor(() => screen.getByText("feat-auth"));
+
+  const btn = screen.getByRole("button", { name: /feat-auth/ });
+  const pill = btn.querySelector(".review-pill");
+  expect(pill).toBeInTheDocument();
+  expect(pill!.querySelector("span")!.textContent).toBe("3");
+  expect(pill!.getAttribute("aria-label")).toBe("3 files to review");
+});
+
+test("review pill is absent when files is 0", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  const diffStats = { ws_a: { added: 5, removed: 2, files: 0 } };
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {}, diffStats } });
+  await waitFor(() => screen.getByText("feat-auth"));
+
+  const btn = screen.getByRole("button", { name: /feat-auth/ });
+  expect(btn.querySelector(".review-pill")).toBeNull();
+});
+
+test("review pill is absent when files is undefined", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  const diffStats = { ws_a: { added: 5, removed: 2 } };
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {}, diffStats } });
+  await waitFor(() => screen.getByText("feat-auth"));
+
+  const btn = screen.getByRole("button", { name: /feat-auth/ });
+  expect(btn.querySelector(".review-pill")).toBeNull();
+});
+
+// ---------------------------------------------------------------------------
+// Feature: per-worktree row color identity
+// ---------------------------------------------------------------------------
+
+test("workspace-row carries --row-color style based on ws.id", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  const { worktreeColor } = await import("./constants");
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {} } });
+  await waitFor(() => screen.getByText("feat-auth"));
+
+  const btn = screen.getByRole("button", { name: /feat-auth/ }) as HTMLElement;
+  const expected = worktreeColor("ws_a");
+  // style:--row-color is set as a CSS custom property on the element's inline style
+  const styleAttr = btn.getAttribute("style") ?? "";
+  expect(styleAttr).toContain(expected);
+});
+
+test("workspace-row --row-color is stable and deterministic per id", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  const { worktreeColor } = await import("./constants");
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {} } });
+  await waitFor(() => screen.getByText("feat-core"));
+
+  const btnA = screen.getByRole("button", { name: /feat-auth/ }) as HTMLElement;
+  const btnB = screen.getByRole("button", { name: /feat-core/ }) as HTMLElement;
+  expect(btnA.getAttribute("style") ?? "").toContain(worktreeColor("ws_a"));
+  expect(btnB.getAttribute("style") ?? "").toContain(worktreeColor("ws_b"));
 });

@@ -12,9 +12,11 @@
   let {
     worktree,
     onSendToAgent,
+    onDiffChanged,
   }: {
     worktree: string;
     onSendToAgent?: (text: string) => void;
+    onDiffChanged?: () => void;
   } = $props();
 
   const STATUS_LABELS: Record<string, { icon: string; label: string }> = {
@@ -25,9 +27,10 @@
     "?": { icon: "?", label: "untracked" },
   };
 
-  let files    = $state<FileDiff[]>([]);
-  let expanded = $state<Record<string, Hunk[]>>({});
-  let loading  = $state(false);
+  let files     = $state<FileDiff[]>([]);
+  let expanded  = $state<Record<string, Hunk[]>>({});
+  let loading   = $state(false);
+  let flashFile = $state<string | null>(null);
 
   // Cancellation guard: if `worktree` changes before an in-flight diffStat resolves,
   // the stale resolve must not clobber the newer worktree's files / loading flag.
@@ -49,14 +52,27 @@
     }
   }
 
+  async function refreshFiles() {
+    try {
+      files = await diffStat(worktree);
+    } catch {
+      // Refresh failure must not break staging — leave stale counts.
+    }
+  }
+
   async function stage(h: Hunk) {
     await stageHunk(worktree, h.file, h.index);
     expanded = { ...expanded, [h.file]: await fetchHunks(worktree, h.file) };
+    flashFile = h.file;
+    await refreshFiles();
+    onDiffChanged?.();
   }
 
   async function discard(h: Hunk) {
     await discardHunk(worktree, h.file, h.index);
     expanded = { ...expanded, [h.file]: await fetchHunks(worktree, h.file) };
+    await refreshFiles();
+    onDiffChanged?.();
   }
 
   function hunkText(h: Hunk): string {
@@ -82,8 +98,10 @@
           <li>
             <button
               class="file-row list-row"
+              class:flash={flashFile === f.path}
               aria-expanded={!!expanded[f.path]}
               onclick={() => toggleFile(f)}
+              onanimationend={() => { if (flashFile === f.path) flashFile = null; }}
               aria-label={f.path}
             >
               <span class="file-status-icon" aria-hidden="true">{st.icon}</span>
@@ -337,4 +355,12 @@
   }
   .btn-send:hover { background: color-mix(in srgb, var(--perch-accent) 12%, var(--perch-bg)); }
   .btn-send:focus-visible { outline-color: var(--perch-accent); }
+
+  /* ---------- Stage flash ---------- */
+  .file-row.flash {
+    animation: perch-stage-flash var(--perch-dur-flash) var(--perch-ease);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .file-row.flash { animation: none; }
+  }
 </style>

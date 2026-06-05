@@ -1,7 +1,8 @@
 <!-- frontend/src/lib/Sidebar.svelte -->
 <script lang="ts">
   import type { WorkspaceVM } from "./wails";
-  import { MIME_SESSION } from "./constants";
+  import { MIME_SESSION, worktreeColor } from "./constants";
+  import { countUp } from "./actions";
 
   let {
     workspaces, activeId, onSelect, onNew, onReorder,
@@ -12,7 +13,7 @@
     onSelect: (id: string) => void;
     onNew: () => void;
     onReorder?: (draggedId: string, targetId: string) => void;
-    diffStats?: Record<string, { added: number; removed: number }>;
+    diffStats?: Record<string, { added: number; removed: number; files?: number }>;
   } = $props();
 
   const STATUS = {
@@ -69,15 +70,19 @@
           aria-current={ws.id === activeId ? "page" : undefined}
           onclick={() => onSelect(ws.id)}
           aria-label={ws.title}
+          style:--row-color={worktreeColor(ws.id)}
         >
           <span class="status-icon status-{ws.state}" aria-hidden="true">{st.icon}</span>
           <span class="workspace-title">{ws.title}</span>
           <span class="workspace-branch dim">{ws.branch}</span>
           {#if ds && (ds.added > 0 || ds.removed > 0)}
             <span class="sidebar-diffstat" aria-label="+{ds.added} minus {ds.removed}">
-              <span class="diff-added">+{ds.added}</span>
-              <span class="diff-removed">&minus;{ds.removed}</span>
+              <span class="diff-added">+<span use:countUp={ds.added}></span></span>
+              <span class="diff-removed">&minus;<span use:countUp={ds.removed}></span></span>
             </span>
+            {#if ds.files != null && ds.files > 0}
+              <span class="review-pill" aria-label="{ds.files} files to review"><span use:countUp={ds.files}></span></span>
+            {/if}
           {/if}
           <span class="status-label">{st.label}</span>
         </button>
@@ -151,9 +156,12 @@
     gap: var(--perch-sp-1);
     width: 100%;
     padding: calc(var(--perch-sp-1) * var(--perch-density-scale))
-             calc(var(--perch-sp-1) * var(--perch-density-scale) * 1.5);
+             calc(var(--perch-sp-1) * var(--perch-density-scale) * 1.5)
+             calc(var(--perch-sp-1) * var(--perch-density-scale))
+             calc(var(--perch-sp-1) * var(--perch-density-scale) * 1.5 - 3px);
     background: transparent;
     border: none;
+    border-left: 3px solid var(--row-color);
     color: var(--perch-text);
     font-family: var(--perch-font-sans);
     font-size: var(--perch-fs-body);
@@ -209,6 +217,7 @@
 
   .status-done {
     color: var(--perch-ok);
+    animation: perch-settle-pop var(--perch-dur-pop) var(--perch-ease);
   }
 
   .status-errored {
@@ -218,6 +227,7 @@
   @keyframes perch-attn-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
   @media (prefers-reduced-motion: reduce) {
     .status-awaiting-approval, .status-awaiting-input { animation: none; }
+    .status-icon.status-done { animation: none; }
     .workspace-row { transition: none; }
     .workspace-row:hover { transform: none; }
   }
@@ -254,6 +264,19 @@
   }
   .diff-added   { color: var(--perch-ok); }
   .diff-removed { color: var(--perch-err); }
+
+  /* ── Review pill: goal-gradient file count ───────────────────── */
+  .review-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 var(--perch-sp-1);
+    background: color-mix(in srgb, var(--perch-accent) 18%, transparent);
+    border-radius: var(--perch-radius-sm);
+    font-size: var(--perch-fs-caption);
+    font-family: var(--perch-font-mono);
+    color: var(--perch-accent);
+    flex-shrink: 0;
+  }
 
   /* ── Status label ─────────────────────────────────────────────── */
   .status-label {

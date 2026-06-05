@@ -32,3 +32,20 @@ test("DND toggle button calls onToggleDnd", async () => {
   await fireEvent.click(screen.getByRole("button", { name: /do not disturb/i }));
   expect(onToggleDnd).toHaveBeenCalled();
 });
+
+test("notif-item carries --item-color style matching worktreeColor for its workspaceId", async () => {
+  const { default: NotificationHub } = await import("./NotificationHub.svelte");
+  const { worktreeColor } = await import("./constants");
+  render(NotificationHub, { props: { items, dnd: false, onDismiss: () => {}, onToggleDnd: () => {}, onClearRead: () => {} } });
+  await waitFor(() => screen.getByText("Approve bash"));
+
+  const notifItems = document.querySelectorAll(".notif-item");
+  expect(notifItems.length).toBeGreaterThanOrEqual(2);
+
+  const item1 = notifItems[0] as HTMLElement;
+  const item2 = notifItems[1] as HTMLElement;
+  const style1 = item1.getAttribute("style") ?? "";
+  const style2 = item2.getAttribute("style") ?? "";
+  expect(style1).toContain(worktreeColor("ws_a"));
+  expect(style2).toContain(worktreeColor("ws_b"));
+});

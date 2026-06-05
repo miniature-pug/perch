@@ -97,6 +97,10 @@
     themeObs.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
   });
 
+  /** Programmatic focus — lets the parent route the keyboard to this pty without
+      requiring a click (used by the awaiting-input auto-focus). Safe before mount. */
+  export function focus(): void { term?.focus(); }
+
   onDestroy(() => {
     disposed = true;
     offData?.();

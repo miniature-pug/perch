@@ -56,3 +56,36 @@ export const MENTION_PREFIX = "@mention:";
 
 // ── localStorage keys ────────────────────────────────────────────────────────
 export const STORAGE_CMD_RECENTS = "perch:cmd-recents";
+
+// ── Per-worktree color identity palette ──────────────────────────────────────
+// Theme-agnostic accent hues (not for text) — moderately saturated, mid-
+// lightness HSL values that remain visually distinct on all 9 app themes
+// (dark and light).  Used for sidebar accent dots/borders and notification
+// accents.  Hues spaced 45° apart; saturation 55%, lightness 60%.
+export const WORKTREE_COLORS = [
+  "hsl(  0, 55%, 60%)", // red
+  "hsl( 45, 55%, 60%)", // amber
+  "hsl( 90, 55%, 60%)", // lime
+  "hsl(135, 55%, 60%)", // teal-green
+  "hsl(180, 55%, 60%)", // cyan
+  "hsl(225, 55%, 60%)", // cornflower blue
+  "hsl(270, 55%, 60%)", // violet
+  "hsl(315, 55%, 60%)", // rose
+] as const;
+
+/**
+ * Deterministic worktree accent color.
+ *
+ * Uses a djb2 hash (hash = hash * 33 ^ charCode) over every character of `id`
+ * and maps the unsigned result into WORKTREE_COLORS.  The same `id` will always
+ * produce the same color across reloads and processes; empty string maps to
+ * index 0.
+ */
+export function worktreeColor(id: string): string {
+  let hash = 5381;
+  for (let i = 0; i < id.length; i++) {
+    hash = (hash * 33) ^ id.charCodeAt(i);
+  }
+  // Force unsigned 32-bit before modulo so negative values are handled safely.
+  return WORKTREE_COLORS[(hash >>> 0) % WORKTREE_COLORS.length];
+}

@@ -9,8 +9,10 @@
   import Preview            from "./lib/Preview.svelte";
   import FileTree           from "./lib/FileTree.svelte";
   import { isPreviewable, previewKind } from "./lib/preview";
-  import { focusOnMount } from "./lib/actions";
+  import { focusOnMount, countUp } from "./lib/actions";
   import DiffView           from "./lib/DiffView.svelte";
+  import ClosingRitual      from "./lib/ClosingRitual.svelte";
+  import { isActiveState, shouldFocusAwaitingInput, ritualShouldFire, computeRitualStats } from "./lib/engagement";
   import MenuBar            from "./lib/MenuBar.svelte";
   import CommandPalette     from "./lib/CommandPalette.svelte";
   import NewSessionDialog   from "./lib/NewSessionDialog.svelte";
@@ -34,7 +36,18 @@
   let previewContent  = $state<string>("");
   let approvals       = $state<Record<string, ApprovalReq>>({});
   let fsVersion  = $state<Record<string, number>>({});
-  let wsDiffStats = $state<Record<string, { added: number; removed: number }>>({});
+  let wsDiffStats = $state<Record<string, { added: number; removed: number; files: number }>>({});
+
+  // #4 awaiting-input auto-focus: a ref to the primary agent terminal so we can
+  // route the keyboard to it without a click, plus a transient emphasis flag
+  // pulsed when the ACTIVE agent asks for input.
+  let primaryTerm    = $state<{ focus: () => void } | undefined>(undefined);
+  let emphasizeInput = $state(false);
+  // #6 closing ritual: stats to show when a run settles (null = hidden).
+  // ritualArmed is plain (non-reactive) — true once activity has been seen, so the
+  // ritual fires on the active→settled edge and never on first load.
+  let ritualStats = $state<import("./lib/engagement").RitualStats | null>(null);
+  let ritualArmed = false;
 
   // Repo discovery — populated lazily when the New Session dialog opens.
   let discoveredRepoPaths = $state<string[]>([]);
@@ -61,6 +74,18 @@
       .then((c) => { if (!cancelled) previewContent = c; })
       .catch(() => { if (!cancelled) previewContent = ""; });
     return () => { cancelled = true; };
+  });
+
+  // #6: closing-ritual edge detector. Arm when any workspace becomes active; when
+  // the run settles back (none active) with at least one `done`, show the card once.
+  $effect(() => {
+    const anyActive = workspaces.some(w => isActiveState(w.state));
+    const anyDone   = workspaces.some(w => w.state === "done");
+    if (anyActive) { ritualArmed = true; return; }
+    if (ritualShouldFire(anyActive, ritualArmed, anyDone)) {
+      ritualArmed = false;
+      ritualStats = computeRitualStats(wsDiffStats, workspaces.length);
+    }
   });
 
   // Dialog / overlay state
@@ -136,10 +161,22 @@
       const files = await diffStat(ws.worktreePath);
       let added = 0, removed = 0;
       for (const f of files) { added += f.added; removed += f.removed; }
-      wsDiffStats = { ...wsDiffStats, [ws.id]: { added, removed } };
+      wsDiffStats = { ...wsDiffStats, [ws.id]: { added, removed, files: files.length } };
     } catch {
       // non-git or missing worktree — leave any existing entry untouched
     }
+  }
+
+  // #4: the active workspace just asked for input — route the user to its pane so
+  // they can answer immediately (the question is answered in the agent's own TUI).
+  // Only ever called for the active workspace on the agent view (see shouldFocusAwaitingInput).
+  function focusAwaitingInput() {
+    if (mode.current === "normal") mode.enterTerminal();
+    emphasizeInput = false; // reset so the pulse restarts even on a rapid re-ask
+    requestAnimationFrame(() => {
+      emphasizeInput = true;
+      primaryTerm?.focus();
+    });
   }
 
   // H-11: capture-phase pointerdown on the app root — when in terminal mode and the
@@ -166,8 +203,13 @@
     offAgentEvent = onAgentEvent((ev) => {
       const ws = workspaces.find(w => w.id === ev.workspaceId);
       if (!ws) return;
+      const prev = ws.state;
       if (ev.state) ws.state = ev.state;
       if (ev.approval) approvals[ev.workspaceId] = ev.approval;
+      // #4: only the ACTIVE workspace, only the agent view, only on the edge.
+      if (ev.state && shouldFocusAwaitingInput(prev, ev.state, ev.workspaceId, activeId, layout.view)) {
+        focusAwaitingInput();
+      }
     });
 
     offNotify = onNotify((n) => {
@@ -635,10 +677,11 @@
                        The wrapper is a flex container that fills the pane; onpointerdown fires
                        before xterm processes the event so mode switches promptly.
                        We do NOT preventDefault/stopPropagation to preserve xterm text selection. -->
-                  <div class="terminal-zone" data-terminal-zone role="group" aria-label="agent terminal"
+                  <div class="terminal-zone" class:input-emphasis={emphasizeInput} data-terminal-zone role="group" aria-label="agent terminal"
+                       onanimationend={(e) => { if (e.animationName === "perch-emphasis") emphasizeInput = false; }}
                        onpointerdown={() => { if (mode.current === "normal") mode.enterTerminal(); }}>
                     <DragDrop paneId={active.paneId} fileDrop={true}>
-                      <Terminal paneId={active.paneId} cwd={active.worktreePath} />
+                      <Terminal bind:this={primaryTerm} paneId={active.paneId} cwd={active.worktreePath} />
                     </DragDrop>
                   </div>
                 {:else if layout.view === "code"}
@@ -664,7 +707,8 @@
                   {/key}
                 {:else if layout.view === "diff"}
                   {#key fsVersion[active.id] ?? 0}
-                    <DiffView worktree={active.worktreePath} onSendToAgent={sendToAgent} />
+                    <DiffView worktree={active.worktreePath} onSendToAgent={sendToAgent}
+                              onDiffChanged={() => { if (active) refreshDiffStat(active); }} />
                   {/key}
                 {/if}
               {:else}
@@ -758,9 +802,13 @@
             {#if ds && (ds.added > 0 || ds.removed > 0)}
               <span class="status-sep" aria-hidden="true">·</span>
               <span class="status-diffstat" aria-label="+{ds.added} minus {ds.removed}">
-                <span class="status-diff-added">+{ds.added}</span>
-                <span class="status-diff-removed">&minus;{ds.removed}</span>
+                <span class="status-diff-added">+<span use:countUp={ds.added}></span></span>
+                <span class="status-diff-removed">&minus;<span use:countUp={ds.removed}></span></span>
               </span>
+            {/if}
+            {#if ds && ds.files > 0}
+              <span class="status-sep" aria-hidden="true">·</span>
+              <span class="status-review-pill" aria-label="{ds.files} files to review"><span use:countUp={ds.files}></span> files</span>
             {/if}
           {/if}
           <span class="status-spacer"></span>
@@ -823,6 +871,15 @@
 
     <SettingsPanel open={settingsOpen} onClose={() => { settingsOpen = false; }} />
 
+    {#if ritualStats}
+      <ClosingRitual
+        lines={ritualStats.lines}
+        files={ritualStats.files}
+        sessions={ritualStats.sessions}
+        onDismiss={() => { ritualStats = null; }}
+      />
+    {/if}
+
     {#if pendingRemovals.length > 0}
       <div class="undo-toast-stack" aria-live="polite">
         {#each pendingRemovals as pending (pending.ws.id)}
@@ -855,6 +912,11 @@
                       transition: outline-color var(--perch-dur) var(--perch-ease); }
   .code-layout      { display: flex; flex-direction: row; flex: 1; min-height: 0; min-width: 0; }
   .terminal-zone    { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+  /* #4 — transient ring pulse drawing the eye when the active agent wants input. */
+  .terminal-zone.input-emphasis { animation: perch-emphasis var(--perch-dur-pop) var(--perch-ease); }
+  @media (prefers-reduced-motion: reduce) {
+    .terminal-zone.input-emphasis { animation: none; }
+  }
   .shell-drawer-zone { flex-shrink: 0; overflow: hidden; border-top: 1px solid var(--perch-border);
                        transition: outline-color var(--perch-dur) var(--perch-ease); }
   /* Feature A — active-zone accent ring (you-are-here cue, not a focus indicator).
@@ -898,6 +960,12 @@
                        font-family: var(--perch-font-mono); font-size: var(--perch-fs-caption); }
   .status-diff-added   { color: var(--perch-ok); }
   .status-diff-removed { color: var(--perch-err); }
+  /* #3 — goal-gradient "files to review" pill; shrinks as the user stages. */
+  .status-review-pill { display: inline-flex; align-items: center; gap: 0.25em;
+                        padding: 0 var(--perch-sp-1);
+                        border-radius: var(--perch-radius-sm);
+                        background: color-mix(in srgb, var(--perch-accent) 18%, transparent);
+                        color: var(--perch-text); font-size: var(--perch-fs-caption); }
   .status-spacer     { flex: 1; }
 
   /* Sidebar collapse toggle rail */

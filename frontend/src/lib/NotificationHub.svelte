@@ -1,6 +1,7 @@
 <!-- frontend/src/lib/NotificationHub.svelte -->
 <script lang="ts">
   import type { Notification, Tier } from "./stores/notifications.svelte";
+  import { worktreeColor } from "./constants";
 
   let {
     items, dnd, onDismiss, onToggleDnd, onClearRead,
@@ -34,7 +35,7 @@
   </div>
   <ul class="notif-list scrollable">
     {#each visible as n (n.id)}
-      <li class="notif-item tier-{n.tier}" class:read={n.read}>
+      <li class="notif-item tier-{n.tier}" class:read={n.read} style:--item-color={worktreeColor(n.workspaceId)}>
         <span class="notif-title">{n.title}</span>
         <span class="notif-body">{n.body}</span>
         <button class="dismiss-btn" onclick={() => onDismiss(n.id)} aria-label="dismiss notification">✕</button>
@@ -145,6 +146,8 @@
     padding: calc(var(--perch-sp-1) * var(--perch-density-scale)) calc(var(--perch-sp-1) * var(--perch-density-scale) * 1.5);
     border-bottom: 1px solid var(--perch-border);
     border-left: 3px solid transparent;
+    /* Inset worktree-color stripe — overlaid atop the tier border so tier signal is preserved */
+    box-shadow: inset 3px 0 0 var(--item-color, transparent);
     transition: background var(--perch-dur) var(--perch-ease),
                 border-color var(--perch-dur) var(--perch-ease),
                 transform var(--perch-dur) var(--perch-ease),
@@ -158,7 +161,7 @@
   .notif-item:hover {
     background: color-mix(in srgb, var(--perch-accent) 8%, transparent);
     transform: translateY(var(--perch-hover-lift));
-    box-shadow: var(--perch-shadow-toast);
+    box-shadow: inset 3px 0 0 var(--item-color, transparent), var(--perch-shadow-toast);
   }
 
   @media (prefers-reduced-motion: reduce) {
