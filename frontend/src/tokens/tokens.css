@@ -22,7 +22,7 @@
   --perch-hover-lift: -1px;
   --perch-ring-w: 2px;
   --perch-ring-color: color-mix(in srgb, var(--perch-accent) 55%, transparent);
-  /* Engagement motion (chunk 2 — juicy micro-feedback, count-up, rituals) */
+  /* Engagement motion (chunk 2 — juicy micro-feedback, count-up, emphasis) */
   --perch-dur-flash: 220ms;
   --perch-dur-pop: 240ms;
   --perch-dur-countup: 380ms;
@@ -62,10 +62,6 @@
   0%   { transform: scale(1); }
   45%  { transform: scale(var(--perch-pop-scale)); }
   100% { transform: scale(1); }
-}
-@keyframes perch-ritual-in {
-  from { opacity: 0; transform: translateY(8px) scale(0.98); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
 }
 /* #4 — brief ring pulse drawing the eye to the agent pane when it wants input. */
 @keyframes perch-emphasis {
