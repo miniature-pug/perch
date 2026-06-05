@@ -32,7 +32,6 @@ import (
 // smoke (perch's test constraints forbid launching a real agent) — the same gate
 // as the WebKit smoke. Everything below is verified against source, not a server.
 type OpencodeMonitor struct {
-	adapter    Adapter
 	serverURL  string
 	password   string
 	events     chan Event
@@ -88,14 +87,14 @@ const (
 func newOpencodeMonitor(a Adapter) *OpencodeMonitor {
 	// serverURL/password stay empty here and are self-assigned in Prepare so the
 	// free port is grabbed as late as possible (smallest bind→serve race window).
-	return &OpencodeMonitor{adapter: a, events: make(chan Event, monitorEventChanBuf), httpClient: &http.Client{}}
+	return &OpencodeMonitor{events: make(chan Event, monitorEventChanBuf), httpClient: &http.Client{}}
 }
 
 // NewOpencodeMonitorWithServer injects a server URL + password instead of
 // self-assigning them. Test-only: it lets tests point the monitor at an
 // httptest server. Production goes through newOpencodeMonitor + Prepare.
 func NewOpencodeMonitorWithServer(a Adapter, serverURL, pw string) *OpencodeMonitor {
-	return &OpencodeMonitor{adapter: a, serverURL: serverURL, password: pw,
+	return &OpencodeMonitor{serverURL: serverURL, password: pw,
 		events: make(chan Event, monitorEventChanBuf), httpClient: &http.Client{}}
 }
 

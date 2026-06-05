@@ -37,16 +37,4 @@ type NewOpts struct {
 	// Model is the provider/model string passed to the tool's model flag —
 	// claude --model / opencode -m. Empty means "use the tool's default."
 	Model string
-
-	// Prompt is the initial prompt text. For claude this is a positional
-	// argument; for opencode it maps to --prompt.
-	Prompt string
-
-	// Agent is the opencode agent identifier (opencode --agent). Not used by
-	// claude.
-	Agent string
-
-	// SessionID is a UUID that claude uses with --session-id to deterministically
-	// name a new session so perch can track it. Not used by opencode.
-	SessionID string
 }

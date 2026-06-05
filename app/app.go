@@ -1042,14 +1042,6 @@ func (a *App) Branches(repo string) ([]string, error) {
 	return gitpkg.Branches(context.Background(), a.runner(), repo)
 }
 
-// Worktrees returns git worktree info for the repo at repo.
-func (a *App) Worktrees(repo string) ([]gitpkg.WorktreeInfo, error) {
-	if err := validateWorktreeUnderRoots(repo, a.roots); err != nil {
-		return nil, err
-	}
-	return gitpkg.Worktrees(context.Background(), a.runner(), repo)
-}
-
 // Approve routes a tool-approval decision to the owning Monitor.
 // reqID format: "<raw>:<workspaceID>". decision: "allow"|"deny"|"always".
 // On "always", an AlwaysRule is persisted to Settings.

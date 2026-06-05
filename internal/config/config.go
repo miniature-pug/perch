@@ -41,8 +41,8 @@ type Config struct {
 // falling back to ~/.config/perch/config.toml when XDG_CONFIG_HOME is unset.
 // The XDG resolution is delegated to registry.DefaultConfigDir so the app-dir
 // name "perch" is defined in exactly one place.
-func DefaultGlobalPath() (string, error) {
-	return filepath.Join(registry.DefaultConfigDir(), configFileName), nil
+func DefaultGlobalPath() string {
+	return filepath.Join(registry.DefaultConfigDir(), configFileName)
 }
 
 // Load assembles a Config from the global config.toml at globalPath.

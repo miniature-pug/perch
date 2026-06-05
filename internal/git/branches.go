@@ -31,24 +31,3 @@ func Branches(ctx context.Context, r proc.Runner, repo string) ([]string, error)
 	}
 	return branches, nil
 }
-
-// Worktrees returns all worktrees for repo via `git worktree list --porcelain`,
-// skipping bare entries. Reuses the existing ListWorktrees logic.
-func Worktrees(ctx context.Context, r proc.Runner, repo string) ([]WorktreeInfo, error) {
-	wts, err := ListWorktrees(ctx, r, repo)
-	if err != nil {
-		return nil, err
-	}
-	var out []WorktreeInfo
-	for _, wt := range wts {
-		if wt.Bare {
-			continue
-		}
-		out = append(out, WorktreeInfo{
-			Path:   wt.Path,
-			Branch: wt.Branch,
-			Head:   wt.Head,
-		})
-	}
-	return out, nil
-}

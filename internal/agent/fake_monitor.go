@@ -83,12 +83,6 @@ func (f *FakeMonitor) ApproveCalls() []ApproveCall {
 	return f.approveCalls
 }
 
-// SetApprovalTool sets the tool LastApprovalTool() reports. Test-only.
-func (f *FakeMonitor) SetApprovalTool(tool string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.lastTool = tool
-}
 func (f *FakeMonitor) Capabilities() Caps { return Caps{true, true} }
 func (f *FakeMonitor) Teardown() error {
 	f.mu.Lock()

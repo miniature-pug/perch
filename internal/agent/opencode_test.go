@@ -25,13 +25,6 @@ func TestOpencode_NewArgs(t *testing.T) {
 	}{
 		{"none", NewOpts{}, nil},
 		{"model", NewOpts{Model: "anthropic/claude"}, []string{"--model", "anthropic/claude"}},
-		{"agent", NewOpts{Agent: "build"}, []string{"--agent", "build"}},
-		{"prompt", NewOpts{Prompt: "do x"}, []string{"--prompt", "do x"}},
-		{
-			"all (SessionID ignored)",
-			NewOpts{Model: "m", Agent: "a", Prompt: "p", SessionID: "ignored"},
-			[]string{"--model", "m", "--agent", "a", "--prompt", "p"},
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

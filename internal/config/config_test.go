@@ -120,10 +120,7 @@ func TestDefaultGlobalPath(t *testing.T) {
 	t.Run("XDG_CONFIG_HOME set", func(t *testing.T) {
 		tmp := t.TempDir()
 		t.Setenv("XDG_CONFIG_HOME", tmp)
-		got, err := config.DefaultGlobalPath()
-		if err != nil {
-			t.Fatalf("DefaultGlobalPath: %v", err)
-		}
+		got := config.DefaultGlobalPath()
 		want := filepath.Join(tmp, "perch", "config.toml")
 		if got != want {
 			t.Errorf("got %q; want %q", got, want)
@@ -132,10 +129,7 @@ func TestDefaultGlobalPath(t *testing.T) {
 
 	t.Run("XDG_CONFIG_HOME unset falls back to ~/.config", func(t *testing.T) {
 		t.Setenv("XDG_CONFIG_HOME", "")
-		got, err := config.DefaultGlobalPath()
-		if err != nil {
-			t.Fatalf("DefaultGlobalPath: %v", err)
-		}
+		got := config.DefaultGlobalPath()
 		home, _ := os.UserHomeDir()
 		want := filepath.Join(home, ".config", "perch", "config.toml")
 		if got != want {

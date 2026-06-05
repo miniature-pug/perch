@@ -96,7 +96,7 @@ API the Svelte frontend calls over the IPC bridge:
 | `OpenShell(paneID, cwd)` | Spawn an auxiliary login-shell pty |
 | `Approve(reqID, decision)` | Resolve a pending `PreToolUse` approval (allow / always / deny) |
 | `DiffStat / Hunks / StageHunk / DiscardHunk` | git diff view + staging per worktree |
-| `Branches / Worktrees` | git metadata for a repo |
+| `Branches` | git metadata for a repo |
 | `ListDir / ReadFile / WriteFile / RevealInFiles / CopyPath` | file-tree operations |
 | `GetSettings / SaveSettings / GetLayout / SaveLayout` | persisted UI state |
 

@@ -46,7 +46,6 @@ interface App {
   RevealInFiles(absPath: string): Promise<void>;
   CopyPath(absPath: string): Promise<void>;
   Branches(repo: string): Promise<string[]>;
-  Worktrees(repo: string): Promise<WorktreeInfo[]>;
   DiscoverRepos(): Promise<RepoInfo[]>;
   GetLayout(): Promise<string>;
   SaveLayout(layoutJSON: string): Promise<void>;

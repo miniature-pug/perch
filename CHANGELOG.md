@@ -95,7 +95,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `OpenWorkspace`, `CloseWorkspace`, `RemoveWorkspace`, `WriteToPty`,
   `ResizePty`, `OpenShell`, `Approve`, `DiffStat`, `Hunks`, `StageHunk`,
   `DiscardHunk`, `ListDir`, `ReadFile`, `WriteFile`, `RevealInFiles`, `CopyPath`,
-  `Branches`, `Worktrees`, `GetLayout`, `SaveLayout`, `GetSettings`,
+  `Branches`, `GetLayout`, `SaveLayout`, `GetSettings`,
   `SaveSettings`, `SetWindowFocus`, `DiscoverRepos`. Every argument crossing
   the boundary is validated: workspace / pane IDs against a `[A-Za-z0-9_-]`
   charset allowlist; worktree paths resolved and confined under configured

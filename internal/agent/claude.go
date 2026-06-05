@@ -58,19 +58,11 @@ func (c Claude) ResumeArgs(sessionID string) []string {
 	return []string{"--resume", sessionID}
 }
 
-// NewArgs builds the launch args for a fresh session. opts.Agent is ignored:
-// claude has no agent concept (that is an opencode flag).
+// NewArgs builds the launch args for a fresh session.
 func (c Claude) NewArgs(opts NewOpts) []string {
 	var args []string
 	if opts.Model != "" {
 		args = append(args, "--model", opts.Model)
-	}
-	if opts.SessionID != "" {
-		args = append(args, "--session-id", opts.SessionID)
-	}
-	if opts.Prompt != "" {
-		// Prompt is a trailing positional argument for claude.
-		args = append(args, opts.Prompt)
 	}
 	return args
 }

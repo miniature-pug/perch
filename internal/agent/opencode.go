@@ -58,18 +58,11 @@ func (o Opencode) ResumeArgs(sessionID string) []string {
 	return []string{"--session", sessionID}
 }
 
-// NewArgs builds the launch args for a fresh interactive session. opts.SessionID
-// is ignored: opencode assigns its own session ids.
+// NewArgs builds the launch args for a fresh interactive session.
 func (o Opencode) NewArgs(opts NewOpts) []string {
 	var args []string
 	if opts.Model != "" {
 		args = append(args, "--model", opts.Model)
-	}
-	if opts.Agent != "" {
-		args = append(args, "--agent", opts.Agent)
-	}
-	if opts.Prompt != "" {
-		args = append(args, "--prompt", opts.Prompt)
 	}
 	return args
 }

@@ -24,11 +24,6 @@ const worktreeDirSuffix = "__worktrees"
 // branch already exists in the repository.
 var ErrBranchExists = errors.New("git: worktree branch already exists")
 
-// ErrWorktreeDirty is returned (wrapped) by RemoveWorktree when the worktree
-// cannot be safely removed because it contains modified or untracked files, or
-// is locked.
-var ErrWorktreeDirty = errors.New("git: worktree has modified/untracked files or is locked")
-
 // SlugifyBranch converts a git branch name into a filesystem-safe handle.
 // Rules: keep [A-Za-z0-9._-], map '/' and any other rune to '-', collapse
 // consecutive '-' runs to one, trim leading/trailing '-', lowercase the result.
@@ -121,65 +116,6 @@ func AddWorktree(ctx context.Context, r proc.Runner, repoRoot, branch, path, bas
 			return fmt.Errorf("git: worktree add %s: %w (stderr: %s)", repoRoot, err, msg)
 		}
 		return fmt.Errorf("git: worktree add %s: %w", repoRoot, err)
-	}
-	return nil
-}
-
-// dirtyPhrases are the git stderr substrings that indicate a worktree cannot
-// be removed safely. Matched case-insensitively to be robust across git
-// versions and locales.
-//
-// Verified against git 2.x:
-//   - "contains modified or untracked files" — git worktree remove on a worktree with changes
-//   - "locked"                               — git worktree remove on a locked worktree
-//   - "is dirty"                             — older git phrasing
-//   - "is a submodule"                       — submodule guard
-var dirtyPhrases = []string{
-	"contains modified or untracked files",
-	"is dirty",
-	"locked",
-	"is a submodule",
-}
-
-// RemoveWorktree runs `git -C <repoRoot> worktree remove <path>`, appending
-// --force when force is true.
-//
-// When force is false and stderr matches a known dirty/locked phrase, the
-// returned error wraps ErrWorktreeDirty. Other failures wrap stderr verbatim.
-func RemoveWorktree(ctx context.Context, r proc.Runner, repoRoot, path string, force bool) error {
-	args := []string{"-C", repoRoot, "worktree", "remove", path}
-	if force {
-		args = append(args, "--force")
-	}
-	_, stderr, err := r.Run(ctx, "git", args...)
-	if err != nil {
-		msg := string(bytes.TrimSpace(stderr))
-		lower := strings.ToLower(msg)
-		if !force {
-			for _, phrase := range dirtyPhrases {
-				if strings.Contains(lower, phrase) {
-					return fmt.Errorf("git: worktree remove %s: %w (stderr: %s)", path, ErrWorktreeDirty, msg)
-				}
-			}
-		}
-		if len(msg) > 0 {
-			return fmt.Errorf("git: worktree remove %s: %w (stderr: %s)", path, err, msg)
-		}
-		return fmt.Errorf("git: worktree remove %s: %w", path, err)
-	}
-	return nil
-}
-
-// PruneWorktrees runs `git -C <repoRoot> worktree prune`. Git prunes stale
-// administrative records for worktrees whose paths no longer exist on disk.
-func PruneWorktrees(ctx context.Context, r proc.Runner, repoRoot string) error {
-	_, stderr, err := r.Run(ctx, "git", "-C", repoRoot, "worktree", "prune")
-	if err != nil {
-		msg := string(bytes.TrimSpace(stderr))
-		if len(msg) > 0 {
-			return fmt.Errorf("git: worktree prune %s: %w (stderr: %s)", repoRoot, err, msg)
-		}
-		return fmt.Errorf("git: worktree prune %s: %w", repoRoot, err)
 	}
 	return nil
 }

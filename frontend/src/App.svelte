@@ -9,6 +9,7 @@
   import Preview            from "./lib/Preview.svelte";
   import FileTree           from "./lib/FileTree.svelte";
   import { isPreviewable, previewKind } from "./lib/preview";
+  import { focusOnMount } from "./lib/actions";
   import DiffView           from "./lib/DiffView.svelte";
   import MenuBar            from "./lib/MenuBar.svelte";
   import CommandPalette     from "./lib/CommandPalette.svelte";
@@ -61,9 +62,6 @@
       .catch(() => { if (!cancelled) previewContent = ""; });
     return () => { cancelled = true; };
   });
-
-  // Svelte action: focus the node immediately on mount (avoids a11y warning from autofocus attr).
-  function focusOnMount(node: HTMLElement) { node.focus(); }
 
   // Dialog / overlay state
   let newSessionOpen        = $state(false);

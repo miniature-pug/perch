@@ -25,13 +25,6 @@ func TestNewArgs(t *testing.T) {
 	}{
 		{"none", NewOpts{}, nil},
 		{"model", NewOpts{Model: "opus"}, []string{"--model", "opus"}},
-		{"sessionid", NewOpts{SessionID: "uuid"}, []string{"--session-id", "uuid"}},
-		{"prompt", NewOpts{Prompt: "do x"}, []string{"do x"}},
-		{
-			"all",
-			NewOpts{Model: "opus", SessionID: "uuid", Prompt: "do x", Agent: "ignored"},
-			[]string{"--model", "opus", "--session-id", "uuid", "do x"},
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
