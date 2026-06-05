@@ -6,10 +6,10 @@ export interface WorkspaceVM {
   state: AgentState; caps: AgentCaps; paneId: string; lastActive: string;
 }
 export type AgentState = "running"|"idle"|"awaiting-approval"|"done"|"errored";
-export interface AgentCaps { approvals: boolean; attention: boolean; tokens: boolean; }
+export interface AgentCaps { approvals: boolean; attention: boolean; }
 export interface AgentEvent {
-  sessionId?: string; workspaceId: string; kind: "state"|"usage"|"approval";
-  state?: AgentState; tokens?: number; cost?: number; approval?: ApprovalReq; err?: string;
+  sessionId?: string; workspaceId: string; kind: "state"|"approval";
+  state?: AgentState; approval?: ApprovalReq; err?: string;
 }
 export interface ApprovalReq { reqId: string; tool: string; summary: string; input?: string; }
 export interface FileDiff { path: string; added: number; removed: number; status: "M"|"A"|"D"|"R"|"?"; }

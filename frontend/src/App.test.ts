@@ -77,7 +77,7 @@ vi.mock("./lib/wails", () => ({
   createWorkspace: vi.fn(async (_agent: string, _repo: string, _branch: string, _model: string) => ({
     id: "ws-new", title: "New", branch: "main", state: "idle",
     worktreePath: "/tmp/new", agent: "claude", paneId: "p-new", lastActive: "",
-    caps: { approvals: false, attention: false, tokens: false },
+    caps: { approvals: false, attention: false },
   })),
   removeWorkspace: vi.fn(async () => {}),
   writeToPty:      vi.fn(async () => {}),
@@ -122,12 +122,12 @@ const fakeWorkspaces = [
   {
     id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
     worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
-    caps: { approvals: false, attention: false, tokens: false },
+    caps: { approvals: false, attention: false },
   },
   {
     id: "ws-2", title: "Beta", branch: "feat/beta", state: "running" as const,
     worktreePath: "/tmp/beta", agent: "claude", paneId: "p2", lastActive: "",
-    caps: { approvals: false, attention: false, tokens: false },
+    caps: { approvals: false, attention: false },
   },
 ];
 
@@ -590,7 +590,7 @@ describe("App.svelte approval card + notification hub (4.25.5)", () => {
     {
       id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
       worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
-      caps: { approvals: true, attention: false, tokens: false },
+      caps: { approvals: true, attention: false },
     },
   ];
 
@@ -762,42 +762,8 @@ describe("App.svelte approval card + notification hub (4.25.5)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 4.25.6a: Dialogs + DragDrop + TokenMeter + usage storage
+// 4.25.6a: Dialogs + DragDrop
 // ---------------------------------------------------------------------------
-
-describe("App.svelte TokenMeter + usage storage (4.25.6a)", () => {
-  const tokenWorkspaces = [
-    {
-      id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
-      worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
-      caps: { approvals: false, attention: false, tokens: true }, // caps.tokens=true → meter visible
-    },
-  ];
-
-  it("usage agent event for active workspace makes TokenMeter show those tokens", async () => {
-    const { listWorkspaces } = await import("./lib/wails");
-    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(tokenWorkspaces);
-    const { default: App } = await import("./App.svelte");
-    render(App);
-
-    // Select ws-1 to make it active
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
-    await fireEvent.click(alphaBtn);
-    await tick();
-
-    // Fire a usage event
-    const cb = captured.agent.at(-1)!;
-    cb({ workspaceId: "ws-1", kind: "usage", tokens: 12345, cost: 0.07 });
-    await tick();
-
-    // TokenMeter (caps.tokens=true) should render and show the token count
-    await waitFor(() => {
-      const meter = screen.getByRole("status", { name: "token usage" });
-      expect(meter).toBeInTheDocument();
-      expect(meter.textContent).toContain("12.3k");
-    });
-  });
-});
 
 describe("App.svelte NewSessionDialog (4.25.6a)", () => {
   it("Sidebar onNew / openNewSession opens the dialog; submitting calls createWorkspace and refreshes", async () => {
@@ -807,7 +773,7 @@ describe("App.svelte NewSessionDialog (4.25.6a)", () => {
         {
           id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
           worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
-          caps: { approvals: false, attention: false, tokens: false },
+          caps: { approvals: false, attention: false },
         },
       ])
       .mockResolvedValue([]); // subsequent listWorkspaces after create
@@ -891,7 +857,7 @@ describe("App.svelte ConfirmDialog (workspace remove) (4.25.6a)", () => {
       {
         id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
         worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
-        caps: { approvals: false, attention: false, tokens: false },
+        caps: { approvals: false, attention: false },
       },
     ]);
     const { default: App } = await import("./App.svelte");
@@ -952,7 +918,7 @@ describe("App.svelte DragDrop (4.25.6a)", () => {
       {
         id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
         worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
-        caps: { approvals: false, attention: false, tokens: false },
+        caps: { approvals: false, attention: false },
       },
     ]);
     const { layout } = await import("./lib/stores/layout.svelte");
@@ -1321,7 +1287,7 @@ describe("App.svelte 4.25.6c: session:close command", () => {
       {
         id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
         worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
-        caps: { approvals: false, attention: false, tokens: false },
+        caps: { approvals: false, attention: false },
       },
     ]);
     const { default: App } = await import("./App.svelte");
@@ -1352,7 +1318,7 @@ describe("App.svelte 4.25.6c: worktree:open command", () => {
       {
         id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
         worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
-        caps: { approvals: false, attention: false, tokens: false },
+        caps: { approvals: false, attention: false },
       },
     ]);
     const { default: App } = await import("./App.svelte");
@@ -1380,12 +1346,12 @@ describe("App.svelte 4.25.6c: agent:approve-all / deny-all", () => {
     {
       id: "ws-1", title: "Alpha", branch: "main", state: "awaiting-approval" as const,
       worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
-      caps: { approvals: true, attention: false, tokens: false },
+      caps: { approvals: true, attention: false },
     },
     {
       id: "ws-2", title: "Beta", branch: "feat/beta", state: "awaiting-approval" as const,
       worktreePath: "/tmp/beta", agent: "claude", paneId: "p2", lastActive: "",
-      caps: { approvals: true, attention: false, tokens: false },
+      caps: { approvals: true, attention: false },
     },
   ];
 
@@ -1614,12 +1580,12 @@ describe("App.svelte Feature A: approval batch buttons (SPEC §8)", () => {
     {
       id: "ws-1", title: "Alpha", branch: "main", state: "awaiting-approval" as const,
       worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
-      caps: { approvals: true, attention: false, tokens: false },
+      caps: { approvals: true, attention: false },
     },
     {
       id: "ws-2", title: "Beta", branch: "feat/beta", state: "awaiting-approval" as const,
       worktreePath: "/tmp/beta", agent: "claude", paneId: "p2", lastActive: "",
-      caps: { approvals: true, attention: false, tokens: false },
+      caps: { approvals: true, attention: false },
     },
   ];
 
@@ -1690,7 +1656,7 @@ describe("App.svelte Feature B: sendToAgent wires Editor→writeToPty (SPEC §7.
     {
       id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
       worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
-      caps: { approvals: false, attention: false, tokens: false },
+      caps: { approvals: false, attention: false },
     },
   ];
 
@@ -1866,7 +1832,7 @@ describe("App.svelte Feature 2: deferred remove — hides workspace + shows undo
     {
       id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
       worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
-      caps: { approvals: false, attention: false, tokens: false },
+      caps: { approvals: false, attention: false },
     },
   ];
 
@@ -2177,7 +2143,7 @@ describe("App.svelte H-8: FileTree @mention prefix routes to sendToAgent", () =>
     {
       id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
       worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
-      caps: { approvals: false, attention: false, tokens: false },
+      caps: { approvals: false, attention: false },
     },
   ];
 
@@ -2262,12 +2228,12 @@ describe("App.svelte M-17: onDecision keys deletion by reqId owner, not activeId
     const ws1 = {
       id: "ws-1", title: "Alpha", branch: "main", state: "awaiting-approval" as const,
       worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
-      caps: { approvals: true, attention: false, tokens: false },
+      caps: { approvals: true, attention: false },
     };
     const ws2 = {
       id: "ws-2", title: "Beta", branch: "feat", state: "awaiting-approval" as const,
       worktreePath: "/tmp/beta", agent: "claude", paneId: "p2", lastActive: "",
-      caps: { approvals: true, attention: false, tokens: false },
+      caps: { approvals: true, attention: false },
     };
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([ws1, ws2]);
     const { default: App } = await import("./App.svelte");
@@ -2314,17 +2280,17 @@ describe("App.svelte M-17: onDecision keys deletion by reqId owner, not activeId
 });
 
 // ---------------------------------------------------------------------------
-// L-14: session:close cleans up approvals/fsVersion/usage
+// L-14: session:close cleans up approvals/fsVersion
 // ---------------------------------------------------------------------------
 describe("App.svelte L-14: session:close cleans up per-workspace frontend state", () => {
-  it("after closeWorkspace resolves, approvals/fsVersion/usage for that id are removed", async () => {
+  it("after closeWorkspace resolves, approvals/fsVersion for that id are removed", async () => {
     const { listWorkspaces, closeWorkspace } = await import("./lib/wails");
     (closeWorkspace as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([
       {
         id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
         worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
-        caps: { approvals: true, attention: false, tokens: true },
+        caps: { approvals: true, attention: false },
       },
     ]);
     const { default: App } = await import("./App.svelte");
@@ -2334,19 +2300,14 @@ describe("App.svelte L-14: session:close cleans up per-workspace frontend state"
     await fireEvent.click(alphaBtn);
     await tick();
 
-    // Inject approval and usage events for ws-1
+    // Inject an approval event for ws-1
     const cb = captured.agent.at(-1)!;
     cb({ workspaceId: "ws-1", kind: "approval", state: "awaiting-approval",
          approval: { reqId: "req-cleanup", tool: "bash", summary: "Cleanup test" } });
-    cb({ workspaceId: "ws-1", kind: "usage", tokens: 100, cost: 0.01 });
     await tick();
 
-    // Approval card and token meter should be visible
+    // Approval card should be visible
     await waitFor(() => expect(screen.getByText("Cleanup test")).toBeInTheDocument());
-    await waitFor(() => {
-      const meter = screen.getByRole("status", { name: "token usage" });
-      expect(meter.textContent).toContain("100");
-    });
 
     // Close the session
     const sessionMenu = screen.getByRole("menuitem", { name: "Session" });

@@ -12,7 +12,7 @@ import type { ApprovalReq, AgentCaps } from "./wails";
 
 describe("ApprovalCard", () => {
   const req: ApprovalReq = { reqId: "req-1", tool: "Write", summary: "Write /tmp/foo.txt" };
-  const caps: AgentCaps = { approvals: true, attention: false, tokens: true };
+  const caps: AgentCaps = { approvals: true, attention: false };
   const queue: ApprovalReq[] = [req];
 
   it("renders the tool name and summary", async () => {
@@ -53,7 +53,7 @@ describe("ApprovalCard", () => {
 
   it("renders no buttons when caps.approvals is false", async () => {
     const { default: ApprovalCard } = await import("./ApprovalCard.svelte");
-    const noCaps: AgentCaps = { approvals: false, attention: false, tokens: false };
+    const noCaps: AgentCaps = { approvals: false, attention: false };
     render(ApprovalCard, { props: { req, queue, caps: noCaps, onDecision: vi.fn() } });
     expect(screen.queryByRole("button", { name: "Allow" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Deny" })).toBeNull();

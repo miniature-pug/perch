@@ -8,8 +8,8 @@ const batchQueue = [
   { reqId: "req_1", tool: "Bash",      summary: "run: ls -la /tmp" },
   { reqId: "req_2", tool: "WriteFile", summary: "write: /wt/out.txt" },
 ];
-const capsOn  = { approvals: true, attention: true, tokens: true };
-const capsOff = { approvals: false, attention: true, tokens: true };
+const capsOn  = { approvals: true, attention: true };
+const capsOff = { approvals: false, attention: true };
 
 test("Allow fires onDecision(reqId, 'allow')", async () => {
   const { default: ApprovalCard } = await import("./ApprovalCard.svelte");

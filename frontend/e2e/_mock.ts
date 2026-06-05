@@ -27,7 +27,7 @@ export interface MockWorkspace {
   title: string;
   branch: string;
   state: string;
-  caps: { approvals: boolean; attention: boolean; tokens: boolean };
+  caps: { approvals: boolean; attention: boolean };
   paneId: string;
   lastActive: string;
 }
@@ -55,7 +55,7 @@ export const WORKSPACE_FIXTURE: MockWorkspace = {
   title: "test session",
   branch: "main",
   state: "idle",
-  caps: { approvals: true, attention: true, tokens: true },
+  caps: { approvals: true, attention: true },
   paneId: "pane-ws-1",
   lastActive: new Date().toISOString(),
 };
@@ -72,7 +72,7 @@ export const WORKSPACE_FIXTURE_NO_CAPS: MockWorkspace = {
   title: "test session (no monitor)",
   branch: "main",
   state: "idle",
-  caps: { approvals: false, attention: false, tokens: false },
+  caps: { approvals: false, attention: false },
   paneId: "pane-ws-2",
   lastActive: new Date().toISOString(),
 };
@@ -179,7 +179,7 @@ export function buildInitScriptContent(opts: MockOptions = {}): string {
           return Promise.resolve({
             id: 'ws-new', worktreePath: repo, agent: agent, title: 'new session',
             branch: branch, state: 'idle',
-            caps: { approvals: true, attention: true, tokens: true },
+            caps: { approvals: true, attention: true },
             paneId: 'pane-ws-new', lastActive: new Date().toISOString(),
           });
         },

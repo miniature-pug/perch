@@ -16,7 +16,6 @@
   import ConfirmDialog      from "./lib/ConfirmDialog.svelte";
   import HelpDialog         from "./lib/HelpDialog.svelte";
   import SettingsPanel      from "./lib/SettingsPanel.svelte";
-  import TokenMeter         from "./lib/TokenMeter.svelte";
   import DragDrop           from "./lib/DragDrop.svelte";
   import { layout }         from "./lib/stores/layout.svelte";
   import { mode }           from "./lib/stores/mode.svelte";
@@ -34,7 +33,6 @@
   let previewContent  = $state<string>("");
   let approvals       = $state<Record<string, ApprovalReq>>({});
   let fsVersion  = $state<Record<string, number>>({});
-  let usage      = $state<Record<string, { tokens: number; cost: number }>>({});
   let wsDiffStats = $state<Record<string, { added: number; removed: number }>>({});
 
   // Repo discovery — populated lazily when the New Session dialog opens.
@@ -172,9 +170,6 @@
       if (!ws) return;
       if (ev.state) ws.state = ev.state;
       if (ev.approval) approvals[ev.workspaceId] = ev.approval;
-      if (ev.kind === "usage") {
-        usage = { ...usage, [ev.workspaceId]: { tokens: ev.tokens ?? 0, cost: ev.cost ?? 0 } };
-      }
     });
 
     offNotify = onNotify((n) => {
@@ -334,7 +329,6 @@
           // L-14: clean up per-workspace frontend state on close
           const { [id]: _a, ...restA } = approvals; approvals = restA;
           const { [id]: _f, ...restF } = fsVersion;  fsVersion = restF;
-          const { [id]: _u, ...restU } = usage;       usage = restU;
         }).catch(() => {});
       } },
     { id: "session:remove", group: "Session", label: "Remove session",     run: () => { if (active) requestRemove(active); } },
@@ -757,13 +751,6 @@
             {/if}
           {/if}
           <span class="status-spacer"></span>
-          {#if active}
-            <TokenMeter
-              tokens={usage[active.id]?.tokens ?? 0}
-              cost={usage[active.id]?.cost ?? 0}
-              capsTokens={active.caps.tokens}
-            />
-          {/if}
         </div>
       </div>
     </div>

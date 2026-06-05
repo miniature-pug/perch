@@ -1,3 +1,0 @@
-{"type":"user","sessionId":"uu-1","cwd":"/repo","message":{"role":"user","content":"hi"}}
-{"type":"assistant","sessionId":"uu-1","cwd":"/repo","message":{"role":"assistant","content":[{"type":"text","text":"hello"}],"usage":{"input_tokens":10,"output_tokens":5}}}
-{"type":"assistant","sessionId":"uu-1","cwd":"/repo","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}

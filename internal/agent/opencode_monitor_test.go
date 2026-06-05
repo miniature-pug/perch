@@ -65,7 +65,7 @@ func TestOpencodeMonitorSSEParser(t *testing.T) {
 
 	deadline := time.After(3 * time.Second)
 	var got []agent.Event
-	for len(got) < 4 {
+	for len(got) < 3 {
 		select {
 		case ev := <-om.Events():
 			got = append(got, ev)
@@ -82,24 +82,18 @@ func TestOpencodeMonitorSSEParser(t *testing.T) {
 	if got[0].SessionID != "ses-1" {
 		t.Errorf("ev[0].SessionID = %q, want ses-1", got[0].SessionID)
 	}
-	if got[1].Kind != "usage" || got[1].Tokens != 140 {
-		t.Errorf("ev[1]: want usage tokens=140 (input+output), got %+v", got[1])
+	if got[1].State != agent.StateAwaitingApproval || got[1].Approval == nil {
+		t.Fatalf("ev[1]: want awaiting-approval, got %+v", got[1])
 	}
-	if got[1].Cost != 0.0012 {
-		t.Errorf("ev[1].Cost = %v, want 0.0012 (from fixture cost field)", got[1].Cost)
-	}
-	if got[2].State != agent.StateAwaitingApproval || got[2].Approval == nil {
-		t.Fatalf("ev[2]: want awaiting-approval, got %+v", got[2])
-	}
-	if got[2].Approval.ReqID != "perm-1" || got[2].Approval.Tool != "bash" {
-		t.Errorf("ev[2].Approval: want ReqID=perm-1 Tool=bash, got %+v", got[2].Approval)
+	if got[1].Approval.ReqID != "perm-1" || got[1].Approval.Tool != "bash" {
+		t.Errorf("ev[1].Approval: want ReqID=perm-1 Tool=bash, got %+v", got[1].Approval)
 	}
 	// patterns are present → Input is a specific match key (never empty/loose).
-	if got[2].Approval.Input == "" || !strings.Contains(got[2].Approval.Input, "ls -la") {
-		t.Errorf("ev[2].Approval.Input = %q, want a specific key containing the pattern", got[2].Approval.Input)
+	if got[1].Approval.Input == "" || !strings.Contains(got[1].Approval.Input, "ls -la") {
+		t.Errorf("ev[1].Approval.Input = %q, want a specific key containing the pattern", got[1].Approval.Input)
 	}
-	if got[3].State != agent.StateErrored || got[3].Err != "timeout" {
-		t.Errorf("ev[3]: want errored err=timeout, got %+v", got[3])
+	if got[2].State != agent.StateErrored || got[2].Err != "timeout" {
+		t.Errorf("ev[2]: want errored err=timeout, got %+v", got[2])
 	}
 
 	if om.CurrentState() != agent.StateErrored {
@@ -109,7 +103,7 @@ func TestOpencodeMonitorSSEParser(t *testing.T) {
 		t.Errorf("LastApprovalTool = %q, want bash", om.LastApprovalTool())
 	}
 
-	if err := om.Approve(got[2].Approval.ReqID, agent.Decision{Allow: true}); err != nil {
+	if err := om.Approve(got[1].Approval.ReqID, agent.Decision{Allow: true}); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
 	if gotReply != "once" {
@@ -123,7 +117,7 @@ func TestOpencodeMonitorSSEParser(t *testing.T) {
 	}
 
 	caps := om.Capabilities()
-	if !caps.Approvals || !caps.Attention || !caps.Tokens {
+	if !caps.Approvals || !caps.Attention {
 		t.Errorf("caps: %+v", caps)
 	}
 }

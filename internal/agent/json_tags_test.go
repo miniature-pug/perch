@@ -6,12 +6,9 @@ import (
 	"testing"
 )
 
-// TestEventOmitempty asserts that zero-value optional fields are omitted:
-//   - a "state"-kind event carries no tokens/cost keys
-//   - a "usage"-kind event carries no state key
-//
-// This keeps the wire format consistent with the TS type declarations (optional
-// fields) and was the L-3 fix: add omitempty to State, Tokens, and Cost tags.
+// TestEventOmitempty asserts that zero-value optional fields are omitted: an
+// approval-kind event carries no state key. This keeps the wire format
+// consistent with the TS type declarations (optional fields; omitempty tags).
 func TestEventOmitempty(t *testing.T) {
 	t.Parallel()
 
@@ -21,47 +18,35 @@ func TestEventOmitempty(t *testing.T) {
 		t.Fatalf("json.Marshal(state event): %v", err)
 	}
 	s := string(data)
-	if strings.Contains(s, `"tokens"`) {
-		t.Errorf("state event must not carry tokens key; got %s", s)
-	}
-	if strings.Contains(s, `"cost"`) {
-		t.Errorf("state event must not carry cost key; got %s", s)
-	}
 	if !strings.Contains(s, `"state":"running"`) {
 		t.Errorf("state event must carry state key; got %s", s)
 	}
 
-	usageEv := Event{WorkspaceID: "ws-1", Kind: "usage", Tokens: 100, Cost: 0.001}
-	data, err = json.Marshal(usageEv)
+	approvalEv := Event{WorkspaceID: "ws-1", Kind: "approval"}
+	data, err = json.Marshal(approvalEv)
 	if err != nil {
-		t.Fatalf("json.Marshal(usage event): %v", err)
+		t.Fatalf("json.Marshal(approval event): %v", err)
 	}
 	s = string(data)
 	if strings.Contains(s, `"state"`) {
-		t.Errorf("usage event must not carry state key; got %s", s)
-	}
-	if !strings.Contains(s, `"tokens":100`) {
-		t.Errorf("usage event must carry tokens key; got %s", s)
-	}
-	if !strings.Contains(s, `"cost":0.001`) {
-		t.Errorf("usage event must carry cost key; got %s", s)
+		t.Errorf("approval event with no state must not carry state key; got %s", s)
 	}
 }
 
 func TestJSONTagsCaps(t *testing.T) {
-	c := Caps{Approvals: true, Attention: false, Tokens: true}
+	c := Caps{Approvals: true, Attention: false}
 	data, err := json.Marshal(c)
 	if err != nil {
 		t.Fatalf("json.Marshal(Caps) error: %v", err)
 	}
 	s := string(data)
 
-	for _, want := range []string{"approvals", "attention", "tokens"} {
+	for _, want := range []string{"approvals", "attention"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("Caps JSON missing lowercase key %q in %s", want, s)
 		}
 	}
-	for _, bad := range []string{"Approvals", "Attention", "Tokens"} {
+	for _, bad := range []string{"Approvals", "Attention"} {
 		if strings.Contains(s, bad) {
 			t.Errorf("Caps JSON has capitalized key %q in %s", bad, s)
 		}

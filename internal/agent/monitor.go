@@ -21,7 +21,6 @@ const (
 type Caps struct {
 	Approvals bool `json:"approvals"`
 	Attention bool `json:"attention"`
-	Tokens    bool `json:"tokens"`
 }
 
 type Decision struct{ Allow, Always bool }
@@ -51,8 +50,6 @@ type Event struct {
 	WorkspaceID string       `json:"workspaceId"`
 	Kind        string       `json:"kind"`
 	State       State        `json:"state,omitempty"`
-	Tokens      int          `json:"tokens,omitempty"`
-	Cost        float64      `json:"cost,omitempty"`
 	Approval    *ApprovalReq `json:"approval,omitempty"`
 	Err         string       `json:"err,omitempty"`
 	// SessionID is populated on SessionStart events so the app layer can

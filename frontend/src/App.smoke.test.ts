@@ -51,7 +51,7 @@ vi.mock("./lib/wails", () => ({
   createWorkspace: vi.fn(async (_agent: string, _repo: string, _branch: string, _model: string) => ({
     id: "ws-new", title: "New", branch: "main", state: "idle",
     worktreePath: "/tmp/new", agent: "claude", paneId: "p-new", lastActive: "",
-    caps: { approvals: false, attention: false, tokens: false },
+    caps: { approvals: false, attention: false },
   })),
   removeWorkspace: vi.fn(async () => {}),
   writeToPty:      vi.fn(async () => {}),
@@ -78,18 +78,18 @@ vi.mock("./lib/stores/settings.svelte", () => ({
 }));
 
 // ---------------------------------------------------------------------------
-// Fake workspaces — ≥2 with caps.approvals:true and caps.tokens:true
+// Fake workspaces — ≥2 with caps.approvals:true
 // ---------------------------------------------------------------------------
 const smokeWorkspaces = [
   {
     id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
     worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
-    caps: { approvals: true, attention: false, tokens: true },
+    caps: { approvals: true, attention: false },
   },
   {
     id: "ws-2", title: "Beta", branch: "feat/beta", state: "running" as const,
     worktreePath: "/tmp/beta", agent: "claude", paneId: "p2", lastActive: "",
-    caps: { approvals: true, attention: false, tokens: true },
+    caps: { approvals: true, attention: false },
   },
 ];
 
@@ -158,11 +158,6 @@ it("4.25.7 full-composition smoke: assembly → select → view-switch → appro
   const terminal = await screen.findByTestId("terminal");
   expect(terminal).toBeInTheDocument();
   expect(terminal.dataset.paneId).toBe("p1");
-
-  // Now that active is set, TokenMeter should be visible (caps.tokens=true)
-  await waitFor(() =>
-    expect(screen.getByRole("status", { name: "token usage" })).toBeInTheDocument()
-  );
 
   // -------------------------------------------------------------------------
   // Step 3 — View switching via keymap (REAL keymap + REAL layout store)

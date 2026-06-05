@@ -101,7 +101,7 @@ func NewOpencodeMonitorWithServer(a Adapter, serverURL, pw string) *OpencodeMoni
 
 func (m *OpencodeMonitor) Events() <-chan Event { return m.events }
 func (m *OpencodeMonitor) Capabilities() Caps {
-	return Caps{Approvals: true, Attention: true, Tokens: true}
+	return Caps{Approvals: true, Attention: true}
 }
 
 // Prepare self-assigns a free loopback port + a random Basic-auth password (unless
@@ -318,9 +318,8 @@ func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
 		ev = Event{Kind: "state", State: StateRunning, SessionID: p.SessionID}
 	case "session.status":
 		// The session-level status is the authoritative idle/running signal.
-		// step.ended fires per-step (a turn has many steps) so it must NOT drive
-		// idle; session.status does. status.type ∈ {idle, busy, retry}
-		// (v1.15.12 session/status.ts). retry is transient → no transition.
+		// status.type ∈ {idle, busy, retry} (v1.15.12 session/status.ts).
+		// retry is transient → no transition.
 		var p struct {
 			Status struct {
 				Type string `json:"type"`
@@ -345,18 +344,6 @@ func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
 	case "session.idle":
 		// Deprecated alias of session.status{type:idle}; same transition rule.
 		ev = idleTransition(prev)
-	case "session.next.step.ended":
-		var p struct {
-			Cost   float64 `json:"cost"`
-			Tokens struct {
-				Input  int `json:"input"`
-				Output int `json:"output"`
-			} `json:"tokens"`
-		}
-		if json.Unmarshal(env.Properties, &p) != nil {
-			return
-		}
-		ev = Event{Kind: "usage", Tokens: p.Tokens.Input + p.Tokens.Output, Cost: p.Cost}
 	case "session.next.step.failed":
 		var p struct {
 			Error json.RawMessage `json:"error"`

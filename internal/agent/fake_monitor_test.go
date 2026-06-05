@@ -14,7 +14,6 @@ func TestFakeMonitorEventSequence(t *testing.T) {
 		{Kind: "state", State: agent.StateRunning},
 		{Kind: "approval", State: agent.StateAwaitingApproval,
 			Approval: &agent.ApprovalReq{ReqID: "r1", Tool: "Bash", Summary: "ls"}},
-		{Kind: "usage", Tokens: 200, Cost: 0.001},
 		{Kind: "state", State: agent.StateDone},
 	}
 	f := agent.NewFakeMonitor(seq)
@@ -24,7 +23,7 @@ func TestFakeMonitorEventSequence(t *testing.T) {
 		t.Fatalf("Prepare: err=%v cmd=%q", err, cmd)
 	}
 	caps := f.Capabilities()
-	if !caps.Approvals || !caps.Attention || !caps.Tokens {
+	if !caps.Approvals || !caps.Attention {
 		t.Errorf("want all-true caps, got %+v", caps)
 	}
 
