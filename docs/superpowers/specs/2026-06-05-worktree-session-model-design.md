@@ -17,8 +17,8 @@ perch's value, not a side detail. The current flow has gaps and a wrong default:
   user resumes prior work.
 - Existing sessions *do* persist and list in the sidebar, but the resume path is
   undiscoverable (a saved row looks like a live one; empty state is blank).
-- Bare worktrees receive no gitignored files (`.env`, local config), so an agent
-  can launch into a tree where it cannot run.
+- Sessions are bound to a worktree with no option to run directly in the repo —
+  no way to keep a permanent, in-place session (e.g. working on `main`).
 - Stale worktrees/branches accumulate with no cleanup path.
 
 ## Research summary (primary sources)
@@ -28,8 +28,8 @@ perch's value, not a side detail. The current flow has gaps and a wrong default:
   one-tree-per-session, tool-owned, with a first-class new-vs-resume choice.
   (workmux confirmed worktree-native; `--open-if-exists` is its resume idiom.)
 - **Claude Code has first-party worktrees** — `--worktree`/`-w`, `worktree.baseRef`,
-  `.worktreeinclude` (copies gitignored files), `WorktreeCreate`/`WorktreeRemove`
-  hooks, and the desktop app auto-creates a worktree per session.
+  `.worktreeinclude`, `WorktreeCreate`/`WorktreeRemove` hooks, and the desktop app
+  auto-creates a worktree per session.
   (https://code.claude.com/docs/en/worktrees, .../best-practices)
 - **opencode has no native worktree CLI surface** — only an internal
   `Worktree.create()` API; community plugins fill the gap.
@@ -51,6 +51,13 @@ checked out in only one worktree at a time* (`git worktree add` on an
 already-checked-out branch fails). Therefore N parallel sessions require N
 branches. perch creates them; the user names them.
 
+A worktree session is **bound to its tree.** Its cwd is the worktree path; perch
+spawns the pty there. **It cannot be launched without that worktree** — delete the
+tree and perch can no longer reopen the session (the path is gone). The harness's
+underlying conversation id might in principle resume elsewhere, but perch never
+launches a session outside its bound directory. This binding is exactly why a
+non-worktree mode is offered (see §4).
+
 ### Scenario mapping
 
 | Goal | Sessions | Starting point (base) | perch creates |
@@ -68,16 +75,21 @@ share one branch.
 |---|---|
 | Create branch + worktree per session | **perch** |
 | Enforce one-branch-one-tree (offer *resume* on collision) | **perch** |
-| Copy env/gitignored files into the new tree | **perch** |
 | Remove a session's tree on request; cleanup of stale trees/branches it created | **perch** |
 | Show each session's diff for review | **perch** |
 | Choosing base, naming branches, branching strategy | **user** (perch suggests a name) |
 | What the agent edits / commits inside the tree | **agent** |
 | Merging / rebasing branches back together (fan-in) | **user** (or agent on request) |
+| Providing any gitignored local config (`.env` etc.) inside a tree | **user** |
 
 perch owns the **fan-out** (spin up N isolated branch+tree+agent). perch is
 **hands-off on fan-in** — it shows diffs, lets you stage/commit, and never merges.
-Merging is the user's git workflow, which lives in the pinned in-tree shell.
+
+**Gitignored files are not carried.** `git worktree add` copies no gitignored
+files, and perch will not either: if it can't be committed, it doesn't travel with
+the worktree. A worktree session that needs `.env`/local config is the user's to
+set up (in the shell), or they use a non-worktree session (§4) for a repo whose
+working copy already has that config.
 
 ### Branch creation: who owns it
 
@@ -89,16 +101,15 @@ job** — it runs `git worktree add -b <branch> <tree> <baseRef>`. But:
 - The user **always chooses** the name and base. perch never silently invents a
   branch — the dialog shows the name (suggestion prefilled, editable).
 - The **shell owns everything after** — extra branches, renames, fixups, commits,
-  merges. It is pinned and already in the worktree, so it is convenient at the
-  right time. It is the escape hatch for any git workflow perch should not bake in.
+  merges. It is pinned and already in the worktree, convenient at the right time.
+- Non-worktree mode (§4) creates **no** branch — it uses an existing branch.
 
 ### Harness launch
 
 perch launches the **CLI** harness (`claude` / `opencode`, never the desktop app)
-with `cmd.Dir = <worktree>` and **never passes `--worktree`/`-w`**. The CLI only
-self-creates a worktree when explicitly flagged; passing no flag means no
-nesting, no conflict by construction. To the agent, the tree is just a normal
-git checkout on a branch — nothing special is conveyed.
+with `cmd.Dir = <session cwd>` and **never passes `--worktree`/`-w`**. The CLI only
+self-creates a worktree when explicitly flagged; passing no flag means no nesting,
+no conflict by construction. To the agent, the cwd is just a normal git checkout.
 
 ## Component changes
 
@@ -107,16 +118,18 @@ git checkout on a branch — nothing special is conveyed.
 Fields, in order:
 
 1. **Repo** — dropdown from `DiscoverRepos()` (now hidden-dir-pruned — done).
-2. **Starting point** — base-ref dropdown of the repo's branches; default = the
-   repo's current branch.
-3. **Branch** — text field for the new branch name, prefilled with a suggestion,
-   editable, required, slug-validated. A **"use existing branch"** toggle switches
-   this to a dropdown of branches not already checked out, which perch checks out
-   directly (no `-b`).
-4. **Agent** — `claude` / `opencode`.
+2. **Worktree** — yes/no toggle, **default yes** (see §4).
+3. **Starting point** — base-ref dropdown of the repo's branches; default = the
+   repo's current branch. *(worktree mode only)*
+4. **Branch** — text field for the new branch name, prefilled with a suggestion,
+   editable, required, slug-validated; or a **"use existing branch"** toggle that
+   switches it to a dropdown of branches not already checked out, checked out
+   directly (no `-b`). *(worktree mode only)*
+   In **non-worktree** mode this becomes a single branch dropdown (the branch to
+   run in, in the repo itself).
+5. **Agent** — `claude` / `opencode`.
 
-**Removed:** the model field (and the opencode "Selected in the opencode TUI"
-note that paired with it) — entirely.
+**Removed:** the model field (and its paired opencode note) — entirely.
 
 **Styling fixes** (also fixes the hands-on report):
 - `<option>` gets `background: var(--perch-bg); color: var(--perch-text)` so the
@@ -124,46 +137,68 @@ note that paired with it) — entirely.
 - `.field-select` / `.field-input` get `min-width: 0` so a long repo path can no
   longer push the control past the dialog's `max-width`.
 
-### 2. Create flow — `app/app.go`
+### 2. Create flow + registry — `app/app.go`, `internal/registry/registry.go`
 
-- New-branch mode: `git worktree add -b <branch> <tree> <baseRef>` (base ref is
-  now the user's choice, not hardcoded `HEAD`).
-- Existing-branch mode: `git worktree add <tree> <branch>` (no `-b`).
-- Copy the env include-list (§4) from the repo root into the new tree.
+**Registry change (required).** Today `Workspace` stores only `WorktreePath`, no
+repo root — but git worktree removal and cleanup need the repo root. Add:
+- `RepoPath string` — the source repo root.
+- `Worktree bool` — true for an isolated-tree session, false for a non-worktree
+  (in-repo) session. (Distinguishes the two; gates removal/cleanup safety.)
+- Remove `Model string` (model removal, §3).
+
+For a worktree session `WorktreePath` is the linked tree; for a non-worktree
+session `WorktreePath == RepoPath` (the cwd is the repo root) and `Worktree=false`.
+
+**Worktree mode create:**
+- New-branch: `git worktree add -b <branch> <tree> <baseRef>` (base ref is the
+  user's choice, not hardcoded `HEAD`).
+- Existing-branch: `git worktree add <tree> <branch>` (no `-b`).
 - Launch the harness in `cwd=tree`.
 - **Collision:** if the branch is already checked out (git refuses), look it up in
-  the registry; if it is an existing perch session, return a signal that the
-  dialog turns into a **Resume** offer for that session. One branch ↔ one tree,
-  always — never two registry records for the same tree.
+  the registry; if it is an existing perch session, the dialog turns into a
+  **Resume** offer for that session. One branch ↔ one tree, always.
 
-**Bound-method signature** (final shape to be settled in the plan; intent fixed):
-`CreateWorkspace(agent, repoPath, baseRef, branch string)` for the new-branch
-case, with an existing-branch entry point (separate method or `baseRef==""`
-sentinel). The `model` parameter is removed.
+**Non-worktree mode create (§4):** no `git worktree add`, no new branch; checkout
+the selected branch in the repo root if it differs from the current checkout
+(guarded — git refuses on a dirty/conflicting tree, surface the error); launch the
+harness in `cwd=repoRoot`.
+
+**Bound-method signature** (final shape settled in the plan; intent fixed): a
+create method taking `agent, repoPath, baseRef, branch, worktree` (the `model`
+parameter is removed). May split into worktree / non-worktree entry points.
 
 ### 3. Model-selection removal (full blast radius)
 
 Frontend: `NewSessionDialog.svelte` (state, `$effect` reset, `onCreate`),
 `App.svelte` (`handleCreate` + `createWorkspace` call), `wails.ts` (interface +
-wrapper), `constants.ts` (`DEFAULT_MODEL`), `NewSessionDialog.test.ts` (the
-model-field cases), `App.test.ts` (model-passed assertions).
+wrapper), `constants.ts` (`DEFAULT_MODEL`), `NewSessionDialog.test.ts` (model
+cases), `App.test.ts` (model-passed assertions).
 
 Go: `CreateWorkspace` signature, `registry.Workspace.Model`, `agent.NewOpts.Model`,
-`Monitor.Prepare(...)` interface + the three impls (`ClaudeMonitor`,
-`OpencodeMonitor`, `FakeMonitor`), and the `--model` construction in
-`claude.go`/`opencode.go` `NewArgs`. After removal, perch passes no `--model`;
-the harness chooses its own model.
+`Monitor.Prepare(...)` interface + three impls (`ClaudeMonitor`, `OpencodeMonitor`,
+`FakeMonitor`), and the `--model` construction in `claude.go`/`opencode.go`
+`NewArgs`. After removal perch passes no `--model`; the harness chooses its model.
 
-### 4. Env propagation — new Settings field + git helper
+### 4. Worktree toggle & non-worktree sessions
 
-Bare `git worktree add` copies no gitignored files. perch copies a **configurable
-include-list** from the repo root into each new tree on create.
+New Session offers **Worktree: yes/no**, default **yes**.
 
-- New Settings field `WorktreeInclude []string`, centralized (no hardcoded
-  literal at the call site). Default: `[".env", ".env.local", ".env.*"]`.
-- Glob-matched against the repo root only; **never** a blanket copy of all
-  gitignored files (must not copy `node_modules`/build output).
-- A `git`/`fs` helper performs the copy; missing files are skipped silently.
+- **Yes (default)** — the isolated model above: new branch + tree, disposable,
+  cleanup-eligible, bound to its tree.
+- **No** — the session runs **directly in the repo root** on the selected branch.
+  No tree is created, no branch is created; if the selected branch differs from
+  the repo's current checkout, perch checks it out in the repo root (clean-tree
+  guard). This is the **permanent / in-place** session — e.g. working on `main`.
+  It is **never auto-cleaned** (there is no throwaway tree) and is **excluded from
+  the cleanup panel** entirely.
+
+**Safety (critical):** removal and cleanup must branch on `Worktree`. A
+non-worktree session's `WorktreePath` *is the user's real repo* — perch must
+**never** run `git worktree remove` / `git branch -d` against it. Closing a
+non-worktree session only stops the agent and drops the registry record.
+
+Multiple non-worktree sessions on one repo share that single working copy and its
+current branch (it is one checkout); that is the user's choice, like two terminals.
 
 ### 5. Resume / session list — `Sidebar.svelte`, `App.svelte`
 
@@ -173,68 +208,64 @@ Workspaces already persist (`~/.config/perch/workspaces.json`) and list via
 - **Relabel** each sidebar row: `branch · agent · last-active` (today the row is
   not obviously a resumable saved session).
 - **Resume preview:** clicking a row shows a glimpse (branch, last activity,
-  diffstat) and a confirm; confirm reopens the bound tree (`--resume`/`--session`
-  if a session id was captured, else a fresh agent in the same tree). An **Open
-  for more** affordance reopens fully to explore.
+  diffstat) and a confirm; confirm reopens the bound cwd (`--resume`/`--session`
+  if a session id was captured, else a fresh agent in the same cwd). An **Open for
+  more** affordance reopens fully to explore.
 - **Empty state:** when there are no sessions, the pane shows "No sessions yet —
   start one" with the New Session affordance, instead of a blank pane.
-- **Verify during implementation:** a successfully created session must appear as
-  a row. The hands-on "left pane completely empty" report must be reproduced and
-  confirmed to be the empty-state/discoverability gap and not a
-  creation/persistence bug.
+- **Verify during implementation:** a successfully created session must appear as a
+  row. The hands-on "left pane completely empty" report must be reproduced and
+  confirmed to be the empty-state/discoverability gap, not a creation/persistence
+  bug.
 
-### 6. Cleanup — staleness-triggered, user-driven, perch-owned only
+### 6. Removal & cleanup
 
-**Scope.** perch only ever offers to clean sessions **it created** (its tracked
-worktrees/branches, sourced from the registry). It never touches worktrees or
-branches the user made outside perch — that would be governing the user's repo.
+**Single "Remove session"** (existing path; user-triggered only). Today it is the
+command-palette command `session:remove` → confirm dialog → an undo-toast window →
+`RemoveWorkspace(id)`, which stops the agent + pty and drops the registry record
+but **leaves the tree and branch on disk** (the dialog says so). There is no
+keybinding, no sidebar affordance, and no automatic trigger. Change:
+- Worktree session → also `git worktree remove` the tree (guarded: warn + confirm
+  on uncommitted changes). The **branch stays** (branch deletion is the cleanup
+  panel's job). Update the ConfirmDialog copy accordingly.
+- Non-worktree session → unchanged (stop agent + drop record only; never touch
+  the repo root or its branch).
 
-**Trigger.** On launch, if any perch session is unused past the threshold
-(new Settings field `StaleThresholdDays`, default **30**), show a **dismissible
-banner**: "N sessions unused >Nd — review." Banner, not a blocking modal — it
-never gates the app. Zero stale → no nudge. Clicking opens the cleanup panel.
+**Stale cleanup** (new). Scope: perch-created **worktree** sessions only; never
+non-worktree sessions and never worktrees/branches the user made outside perch.
 
-**Panel** (`CleanupPanel.svelte`). One row per stale session:
-`[checkbox] <session name> · <branch> · <agent> · <last-active> · <diffstat> ·
-<state badge> · [Open]`. A master **Select all** checkbox toggles every row.
-**Remove selected** → confirm → per row: `git worktree remove` then
-`git branch -d`.
+- **Trigger:** on launch, if any worktree session is unused past the threshold
+  (new Settings field `StaleThresholdDays`, default **30**), show a **dismissible
+  banner**: "N sessions unused >Nd — review." Banner, not a blocking modal. Zero
+  stale → no nudge. Clicking opens the cleanup panel.
+- **Panel** (`CleanupPanel.svelte`): one row per stale session —
+  `[checkbox] <session name> · <branch> · <agent> · <last-active> · <diffstat> ·
+  <state badge> · [Open]`. Master **Select all** toggles every row. **Remove
+  selected** → confirm → per row: `git worktree remove` then `git branch -d`.
+- **Snapshot** = the row itself; **Open** reopens the session to explore first.
+- **Default-checked (data-preserving):** only **safe** rows (clean working tree AND
+  branch merged into its base) are checked on open. Rows with uncommitted changes
+  or unmerged commits are shown **unchecked** with a ⚠. Select-all still checks them
+  if the user deliberately wants them gone.
+- **Safety:** the cleanup panel is the **only** place a branch is deleted (auto =
+  never). `git branch -d` (safe — git refuses unmerged); force `-D` only behind an
+  extra confirm.
 
-**Snapshot.** The row *is* the snapshot (name, branch, agent, last-active,
-diffstat, state badge). **Open** reopens the session so the user can explore
-before deciding.
-
-**Default-checked set (data-preserving).** Only **safe** rows (clean working tree
-AND branch fully merged into its base) are checked when the panel opens. Rows
-with uncommitted changes or unmerged commits are shown **unchecked** with a ⚠
-badge, so a one-click "Select all → Remove" can never destroy unmerged work.
-Select-all still checks them when the user deliberately wants them gone.
-
-**Safety.**
-- The cleanup panel is the **only** place a branch is deleted. Automatic branch
-  deletion: never.
-- `git branch -d` (safe delete — git refuses an unmerged branch). Force `-D` is
-  available only behind an extra explicit confirm.
-- Per-session "Remove workspace" (outside the panel) removes the **tree** and the
-  registry record with an uncommitted-changes guard (warn + confirm); it leaves
-  the branch intact (branch deletion is the cleanup panel's job).
-
-**Backend helpers (re-introduced).** Round 4 removed worktree
-list/remove helpers as dead code; they now have a real consumer:
-- `RemoveWorktree(repo, tree)` — `git worktree remove` (force only on confirm).
-- worktree dirty check — `git status --porcelain` in the tree.
-- branch-merged check — `git branch --merged <base>` / `rev-list` count.
-- safe/force branch delete — `git branch -d` / `-D`.
-- stale-session enumeration — registry `LastActive` + per-tree git state. Sourced
-  from the registry (perch's own sessions); does **not** require a general
-  `git worktree list` of the whole repo.
+**Backend helpers (re-introduced; round 4 removed them as dead code, now with a
+real consumer):** `RemoveWorktree(repo, tree)` (`git worktree remove`, force only on
+confirm); worktree dirty check (`git status --porcelain`); branch-merged check
+(`git branch --merged <base>` / rev-list); safe/force branch delete; stale
+enumeration (registry `LastActive` + per-tree git state, filtered to `Worktree`
+sessions). Sourced from the registry — no general `git worktree list` of the repo.
 
 ## Out of scope (deliberate, not deferrals)
 
-- **Fan-in / merge orchestration** — hands-off by design (see boundary above).
-- **Cleaning the user's externally-made worktrees/branches** — perch only manages
+- **Fan-in / merge orchestration** — hands-off by design.
+- **Carrying gitignored files into a tree** — rejected on principle (uncommittable
+  = not carried); non-worktree mode is the escape for config-dependent repos.
+- **Cleaning the user's externally-made worktrees/branches** — perch manages only
   its own.
-- **Conflict pre-warning across open sessions** — not in this iteration.
+- **Conflict pre-warning across open sessions** — not this iteration.
 - **Per-harness delegation to `claude --worktree`** — rejected; perch owns the
   mechanism uniformly for cross-harness parity.
 
@@ -248,23 +279,26 @@ list/remove helpers as dead code; they now have a real consumer:
 ## Testing
 
 - **Go (gate-verifiable):** worktree add with chosen base; existing-branch
-  checkout; collision → resume signal; env include copy (globs, skip-missing,
-  no blanket copy); RemoveWorktree + dirty guard; branch-merged detection; safe
-  vs force branch delete; stale enumeration by threshold; model param fully gone
-  from `CreateWorkspace`/`Prepare`/`NewArgs`.
-- **Frontend (vitest):** dialog without a model field; base-ref + branch fields;
-  existing-branch toggle; option/`min-width` styling present; sidebar row labels;
-  empty-state; cleanup panel select-all, safe-only default-check, ⚠ on
-  unmerged/dirty, Remove wiring.
+  checkout; collision → resume signal; non-worktree create runs in repo root +
+  branch checkout guard; registry `RepoPath`/`Worktree` round-trip; single-remove
+  removes the tree for worktree sessions and never touches the repo root for
+  non-worktree sessions; cleanup excludes non-worktree sessions; RemoveWorktree +
+  dirty guard; branch-merged detection; safe vs force branch delete; stale
+  enumeration by threshold; model param fully gone from
+  `CreateWorkspace`/`Prepare`/`NewArgs`.
+- **Frontend (vitest):** dialog without a model field; worktree toggle (fields
+  shown/hidden per mode); base-ref + branch fields; existing-branch toggle;
+  option/`min-width` styling; sidebar row labels; empty-state; cleanup panel
+  select-all, safe-only default-check, ⚠ on unmerged/dirty, Remove wiring.
 - **Manual smoke (gate-blind — append to `docs/superpowers/smoke-checklist.md`):**
-  real parallel sessions on separate branches in one repo each with its own tree;
-  `.env` present in a fresh tree so the agent runs; resume reopens the same
-  conversation; cleanup banner appears past threshold and removal frees the tree;
-  dropdown popup is dark; no white border/scroll.
+  real parallel worktree sessions on separate branches in one repo; a non-worktree
+  session on `main` runs in place and survives; resume reopens the same
+  conversation; cleanup banner past threshold and removal frees the tree but not a
+  non-worktree session; dropdown popup is dark; no white border/scroll.
 
 ## Honest ceiling
 
 Real WebKit rendering, real-agent round-trips, real desktop notifications, and
 parallel real worktrees remain user-gated manual smoke. The automated gate proves
-the contracts (git operations, dialog shape, cleanup logic); it cannot prove the
-rendered/cross-process behavior.
+the contracts (git operations, dialog shape, removal/cleanup logic); it cannot
+prove the rendered/cross-process behavior.
