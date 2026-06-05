@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.1.0] - Unreleased
 
+### Round 6 — create spawns the pty; positioning statement (2026-06-05)
+
+#### Fixed
+
+- **A freshly-created session was selected but dead until a second click** —
+  `handleCreate` set `activeId` to the new workspace but never called
+  `openWorkspace`, and no effect watches `activeId`, so the pty/agent only
+  spawned on a later sidebar click / `Enter` / palette "Open worktree". The new
+  session showed a selected-but-inert Agent pane. `handleCreate` now mirrors
+  `onSelect` (set active + open), so creating a session spawns its pty in one
+  step. This is a thesis-friction fix — a dead-selected row violates the
+  seamless single-window flow — and is consistent with the §7.7 New Session
+  flow. (The e2e mock stubs `OpenWorkspace`, so `make test-all` proves the
+  `handleCreate → onSelect → openWorkspace` wiring but NOT that a real pty/agent
+  spawns on create; that round-trip is a manual smoke-checklist item.)
+
+#### Docs
+
+- **README positioning paragraph** — stated explicitly what perch is and is
+  not: a cockpit *around* the agents (consolidation, single-window flow), not an
+  editor or harness replacement and not a thin wrapper. The thesis previously
+  lived only in the internal design spec.
+
 ### Round 5 — install-script fix, dead-code trim & doc sync (2026-06-05)
 
 #### Fixed

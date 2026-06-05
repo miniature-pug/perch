@@ -38,10 +38,16 @@ real pty, real desktop notifications, a real agent).
 ## Workspace creation (claude)
 - [ ] Command palette (`Ctrl-K` or `:`) → New Session → dialog appears
 - [ ] Pick a git repo, branch, agent `claude`
-- [ ] Create → workspace appears in the sidebar with a running status
+- [ ] Create → the workspace appears in the sidebar AND its Terminal pane opens
+      immediately with a live shell — the pty spawns **on create**, with no
+      extra click. (Round 6: `handleCreate` opens the workspace in one step. The
+      e2e gate stubs `OpenWorkspace`, so it proves the create→open wiring but
+      NOT that a real pty/agent spawns on create — only this step proves the
+      real round-trip.)
 
 ## Terminal pane — CRITICAL (the one path no automated test covers)
-- [ ] Click the workspace → a Terminal pane with a live shell appears
+- [ ] The active session's Terminal pane shows a live shell (it opened on
+      create; clicking a different session row opens/switches to that one)
 - [ ] **Agent output actually appears in the pane** — type a command / start the agent and confirm bytes render. (This is the cross-process pty→WebKit→xterm wire — bug-1. Headless tests lock the event-name agreement (`pty:data:pane-<id>`), but only this step proves the real round-trip.)
 - [ ] `i` → TERMINAL mode; keystrokes pass through to the agent
 - [ ] `Ctrl-\ Ctrl-n` → back to NORMAL mode
