@@ -3,8 +3,9 @@
     theme,
     density = "dense",
     font = "geist",
+    glass = true,
     children,
-  }: { theme: string; density?: "dense" | "comfortable" | "ultra"; font?: string; children?: any } = $props();
+  }: { theme: string; density?: "dense" | "comfortable" | "ultra"; font?: string; glass?: boolean; children?: any } = $props();
 
   // Map font keys from settings to CSS font-family stacks.
   // Setting --perch-font-sans directly on :root lets every component pick it up
@@ -21,6 +22,7 @@
     const family = FONT_FAMILIES[font] ?? FONT_FAMILIES["geist"];
     document.documentElement.style.setProperty("--perch-font-sans", family);
   });
+  $effect(() => { document.documentElement.setAttribute("data-glass", glass ? "on" : "off"); });
 </script>
 
 {@render children?.()}

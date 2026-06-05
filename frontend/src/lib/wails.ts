@@ -21,7 +21,7 @@ export interface Hunk {
 export interface FsNode { name: string; path: string; isDir: boolean; modified?: boolean; untracked?: boolean; }
 export interface AlwaysRule { agent: string; tool: string; pattern: string; hash?: string; }
 export interface AppSettings {
-  theme: string; density: string; font: string; dnd: boolean; alwaysRules: AlwaysRule[];
+  theme: string; density: string; font: string; dnd: boolean; glassDisabled?: boolean; alwaysRules: AlwaysRule[];
 }
 export interface WorktreeInfo { path: string; branch: string; head: string; }
 export interface RepoInfo { path: string; name: string; branch: string; worktrees: WorktreeInfo[]; }

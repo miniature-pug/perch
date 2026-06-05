@@ -388,11 +388,12 @@ func (a *App) ListWorkspaces() []WorkspaceVM {
 
 // Settings is the persisted user preference blob.
 type Settings struct {
-	Theme       string       `json:"theme"`
-	Density     string       `json:"density"`
-	Font        string       `json:"font"`
-	DND         bool         `json:"dnd"`
-	AlwaysRules []AlwaysRule `json:"alwaysRules"`
+	Theme         string       `json:"theme"`
+	Density       string       `json:"density"`
+	Font          string       `json:"font"`
+	DND           bool         `json:"dnd"`
+	GlassDisabled bool         `json:"glassDisabled,omitempty"`
+	AlwaysRules   []AlwaysRule `json:"alwaysRules"`
 }
 
 // AlwaysRule persists an "always allow" approval rule.

@@ -3,7 +3,7 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 
 vi.mock("../wails", () => ({
   getSettings: vi.fn(async () => ({
-    theme: "gruvbox", density: "dense", font: "geist", dnd: false, alwaysRules: [],
+    theme: "gruvbox", density: "dense", font: "geist", dnd: false, glassDisabled: false, alwaysRules: [],
   })),
   saveSettings: vi.fn(async () => {}),
 }));
@@ -36,6 +36,35 @@ describe("settings store", () => {
     expect(settings.dnd).toBe(true);
     expect(vi.mocked(w.saveSettings)).toHaveBeenCalledWith(
       expect.objectContaining({ dnd: true }),
+    );
+  });
+  it("load() defaults glass=true when glassDisabled is absent", async () => {
+    const w = await import("../wails");
+    vi.mocked(w.getSettings).mockResolvedValueOnce({
+      theme: "gruvbox", density: "dense", font: "geist", dnd: false, alwaysRules: [],
+    });
+    const { settings } = await import("./settings.svelte");
+    await settings.load();
+    expect(settings.glass).toBe(true);
+  });
+  it("setGlass(false) persists glassDisabled=true", async () => {
+    const { settings } = await import("./settings.svelte");
+    const w = await import("../wails");
+    await settings.load();
+    await settings.setGlass(false);
+    expect(settings.glass).toBe(false);
+    expect(vi.mocked(w.saveSettings)).toHaveBeenCalledWith(
+      expect.objectContaining({ glassDisabled: true }),
+    );
+  });
+  it("setGlass(true) persists glassDisabled=false", async () => {
+    const { settings } = await import("./settings.svelte");
+    const w = await import("../wails");
+    await settings.load();
+    await settings.setGlass(true);
+    expect(settings.glass).toBe(true);
+    expect(vi.mocked(w.saveSettings)).toHaveBeenCalledWith(
+      expect.objectContaining({ glassDisabled: false }),
     );
   });
 });

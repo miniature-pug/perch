@@ -567,7 +567,7 @@
 
 <svelte:window onkeydown={onKeyDown} />
 
-<ThemeProvider theme={settings.theme} density={settings.density} font={settings.font}>
+<ThemeProvider theme={settings.theme} density={settings.density} font={settings.font} glass={settings.glass}>
   <div class="app-root" onpointerdowncapture={onAppPointerDown}>
     <MenuBar onCommand={(id) => runCommand(id)} {unreadCount} />
 

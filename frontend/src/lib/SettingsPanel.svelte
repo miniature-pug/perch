@@ -16,7 +16,7 @@
   } = $props();
 
   let settings = $state<AppSettings>({
-    theme: DEFAULT_THEME, density: DEFAULT_DENSITY as Density, font: DEFAULT_FONT, dnd: false, alwaysRules: [],
+    theme: DEFAULT_THEME, density: DEFAULT_DENSITY as Density, font: DEFAULT_FONT, dnd: false, glassDisabled: false, alwaysRules: [],
   });
 
   onMount(async () => {
@@ -50,6 +50,12 @@
     settings = { ...settings, dnd: next };
     setDnd(next);
     await settingsStore.setDnd(next);
+  }
+
+  async function toggleGlass() {
+    const next = !(settings.glassDisabled ?? false);
+    settings = { ...settings, glassDisabled: next };
+    await settingsStore.setGlass(!next);
   }
 
   async function revokeRule(i: number) {
@@ -94,6 +100,21 @@
             {/each}
           </select>
         </label>
+
+        <div class="setting-row">
+          <span class="setting-label">Glass effects</span>
+          <button
+            role="switch"
+            aria-label="Glass effects"
+            aria-checked={!(settings.glassDisabled ?? false)}
+            class="dnd-switch"
+            class:on={!(settings.glassDisabled ?? false)}
+            onclick={toggleGlass}
+          >
+            {!(settings.glassDisabled ?? false) ? "On" : "Off"}
+          </button>
+          <span class="setting-hint">Frosted translucency on menus &amp; dialogs</span>
+        </div>
       </section>
 
       <section class="settings-section">
@@ -207,6 +228,13 @@
     padding: 2px 6px;
     font-size: var(--perch-fs-body);
     font-family: var(--perch-font-sans);
+  }
+
+  .setting-hint {
+    font-size: var(--perch-fs-code);
+    color: var(--perch-text-dim, var(--perch-text));
+    opacity: 0.7;
+    flex: 1;
   }
 
   .dnd-switch {

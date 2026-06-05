@@ -12,6 +12,7 @@ const fixture: AppSettings = {
   density: "dense",
   font: "geist",
   dnd: false,
+  glassDisabled: false,
   alwaysRules: [
     { agent: "claude", tool: "bash",     pattern: "npm test" },
     { agent: "claude", tool: "readFile", pattern: "/tmp/**" },
@@ -119,6 +120,29 @@ describe("SettingsPanel — DND toggle persists", () => {
     await waitFor(() =>
       expect(vi.mocked(w.saveSettings)).toHaveBeenCalledWith(
         expect.objectContaining({ dnd: true })
+      )
+    );
+    expect(vi.mocked(w.saveSettings)).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("SettingsPanel — glass toggle persists", () => {
+  it("toggling Glass effects calls saveSettings exactly once with glassDisabled=true", async () => {
+    const w = await import("./wails");
+    const { default: SettingsPanel } = await import("./SettingsPanel.svelte");
+    render(SettingsPanel, { props: { open: true, onClose: vi.fn() } });
+
+    // Wait for panel to load (rules appear)
+    await screen.findAllByRole("button", { name: "Revoke" });
+
+    const glassBtn = screen.getByRole("switch", { name: "Glass effects" });
+    // Default fixture has glassDisabled=false → glass is ON (aria-checked=true)
+    expect(glassBtn).toHaveAttribute("aria-checked", "true");
+    await fireEvent.click(glassBtn);
+
+    await waitFor(() =>
+      expect(vi.mocked(w.saveSettings)).toHaveBeenCalledWith(
+        expect.objectContaining({ glassDisabled: true })
       )
     );
     expect(vi.mocked(w.saveSettings)).toHaveBeenCalledTimes(1);
