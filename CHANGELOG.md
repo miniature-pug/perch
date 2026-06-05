@@ -6,6 +6,62 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.1.0] - Unreleased
 
+### Round 4 — attention model & dead-code cleanup (2026-06-05)
+
+#### Added
+
+- **Question / `awaiting-input` attention signal** — a new agent state
+  (`StateAwaitingInput`, `"awaiting-input"`) and event kind (`"question"`)
+  distinguish "the agent is asking the **user** a question/choice" from a tool
+  approval. For claude, `AskUserQuestion`'s `PreToolUse` is auto-allowed and
+  surfaced as this signal (so the agent renders the question in its own pane
+  TUI); `ExitPlanMode` stays on the approval path. For opencode, the default
+  `question.asked` event raises it and `question.replied` / `question.rejected`
+  clear it. It is a **signal only** — perch renders no question card and sends
+  no reply; the user answers in the agent's own pane TUI. The sidebar shows a
+  distinct "asking you" feel (`?`, cyan `--perch-info`, slow pulse) vs. the
+  approval feel (`⚠` "needs you", amber, fast pulse). The full attention state
+  set is now six: running, idle, awaiting-approval, awaiting-input, done,
+  errored.
+- **opencode `session.error` path** — opencode failures now map to
+  `StateErrored` via the default-emitted `session.error` event.
+
+#### Changed
+
+- **Approve-all scoped to the active workspace** — the "Approve all" / "Deny
+  all" batch action resolves only the active workspace's pending request; it can
+  never silently green-light a tool waiting in a different, unseen workspace
+  (the cross-workspace queue still drives the "N pending" render condition).
+- **`aria-modal` on dialogs** — the approval card, command palette, confirm,
+  help, new-session, and settings dialogs all carry `role="dialog"
+  aria-modal="true"`.
+- **Centralized loopback / poll constants** — the opencode monitor's loopback
+  host, server-URL format, and serve-readiness poll bounds (max iters, interval)
+  are single-sourced named constants.
+
+#### Removed
+
+- **Token / cost metering — removed entirely** — perch is not a usage meter.
+  No `TokenMeter`, no `"usage"` event kind, no `Event.Tokens` / `Event.Cost`, no
+  `Caps.Tokens`, and no transcript tailing. The `tokens` capability is gone.
+- **Dead code** — the `app.Worktrees()` bound method, `git.Worktrees()`,
+  `git.RemoveWorktree()` / `git.PruneWorktrees()` (worktrees are left on disk by
+  design), and the unused `agent.NewOpts.{Prompt,SessionID,Agent}` fields were
+  removed. `config.DefaultGlobalPath()` dropped its unused error return.
+- **Gated opencode `session.next.step.*` cases** — the `session.next.step.{started,failed}`
+  handlers were removed; perch never sets `OPENCODE_EXPERIMENTAL_EVENT_SYSTEM`,
+  so those frames never fired. `sessionID` now comes from the default
+  `session.status` event and errors from `session.error`.
+
+#### Fixed
+
+- **Shell-drawer pty key** — the shell drawer pty is keyed `shell-<wsid>` (was
+  `<wsid>:shell`; the `:` failed `validateSessionID`, so the drawer silently
+  never connected to a pty).
+- **opencode resume on default config** — resume now works without the
+  experimental event flag: `sessionID` is captured from the default
+  `session.status` event and passed back as `attach --session <id>`.
+
 ### Added
 
 - **Wails v2 desktop GUI (direct-pty, no tmux)** — `perch` (no arguments) opens
@@ -54,8 +110,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     Server-Sent-Events stream; session resume via `opencode attach --session
     <id>`.
   - Model selection is supported when creating a workspace. Capabilities
-    (`approvals`, `attention`, `tokens`) are advertised per-monitor; the UI
-    degrades to exactly what each agent supports.
+    (`approvals`, `attention`) are advertised per-monitor; the UI degrades to
+    exactly what each agent supports.
 
 - **Inline tool-call approvals** — a docked `ApprovalCard` (perch chrome, never
   inside the xterm grid) presents **Allow / Deny / Always** for each `PreToolUse`

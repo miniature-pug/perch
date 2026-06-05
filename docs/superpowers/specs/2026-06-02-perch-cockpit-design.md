@@ -47,7 +47,7 @@ perch is a **worktree-native cockpit for agent-assisted coding**: a keyboard-fir
 
 ## 4. Deletions
 
-Remove entirely (no compat shims): `internal/tui`, `internal/frame`, `internal/tmux`, the tmux **attach-pty bridge**, and all charmbracelet/Bubble Tea dependencies. `cmd/perch` keeps `setup`, `doctor`, `version`, and gains the GUI default; `attach`/`resurrect`/`status` are re-evaluated against the new model (see §6.5).
+Remove entirely (no compat shims): `internal/tui`, `internal/frame`, `internal/tmux`, the tmux **attach-pty bridge**, and all charmbracelet/Bubble Tea dependencies. `cmd/perch` keeps ~~`setup`,~~ `doctor`, `version`, and gains the GUI default; `attach`/`resurrect`/`status` are re-evaluated against the new model (see §6.5). **As-built:** `setup` was removed (it installed a global status hook calling a nonexistent `perch status set`); the shipped subcommands are `doctor`, `version`, `attach`, and a hidden `debug`.
 
 ---
 
@@ -76,7 +76,7 @@ perch computes diffs itself (no agent needed): `DiffStat` (per-file `+/−`), pe
 
 ## 6. Agent Integration — the spine (`internal/agent`)
 
-The state-bearing features (attention, notifications, approvals, token/cost) cannot come from the pty byte stream (that's pixels, not state). They come from an **agent-specific structured side-channel**, abstracted behind one interface. **Claude is the primary target.**
+The state-bearing features (attention, notifications, approvals; **as-built: not token/cost — that metering was removed entirely**) cannot come from the pty byte stream (that's pixels, not state). They come from an **agent-specific structured side-channel**, abstracted behind one interface. **Claude is the primary target.**
 
 ### 6.1 `AgentAdapter` interface
 ```
@@ -84,7 +84,7 @@ type AgentAdapter interface {
     // Launch the agent inside a shell pty in cwd; resumeID "" = fresh.
     Spawn(ctx, cwd string, resumeID string) (Session, error)
     // Structured state stream for this session.
-    Events() <-chan AgentEvent      // running | idle/awaiting-input | awaiting-approval | tool-start/end | done | errored | usage{tokens,cost}
+    Events() <-chan AgentEvent      // AS-BUILT v1: running | idle | awaiting-approval | awaiting-input | done | errored (6 states). `tool-start/end` and `usage{tokens,cost}` are OUT OF SCOPE FOR v1 — token/cost metering was removed entirely (perch is not a usage meter), and there are no per-tool start/end events.
     // Resolve a pending tool-approval (drives GUI Allow/Deny/Always).
     Approve(reqID string, decision Decision) error
     Capabilities() Caps             // which features this agent supports (UI degrades per-agent)
@@ -100,23 +100,23 @@ A registry selects the adapter by agent type. `Caps` lets the UI light up only w
   - `Stop` → "turn done, your turn" (drives idle/attention). `StopFailure` → errored (carries `error_type`).
   - `SessionStart` → captures `session_id` for transcript lookup + registry.
 - **Listener:** Go HTTP server on `127.0.0.1`, ephemeral port, per-process bearer token injected into the hook command/`http` hook config. Localhost-only.
-- **Transcript tail:** `TailTranscript` is wired from the `SessionStart` hook and follows the growing JSONL (`tail -f` semantics). It emits token counts per turn. Claude JSONL carries **no cost field** — usage events have `Cost=0`; do not fake a cost value.
-- **Capabilities:** approvals ✓, attention ✓ (via Stop → `StateDone`), tokens ✓ (tokens only; no cost).
+- **Transcript tail:** ~~`TailTranscript` is wired from the `SessionStart` hook and follows the growing JSONL (`tail -f` semantics). It emits token counts per turn. Claude JSONL carries **no cost field** — usage events have `Cost=0`; do not fake a cost value.~~ **OUT OF SCOPE FOR v1 (as-built):** token/cost metering was removed entirely — there is no transcript tailing, no `usage` event, and no token/cost fields. perch is not a usage meter. (AskUserQuestion `PreToolUse` is instead auto-allowed and surfaced as the `awaiting-input` question signal; `ExitPlanMode` stays on the approval path.)
+- **Capabilities:** approvals ✓, attention ✓ (via Stop → `StateDone`). **As-built:** there is no `tokens` capability.
 
 ### 6.3 `OpencodeAdapter` (serve + SSE + REST)
 - **Spawn / launch topology:** perch self-assigns a free loopback port `P` + random password `PW`, then the pane runs roughly `export OPENCODE_SERVER_PASSWORD=PW; opencode serve --port P --hostname 127.0.0.1 & <poll until listening>; exec opencode attach http://127.0.0.1:P [--session <id>]`, so the user still sees the real TUI while perch consumes the server's stream. `opencode attach` takes the URL as an explicit positional (there is **no** `$OPENCODE_URL` env var), reads the password from `OPENCODE_SERVER_PASSWORD`, and accepts `--session` for resume but **not** `--model`/`--agent` (model selection stays in the opencode TUI — a documented deviation).
-- **Events:** subscribe to **SSE `GET /event`** behind **HTTP Basic auth** (`Authorization: Basic base64("opencode:"+PW)`). Wire frames are a nested envelope `data: {"id":…,"type":…,"properties":{…}}` carrying `session.next.step.started/ended/failed` (with **token+cost** in `properties.tokens`/`properties.cost`), `session.status` (`status.type` idle/busy/retry — the authoritative running↔idle signal; step.ended is per-step and does not drive idle), `permission.asked`/`permission.replied`, text/shell events, heartbeat. Reconnect by re-opening the stream.
+- **Events:** subscribe to **SSE `GET /event`** behind **HTTP Basic auth** (`Authorization: Basic base64("opencode:"+PW)`). Wire frames are a nested envelope `data: {"id":…,"type":…,"properties":{…}}`. **As-built v1** consumes only the **default-emitted** frames: `session.status` (`status.type` idle/busy/retry — the authoritative running↔idle signal **and the only default frame carrying `sessionID`**, which is what makes resume work without the experimental flag), `session.error` (→ `StateErrored`), `question.asked`/`question.replied`/`question.rejected` (the `awaiting-input` signal + clear), and `permission.asked`/`permission.replied`. The `session.next.step.started/ended/failed` frames (which carry token+cost) are **OUT OF SCOPE FOR v1** — they are gated behind `OPENCODE_EXPERIMENTAL_EVENT_SYSTEM`, which perch never sets, and token/cost metering was removed entirely. Reconnect by re-opening the stream.
 - **Approvals:** `permission.asked` (in) → GUI card → `POST /permission/:id/reply` with body `{reply: once|always|reject}` (Basic auth) (out).
-- **Resume/registry:** `opencode session list --format json`; resume `--session <id>` / `--continue`.
-- **Capabilities:** approvals ✓, attention ✓, tokens ✓ (native). opencode is the *easier* integration; Claude is still primary because it's the daily driver.
+- **Resume/registry:** ~~`opencode session list --format json`;~~ resume `--session <id>` / `--continue`. **As-built:** there is no session-list enumeration (the dead `Adapter.ListSessions`/`ForkInto` surface was removed); the resume id is the `lastSessionID` persisted in the registry, captured from the default `session.status` event and passed back as `attach --session <id>`.
+- **Capabilities:** approvals ✓, attention ✓. **As-built:** there is no `tokens` capability (token/cost metering was removed). opencode is the *easier* integration; Claude is still primary because it's the daily driver.
 
 ### 6.4 State → UI mapping
-`AgentEvent`s drive: sidebar status icon (`◐ running` / `◯ idle` / `⚠ needs you` / `✓ done` / `✗ error`), the notification tiers (§8), the approval card, and the token/cost meter in the status line.
+`AgentEvent`s drive: sidebar status icon (`◐ running` / `◯ idle` / `⚠ needs you` (awaiting-approval) / `? asking you` (awaiting-input) / `✓ done` / `✗ error`), the notification tiers (§8), and the approval card. **As-built:** there is no token/cost meter in the status line (token/cost metering was removed). The `awaiting-input` question signal (claude `AskUserQuestion`, opencode `question.asked`) shows the cyan "asking you" feel and is answered in the agent's own pane TUI — perch renders no question card.
 
 **`StateDone` turn-done semantics:** monitors emit `StateDone` (not `StateIdle`) when a turn completes — claude `Stop` hook, opencode busy→idle transition. A bare idle that does **not** follow a running state emits `StateIdle` with no toast, preventing spurious "Turn complete" notifications on initial attach or reconnect.
 
 ### 6.5 CLI surface
-`cmd/perch`: default → launch GUI; keep `setup`, `doctor`, `version`. `attach` becomes "focus/raise an existing perch workspace" (no separate process to attach to); `resurrect`/`status` fold into the registry + GUI.
+`cmd/perch`: default → launch GUI; keep ~~`setup`,~~ `doctor`, `version`. `attach` becomes "focus/raise an existing perch workspace" (no separate process to attach to); `resurrect`/`status` fold into the registry + GUI. **As-built:** the shipped subcommands are `doctor`, `version`, `attach`, and a hidden `debug` — `setup` was removed.
 
 ---
 
@@ -181,7 +181,7 @@ Modes shown in status line: **NORMAL** (keys drive perch: `j/k` sessions, `gt/gT
 - **End-to-end smoke:** production build launches, fake agent drives a full loop (spawn → tool approval via GUI → diff → resume).
 - **Validation spikes (gated, early in the plan — de-risk, don't defer):**
   1. Claude `PreToolUse` GUI approval interception end-to-end.
-  2. Claude transcript token/cost availability + project-slug derivation.
+  2. ~~Claude transcript token/cost availability + project-slug derivation.~~ **OUT OF SCOPE FOR v1 (as-built):** token/cost metering and transcript tailing were removed entirely.
   3. opencode `serve` + SSE consumption + REST approval reply.
   4. Wails `OnFileDrop` Linux #3686 workaround.
   5. Linux OS desktop notification path.
@@ -192,7 +192,7 @@ Modes shown in status line: **NORMAL** (keys drive perch: `j/k` sessions, `gt/gT
 ## 11. Package / File Layout
 
 ```
-cmd/perch/            # entry: GUI default + setup/doctor/version
+cmd/perch/            # entry: GUI default + doctor/version/attach (+ hidden debug); as-built: no `setup`
 app/                  # Wails App: bound methods, options (no-port Run), startup/shutdown
 internal/pty/         # direct-pty bridge
 internal/agent/       # AgentAdapter + claude/ + opencode/ + fake/ (tests)
@@ -212,7 +212,7 @@ frontend/src/tokens/  # design tokens + themes
 
 All five §10 spikes are documented-but-unverified Claude/Wails behaviors. Each is a **gated early task**: if a spike fails, we adapt the mechanism — but the *feature* stays in scope. opencode integration carries low risk (fully documented server/SSE). The single accepted limitation is **no separate OS windows** (Wails v2), met by splits.
 
-**Resolved spikes:** spike-1 (Claude `PreToolUse` GUI approval), spike-2 (Claude transcript token availability — resolved: tokens present, cost absent; `TailTranscript` is wired), spike-3 (opencode serve+SSE+REST approval). spike-4 (Wails `OnFileDrop` Linux #3686) and spike-5 (Linux OS desktop notifications) are exercised in the manual WebKit smoke.
+**Resolved spikes:** spike-1 (Claude `PreToolUse` GUI approval), ~~spike-2 (Claude transcript token availability — resolved: tokens present, cost absent; `TailTranscript` is wired)~~ (**as-built: spike-2 is moot — token/cost metering and transcript tailing were removed entirely; perch is not a usage meter**), spike-3 (opencode serve+SSE+REST approval). spike-4 (Wails `OnFileDrop` Linux #3686) and spike-5 (Linux OS desktop notifications) are exercised in the manual WebKit smoke.
 
 **Resolved post-audit (2026-06-04):**
 - `internal/worktree` (the orphaned `.perch.toml` lifecycle-hooks + trust helpers) was **deleted** — never cockpit scope; worktrees are created/removed via `internal/git`. The dead `config.Config` fields it alone fed were removed with it (config is now global-only `roots`).

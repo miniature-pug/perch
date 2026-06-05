@@ -159,7 +159,7 @@ config into the worktree when it opens.
 
 An opencode workspace launches `opencode serve` and the `OpencodeMonitor`
 consumes its Server-Sent-Events stream (`/event`) over an authenticated HTTP
-connection to surface lifecycle, token, and approval events. opencode exposes
+connection to surface lifecycle, approval, and question events. opencode exposes
 session status natively via its SSE stream, so no additional setup is required.
 
 ---
@@ -172,11 +172,32 @@ supports.
 | Cap | Meaning | claude | opencode |
 |-----|---------|:------:|:--------:|
 | `approvals` | Inline tool-call approval (Allow / Always / Deny) | ✅ | ✅ |
-| `attention` | Lifecycle / attention state (running, idle, awaiting, done, errored) | ✅ | ✅ |
-| `tokens` | Token / cost usage reporting | ✅ (tokens only; no cost) | ✅ |
+| `attention` | Lifecycle / attention state (running, idle, awaiting-approval, awaiting-input, done, errored) | ✅ | ✅ |
 
 An agent that did not advertise a cap simply has that surface hidden — the
 cockpit degrades rather than showing dead controls.
+
+perch is **not** a usage meter — there is no token or cost reporting. The two
+caps above are the entire surface.
+
+### Attention states & the question signal
+
+The sidebar shows each workspace's attention state with a distinct color + icon
++ label (never color alone):
+
+| State | Look | Meaning |
+|-------|------|---------|
+| `running` | ◐ running (dim) | the agent is working |
+| `idle` | ◯ idle (dim) | steady idle |
+| `awaiting-approval` | ⚠ needs you (amber, fast pulse) | a tool call is blocked on your Allow/Deny/Always |
+| `awaiting-input` | ? asking you (cyan, slow pulse) | the agent is asking **you** a question |
+| `done` | ✓ done (green) | a turn completed |
+| `errored` | ✗ error (red) | the agent reported a failure |
+
+An **approval** is gated by perch (the docked `ApprovalCard`). A **question**
+(claude `AskUserQuestion`, opencode `question.asked`) is a *signal only*: perch
+surfaces the "asking you" feel but renders no card and sends no reply — you
+answer the question inside the agent's own pane TUI.
 
 ---
 

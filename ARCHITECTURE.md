@@ -123,11 +123,11 @@ Each agent integration implements the `agent.Monitor` interface
 (`internal/agent/monitor.go`):
 
 ```
-Prepare(ctx, workspaceID, cwd, resumeID) (launchCmd, err)
+Prepare(ctx, workspaceID, cwd, resumeID, model) (launchCmd, err)
 Start(ctx)                 // launch the event pump bound to ctx
 Events() <-chan Event
 Approve(reqID, Decision) error
-Capabilities() Caps        // {approvals, attention, tokens}
+Capabilities() Caps        // {approvals, attention}
 Teardown() error
 CurrentState() State
 LastApprovalTool() string
@@ -150,7 +150,7 @@ Key Go→frontend events:
 
 | Event name | Payload | Trigger |
 |------------|---------|---------|
-| `agent:event` | `AgentEvent` | Monitor produces a state/usage/approval event |
+| `agent:event` | `AgentEvent` | Monitor produces a `state`, `approval`, or `question` event |
 | `fs:changed` | — | Per-workspace fsnotify fires (debounced) |
 | `notify` | notification record | `dispatchNotify` emits a blocking/ambient/routine notification |
 | `pty:data:<paneId>` | `[]int` (byte values) | pty bridge read loop |
@@ -338,16 +338,63 @@ claude agent
               → App emits state-update event → frontend re-renders
 ```
 
-Non-`PreToolUse` hook events (`SessionStart`, `Stop`, `StopFailure`,
-`Notification`) are translated by `ClaudeMonitor` into lifecycle `Event`s
-(`running` / `idle` / `errored`) and forwarded the same way; token usage is
-read from the transcript. For **opencode**, the equivalent events arrive over
-the `opencode serve` SSE stream.
+`ClaudeMonitor` installs exactly four hooks (`PreToolUse`, `Stop`,
+`StopFailure`, `SessionStart`). The non-`PreToolUse` events are translated into
+lifecycle `Event`s (`SessionStart` → `running`, `Stop` → `done`, `StopFailure`
+→ `errored`) and forwarded the same way. perch is **not** a usage meter: there
+is no token or cost metering, no `usage` event kind, and no transcript tailing.
+For **opencode**, the equivalent events arrive over the `opencode serve` SSE
+stream — `session.status` (busy/idle, and the only default-emitted frame
+carrying the `sessionID` used for resume), `session.error` (→ `errored`), and
+the question frames below. opencode's experimental `session.next.step.*` frames
+are gated behind `OPENCODE_EXPERIMENTAL_EVENT_SYSTEM`, which perch never sets,
+so they never fire and are not consumed.
 
 Claude status reporting is automatic — `ClaudeMonitor` writes the per-session hook
 config (listener URL + token) into the worktree's `.claude/settings.json` when
 the workspace opens. opencode exposes session status natively via its SSE stream
 (`opencode serve`), so no plugin file is needed for opencode.
+
+### Event kinds, states, and the attention/notification model
+
+A unified `agent.Event` carries a `Kind` (`state`, `approval`, or `question`)
+and, for state-bearing events, a `State`. The full attention state set is six
+values:
+
+| State | Meaning |
+|-------|---------|
+| `running` | The agent is working a turn. |
+| `idle` | Steady idle (e.g. reported at connect, or a non-turn idle). |
+| `awaiting-approval` | A `PreToolUse` tool call is blocked on the user's Allow/Deny/Always verdict. |
+| `awaiting-input` | The agent is asking the **user** a question/choice — distinct from a tool approval. |
+| `done` | A turn completed (busy→idle / claude `Stop`); drives the §8 "Turn complete" ambient toast. |
+| `errored` | The agent reported a failure. |
+
+**Approval vs. question.** An *approval* (`Kind: "approval"`,
+`awaiting-approval`) is a request to act on the system that perch gates behind
+the `ApprovalCard` until the user decides. A *question* (`Kind: "question"`,
+`awaiting-input`) is the agent asking the user to choose — claude's
+`AskUserQuestion` (its `PreToolUse` is **auto-allowed** so the agent renders the
+question in its own pane TUI) and opencode's `question.asked`. A question is a
+**signal only**: perch renders no question card and sends no reply; the user
+answers in the agent's own pane TUI. claude's `ExitPlanMode` stays on the normal
+approval path (auto-allowing it would skip the user's plan review). opencode's
+`question.replied` resumes `running` and `question.rejected` falls back to a
+steady `idle`.
+
+**Sidebar "feels".** Each attention state has a glanceable look in the sidebar
+(`Sidebar.svelte`), color + icon + label (never color alone, for WCAG):
+
+| State | Icon | Label | Color / motion |
+|-------|------|-------|----------------|
+| `awaiting-approval` | ⚠ | needs you | `--perch-warn` amber, fast pulse (1s) |
+| `awaiting-input` | ? | asking you | `--perch-info` cyan, slow pulse (1.6s) |
+| `done` | ✓ | done | `--perch-ok` green, steady |
+| `errored` | ✗ | error | `--perch-err` red, steady |
+| `running` | ◐ | running | dim, steady |
+| `idle` | ◯ | idle | dim, steady |
+
+Pulses are suppressed under `prefers-reduced-motion`.
 
 ---
 
@@ -435,11 +482,10 @@ Every argument the Svelte frontend sends over the IPC bridge is validated in
 
 ## Capabilities & Degradation
 
-Each Monitor advertises `Caps {approvals, attention, tokens}` via
-`Capabilities()`. The frontend reads these and surfaces only the controls the
-agent supports — an agent that omits a cap has that surface hidden rather than
-showing a dead control. Both `ClaudeMonitor` and `OpencodeMonitor` currently
-advertise all three.
+Each Monitor advertises `Caps {approvals, attention}` via `Capabilities()`. The
+frontend reads these and surfaces only the controls the agent supports — an
+agent that omits a cap has that surface hidden rather than showing a dead
+control. Both `ClaudeMonitor` and `OpencodeMonitor` currently advertise both.
 
 ---
 

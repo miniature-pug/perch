@@ -20,7 +20,13 @@ sequenceDiagram
 
     Note over Agent,HL: lifecycle hooks (SessionStart / Stop / StopFailure) POST non-blocking
     Agent->>HL: POST lifecycle event
-    HL->>App: agent:event (state)
+    HL->>App: agent:event (state: running / idle / done / errored)
     App->>FE: agent:event → re-render state glyph
+
+    Note over Agent,User: AskUserQuestion (opencode question.asked) is an attention SIGNAL, not an approval
+    Agent->>HL: POST PreToolUse AskUserQuestion
+    HL->>HL: auto-allow immediately — never blocks. ExitPlanMode stays on the approval path
+    HL->>App: agent:event — kind question, state awaiting-input
+    App->>FE: agent:event → sidebar "asking you" feel, cyan pulse. User answers in the agent's own pane TUI
 
     Note over App,FE: opencode is equivalent — events arrive over the opencode serve SSE /event stream instead

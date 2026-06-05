@@ -1,7 +1,8 @@
 // Command perch is a keyboard-first GUI for managing AI coding sessions
-// (claude, opencode) across git worktrees. Run without arguments it launches
-// the Wails desktop GUI; it also provides the setup, doctor, and version
-// subcommands. See ARCHITECTURE.md for the full design.
+// (claude, opencode) across git worktrees. Run without arguments (or with a
+// path) it launches the Wails desktop GUI; it also provides the attach, doctor,
+// and version subcommands (plus a hidden debug subcommand). See ARCHITECTURE.md
+// for the full design.
 package main
 
 import (
