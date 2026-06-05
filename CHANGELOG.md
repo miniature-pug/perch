@@ -8,6 +8,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Round 6 — create spawns the pty; positioning statement (2026-06-05)
 
+#### Added
+
+- **Liquid-glass aesthetic on floating chrome.** Command palette, approval card,
+  dialogs, notification hub, menu dropdown, file-tree context menu and the undo
+  toast now use a frosted translucent material (`backdrop-filter` blur + a tinted
+  floor + specular edge + depth shadow), centralized in `--perch-glass-*` tokens
+  + `tokens/glass.css`. Work panes (terminal / editor / diff / sidebar) stay
+  opaque — blur on a scrolling pane re-fires every frame in WebKit and would
+  break the AA contrast bar. AA verified: text-on-glass stays ≥6:1 (dark) / ≥11:1
+  (light) at worst-case backdrop bleed.
+- **Glass on/off setting** ("Glass effects" in Settings) — the practical a11y
+  off-switch for transparency, since `prefers-reduced-transparency` does not fire
+  in WebKitGTK. Defaults on; persisted via an inverted `glassDisabled` field so an
+  absent key keeps glass enabled.
+- **Interaction feedback.** The focused sub-window (sidebar / stage / shell
+  drawer) shows a subtle accent ring (`:focus-within`, non-occluding — other
+  panes stay fully visible); high-frequency rows (sidebar sessions, notification
+  items) get a small hover lift. Tokenized; transforms guarded by
+  `prefers-reduced-motion`.
+
 #### Fixed
 
 - **A freshly-created session was selected but dead until a second click** —

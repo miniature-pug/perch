@@ -139,8 +139,28 @@ D-Bus message; only this manual step proves the real round-trip.
 - [ ] Open Settings (menu ▸ Settings… or the `settings:open` command)
 - [ ] Change theme (e.g. to `tokyo-night`) → colors update IMMEDIATELY
 - [ ] Toggle Do-not-disturb
+- [ ] Toggle **Glass effects** off → floating chrome (palette, dialogs, menus,
+      approval card, notification hub) becomes solid opaque; toggle on → frosted
+      translucency returns. Setting persists across restart.
 - [ ] Revoke an always-allow rule (if any exist)
 - [ ] Close & reopen Settings → the theme selection persisted
+
+## Look & feel — liquid glass + interaction (visual; no automated coverage)
+The glass material, the active-zone ring, and the hover lift are rendered by real
+WebKit and cannot be verified headlessly — only this manual pass proves them.
+- [ ] Floating chrome (open the command palette / a dialog / the menu dropdown)
+      shows a **frosted translucent** material — you can see the panes blurred
+      behind it, text stays crisp and legible (AA holds), with a subtle light
+      edge and depth shadow. Work panes (terminal / editor / diff / sidebar)
+      are **opaque**, not glassy.
+- [ ] On a headless/VM display with `WEBKIT_DISABLE_COMPOSITING_MODE=1`, glass
+      falls back to a **solid opaque** tint (no blur) and chrome stays legible.
+- [ ] Focusing a sub-window (click into the sidebar, the stage, or the shell
+      drawer) shows a subtle **accent ring** on that zone; the other panes stay
+      fully visible (not dimmed).
+- [ ] Hovering a sidebar session row or a notification item gives a small
+      **lift**; with OS "reduce motion" on, the lift is suppressed (background
+      highlight only).
 
 ## Desktop notification
 - [ ] Background the window; trigger a BLOCKING event (ask the agent to do
