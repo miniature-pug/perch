@@ -2593,6 +2593,24 @@ describe("App.svelte Feature 1: diffstat counts in Sidebar and status line", () 
     });
   });
 
+  it("status line shows the 'files to review' pill for the active workspace", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    await tick();
+
+    // Alpha's diffStat returns 2 files → the goal-gradient pill "2 files to review".
+    await waitFor(() => {
+      const pill = document.querySelector(".status-review-pill");
+      expect(pill).toBeInTheDocument();
+      expect(pill!.getAttribute("aria-label")).toBe("2 files to review");
+    });
+  });
+
   it("onFsChanged for ws-1 re-calls diffStat with /tmp/alpha", async () => {
     const { listWorkspaces, diffStat } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);

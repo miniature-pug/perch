@@ -4,6 +4,7 @@ import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 
 const writeSpy   = vi.fn();
 const disposeSpy = vi.fn();
+const focusSpy   = vi.fn();
 const onDataCbs: Array<(d: string) => void> = [];
 
 vi.mock("@xterm/xterm", () => ({
@@ -12,6 +13,7 @@ vi.mock("@xterm/xterm", () => ({
     write(d: Uint8Array | string) { writeSpy(d); }
     onData(cb: (d: string) => void) { onDataCbs.push(cb); return { dispose() {} }; }
     loadAddon() {}
+    focus() { focusSpy(); }
     get cols() { return 80; }
     get rows() { return 24; }
     dispose() { disposeSpy(); }
@@ -38,7 +40,7 @@ vi.mock("./wails", () => ({
 }));
 
 afterEach(() => {
-  cleanup(); writeSpy.mockClear(); disposeSpy.mockClear();
+  cleanup(); writeSpy.mockClear(); disposeSpy.mockClear(); focusSpy.mockClear();
   ptyCbs.length = 0; onDataCbs.length = 0; exitCbs.length = 0;
 });
 
@@ -99,5 +101,11 @@ describe("Terminal.svelte", () => {
     const { unmount } = render(Terminal, { props: { paneId: "pane8", cwd: "/repo" } });
     unmount();
     expect(offSpy).toHaveBeenCalled();
+  });
+  it("exported focus() forwards to the underlying xterm (awaiting-input auto-focus mechanism)", async () => {
+    const { default: Terminal } = await import("./Terminal.svelte");
+    const { component } = render(Terminal, { props: { paneId: "pane9", cwd: "/repo" } });
+    (component as unknown as { focus: () => void }).focus();
+    expect(focusSpy).toHaveBeenCalled();
   });
 });

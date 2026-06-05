@@ -56,6 +56,14 @@ Six converged rounds left the codebase clean on feature parity (**0 cut corners*
 
 ---
 
+## Reconciliation — findings surfaced but not in R7-1..R7-20 (each given a disposition)
+
+- **8 "unexport candidate" Go symbols** (`discover.DefaultMaxDepth`/`DefaultPrune`, `notify.RunFunc`, `doctor.ParseToolVersions`, `fs.ShouldExclude`/`RevealRunner`/`SetRevealRunner`, `proc.ExitCode`): **NOT dead, NOT actioned.** The dead-code agent's "zero prod callers" was a false positive (grep conflated "not used cross-package" with "dead"). Verified: `DefaultMaxDepth` (discover.go:69), `DefaultPrune` (74), `ParseToolVersions` (227), `ShouldExclude` (218/241), `ExitCode` (207) all have production callers. And 5 of the 8 (`RunFunc`, `ShouldExclude`, `RevealRunner`, `SetRevealRunner`, `ExitCode`) are referenced by **black-box** `*_test` packages (`notify_test`, `fs_test`, `proc_test`) or are injection seams (the project's established exported-seam pattern, already covered by the 2026-06-03 audit's "test seams kept by design" exclusion) — unexporting them would break the build. `ParseToolVersions`/`DefaultMaxDepth`/`DefaultPrune` are package-internal but legitimately exported defaults/helpers; unexporting is cosmetic-only and elective. None warrant action.
+- **status-review-pill untested at App level** (engagement agent): **CLOSED** — added an App.test.ts assertion (Alpha's mock diffStat returns 2 files → pill `aria-label="2 files to review"`). Round-6 logic, unit-testable in jsdom.
+- **Terminal.focus() untested** (engagement agent): **CLOSED** — added a Terminal.test.ts case asserting the exported `focus()` forwards to the xterm instance (the awaiting-input auto-focus mechanism).
+- **`OpenShell` uses `context.Background()`** (structure agent, LOW): **NOT actioned.** Works correctly — `Bridge.Close()` is the sole lifecycle owner for shell panes and sends SIGKILL explicitly. Tying a cancellable context would add complexity for no functional gain; recorded, not changed.
+- `focusAwaitingInput`/`emphasizeInput` integration path, all glass/feel/visual: **manual-smoke-only** (jsdom/WebKit ceiling) — not unit-testable, flagged in smoke-checklist, not findings.
+
 ## Deliberate non-actions (decided, with rationale)
 
 - **`--perch-fs-h1/h2`, `--perch-lh-h1/h2`, `--perch-sp-5..8`** (flagged "unused" by dead-code sweep): **KEPT.** These are the documented design-token scales (spec §7.4 promises the type scale incl. headings 24/20 and the 8pt grid). A scale is intentionally complete; removing mid-scale steps creates spec drift and an inconsistent system. Parity agent independently cites them as fulfilling §7.4.
