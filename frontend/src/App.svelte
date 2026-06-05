@@ -846,14 +846,27 @@
                       background: var(--perch-bg); color: var(--perch-text);
                       font-family: var(--perch-font-sans); font-size: var(--perch-fs-body); }
   .main-area        { display: flex; flex: 1; min-height: 0; }
-  .sidebar-zone     { flex-shrink: 0; overflow: hidden; border-right: 1px solid var(--perch-border); }
+  .sidebar-zone     { flex-shrink: 0; overflow: hidden; border-right: 1px solid var(--perch-border);
+                      transition: outline-color var(--perch-dur) var(--perch-ease); }
   .divider-v        { width: 4px; cursor: col-resize; background: var(--perch-border); flex-shrink: 0; }
   .divider-h        { height: 4px; cursor: row-resize; background: var(--perch-border); }
   .center-column    { display: flex; flex-direction: column; flex: 1; min-width: 0; }
-  .stage-zone       { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .stage-zone       { flex: 1; min-height: 0; display: flex; flex-direction: column;
+                      transition: outline-color var(--perch-dur) var(--perch-ease); }
   .code-layout      { display: flex; flex-direction: row; flex: 1; min-height: 0; min-width: 0; }
   .terminal-zone    { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
-  .shell-drawer-zone { flex-shrink: 0; overflow: hidden; border-top: 1px solid var(--perch-border); }
+  .shell-drawer-zone { flex-shrink: 0; overflow: hidden; border-top: 1px solid var(--perch-border);
+                       transition: outline-color var(--perch-dur) var(--perch-ease); }
+  /* Feature A — active-zone accent ring (you-are-here cue, not a focus indicator).
+     Uses outline (not inset box-shadow) so it paints over opaque child panes and
+     is not clipped by the zones' overflow:hidden; negative offset draws it inside. */
+  [data-zone="sidebar"]:focus-within,
+  [data-zone="stage"]:focus-within,
+  [data-zone="shell-drawer"]:focus-within {
+    outline: var(--perch-ring-w) solid var(--perch-ring-color);
+    outline-offset: calc(-1 * var(--perch-ring-w));
+  }
+
   .filter-input      { display: block; width: 100%; box-sizing: border-box;
                        padding: 0.25rem 0.5rem; border: none; border-bottom: 1px solid var(--perch-border-strong);
                        background: var(--perch-bg); color: var(--perch-text);

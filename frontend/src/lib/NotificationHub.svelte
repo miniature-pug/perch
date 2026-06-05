@@ -146,7 +146,9 @@
     border-bottom: 1px solid var(--perch-border);
     border-left: 3px solid transparent;
     transition: background var(--perch-dur) var(--perch-ease),
-                border-color var(--perch-dur) var(--perch-ease);
+                border-color var(--perch-dur) var(--perch-ease),
+                transform var(--perch-dur) var(--perch-ease),
+                box-shadow var(--perch-dur) var(--perch-ease);
   }
 
   .notif-item:last-child {
@@ -155,6 +157,13 @@
 
   .notif-item:hover {
     background: color-mix(in srgb, var(--perch-accent) 8%, transparent);
+    transform: translateY(var(--perch-hover-lift));
+    box-shadow: var(--perch-shadow-toast);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .notif-item { transition: none; }
+    .notif-item:hover { transform: none; }
   }
 
   /* Unread = slightly elevated bg */

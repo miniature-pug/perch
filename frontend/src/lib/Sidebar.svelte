@@ -159,12 +159,16 @@
     font-size: var(--perch-fs-body);
     text-align: left;
     cursor: pointer;
-    transition: background var(--perch-dur) var(--perch-ease);
+    transition: background var(--perch-dur) var(--perch-ease),
+                transform var(--perch-dur) var(--perch-ease),
+                box-shadow var(--perch-dur) var(--perch-ease);
     user-select: none;
   }
 
   .workspace-row:hover {
     background: color-mix(in srgb, var(--perch-accent) 10%, transparent);
+    transform: translateY(var(--perch-hover-lift));
+    box-shadow: var(--perch-shadow-toast);
   }
 
   .workspace-row[aria-current="page"] {
@@ -214,6 +218,8 @@
   @keyframes perch-attn-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
   @media (prefers-reduced-motion: reduce) {
     .status-awaiting-approval, .status-awaiting-input { animation: none; }
+    .workspace-row { transition: none; }
+    .workspace-row:hover { transform: none; }
   }
 
   /* ── Session title ────────────────────────────────────────────── */

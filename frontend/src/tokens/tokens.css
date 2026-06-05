@@ -18,6 +18,10 @@
   --perch-shadow-float: 0 8px 32px rgba(0, 0, 0, 0.45);
   --perch-shadow-toast: 0 4px 16px rgba(0, 0, 0, 0.3);
   --perch-scrim: rgba(0, 0, 0, 0.5);
+  /* Interaction feedback */
+  --perch-hover-lift: -1px;
+  --perch-ring-w: 2px;
+  --perch-ring-color: color-mix(in srgb, var(--perch-accent) 55%, transparent);
   /* Glass + radius */
   --perch-radius-sm: 4px;
   --perch-radius-md: 6px;
