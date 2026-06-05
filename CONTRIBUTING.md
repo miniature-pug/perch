@@ -165,6 +165,4 @@ below 80% will block the review gate.
 |----------|----------|
 | Implementation plans | `docs/superpowers/plans/` |
 | Architecture diagrams (Mermaid) | `docs/diagrams/` |
-| Security ledger | `docs/security-audit.md` |
-| Design rationale / internal ADRs | `plan.md` (⚠ superseded original TUI spec — see banner at top; current architecture reference is `ARCHITECTURE.md`) |
 | Public architecture overview | `ARCHITECTURE.md` |
