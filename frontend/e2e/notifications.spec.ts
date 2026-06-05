@@ -119,7 +119,7 @@ test("dismissing a notification marks it read (dismiss button present)", async (
   await expect(readItem).toBeVisible();
 });
 
-test("DND switch blocks ambient and routine but not blocking", async ({ page }) => {
+test("DND silences ambient/routine (logged as read) but never blocking", async ({ page }) => {
   // Toggle DND on via the bell → hub → "Do not disturb" button
   await openNotificationHub(page);
   const dndBtn = page.locator('section[aria-label="notification hub"] button', {
@@ -131,19 +131,20 @@ test("DND switch blocks ambient and routine but not blocking", async ({ page }) 
   await page.locator('button[aria-label="notifications"]').click();
   await page.waitForTimeout(200);
 
-  // Emit ambient — should be suppressed by DND
-  await emitNotification(page, "ambient", "Suppressed Ambient", "this should not appear");
-  // Emit blocking — should still appear
+  // Emit ambient — under DND it is SILENCED (logged as read), not dropped
+  await emitNotification(page, "ambient", "Silenced Ambient", "still logged, just read");
+  // Emit blocking — DND never silences blocking
   await emitNotification(page, "blocking", "Critical Block", "must show");
 
   // Open hub
   await openNotificationHub(page);
 
-  // Blocking notification must be present
+  // Blocking notification present (DND never silences tier 1)
   await expect(page.locator(".notif-item.tier-blocking")).toBeVisible();
 
-  // Ambient notification must NOT be present (DND blocked it)
-  await expect(page.locator(".notif-item.tier-ambient")).not.toBeVisible();
+  // Ambient notification IS present (silenced, not dropped) but recorded read —
+  // it stays in the away catch-up log without bumping the unread badge.
+  await expect(page.locator(".notif-item.tier-ambient.read")).toBeVisible();
 
   await page.screenshot({ path: path.join(SCREENSHOT_DIR, "notification-dnd-active.png"), fullPage: true });
 });

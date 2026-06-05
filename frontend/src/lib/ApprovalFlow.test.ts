@@ -125,12 +125,16 @@ describe("notification store tiering", () => {
     expect(getItems()).toHaveLength(1);
   });
 
-  it("ambient and routine items are suppressed by DND", async () => {
+  it("ambient and routine items are silenced (logged as read) by DND, not dropped", async () => {
     const { addAmbient, addRoutine, setDnd, getItems } =
       await import("./stores/notifications.svelte");
     setDnd(true);
     addAmbient("ws-1", "Quiet", "background info");
     addRoutine("ws-1", "Bg", "routine task");
-    expect(getItems()).toHaveLength(0);
+    // DND silences the interruption but keeps the record for away catch-up:
+    // both are still in the hub, just recorded already-read (no unread badge).
+    const items = getItems();
+    expect(items).toHaveLength(2);
+    expect(items.every((n) => n.read)).toBe(true);
   });
 });

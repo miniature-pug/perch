@@ -22,12 +22,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `handleCreate → onSelect → openWorkspace` wiring but NOT that a real pty/agent
   spawns on create; that round-trip is a manual smoke-checklist item.)
 
+#### Changed
+
+- **Do-Not-Disturb now silences tiers 2–3 instead of dropping them.** Previously
+  `add()` early-returned for ambient/routine under DND, so those events were
+  never recorded — stepping away with DND on meant they were gone from the
+  notification hub on return. Now they are still logged (recorded already-read,
+  so no unread bell-badge bump and no toast), keeping the hub a complete away
+  catch-up log. Blocking (tier 1) is never silenced. Matches spec §8 "DND mutes
+  tiers 2–3" read as *silence the interruption, keep the record*.
+
 #### Docs
 
 - **README positioning paragraph** — stated explicitly what perch is and is
   not: a cockpit *around* the agents (consolidation, single-window flow), not an
   editor or harness replacement and not a thin wrapper. The thesis previously
   lived only in the internal design spec.
+- **smoke-checklist desktop-notification section corrected** — it claimed an OS
+  desktop notification fires "on turn completion," but turn-completion is the
+  `ambient` tier and OS notify is blocking-only; fixed to test the real
+  blocking-tier path, and updated the DND item to the silence-but-log behavior.
 
 ### Round 5 — install-script fix, dead-code trim & doc sync (2026-06-05)
 

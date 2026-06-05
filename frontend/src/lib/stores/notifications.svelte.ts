@@ -20,12 +20,18 @@ export function getDnd():   boolean         { return dnd; }
 export function setDnd(v: boolean)          { dnd = v; }
 
 function add(tier: Tier, workspaceId: string, title: string, body: string) {
-  if (dnd && tier !== "blocking") return;
   const id = `notif-${++_seq}`;
-  items = [{ id, workspaceId, tier, title, body, read: false, ts: Date.now() }, ...items];
+  // DND silences tiers 2-3 — it does NOT drop them. They are still logged to the
+  // hub so the away catch-up stays complete, but recorded as already-read so they
+  // never bump the unread bell badge (the only interruption these tiers have; OS
+  // notifications fire for blocking only). Blocking (tier 1) is never silenced.
+  // (spec §8: "DND mutes tiers 2-3" — mute = silence the interruption, keep the record.)
+  const silenced = dnd && tier !== "blocking";
+  items = [{ id, workspaceId, tier, title, body, read: silenced, ts: Date.now() }, ...items];
 
-  // Auto-dismiss for non-blocking tiers (spec §8 "ambient → toast 5-7s")
-  if (tier !== "blocking") {
+  // Auto-dismiss for non-blocking tiers that were actually surfaced (spec §8
+  // "ambient → toast 5-7s"). Silenced items are already read — no timer needed.
+  if (tier !== "blocking" && !silenced) {
     const delay = tier === "ambient" ? AMBIENT_DISMISS_MS : ROUTINE_DISMISS_MS;
     const t = setTimeout(() => {
       _timers.delete(id);

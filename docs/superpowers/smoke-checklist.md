@@ -143,9 +143,16 @@ D-Bus message; only this manual step proves the real round-trip.
 - [ ] Close & reopen Settings → the theme selection persisted
 
 ## Desktop notification
-- [ ] Background the window; ask the agent for a slow operation
-- [ ] An OS desktop notification appears on turn completion
-- [ ] With DND on, ambient/routine notifications are suppressed; blocking still surfaces
+- [ ] Background the window; trigger a BLOCKING event (ask the agent to do
+      something that needs approval, or cause an agent error)
+- [ ] An OS desktop notification appears. OS notify fires for **blocking-tier
+      events only** (approval needed / agent error) and only while the window is
+      unfocused; turn-completion is `ambient` and does NOT desktop-notify
+      (`app.go` dispatchNotify returns before the OS-notify path for non-blocking)
+- [ ] With DND on, ambient/routine events are **silenced, not dropped**: they
+      still appear in the notification hub (recorded read, no unread-badge bump)
+      so the away catch-up stays complete; blocking still surfaces (badge + OS
+      notification)
 
 ## Accessibility (keyboard)
 - [ ] Command palette: ArrowUp/Down moves the selection, Enter runs it, Escape closes

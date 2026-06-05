@@ -12,7 +12,7 @@ describe("notification store", () => {
     expect(items[0].read).toBe(false);
   });
 
-  it("DND mutes tier 2 and 3 but not tier 1", async () => {
+  it("DND silences tiers 2-3 (logged as read) but never tier 1", async () => {
     const { addBlocking, addAmbient, addRoutine, setDnd, getItems } =
       await import("./notifications.svelte");
     setDnd(true);
@@ -20,9 +20,16 @@ describe("notification store", () => {
     addAmbient("ws_b", "Done", "quiet");
     addRoutine("ws_c", "File", "bg");
     const items = getItems();
+    // All three are still logged to the hub — DND silences, it does not drop —
+    // so the away catch-up stays complete.
     expect(items.filter((i) => i.tier === "blocking")).toHaveLength(1);
-    expect(items.filter((i) => i.tier === "ambient")).toHaveLength(0);
-    expect(items.filter((i) => i.tier === "routine")).toHaveLength(0);
+    expect(items.filter((i) => i.tier === "ambient")).toHaveLength(1);
+    expect(items.filter((i) => i.tier === "routine")).toHaveLength(1);
+    // Silenced tiers 2-3 are recorded already-read (no unread-badge bump);
+    // blocking stays unread (always surfaces).
+    expect(items.find((i) => i.tier === "blocking")!.read).toBe(false);
+    expect(items.find((i) => i.tier === "ambient")!.read).toBe(true);
+    expect(items.find((i) => i.tier === "routine")!.read).toBe(true);
   });
 
   it("markRead + clearRead remove read items", async () => {
