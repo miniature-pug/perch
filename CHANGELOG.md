@@ -6,6 +6,59 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.1.0] - Unreleased
 
+### Round 7 — converged-state audit: notification bug, glass defeat, centralization (2026-06-05)
+
+A 9-agent read-only audit of the rounds 3–6 delta (`docs/audit-2026-06-05-round7.md`).
+Feature parity was already complete (0 cut corners) and compiled-code removals
+clean; the findings were a notification logic bug the gate couldn't see, a glass
+defeat, and a set of tidies.
+
+#### Fixed
+
+- **Tool-approval notifications never fired.** `dispatchNotify`'s approval case
+  matched `Kind == "state"`, but both monitors emit approval events with
+  `Kind == "approval"`, so real approvals fell through to the default branch: the
+  blocking-tier in-app notification *and* the OS desktop notification were silent
+  (only the docked approval card showed, fed directly from `agent:event`). Per
+  spec §8 a blocking event must surface both. Five tests had encoded the buggy
+  `Kind:"state"` contract and masked it; all now assert against `Kind:"approval"`,
+  and the seam test verifies the OS notification fires when unfocused.
+- **Notification hub glass never rendered** — the `.notification-hub-dock` wrapper
+  carried an opaque `--perch-bg` background directly behind the hub's
+  `backdrop-filter`, so the frost blurred a solid color. Removed; the hub owns its
+  own surface.
+- **Diff view showed "No changes" on a git error** — the initial load now renders
+  "Could not load diff" when `diffStat` rejects, instead of masquerading the
+  failure as an empty diff.
+- **Always-rule could be silently dropped on corrupt settings** — `Approve` now
+  propagates the `GetSettings` error instead of discarding it.
+- The dbus availability probe in `notify.New()` no longer leaks its throwaway
+  session-bus connection; the undo-toast slide-in is now guarded by
+  `prefers-reduced-motion`; the glass-off / unsupported fallback also resets
+  `--perch-glass-shadow` so the specular sheen no longer renders on solid cards.
+
+#### Changed
+
+- **Config centralization** (no magic numbers / no dead tokens): the sidebar
+  attention-pulse durations + min-opacity are now `--perch-dur-attn-*` /
+  `--perch-attn-opacity-min` tokens; loopback binds route through a `loopbackHost`
+  const in both `hooklistener` and `opencode_monitor`; agent identifiers are
+  `AGENT_CLAUDE` / `AGENT_OPENCODE` consts; the count-up JS fallback is
+  `COUNTUP_FALLBACK_MS`.
+
+#### Removed
+
+- Dead `--perch-glass-sheen` token (zero consumers, all 9 themes) and orphaned
+  agent testdata fixtures left behind by the token-metering and `ListSessions`
+  removals (only `events.sse` is still read).
+
+#### Docs
+
+- Synced doc/diagram drift to as-built: `fs:changed` payload, the
+  `SetWindowFocus` / `DiscoverRepos` bound methods, the `model` registry field
+  (ARCHITECTURE + discovery diagram), the `run` / `verify-all` make targets, and a
+  Round-6 record of the dropped closing ritual.
+
 ### Round 6 — create spawns the pty; positioning statement (2026-06-05)
 
 #### Added
@@ -85,6 +138,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   so no unread bell-badge bump and no toast), keeping the hub a complete away
   catch-up log. Blocking (tier 1) is never silenced. Matches spec §8 "DND mutes
   tiers 2–3" read as *silence the interruption, keep the record*.
+
+#### Removed
+
+- **Session-complete "closing ritual"** — scoped for this round, built, then
+  dropped before shipping. The trigger keyed on all sessions being settled, but
+  `done` is the *per-turn* state (the agent finished a turn), not session-ended,
+  so the "all settled" edge fires after nearly every turn — the modal would pop
+  per turn, a flow-break already covered by the settle-pop, the count-up, and the
+  ambient "Turn complete" toast. Removed cleanly (component, helpers, and the
+  orphaned `perch-ritual-in` keyframe); no closing-ritual code remains.
 
 #### Docs
 

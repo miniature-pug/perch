@@ -99,6 +99,8 @@ API the Svelte frontend calls over the IPC bridge:
 | `Branches` | git metadata for a repo |
 | `ListDir / ReadFile / WriteFile / RevealInFiles / CopyPath` | file-tree operations |
 | `GetSettings / SaveSettings / GetLayout / SaveLayout` | persisted UI state |
+| `SetWindowFocus(focused)` | Track window focus so OS notifications fire only while unfocused |
+| `DiscoverRepos()` | Enumerate git repos under the configured roots for the New Session dialog |
 
 Every argument crossing the IPC boundary is validated inside `app.App`:
 workspace / pane IDs are checked against a `[A-Za-z0-9_-]` charset allowlist;
@@ -151,7 +153,7 @@ Key Go→frontend events:
 | Event name | Payload | Trigger |
 |------------|---------|---------|
 | `agent:event` | `AgentEvent` | Monitor produces a `state`, `approval`, or `question` event |
-| `fs:changed` | — | Per-workspace fsnotify fires (debounced) |
+| `fs:changed` | `{workspaceId, path}` | Per-workspace fsnotify fires (debounced) |
 | `notify` | notification record | `dispatchNotify` emits a blocking/ambient/routine notification |
 | `pty:data:<paneId>` | `[]int` (byte values) | pty bridge read loop |
 | `pty:exit:<paneId>` | `{code}` | pty process exits |
@@ -303,6 +305,7 @@ Workspaces are persisted as a single JSON store at
 | `id` | Stable workspace identifier (charset-validated). |
 | `worktreePath` | Absolute path to the git worktree. |
 | `agent` | `claude` or `opencode`. |
+| `model` | Model passed at create time (`omitempty` — absent means the agent's default). |
 | `branch` | Worktree branch. |
 | `title` | Display label. |
 | `lastSessionID` | Resume id for the agent (passed to `Monitor.Prepare`). |

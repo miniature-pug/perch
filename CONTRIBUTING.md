@@ -40,6 +40,7 @@ Run targets from the repo root. All targets respect the vendored build.
 | `make shell` | Open an interactive shell inside the `perch-dev` image |
 | `make build` | Build `./bin/perch` with `-tags "production webkit2_41"` (trimpath, ldflags version stamp; links webkit2gtk-4.1) |
 | `make install` | Install to `GOBIN` / `~/go/bin` with `-tags "production webkit2_41"` |
+| `make run` | `build` then run `./bin/perch` (needs an X/Wayland display for the GUI) |
 | `make gui-build` | `npm --prefix frontend ci` + `npm --prefix frontend run build`, then `go build -tags "production webkit2_41"` |
 | `make gui-run` | `gui-build` then launch the binary (needs an X/Wayland display) |
 | `make test` | Unit tests (`go test -race -count=1 ./...`) — in the `perch-dev` container |
@@ -53,6 +54,7 @@ Run targets from the repo root. All targets respect the vendored build.
 | `make vet` | `go vet ./...` — in the `perch-dev` container |
 | `make vulncheck` | govulncheck v1.3.0 — prebaked pinned binary inside the `perch-dev` image; scans deps for known CVEs |
 | `make verify` | Verify every module checksum against `go.sum` |
+| `make verify-all` | Quality gates only: `vet lint vulncheck test-front` (vet + lint + govulncheck + tsc + frontend unit; no integration/e2e) — in the `perch-dev` container |
 | `make tidy` | `go mod tidy` then refresh the vendor tree |
 | `make vendor` | Refresh the committed `/vendor` tree |
 | `make cross` | Build `./bin/perch-linux-amd64` with `-tags "production webkit2_41"` (Linux-only; cgo+WebKit requires per-target toolchain) |
