@@ -25,8 +25,11 @@
 </script>
 
 {#if caps.approvals}
-  <div role="dialog" aria-modal="true" aria-label="approval card" class="approval-card"
-       tabindex="-1" use:focusOnMount>
+  <!-- A docked, bottom-center card (App keeps the sidebar/terminal live), so it is
+       a labeled, focus-on-open landmark region — NOT a modal: aria-modal="true"
+       would falsely tell AT the rest of the page is inert. -->
+  <section aria-label="approval card" class="approval-card"
+           tabindex="-1" use:focusOnMount>
     <header class="approval-header">
       <span class="tool-name">{req.tool}</span>
       {#if queue.length > 1}<span class="batch-count">{queue.length} pending</span>{/if}
@@ -44,7 +47,7 @@
         <span class="batch-badge">{queue.length}</span>
       </div>
     {/if}
-  </div>
+  </section>
 {/if}
 
 <style>
