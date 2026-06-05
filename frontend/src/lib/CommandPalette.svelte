@@ -113,7 +113,7 @@
 </script>
 
 {#if open}
-  <div role="dialog" aria-label="command palette" class="palette-overlay">
+  <div role="dialog" aria-modal="true" aria-label="command palette" class="palette-overlay">
     <div class="palette">
       <input type="text" role="combobox" aria-autocomplete="list" aria-controls="palette-list"
         aria-expanded={open}

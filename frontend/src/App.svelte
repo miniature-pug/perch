@@ -298,21 +298,33 @@
   // Command registry — keyed by the ids MenuBar actually emits.
   // ---------------------------------------------------------------------------
   // ---------------------------------------------------------------------------
-  // Shared bulk-approval helper — mid-flight safe.
-  // Snapshots entries pre-await; reads approvals fresh post-await; only removes
-  // the entry at wsId if it still holds the SAME reqId we just acted on.
+  // Bulk-approval helper — SAFETY-SCOPED to the ACTIVE workspace only.
+  //
+  // A batch ("Approve all" / "Deny all") action MUST only affect the approval the
+  // user is actually looking at — the active workspace's pending request. It must
+  // NEVER silently green-light a tool waiting in a DIFFERENT, unseen workspace.
+  // The cross-workspace queue still DRIVES the batch-button render condition (the
+  // "N pending" indicator), but the ACTION resolves active.id alone.
+  //
+  // The data model is one-approval-per-workspace (approvals[wsId] = req), so the
+  // active workspace has at most one pending request. Mid-flight safe: re-reads
+  // approvals after the await and only clears the active key if it still holds the
+  // SAME reqId we acted on (a newer event may have replaced it).
   // ---------------------------------------------------------------------------
   async function decideAll(decision: "allow" | "deny") {
-    const entries = Object.entries(approvals);           // pre-await snapshot
-    const results = await Promise.allSettled(entries.map(([, req]) => approve(req.reqId, decision)));
-    const next = { ...approvals };                        // fresh read post-await
-    results.forEach((res, i) => {
-      const [wsId, req] = entries[i];
-      if (next[wsId]?.reqId !== req.reqId) return;        // replaced mid-flight → leave survivor
-      if (res.status === "fulfilled") delete next[wsId];
-      else addBlocking(wsId, "Approval failed", String(res.reason));
-    });
-    approvals = next;
+    const wsId = active?.id;
+    if (!wsId) return;
+    const req = approvals[wsId];                          // active's pending request (if any)
+    if (!req) return;
+    try {
+      await approve(req.reqId, decision);
+      if (approvals[wsId]?.reqId === req.reqId) {         // not replaced mid-flight → clear it
+        const { [wsId]: _, ...rest } = approvals;
+        approvals = rest;
+      }
+    } catch (e) {
+      addBlocking(wsId, "Approval failed", String(e));
+    }
   }
 
   type Command = { id: string; group: string; label: string; keybinding?: string; run: () => void | Promise<void> };

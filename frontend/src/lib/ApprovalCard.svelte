@@ -1,6 +1,7 @@
 <!-- frontend/src/lib/ApprovalCard.svelte -->
 <script lang="ts">
   import type { ApprovalReq, AgentCaps } from "./wails";
+  import { focusOnMount } from "./actions";
 
   let {
     req, queue, caps, onDecision, onApproveAll, onDenyAll,
@@ -24,7 +25,8 @@
 </script>
 
 {#if caps.approvals}
-  <section aria-label="approval card" class="approval-card">
+  <div role="dialog" aria-modal="true" aria-label="approval card" class="approval-card"
+       tabindex="-1" use:focusOnMount>
     <header class="approval-header">
       <span class="tool-name">{req.tool}</span>
       {#if queue.length > 1}<span class="batch-count">{queue.length} pending</span>{/if}
@@ -42,7 +44,7 @@
         <span class="batch-badge">{queue.length}</span>
       </div>
     {/if}
-  </section>
+  </div>
 {/if}
 
 <style>

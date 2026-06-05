@@ -22,13 +22,18 @@
   $effect(() => { if (open) { agent = initialAgent ?? DEFAULT_AGENT; repo = repos[0] ?? ""; model = DEFAULT_MODEL; } });
 
   // Load branches whenever repo changes (and is non-empty).
+  // Cancellation guard: switching repos rapidly can leave an older loadBranches
+  // in flight; its stale resolve must not clobber the newer repo's branch list.
   $effect(() => {
     const currentRepo = repo;
     if (!currentRepo) { branches = []; branch = ""; return; }
+    let cancelled = false;
     loadBranches(currentRepo).then((list) => {
+      if (cancelled) return;
       branches = list;
       branch   = list[0] ?? "";
     });
+    return () => { cancelled = true; };
   });
 
   function handleCreate() {
@@ -42,7 +47,7 @@
 </script>
 
 {#if open}
-  <div role="dialog" aria-label="new session" class="dialog-overlay"
+  <div role="dialog" aria-modal="true" aria-label="new session" class="dialog-overlay"
        tabindex="-1" onkeydown={handleKey}>
     <div class="dialog">
       <h2>New Session</h2>

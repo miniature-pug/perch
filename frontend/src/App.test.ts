@@ -1406,13 +1406,20 @@ describe("App.svelte 4.25.6c: agent:approve-all / deny-all", () => {
     },
   ];
 
-  it("agent:approve-all calls approve(reqId,'allow') for every pending approval and clears them", async () => {
+  // SAFETY (Feature A): "Approve all pending" must scope to the ACTIVE workspace
+  // ONLY — it must NEVER silently green-light a tool waiting in a different,
+  // unseen workspace. With Alpha active, approve-all resolves Alpha's request and
+  // leaves Beta's untouched.
+  it("agent:approve-all resolves ONLY the active workspace's approval; other workspace stays pending", async () => {
     const { listWorkspaces, approve } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(twoApprovalWorkspaces);
     const { default: App } = await import("./App.svelte");
     render(App);
 
-    await screen.findByRole("button", { name: "Alpha" });
+    // Select Alpha (ws-1) so it is the ACTIVE workspace.
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    await tick();
 
     // Inject approval events for both workspaces
     const cb = captured.agent.at(-1)!;
@@ -1429,33 +1436,37 @@ describe("App.svelte 4.25.6c: agent:approve-all / deny-all", () => {
     const approveAllItem = screen.getByRole("menuitem", { name: "Approve all pending" });
     await fireEvent.click(approveAllItem);
 
+    // Only Alpha's (active) request is approved.
     await waitFor(() => {
       expect(approve).toHaveBeenCalledWith("req-a1", "allow");
-      expect(approve).toHaveBeenCalledWith("req-b1", "allow");
     });
+    // Beta's request must NOT have been touched — the safety invariant.
+    expect(approve).not.toHaveBeenCalledWith("req-b1", "allow");
 
-    // Switch to Alpha (ws-1) and verify its approval was cleared (summary absent)
-    await fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
+    // Alpha (active) approval cleared.
     await waitFor(() =>
       expect(screen.queryByText("Alpha approval")).not.toBeInTheDocument()
     );
 
-    // Switch to Beta (ws-2) and verify its approval was also cleared
+    // Beta still has its pending approval — switch to it and verify it survived.
     await fireEvent.click(screen.getByRole("button", { name: "Beta" }));
     await waitFor(() =>
-      expect(screen.queryByText("Beta approval")).not.toBeInTheDocument()
+      expect(screen.getByText("Beta approval")).toBeInTheDocument()
     );
   });
 
-  it("agent:approve-all partial failure: failed approval stays; a blocking notification added", async () => {
+  it("agent:approve-all failure on the active approval: it stays; a blocking notification added", async () => {
     const { listWorkspaces, approve } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(twoApprovalWorkspaces);
-    // First call rejects (ws-1), second succeeds (ws-2)
+    // The active workspace's approve call rejects.
     vi.mocked(approve).mockRejectedValueOnce(new Error("network error"));
     const { default: App } = await import("./App.svelte");
     render(App);
 
-    await screen.findByRole("button", { name: "Alpha" });
+    // Select Alpha (ws-1) so it is the ACTIVE workspace.
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    await tick();
 
     const { getItems } = await import("./lib/stores/notifications.svelte");
     const notifBefore = getItems().length;
@@ -1464,7 +1475,7 @@ describe("App.svelte 4.25.6c: agent:approve-all / deny-all", () => {
     cb({ workspaceId: "ws-1", kind: "approval", state: "awaiting-approval",
          approval: { reqId: "req-fail", tool: "bash", summary: "Will fail" } });
     cb({ workspaceId: "ws-2", kind: "approval", state: "awaiting-approval",
-         approval: { reqId: "req-ok", tool: "bash", summary: "Will pass" } });
+         approval: { reqId: "req-ok", tool: "bash", summary: "Untouched" } });
     await tick();
 
     // Dispatch approve-all
@@ -1474,27 +1485,22 @@ describe("App.svelte 4.25.6c: agent:approve-all / deny-all", () => {
     const approveAllItem = screen.getByRole("menuitem", { name: "Approve all pending" });
     await fireEvent.click(approveAllItem);
 
-    // Wait for the async command to settle
+    // A blocking notification was added for the failure
     await waitFor(() => {
       const items = getItems();
       expect(items.some(n => n.title === "Approval failed")).toBe(true);
     });
+    expect(getItems().length).toBeGreaterThan(notifBefore);
 
-    // A blocking notification was added for the failure
-    const items = getItems();
-    expect(items.length).toBeGreaterThan(notifBefore);
-    expect(items.some(n => n.title === "Approval failed")).toBe(true);
-
-    // ws-1 (req-fail) was NOT cleared — select Alpha and verify "Will fail" summary still present
-    await fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
+    // ws-1 (req-fail, active) was NOT cleared — "Will fail" summary still present
     await waitFor(() =>
       expect(screen.getByText("Will fail")).toBeInTheDocument()
     );
 
-    // ws-2 (req-ok) WAS cleared — select Beta and verify "Will pass" summary is absent
+    // ws-2 (req-ok) was never acted on — switch to Beta and verify it is still pending
     await fireEvent.click(screen.getByRole("button", { name: "Beta" }));
     await waitFor(() =>
-      expect(screen.queryByText("Will pass")).not.toBeInTheDocument()
+      expect(screen.getByText("Untouched")).toBeInTheDocument()
     );
   });
 });
@@ -1640,7 +1646,7 @@ describe("App.svelte Feature A: approval batch buttons (SPEC §8)", () => {
     },
   ];
 
-  it("with TWO pending approvals: batch buttons render, clicking Approve all calls approve for both", async () => {
+  it("with TWO pending approvals: batch buttons render (cross-workspace count), but Approve all resolves ONLY the active workspace", async () => {
     const { listWorkspaces, approve } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(twoApprovalWs);
     const { default: App } = await import("./App.svelte");
@@ -1659,18 +1665,26 @@ describe("App.svelte Feature A: approval batch buttons (SPEC §8)", () => {
     await fireEvent.click(alphaBtn);
     await tick();
 
-    // With two pending approvals (approvalQueue.length === 2), batch buttons must render
+    // The cross-workspace queue (2 pending) still DRIVES the batch-button render —
+    // the "N pending" indicator is preserved.
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /approve all/i })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: /deny all/i })).toBeInTheDocument();
     });
 
-    // Click Approve all → decideAll("allow") → approve called for both req IDs
+    // SAFETY: clicking Approve all resolves ONLY Alpha's (active) request. Beta's
+    // request — waiting in an unseen workspace — must NOT be silently approved.
     await fireEvent.click(screen.getByRole("button", { name: /approve all/i }));
     await waitFor(() => {
       expect(approve).toHaveBeenCalledWith("req-a", "allow");
-      expect(approve).toHaveBeenCalledWith("req-b", "allow");
     });
+    expect(approve).not.toHaveBeenCalledWith("req-b", "allow");
+
+    // Beta's approval survives — switch to it and confirm it is still pending.
+    await fireEvent.click(screen.getByRole("button", { name: "Beta" }));
+    await waitFor(() =>
+      expect(screen.getByText("Beta task")).toBeInTheDocument()
+    );
   });
 
   it("with ONE pending approval: batch buttons do NOT render", async () => {

@@ -7,6 +7,11 @@
 
   let { paneId, cwd, onExit }: { paneId: string; cwd: string; onExit?: (code: number) => void } = $props();
 
+  // Hex-alpha suffix for the xterm text-selection layer. color-mix() isn't usable
+  // as a raw ITheme value, so we append this to the accent hex instead. 0x66 ≈ 40%
+  // opacity — enough to tint the selection without hiding the glyphs underneath.
+  const SELECTION_ALPHA_HEX = "66";
+
   let host:     HTMLDivElement;
   let term:     Terminal;
   let fit:      FitAddon;
@@ -30,10 +35,8 @@
       cursor:            cssVar("--perch-accent",       "#d79921"),
       cursorAccent:      cssVar("--perch-bg",           "#282828"),
       selectionBackground: (() => {
-        // color-mix isn't available as a raw value; compute a translucent accent
         const accent = cssVar("--perch-accent", "#d79921");
-        // append ~40% alpha via hex (approx 0x66)
-        return accent.startsWith("#") && accent.length === 7 ? accent + "66" : accent;
+        return accent.startsWith("#") && accent.length === 7 ? accent + SELECTION_ALPHA_HEX : accent;
       })(),
       // Standard 16-colour ANSI mapped to Gruvbox equivalents via tokens where possible
       black:             cssVar("--perch-bg-elev",      "#1d2021"),

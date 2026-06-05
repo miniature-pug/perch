@@ -61,7 +61,7 @@
 
 {#if open}
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <div role="dialog" aria-label="Settings" class="dialog-overlay"
+  <div role="dialog" aria-modal="true" aria-label="Settings" class="dialog-overlay"
        tabindex="-1" onkeydown={handleKey} use:focusOnMount>
     <div class="dialog settings-dialog">
 

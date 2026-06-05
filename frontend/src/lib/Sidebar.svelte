@@ -133,7 +133,7 @@
   .workspace-list > li {
     display: block;
     border-bottom: 1px solid var(--perch-border-strong);
-    transition: border-color 100ms var(--perch-ease);
+    transition: border-color var(--perch-dur) var(--perch-ease);
   }
 
   .workspace-list > li:last-child {

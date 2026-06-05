@@ -29,10 +29,16 @@
   let expanded = $state<Record<string, Hunk[]>>({});
   let loading  = $state(false);
 
+  // Cancellation guard: if `worktree` changes before an in-flight diffStat resolves,
+  // the stale resolve must not clobber the newer worktree's files / loading flag.
   $effect(() => {
     const wt = worktree;
+    let cancelled = false;
     loading = true;
-    diffStat(wt).then((r) => { files = r; loading = false; }).catch(() => { loading = false; });
+    diffStat(wt)
+      .then((r) => { if (!cancelled) { files = r; loading = false; } })
+      .catch(() => { if (!cancelled) loading = false; });
+    return () => { cancelled = true; };
   });
 
   async function toggleFile(f: FileDiff) {

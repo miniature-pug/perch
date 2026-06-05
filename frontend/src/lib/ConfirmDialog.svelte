@@ -16,7 +16,7 @@
 
 {#if open}
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <div role="dialog" aria-label="confirm" class="confirm-overlay"
+  <div role="dialog" aria-modal="true" aria-label="confirm" class="confirm-overlay"
        tabindex="-1" onkeydown={handleKey} use:focusOnMount>
     <div class="confirm-dialog">
       <p class="confirm-message">{message}</p>
