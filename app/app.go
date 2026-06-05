@@ -888,8 +888,35 @@ func (a *App) GetSettings() (Settings, error) {
 	return s, nil
 }
 
-// SaveSettings atomically writes settings to disk.
+// SaveSettings atomically writes settings to disk. It is the public Wails-bound
+// method the frontend calls to persist a whole settings blob (theme/density/font/
+// dnd/alwaysRules). It takes settingsMu so a frontend write is serialized with
+// Approve(always)'s read-append-write; this prevents torn writes and prevents two
+// concurrent appends from losing each other.
+//
+// DEADLOCK GUARD: settingsMu must not be entered while a.mu is held, and
+// saveSettingsLocked must not acquire a.mu (it doesn't — it only marshals+writes).
+// Approve already holds settingsMu across its read-modify-write and therefore calls
+// saveSettingsLocked directly; calling this public method there would self-deadlock
+// (sync.Mutex is not reentrant).
+//
+// Residual limit (inherent to whole-blob replacement, not a cut corner): the lock
+// cannot stop a stale whole-blob overwrite — a frontend SaveSettings carrying a
+// snapshot read before an Approve(always) append will still clobber the new rule.
+// This is last-writer-wins on a full-document PUT, not a data race. Closing it fully
+// would require a version field + compare-and-set; a naive "re-read and preserve
+// on-disk AlwaysRules" merge is NOT a valid fix because it would break the frontend's
+// legitimate rule-deletion path (setAlwaysRules deliberately sends a shorter list,
+// which a preserve-merge would treat as rules to resurrect). The lock is the correct
+// fix for the in-scope torn-write / concurrent-append races.
 func (a *App) SaveSettings(s Settings) error {
+	a.settingsMu.Lock()
+	defer a.settingsMu.Unlock()
+	return a.saveSettingsLocked(s)
+}
+
+// saveSettingsLocked is the unlocked inner write. Callers MUST hold settingsMu.
+func (a *App) saveSettingsLocked(s Settings) error {
 	data, err := json.Marshal(s)
 	if err != nil {
 		return err
@@ -1114,7 +1141,9 @@ func (a *App) Approve(reqID, decision string) error {
 				Pattern: req.Input,     // truncated display value
 				Hash:    req.InputHash, // M-13: hash of full input, authoritative match key
 			})
-			_ = a.SaveSettings(s)
+			// settingsMu is already held here; call the unlocked inner helper to
+			// avoid a re-entrant deadlock (SaveSettings would re-take settingsMu).
+			_ = a.saveSettingsLocked(s)
 		}
 		a.settingsMu.Unlock()
 	}

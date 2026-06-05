@@ -214,6 +214,41 @@ func TestClaudeMonitorEventTranslation(t *testing.T) {
 	}
 }
 
+// TestClaudeMonitorStopFailureErrored asserts the StopFailure hook event
+// translates to Event{Kind:"state", State:StateErrored, Err:<error_type>} — the
+// blocking "Agent error" path dispatchNotify keys off. The error_type payload
+// field must surface verbatim in Event.Err.
+func TestClaudeMonitorStopFailureErrored(t *testing.T) {
+	m, l, cleanup := newMonitorWithTestListener(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.Start(ctx)
+
+	req, _ := http.NewRequest(http.MethodPost, "http://"+l.Addr()+"/hook",
+		strings.NewReader(`{"hook_event_name":"StopFailure","session_id":"sid-E","error_type":"context_limit"}`))
+	req.Header.Set("Authorization", "Bearer "+l.Token())
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	select {
+	case ev := <-m.Events():
+		if ev.Kind != "state" || ev.State != agent.StateErrored {
+			t.Fatalf("StopFailure must emit state/StateErrored; got %+v", ev)
+		}
+		if ev.Err != "context_limit" {
+			t.Errorf("Err = %q, want %q (the error_type)", ev.Err, "context_limit")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for StopFailure event")
+	}
+}
+
 // postHook POSTs a hook payload to the listener's /hook and returns the response
 // body string. PreToolUse blocks in the handler until Decide() is called, so
 // callers that POST a PreToolUse normally run this in a goroutine.

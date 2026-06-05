@@ -72,3 +72,28 @@ func TestJSONTagsApprovalReq(t *testing.T) {
 		}
 	}
 }
+
+// TestJSONTagsApprovalReq_InputHashOmitempty pins the `inputHash,omitempty`
+// contract: an empty InputHash must NOT appear on the wire (so an absent hash
+// reads as "no hash" on the TS side, matching the optional field), and a set
+// InputHash must appear. maybeAutoApprove fails closed on a missing hash, so the
+// omitempty behavior is part of the security contract, not just cosmetics.
+func TestJSONTagsApprovalReq_InputHashOmitempty(t *testing.T) {
+	t.Parallel()
+
+	empty, err := json.Marshal(ApprovalReq{ReqID: "r1", Tool: "Bash"})
+	if err != nil {
+		t.Fatalf("json.Marshal(empty InputHash): %v", err)
+	}
+	if strings.Contains(string(empty), "inputHash") {
+		t.Errorf("empty InputHash must be omitted (omitempty); got %s", empty)
+	}
+
+	set, err := json.Marshal(ApprovalReq{ReqID: "r1", Tool: "Bash", InputHash: "deadbeef"})
+	if err != nil {
+		t.Fatalf("json.Marshal(set InputHash): %v", err)
+	}
+	if !strings.Contains(string(set), `"inputHash":"deadbeef"`) {
+		t.Errorf("set InputHash must be present; got %s", set)
+	}
+}

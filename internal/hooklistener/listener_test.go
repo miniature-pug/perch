@@ -45,6 +45,41 @@ func TestListenerUnauthorized(t *testing.T) {
 	}
 }
 
+// TestListenerWrongTokenNoEnqueue asserts that a /hook POST carrying a WRONG
+// Bearer token is rejected with 401 AND does not enqueue an event. This is the
+// auth boundary: a forged hook (e.g. another local process probing the loopback
+// port) must never reach the monitor's event channel. We post a fully-valid Stop
+// payload so the only thing standing between it and the queue is the token check.
+func TestListenerWrongTokenNoEnqueue(t *testing.T) {
+	t.Parallel()
+	l, err := hooklistener.New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = l.Close() }()
+
+	body := `{"hook_event_name":"Stop","session_id":"s1","transcript_path":"/t.jsonl","cwd":"/p"}`
+	req, _ := http.NewRequest(http.MethodPost, "http://"+l.Addr()+"/hook", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer not-the-real-token")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("want 401 for wrong token, got %d", resp.StatusCode)
+	}
+
+	// The rejected request must NOT have produced an event.
+	select {
+	case ev := <-l.Events():
+		t.Fatalf("wrong-token POST must not enqueue an event; got %+v", ev)
+	case <-time.After(200 * time.Millisecond):
+		// no event — correct.
+	}
+}
+
 func TestStopEventArrives(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	l, err := hooklistener.New()

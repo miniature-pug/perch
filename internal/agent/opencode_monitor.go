@@ -42,9 +42,20 @@ type OpencodeMonitor struct {
 }
 
 const (
+	// loopbackHost is the single source of truth for the loopback address used by
+	// both the server URL and the `--hostname` flag below. Centralizing it keeps the
+	// two references in lockstep.
+	loopbackHost = "127.0.0.1"
+
 	// loopbackServerURLFmt is the format string used to build the opencode serve
 	// URL from a free loopback port number.
-	loopbackServerURLFmt = "http://127.0.0.1:%d"
+	loopbackServerURLFmt = "http://" + loopbackHost + ":%d"
+
+	// opencodeServePollMaxIters and opencodeServePollIntervalSec bound the readiness
+	// poll baked into serveAndAttachFmt (budget: 50×0.2s≈10s). They are string consts
+	// because they are interpolated directly into the emitted shell command.
+	opencodeServePollMaxIters    = "50"
+	opencodeServePollIntervalSec = "0.2"
 
 	// randomTokenBytes is the number of cryptographically-random bytes used when
 	// generating the Basic-auth password for opencode serve.
@@ -79,8 +90,8 @@ const (
 	// the shell command and must not be changed without updating the comment above
 	// that documents the ~10 s budget.
 	serveAndAttachFmt = " ( export OPENCODE_SERVER_PASSWORD=%s;" +
-		" opencode serve --port %s --hostname 127.0.0.1 >/dev/null 2>&1 &" +
-		" i=0; while [ $i -lt 50 ]; do curl -s -o /dev/null %s && break; i=$((i+1)); sleep 0.2; done;" +
+		" opencode serve --port %s --hostname " + loopbackHost + " >/dev/null 2>&1 &" +
+		" i=0; while [ $i -lt " + opencodeServePollMaxIters + " ]; do curl -s -o /dev/null %s && break; i=$((i+1)); sleep " + opencodeServePollIntervalSec + "; done;" +
 		" exec %s )\n"
 )
 

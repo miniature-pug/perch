@@ -65,6 +65,19 @@ func TestValidateSessionID_AdversarialCases(t *testing.T) {
 	})
 }
 
+// TestValidateSessionID_LengthBoundary pins the maxSessionIDLen edge: exactly 128
+// chars is accepted, 129 is rejected. (129-rejection is also covered by the
+// adversarial "overlong" case; this asserts the just-below boundary is accepted so
+// an off-by-one in the length check would be caught.)
+func TestValidateSessionID_LengthBoundary(t *testing.T) {
+	if err := validateSessionID(strings.Repeat("a", maxSessionIDLen)); err != nil {
+		t.Errorf("validateSessionID(128 chars) = %v, want nil (the boundary length must be accepted)", err)
+	}
+	if err := validateSessionID(strings.Repeat("a", maxSessionIDLen+1)); err == nil {
+		t.Error("validateSessionID(129 chars) = nil, want error (one over the boundary must be rejected)")
+	}
+}
+
 // TestValidateSessionID_ShellDrawerKeyShape guards BUG-1b at the Go boundary: the
 // shell drawer's pane key was changed from "<wsid>:shell" (colon ⇒ rejected by the
 // [A-Za-z0-9_-] allowlist, so OpenShell never spawned a pty) to "shell-<wsid>".
@@ -867,6 +880,69 @@ func TestApp_Approve_RoutesToMonitor(t *testing.T) {
 	calls := fm.ApproveCalls()
 	if len(calls) != 1 || calls[0].ReqID != "req-001" {
 		t.Errorf("Approve did not route to monitor; calls=%+v", calls)
+	}
+}
+
+// TestApp_Approve_NegativePaths covers the two reqID failure modes: a malformed
+// reqID with no ":" separator (cannot split workspace) and a well-formed reqID whose
+// workspace has no live monitor. Both must return an error and must not panic.
+func TestApp_Approve_NegativePaths(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+
+	a := &App{
+		store:        store,
+		emit:         func(string, ...any) {},
+		bridges:      map[string]*internalpty.Bridge{},
+		monitors:     map[string]agent.Monitor{}, // no live monitors
+		settingsPath: filepath.Join(cfgDir, "settings.json"),
+	}
+
+	t.Run("malformed reqID without separator", func(t *testing.T) {
+		if err := a.Approve("no-colon-here", "allow"); err == nil {
+			t.Error("Approve with a reqID lacking ':' must return an error")
+		}
+	})
+
+	t.Run("workspace has no live monitor", func(t *testing.T) {
+		if err := a.Approve("req-001:ws-missing", "allow"); err == nil {
+			t.Error("Approve for a workspace with no live monitor must return an error")
+		}
+	})
+}
+
+// TestApp_StageHunk_RejectsPathTraversal asserts the hunk apply path's
+// path-traversal guard (validateRelFile): a file arg that escapes the worktree via
+// ".." or is absolute must be rejected BEFORE any git command runs, so a malicious
+// `file` cannot turn into a git pathspec pointing outside the worktree.
+func TestApp_StageHunk_RejectsPathTraversal(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	wt := t.TempDir()
+
+	a := &App{
+		store:        store,
+		roots:        []string{filepath.Dir(wt)},
+		emit:         func(string, ...any) {},
+		bridges:      map[string]*internalpty.Bridge{},
+		monitors:     map[string]agent.Monitor{},
+		settingsPath: filepath.Join(cfgDir, "settings.json"),
+	}
+
+	for _, bad := range []string{"../etc/passwd", "../../secret", "/etc/passwd", "a/../../../etc/passwd"} {
+		t.Run(bad, func(t *testing.T) {
+			if err := a.StageHunk(wt, bad, 0); err == nil {
+				t.Errorf("StageHunk(file=%q) = nil, want rejection (path escapes worktree)", bad)
+			}
+			if _, err := a.Hunks(wt, bad); err == nil {
+				t.Errorf("Hunks(file=%q) returned nil err, want rejection", bad)
+			}
+			if err := a.DiscardHunk(wt, bad, 0); err == nil {
+				t.Errorf("DiscardHunk(file=%q) = nil, want rejection", bad)
+			}
+		})
 	}
 }
 
