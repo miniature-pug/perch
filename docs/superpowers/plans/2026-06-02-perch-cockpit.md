@@ -1,5 +1,12 @@
 # perch Agent-Cockpit Implementation Plan
 
+> **⚠ Historical planning document.** This plan records the original design and
+> contains contracts that were superseded during implementation — notably a
+> `Caps{Tokens}` bit and token/cost metering (removed entirely; perch is not a
+> usage meter) and an earlier opencode SSE event API. For the authoritative
+> as-built design, see [`ARCHITECTURE.md`](../../../ARCHITECTURE.md). Kept for
+> traceability; do not treat its contracts as current.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Rebuild perch as a worktree-native, keyboard-first Linux GUI cockpit that runs Claude Code and opencode in direct-pty terminals across git worktrees, with desktop notifications, inline tool-call approvals, visual diffs, and a thin real editor — replacing the deleted tmux/Bubble-Tea architecture.

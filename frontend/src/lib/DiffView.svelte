@@ -243,7 +243,7 @@
 
   .hunk {
     border-bottom: 1px solid var(--perch-border);
-    transition: opacity 100ms var(--perch-ease);
+    transition: opacity var(--perch-dur) var(--perch-ease);
   }
   .hunk[draggable="true"] { cursor: grab; }
   .hunk[draggable="true"]:active { opacity: 0.7; }

@@ -455,11 +455,15 @@ This is the entire production local network surface.
 
 ### Always-allow approval rules
 
-`Always` on an approval persists an `AlwaysRule {agent, tool, pattern}` in
-`settings.json`. On a later request, perch auto-approves only when the agent,
-tool, and tool **input match exactly** (byte-for-byte — never a glob), so a rule
-can never grant more than the request the user approved. Rules are listed and
-revocable in Settings; a security caveat is surfaced there.
+`Always` on an approval persists an `AlwaysRule {agent, tool, pattern, hash}` in
+`settings.json`. The `hash` is the SHA-256 of the **full** tool input captured
+when the user clicked Always; `pattern` is a truncated copy kept only for display
+and is **not** the security boundary. On a later request, perch auto-approves only
+when the agent, the tool, and the input **hash** match exactly — a rule with no
+hash (or a request with no input hash) never auto-approves. Hashing the full input
+means two calls sharing a 4096-byte prefix but differing afterwards cannot collide,
+so a rule can never grant more than the exact request the user approved. Rules are
+listed and revocable in Settings; a security caveat is surfaced there.
 
 ### Bound-method input validation
 

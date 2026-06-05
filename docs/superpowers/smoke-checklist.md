@@ -15,6 +15,15 @@ real pty, real desktop notifications, a real agent).
 > bundle. The Go headless full-loop test also requires its build tag:
 > `go test -tags integration ./app/`.
 
+## Installation (fresh machine / clean checkout)
+`install.sh` is NOT covered by `make test-all` — no automated gate sees it.
+- [ ] `shellcheck -s sh install.sh` and `sh -n install.sh` both exit 0
+- [ ] A fresh `./install.sh` (optionally `--skip-agents`) runs end-to-end with no
+      error: it builds and installs the `perch` binary, then exits cleanly. There
+      is NO `perch setup` step — global-hook install was replaced by the
+      per-session hook listener in Round 3 — so the run must never invoke a
+      `setup` (or `status`) verb.
+
 ## Environment
 - [ ] Linux with WebKit2GTK + GTK3 installed
 - [ ] `claude` or `opencode` installed and authenticated

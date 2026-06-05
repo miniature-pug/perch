@@ -6,6 +6,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.1.0] - Unreleased
 
+### Round 5 — install-script fix, dead-code trim & doc sync (2026-06-05)
+
+#### Fixed
+
+- **`install.sh` invoked the removed `perch setup` subcommand** — the installer's
+  "Step 6" ran `perch setup`, which no longer exists (it was removed in Round 3 in
+  favour of the per-session hook listener). A fresh `install.sh` run without
+  `--skip-setup` would error at that step. Removed the entire setup cluster: the
+  Step-6 block, the `SKIP_SETUP` / `--skip-setup` flag, and the dead `YES` /
+  `--yes` export (which existed only for the setup sub-process to read). The
+  installer now ends after the build step. (`make test-all` does not cover
+  `install.sh`; verified with `shellcheck` + `sh -n` and a smoke-checklist item.)
+
+#### Removed
+
+- **`git.RemoveLock` / `git.InternalName`** — both worktree helpers had zero
+  production callers (only their own tests). They were companions to the
+  worktree-removal flow deleted in Round 4; removal completes that cleanup.
+
+#### Docs
+
+- Corrected the `AlwaysRule` description in `ARCHITECTURE.md`: matching is on the
+  SHA-256 `hash` of the full tool input (the security boundary), not the truncated
+  display `pattern` — reflecting the Round-3 M-13 fix.
+- Added `internal/notify` to `docs/diagrams/architecture.mmd` and the diagram
+  index; corrected the lifecycle-state list (6 states, incl. `awaiting-approval`).
+- Added superseded banners to the historical plan and spikes runbook pointing at
+  `ARCHITECTURE.md` (stale `Caps{Tokens}` bit, token/cost metering, opencode SSE
+  event names).
+
+#### Changed
+
+- Two CSS transition durations (`DiffView`, `FileTree`) used a raw `100ms` literal
+  bypassing the existing `var(--perch-dur)` token (one as a mismatched leg of a
+  multi-property transition); both now use the token.
+
 ### Round 4 — attention model & dead-code cleanup (2026-06-05)
 
 #### Added
@@ -32,9 +68,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   all" batch action resolves only the active workspace's pending request; it can
   never silently green-light a tool waiting in a different, unseen workspace
   (the cross-workspace queue still drives the "N pending" render condition).
-- **`aria-modal` on dialogs** — the approval card, command palette, confirm,
-  help, new-session, and settings dialogs all carry `role="dialog"
-  aria-modal="true"`.
+- **`aria-modal` on dialogs** — the command palette, confirm, help, new-session,
+  and settings dialogs carry `role="dialog" aria-modal="true"`. The approval card
+  is deliberately **not** a modal: it is a docked, labeled `<section>` landmark
+  (`aria-label="approval card"`), so assistive tech is never falsely told the rest
+  of the cockpit is inert while a tool waits.
 - **Centralized loopback / poll constants** — the opencode monitor's loopback
   host, server-URL format, and serve-readiness poll bounds (max iters, interval)
   are single-sourced named constants.

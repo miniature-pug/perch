@@ -3,8 +3,6 @@ package git
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -298,105 +296,5 @@ func TestAddWorktree_BranchExists(t *testing.T) {
 	}
 	if !errors.Is(err, ErrBranchExists) {
 		t.Errorf("errors.Is(err, ErrBranchExists) = false; err = %v", err)
-	}
-}
-
-// ── RemoveLock ────────────────────────────────────────────────────────────────
-
-func TestRemoveLock_MissingFile(t *testing.T) {
-	dir := t.TempDir()
-	// Construct fake repo structure but don't create the locked file.
-	internalName := "feat-x"
-	worktreesDir := filepath.Join(dir, ".git", "worktrees", internalName)
-	if err := os.MkdirAll(worktreesDir, 0o755); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-
-	err := RemoveLock(dir, internalName)
-	if err != nil {
-		t.Errorf("want nil for missing file, got %v", err)
-	}
-}
-
-func TestRemoveLock_ExistingFile(t *testing.T) {
-	dir := t.TempDir()
-	internalName := "feat-x"
-	worktreesDir := filepath.Join(dir, ".git", "worktrees", internalName)
-	if err := os.MkdirAll(worktreesDir, 0o755); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-	lockPath := filepath.Join(worktreesDir, "locked")
-	if err := os.WriteFile(lockPath, []byte("reason"), 0o644); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-
-	err := RemoveLock(dir, internalName)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if _, statErr := os.Stat(lockPath); !errors.Is(statErr, os.ErrNotExist) {
-		t.Errorf("locked file should be gone after RemoveLock")
-	}
-}
-
-// ── InternalName ──────────────────────────────────────────────────────────────
-
-func TestInternalName_FromGitFile(t *testing.T) {
-	dir := t.TempDir()
-	treePath := filepath.Join(dir, "feat-x-wt")
-	if err := os.Mkdir(treePath, 0o755); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-
-	// Write a .git pointer file as git does for linked worktrees.
-	content := "gitdir: /abs/.git/worktrees/feat-x\n"
-	if err := os.WriteFile(filepath.Join(treePath, ".git"), []byte(content), 0o644); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-
-	name, err := InternalName(treePath)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if name != "feat-x" {
-		t.Errorf("InternalName = %q, want %q", name, "feat-x")
-	}
-}
-
-func TestInternalName_MissingGitFile(t *testing.T) {
-	dir := t.TempDir()
-	treePath := filepath.Join(dir, "mywt")
-	if err := os.Mkdir(treePath, 0o755); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-	// No .git file written — should fall back to filepath.Base(treePath).
-
-	name, err := InternalName(treePath)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if name != "mywt" {
-		t.Errorf("InternalName fallback = %q, want %q", name, "mywt")
-	}
-}
-
-func TestInternalName_MalformedGitFile(t *testing.T) {
-	dir := t.TempDir()
-	treePath := filepath.Join(dir, "weirdwt")
-	if err := os.Mkdir(treePath, 0o755); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-	// Content that doesn't match "gitdir: ..." prefix.
-	if err := os.WriteFile(filepath.Join(treePath, ".git"), []byte("not a gitdir pointer"), 0o644); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-
-	name, err := InternalName(treePath)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if name != "weirdwt" {
-		t.Errorf("InternalName malformed fallback = %q, want %q", name, "weirdwt")
 	}
 }

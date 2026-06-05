@@ -1,5 +1,15 @@
 # Phase-1 Validation Spikes — Runbook
 
+> **⚠ Historical runbook — superseded in places.** These spikes predate the
+> as-built cockpit. Some conclusions they gate no longer hold: the `Tokens` Caps
+> bit and all token/cost metering were removed entirely, and spike 3's opencode
+> SSE contract is stale — the monitor consumes the default `session.status` /
+> `session.error` / `question.*` / `permission.asked` frames, not the gated
+> `session.next.step.*` / `permission.v2.*` names listed below. The `cmd/spike-*/`
+> harnesses are deleted, so the `go run ./cmd/spike-N/` instructions are not
+> runnable. See [`ARCHITECTURE.md`](../../../ARCHITECTURE.md) for the authoritative
+> current design.
+
 These five harnesses are **throwaway manual experiments** run on a real dev machine — never in CI.
 They answer binary questions (PASS/FAIL) that gate Caps bits in the Phase-2+ implementation.
 The entire `cmd/spike-*/` tree is deleted in Phase-5 task 5.6.

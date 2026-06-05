@@ -1,5 +1,5 @@
-// Package git — worktree.go contains the functions that create, remove, and
-// inspect git linked worktrees. All git shell-outs go through proc.Runner so
+// Package git — worktree.go contains the functions that create and resolve
+// paths for git linked worktrees. All git shell-outs go through proc.Runner so
 // that callers can inject a FakeRunner in unit tests (§20.1).
 package git
 
@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"unicode"
@@ -118,54 +117,4 @@ func AddWorktree(ctx context.Context, r proc.Runner, repoRoot, branch, path, bas
 		return fmt.Errorf("git: worktree add %s: %w", repoRoot, err)
 	}
 	return nil
-}
-
-// RemoveLock removes the lock file at
-// <repoRoot>/.git/worktrees/<internalName>/locked. It is a direct filesystem
-// operation — the lock file is a local sentinel that does not require a git
-// subprocess. os.ErrNotExist is silently ignored (already unlocked).
-func RemoveLock(repoRoot, internalName string) error {
-	lockPath := filepath.Join(repoRoot, ".git", "worktrees", internalName, "locked")
-	err := os.Remove(lockPath)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("git: remove lock %s: %w", lockPath, err)
-	}
-	return nil
-}
-
-// InternalName resolves git's internal worktree directory name for treePath by
-// reading the <treePath>/.git pointer file that git writes for linked
-// worktrees. The file contains a line of the form:
-//
-//	gitdir: /abs/.git/worktrees/<name>
-//
-// The basename of that path is the internal name.
-//
-// No Runner is needed here: this reads a local pointer file, not a subprocess.
-// The signature omits ctx and Runner intentionally.
-//
-// Falls back to filepath.Base(treePath) when the pointer file is absent,
-// unreadable, or not in the expected format (best-effort for unusual setups).
-func InternalName(treePath string) (string, error) {
-	dotGit := filepath.Join(treePath, ".git")
-	data, err := os.ReadFile(dotGit)
-	if err != nil {
-		// Unreadable or absent pointer file — best-effort fallback.
-		return filepath.Base(treePath), nil //nolint:nilerr
-	}
-
-	line := strings.TrimSpace(string(data))
-	// Expected: "gitdir: /abs/path/.git/worktrees/<name>"
-	const prefix = "gitdir: "
-	if !strings.HasPrefix(line, prefix) {
-		return filepath.Base(treePath), nil
-	}
-	gitdirPath := strings.TrimPrefix(line, prefix)
-	// Strip any trailing "/.git" suffix (defensive; not observed in practice).
-	gitdirPath = strings.TrimSuffix(gitdirPath, "/.git")
-	name := filepath.Base(gitdirPath)
-	if name == "" || name == "." {
-		return filepath.Base(treePath), nil
-	}
-	return name, nil
 }

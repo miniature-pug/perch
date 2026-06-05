@@ -6,6 +6,7 @@ flowchart TD
     subgraph GUILayer["GUI layer"]
         apppkg["app/\nWails App + bound methods\ninput validation + event forwarding"]
         pty["internal/pty\ndirect pty Bridge\n(creack/pty + login shell)\nxterm.js events — no tmux"]
+        notify["internal/notify\ntiered desktop notifications\n(D-Bus, runner fallback)"]
         frontend["frontend/\nSvelte 5 SPA\nWails bindings + events"]
     end
 
@@ -49,6 +50,7 @@ flowchart TD
 
     frontend <-->|"Wails bindings + events\n(no TCP port)"| apppkg
     apppkg -->|"App → Bridge → Shell"| pty
+    apppkg -->|"dispatchNotify (tiered)"| notify
     apppkg -->|"new Monitor"| monitor
     apppkg -->|"read/write"| registry
     apppkg -->|"load config"| config

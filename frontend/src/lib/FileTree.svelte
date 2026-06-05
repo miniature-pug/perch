@@ -176,7 +176,7 @@
   .tree-node[draggable="true"] {
     cursor: grab;
     transition: background var(--perch-dur) var(--perch-ease),
-                opacity   100ms var(--perch-ease);
+                opacity   var(--perch-dur) var(--perch-ease);
   }
   .tree-node[draggable="true"]:active { opacity: 0.7; }
   .tree-node:focus-visible {

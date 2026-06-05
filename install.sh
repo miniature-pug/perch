@@ -15,18 +15,13 @@ REPO_ROOT="$SCRIPT_DIR"
 # ---------------------------------------------------------------------------
 SKIP_AGENTS=0
 SKIP_BUILD=0
-SKIP_SETUP=0
 INSTALL_PREFIX=""
-YES=0
-export YES  # used by sub-scripts invoked from this one (e.g. perch setup)
 
 for arg in "$@"; do
   case "$arg" in
     --skip-agents) SKIP_AGENTS=1 ;;
     --skip-build)  SKIP_BUILD=1  ;;
-    --skip-setup)  SKIP_SETUP=1  ;;
     --prefix=*)    INSTALL_PREFIX="${arg#--prefix=}" ;;
-    --yes)         YES=1         ;;
     *)
       printf 'error: unknown flag: %s\n' "$arg" >&2
       exit 2
@@ -315,8 +310,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Resolve INSTALL_PREFIX once — used by both step 6 (build) and step 7 (setup).
-# Must be set before either step so that --skip-build + run-setup still works.
+# Resolve INSTALL_PREFIX once — the build step installs the perch binary here.
 # ---------------------------------------------------------------------------
 if [ -z "$INSTALL_PREFIX" ]; then
   if [ -w /usr/local/bin ]; then
@@ -339,21 +333,4 @@ else
     -ldflags "-s -w -X main.version=$(git describe --tags --always 2>/dev/null || printf 'dev')" \
     -o "${INSTALL_PREFIX}/perch" ./cmd/perch
   printf '[ok]    perch built at %s/perch\n' "$INSTALL_PREFIX"
-fi
-
-# ---------------------------------------------------------------------------
-# Step 6: perch setup
-# ---------------------------------------------------------------------------
-if [ "$SKIP_SETUP" = "1" ]; then
-  printf '[skip] perch setup (--skip-setup)\n'
-else
-  PERCH_BIN="${INSTALL_PREFIX}/perch"
-  if [ ! -x "$PERCH_BIN" ]; then
-    printf '[warn]  perch setup skipped — binary not found at %s (run without --skip-build first)\n' \
-      "$PERCH_BIN"
-  else
-    printf '[install] running perch setup\n'
-    "$PERCH_BIN" setup
-    printf '[ok]    perch setup complete\n'
-  fi
 fi
