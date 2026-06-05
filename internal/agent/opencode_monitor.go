@@ -317,11 +317,17 @@ func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
 		_ = json.Unmarshal(env.Properties, &p)
 		ev = Event{Kind: "state", State: StateRunning, SessionID: p.SessionID}
 	case "session.status":
-		// The session-level status is the authoritative idle/running signal.
+		// The session-level status is the authoritative idle/running signal and,
+		// crucially, the only DEFAULT-emitted event that carries the sessionID
+		// (the session.next.step.* events that also carry it are gated behind
+		// OPENCODE_EXPERIMENTAL_EVENT_SYSTEM). Capturing sessionID here is what
+		// makes resume work without the experimental flag: the app persists it as
+		// LastSessionID and passes it back as `attach --session <id>`.
 		// status.type ∈ {idle, busy, retry} (v1.15.12 session/status.ts).
 		// retry is transient → no transition.
 		var p struct {
-			Status struct {
+			SessionID string `json:"sessionID"`
+			Status    struct {
 				Type string `json:"type"`
 			} `json:"status"`
 		}
@@ -336,8 +342,9 @@ func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
 			// a duplicate idle / the deprecated session.idle alias firing too) is a
 			// steady idle → StateIdle, no spurious "Turn complete" toast.
 			ev = idleTransition(prev)
+			ev.SessionID = p.SessionID
 		case "busy":
-			ev = Event{Kind: "state", State: StateRunning}
+			ev = Event{Kind: "state", State: StateRunning, SessionID: p.SessionID}
 		default:
 			return
 		}

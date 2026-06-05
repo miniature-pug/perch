@@ -3,9 +3,11 @@ import { render, screen, fireEvent, waitFor, within } from "@testing-library/sve
 import { tick } from "svelte";
 import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 
-// Stub ShellDrawer (imports xterm which crashes jsdom).
+// Stub ShellDrawer (imports xterm which crashes jsdom). Use a probe stub that
+// surfaces its paneId/cwd props so the BUG-1b regression test can assert the
+// shell drawer is wired with a safe pane key (no colon).
 vi.mock("./lib/ShellDrawer.svelte", async () => ({
-  default: (await import("./lib/__stubs__/Empty.svelte")).default,
+  default: (await import("./lib/__stubs__/ShellDrawerProbe.svelte")).default,
 }));
 
 // Stub heavy children — xterm/CodeMirror crash jsdom; wails calls in $effect would throw.
@@ -402,6 +404,29 @@ describe("App.svelte Stage content routing (4.25.2)", () => {
     const secondaryPane = document.querySelector("[data-pane='secondary']") as HTMLElement;
     expect(within(primaryPane).getByTestId("terminal").dataset.paneId).toBe("p1");
     expect(within(secondaryPane).getByTestId("terminal").dataset.paneId).toBe("p2");
+  });
+
+  // BUG-1b regression: the shell drawer pane key must be a safe shape. It was
+  // "{wsid}:shell" — the colon is rejected by Go's validateSessionID charset
+  // [A-Za-z0-9_-], so OpenShell rejected the id and the drawer never connected to
+  // a pty. It is now "shell-{wsid}". Assert the rendered paneId starts with
+  // "shell-" and contains no colon / out-of-charset character.
+  it("shell drawer paneId is the safe 'shell-{wsid}' shape (no colon)", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    // ShellDrawer renders under {#if active}, so select a workspace first.
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    await tick();
+
+    const drawer = await screen.findByTestId("shell-drawer-probe");
+    const paneId = drawer.dataset.paneId!;
+    expect(paneId).toBe("shell-ws-1");
+    expect(paneId.startsWith("shell-")).toBe(true);
+    // Mirror Go's validateSessionID charset: no colon, no other invalid chars.
+    expect(paneId).toMatch(/^[A-Za-z0-9_-]+$/);
   });
 });
 

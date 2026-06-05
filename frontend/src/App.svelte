@@ -726,7 +726,7 @@
              style:display={layout.collapsed["shell"] ? "none" : undefined}>
           {#if active}
             {#key active.id}
-              <ShellDrawer paneId="{active.id}:shell" cwd={active.worktreePath}
+              <ShellDrawer paneId="shell-{active.id}" cwd={active.worktreePath}
                 collapsed={layout.collapsed["shell"] ?? false}
                 onToggleCollapse={() => layout.setCollapsed("shell", !layout.collapsed["shell"])} />
             {/key}

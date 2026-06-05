@@ -438,6 +438,56 @@ func TestOpencodeMonitorSSE_IdleAtConnectIsSteady(t *testing.T) {
 	}
 }
 
+// TestOpencodeMonitorSSE_SessionStatusCapturesSessionID verifies sessionID
+// capture from the DEFAULT session.status event (BUG-2). session.status is the
+// only DEFAULT-emitted event carrying the sessionID — the session.next.step.*
+// events that also carry it are gated behind OPENCODE_EXPERIMENTAL_EVENT_SYSTEM,
+// so without this capture resume breaks on default opencode. Both the busy and
+// idle frames carry sessionID as a TOP-LEVEL property of properties (sibling of
+// status, NOT nested inside it), per v1.15.12 session/status.ts; the app
+// persists Event.SessionID as LastSessionID and passes it to attach --session.
+func TestOpencodeMonitorSSE_SessionStatusCapturesSessionID(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	fixture := `data: {"type":"session.status","properties":{"sessionID":"ses_abc123","status":{"type":"busy"}}}` + "\n\n" +
+		`data: {"type":"session.status","properties":{"sessionID":"ses_abc123","status":{"type":"idle"}}}` + "\n\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/event" {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte(fixture))
+		} else {
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	om := agent.NewOpencodeMonitorWithServer(agent.NewOpencode(), srv.URL, "pw")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	om.Start(ctx)
+
+	deadline := time.After(3 * time.Second)
+	var got []agent.Event
+	for len(got) < 2 {
+		select {
+		case ev := <-om.Events():
+			got = append(got, ev)
+		case <-deadline:
+			t.Fatalf("timeout after %d events", len(got))
+		}
+	}
+	// busy frame → running, and it must carry the sessionID for resume.
+	if got[0].State != agent.StateRunning {
+		t.Errorf("busy → want running, got %+v", got[0])
+	}
+	if got[0].SessionID != "ses_abc123" {
+		t.Errorf("busy SessionID = %q, want ses_abc123", got[0].SessionID)
+	}
+	// idle frame (busy→idle = completed turn) must ALSO carry the sessionID.
+	if got[1].SessionID != "ses_abc123" {
+		t.Errorf("idle SessionID = %q, want ses_abc123", got[1].SessionID)
+	}
+}
+
 // TestOpencodeMonitorSSE_SessionIDCapture verifies sessionID capture from the
 // real envelope (properties.sessionID), which is what lets app.go persist
 // LastSessionID for resume.

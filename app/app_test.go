@@ -65,6 +65,46 @@ func TestValidateSessionID_AdversarialCases(t *testing.T) {
 	})
 }
 
+// TestValidateSessionID_ShellDrawerKeyShape guards BUG-1b at the Go boundary: the
+// shell drawer's pane key was changed from "<wsid>:shell" (colon ⇒ rejected by the
+// [A-Za-z0-9_-] allowlist, so OpenShell never spawned a pty) to "shell-<wsid>".
+// The NEW shape must be accepted and the OLD colon shape must be rejected.
+func TestValidateSessionID_ShellDrawerKeyShape(t *testing.T) {
+	if err := validateSessionID("shell-ws-1"); err != nil {
+		t.Errorf("validateSessionID(\"shell-ws-1\") = %v, want nil (new shell drawer key shape must be accepted)", err)
+	}
+	if err := validateSessionID("ws-1:shell"); err == nil {
+		t.Error("validateSessionID(\"ws-1:shell\") = nil, want error (old colon key shape must be rejected)")
+	}
+}
+
+// TestApp_OpenShell_RejectsColonPaneID is the call-boundary guard for BUG-1b:
+// OpenShell validates the paneID via validateSessionID BEFORE spawning, so a
+// colon-containing key (the old "<wsid>:shell" shape) is rejected early and the
+// pty is never spawned.
+func TestApp_OpenShell_RejectsColonPaneID(t *testing.T) {
+	shellCwd := t.TempDir()
+	spawnCalled := false
+	a := &App{
+		emit:     func(string, ...any) {},
+		roots:    []string{shellCwd},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+		spawnPty: func(_ context.Context, _ string, _ []string, _, _ string,
+			_ internalpty.EmitFunc, _, _ uint16) (*internalpty.Bridge, error) {
+			spawnCalled = true
+			return internalpty.NewBridgeForTest(func() error { return nil }), nil
+		},
+	}
+
+	if err := a.OpenShell("ws-1:shell", shellCwd); err == nil {
+		t.Error("OpenShell(\"ws-1:shell\", ...) = nil, want error (colon pane id must be rejected)")
+	}
+	if spawnCalled {
+		t.Error("spawnPty must NOT be called when the pane id is rejected")
+	}
+}
+
 func TestValidateWorktreeUnderRoots(t *testing.T) {
 	root := t.TempDir()
 	sub := filepath.Join(root, "perch", "wt")
