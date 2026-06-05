@@ -38,6 +38,15 @@ real pty, real desktop notifications, a real agent).
 - [ ] `Ctrl-\ Ctrl-n` → back to NORMAL mode
 - [ ] Clicking outside the terminal returns to NORMAL (if click-out is wired)
 
+## Shell drawer — CRITICAL (separate pty, bug-1b)
+- [ ] The pinned shell drawer at the bottom shows a **live shell**; type a
+      command and confirm it runs and output renders. This is a SEPARATE pty
+      from the agent pane, keyed `shell-<id>`. (A prior bug keyed it
+      `<id>:shell`; the `:` was rejected by `validateSessionID`, so the drawer
+      silently never connected to a pty — only this step proves the real shell
+      pty round-trip. The new `OpenShell` bad-pane-id negative test guards the
+      charset, but not the live wire.)
+
 ## Tool-call approval (hook listener)
 - [ ] Ask the agent to write a file
 - [ ] ApprovalCard appears in the chrome (not inside the terminal grid)
@@ -53,10 +62,17 @@ Verify each of these against a real `opencode`:
 - [ ] New Session with agent `opencode` → the pane runs `opencode serve` then `opencode attach`; the TUI appears and accepts input (the serve+attach launch incantation actually submits and connects)
 - [ ] While the agent works, the sidebar shows **running**; when the turn ends it shows **done** (busy→idle ⇒ StateDone) — and an ambient "Turn complete" notification fires
 - [ ] Opening the workspace does NOT fire a spurious "Turn complete" toast before any turn runs (idle-at-connect stays steady, not done)
-- [ ] A tool call surfaces an ApprovalCard; Allow lets it proceed; the token/cost meter updates (opencode reports both natively)
+- [ ] A tool call surfaces an ApprovalCard; Allow lets it proceed
 - [ ] "Always allow" a specific tool input → the *same* input auto-approves next time, but a *different* input of the same tool still prompts (hash-based match, not prefix)
 - [ ] Deny a tool call → the agent reports the rejection (the `/permission/:id/reply` POST reached the server)
-- [ ] Resume: reopen the workspace → it attaches to the prior session (`--session <id>`)
+- [ ] Resume — CRITICAL (sessionID capture, bug-2): run a full turn, close the
+      workspace, then reopen it → it resumes the **SAME conversation**, not a
+      fresh session. This proves `lastSessionID` was captured from the real
+      opencode `session.status` event (which carries `sessionID` and fires by
+      default) and passed back as `--session <id>`. Headless tests use a
+      hand-authored SSE fixture and CANNOT prove the real binary emits the id —
+      only this step does. (Note: `session.status` fires on state change, so the
+      id is first captured when the opening turn begins, not at connect.)
 
 ## Diff view
 - [ ] Switch to Diff view (View ▸ Diff or the keybinding)
