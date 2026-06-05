@@ -19,6 +19,9 @@ perch's value, not a side detail. The current flow has gaps and a wrong default:
   undiscoverable (a saved row looks like a live one; empty state is blank).
 - Sessions are bound to a worktree with no option to run directly in the repo —
   no way to keep a permanent, in-place session (e.g. working on `main`).
+- The home screen has no shell, so when perch asks the user to fix a git state
+  (clean a dirty tree, resolve a checkout) they must leave the GUI to do it —
+  immersion-breaking.
 - Stale worktrees/branches accumulate with no cleanup path.
 
 ## Research summary (primary sources)
@@ -211,8 +214,9 @@ Workspaces already persist (`~/.config/perch/workspaces.json`) and list via
   diffstat) and a confirm; confirm reopens the bound cwd (`--resume`/`--session`
   if a session id was captured, else a fresh agent in the same cwd). An **Open for
   more** affordance reopens fully to explore.
-- **Empty state:** when there are no sessions, the pane shows "No sessions yet —
-  start one" with the New Session affordance, instead of a blank pane.
+- **Empty state:** the main-area welcome card already exists (Welcome to perch +
+  New Session + quick-start); the home view gains a home shell beneath it (§7).
+  The *sidebar* gains an empty hint when no sessions exist.
 - **Verify during implementation:** a successfully created session must appear as a
   row. The hands-on "left pane completely empty" report must be reproduced and
   confirmed to be the empty-state/discoverability gap, not a creation/persistence
@@ -258,6 +262,34 @@ confirm); worktree dirty check (`git status --porcelain`); branch-merged check
 enumeration (registry `LastActive` + per-tree git state, filtered to `Worktree`
 sessions). Sourced from the registry — no general `git worktree list` of the repo.
 
+### 7. Home screen + home shell
+
+Today the no-session main area is a centered welcome card (`empty-state`: "Welcome
+to perch", a New Session button, Claude/Opencode quick-start) — switched on by
+`activeId == null`. It has **no shell**, so a user told to fix a git state must
+leave perch.
+
+Restructure the home view as a vertical split, mirroring a session view:
+- **Upper area** — the existing welcome/actions card (New Session + quick-start),
+  with room for future home actions.
+- **Lower area** — a **home shell**: a pinned, collapsible/resizable shell at a
+  home cwd, so pre-session fixes (clean a dirty tree, git ops) happen in-app.
+
+Shell scoping (answers "separate per session/view?" — **yes**):
+- **Home shell** — a single pty keyed `shell-home`, cwd = perch's launch directory
+  (fallback `$HOME`). Persists for the app lifetime, so navigating into and back
+  out of a session does not kill a running command.
+- **Per-session shell** — unchanged: `shell-{id}`, cwd = the session's
+  worktree/repo path, re-keyed (re-mounted) per active workspace.
+
+These are distinct ptys; the home shell and every session shell are independent.
+Launching/selecting a session sets `activeId`, switching the main area from the
+home view to that session's view (its own shell drawer beneath it).
+
+**Implementation note:** verify `OpenShell` accepts a standalone paneId/cwd not
+tied to a registered workspace (the home shell is not a workspace); if it requires
+a workspace record, generalize it to spawn a bare pty for the home pane.
+
 ## Out of scope (deliberate, not deferrals)
 
 - **Fan-in / merge orchestration** — hands-off by design.
@@ -289,7 +321,9 @@ sessions). Sourced from the registry — no general `git worktree list` of the r
 - **Frontend (vitest):** dialog without a model field; worktree toggle (fields
   shown/hidden per mode); base-ref + branch fields; existing-branch toggle;
   option/`min-width` styling; sidebar row labels; empty-state; cleanup panel
-  select-all, safe-only default-check, ⚠ on unmerged/dirty, Remove wiring.
+  select-all, safe-only default-check, ⚠ on unmerged/dirty, Remove wiring; home
+  view renders the welcome card AND a home shell whose paneId is `shell-home`
+  (distinct from any `shell-<id>`); selecting a session switches away from home.
 - **Manual smoke (gate-blind — append to `docs/superpowers/smoke-checklist.md`):**
   real parallel worktree sessions on separate branches in one repo; a non-worktree
   session on `main` runs in place and survives; resume reopens the same
