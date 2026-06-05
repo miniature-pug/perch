@@ -185,10 +185,12 @@
     list-style: none;
     margin: 0;
     padding: var(--perch-sp-1) 0;
-    background: var(--perch-bg);
-    border: 1px solid var(--perch-border);
-    border-radius: 6px;
-    box-shadow: var(--perch-shadow-float);
+    background: var(--perch-glass-bg);
+    -webkit-backdrop-filter: var(--perch-glass-filter);
+    backdrop-filter: var(--perch-glass-filter);
+    border: 1px solid var(--perch-glass-border);
+    border-radius: var(--perch-radius-md);
+    box-shadow: var(--perch-glass-shadow);
     z-index: var(--perch-z-menu-dropdown);
   }
 

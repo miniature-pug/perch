@@ -46,11 +46,13 @@
 
   /* Modal card */
   .confirm-dialog {
-    background: var(--perch-bg);
+    background: var(--perch-glass-bg);
+    -webkit-backdrop-filter: var(--perch-glass-filter);
+    backdrop-filter: var(--perch-glass-filter);
     color: var(--perch-text);
-    border: 1px solid var(--perch-border);
-    border-radius: 6px;
-    box-shadow: var(--perch-shadow-float);
+    border: 1px solid var(--perch-glass-border);
+    border-radius: var(--perch-radius-lg);
+    box-shadow: var(--perch-glass-shadow);
     padding: var(--perch-sp-3);
     min-width: 360px;
     max-width: 480px;

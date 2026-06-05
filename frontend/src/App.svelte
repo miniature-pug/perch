@@ -996,10 +996,12 @@
   .undo-toast {
     display: flex; align-items: center; gap: var(--perch-sp-2);
     padding: var(--perch-sp-1) var(--perch-sp-2);
-    background: var(--perch-surface);
-    border: 1px solid var(--perch-border);
-    border-radius: 6px;
-    box-shadow: var(--perch-shadow-toast);
+    background: var(--perch-glass-bg);
+    -webkit-backdrop-filter: var(--perch-glass-filter);
+    backdrop-filter: var(--perch-glass-filter);
+    border: 1px solid var(--perch-glass-border);
+    border-radius: var(--perch-radius-md);
+    box-shadow: var(--perch-glass-shadow);
     font-family: var(--perch-font-sans); font-size: var(--perch-fs-body);
     color: var(--perch-text);
     min-width: 220px;

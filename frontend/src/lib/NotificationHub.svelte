@@ -49,8 +49,11 @@
   .notif-hub {
     display: flex;
     flex-direction: column;
-    background: var(--perch-bg);
-    border-left: 1px solid var(--perch-border);
+    background: var(--perch-glass-bg);
+    -webkit-backdrop-filter: var(--perch-glass-filter);
+    backdrop-filter: var(--perch-glass-filter);
+    border-left: 1px solid var(--perch-glass-border);
+    box-shadow: var(--perch-glass-shadow);
     width: 320px;
     max-height: 60vh;
     font-family: var(--perch-font-sans);

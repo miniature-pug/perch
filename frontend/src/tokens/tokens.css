@@ -18,6 +18,12 @@
   --perch-shadow-float: 0 8px 32px rgba(0, 0, 0, 0.45);
   --perch-shadow-toast: 0 4px 16px rgba(0, 0, 0, 0.3);
   --perch-scrim: rgba(0, 0, 0, 0.5);
+  /* Glass + radius */
+  --perch-radius-sm: 4px;
+  --perch-radius-md: 6px;
+  --perch-radius-lg: 10px;
+  --perch-glass-filter: blur(10px) saturate(1.4);
+  --perch-glass-shadow: 0 8px 32px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.08);
   /* Stacking order — one named scale so layer relationships are explicit.
      command-palette sits above undo-toast so the focused palette is never
      occluded by a transient toast (previously both were 300). */
