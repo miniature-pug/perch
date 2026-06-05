@@ -1780,7 +1780,7 @@ func TestApp_DispatchNotify_OSFires_WhenUnfocusedAndDNDOff(t *testing.T) {
 	a, fn := newNotifyTestApp(t, false /*focused*/, false /*dnd*/)
 
 	a.dispatchNotify(agent.Event{
-		Kind:        "state",
+		Kind:        "approval",
 		State:       agent.StateAwaitingApproval,
 		WorkspaceID: "ws-1",
 	})
@@ -1819,7 +1819,7 @@ func TestApp_DispatchNotify_OSSuppressed_WhenFocused(t *testing.T) {
 	a, fn := newNotifyTestApp(t, true /*focused*/, false /*dnd*/)
 
 	a.dispatchNotify(agent.Event{
-		Kind:        "state",
+		Kind:        "approval",
 		State:       agent.StateAwaitingApproval,
 		WorkspaceID: "ws-1",
 	})
@@ -1837,7 +1837,7 @@ func TestApp_DispatchNotify_OSFires_BlockingDespiteDND(t *testing.T) {
 	a, fn := newNotifyTestApp(t, false /*focused*/, true /*dnd*/)
 
 	a.dispatchNotify(agent.Event{
-		Kind:        "state",
+		Kind:        "approval",
 		State:       agent.StateAwaitingApproval,
 		WorkspaceID: "ws-1",
 	})
@@ -1887,7 +1887,7 @@ func TestApp_DispatchNotify_NilNotifier_NoPanic(t *testing.T) {
 
 	// Must not panic.
 	a.dispatchNotify(agent.Event{
-		Kind:        "state",
+		Kind:        "approval",
 		State:       agent.StateAwaitingApproval,
 		WorkspaceID: "ws-nil",
 	})

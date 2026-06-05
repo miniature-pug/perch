@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Miniature-Pug/perch/internal/agent"
+	"github.com/Miniature-Pug/perch/internal/notify"
 	internalpty "github.com/Miniature-Pug/perch/internal/pty"
 	"github.com/Miniature-Pug/perch/internal/registry"
 )
@@ -169,6 +170,13 @@ func TestOpenWorkspace_ApprovalReqIDComposition(t *testing.T) {
 	var mu sync.Mutex
 	var agentEvents []agent.Event
 	var notifyEvents []map[string]any
+	var osNotifyCalls [][]string // R7-1: records OS desktop notifications fired
+	osNotify := func(_ string, args ...string) error {
+		mu.Lock()
+		osNotifyCalls = append(osNotifyCalls, args)
+		mu.Unlock()
+		return nil
+	}
 	emit := func(event string, data ...any) {
 		if len(data) != 1 {
 			return
@@ -197,6 +205,9 @@ func TestOpenWorkspace_ApprovalReqIDComposition(t *testing.T) {
 		monitors:     map[string]agent.Monitor{},
 		cancels:      map[string]context.CancelFunc{},
 		settingsPath: cfgDir + "/settings.json",
+		// focused defaults to false here (unfocused), so a blocking-tier event
+		// must fire the OS notification through this injected runner.
+		notifier: notify.NewWithRunner(osNotify),
 		spawnPty: func(_ context.Context, _ string, _ []string, _, _ string,
 			_ internalpty.EmitFunc, _, _ uint16) (*internalpty.Bridge, error) {
 			return internalpty.NewBridgeForTest(func() error { return nil }), nil
@@ -210,9 +221,12 @@ func TestOpenWorkspace_ApprovalReqIDComposition(t *testing.T) {
 		t.Fatalf("OpenWorkspace: %v", err)
 	}
 
-	// Replay a raw approval event — WorkspaceID empty, ReqID bare.
+	// Replay a raw approval event — WorkspaceID empty, ReqID bare. The Kind is
+	// "approval", matching what ClaudeMonitor/OpencodeMonitor actually emit
+	// (R7-1: a prior version injected Kind:"state", masking the dispatchNotify
+	// approval case which keyed on the wrong Kind and never fired).
 	fm.Replay(agent.Event{
-		Kind:  "state",
+		Kind:  "approval",
 		State: agent.StateAwaitingApproval,
 		Approval: &agent.ApprovalReq{
 			ReqID:   "raw123",
@@ -221,12 +235,16 @@ func TestOpenWorkspace_ApprovalReqIDComposition(t *testing.T) {
 		},
 	})
 
+	// Wait for the OS notification — the LAST step dispatchNotify performs for a
+	// blocking event — so observing it under mu establishes happens-before for
+	// the agent:event and notify writes that precede it. If the fix regresses,
+	// this times out and the OS-notify assertion below fails with precise blame.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		mu.Lock()
-		n := len(agentEvents)
+		fired := len(osNotifyCalls) > 0
 		mu.Unlock()
-		if n > 0 {
+		if fired {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
@@ -235,6 +253,7 @@ func TestOpenWorkspace_ApprovalReqIDComposition(t *testing.T) {
 	mu.Lock()
 	evs := agentEvents
 	notEvs := notifyEvents
+	osCalls := osNotifyCalls
 	mu.Unlock()
 
 	if len(evs) == 0 {
@@ -274,6 +293,19 @@ func TestOpenWorkspace_ApprovalReqIDComposition(t *testing.T) {
 	}
 	if wid := notEvs[0]["workspaceId"]; wid != "ws-appr" {
 		t.Errorf("notify workspaceId = %v, want ws-appr", wid)
+	}
+	// R7-1: an approval event must dispatch at the BLOCKING tier (SPEC §8 tier 1),
+	// not fall through dispatchNotify's default.
+	if tier := notEvs[0]["tier"]; tier != "blocking" {
+		t.Errorf("notify tier = %v, want blocking", tier)
+	}
+	// R7-1: and, while unfocused, must fire an OS desktop notification. Pre-fix
+	// the approval case keyed on Kind:"state" while monitors emit Kind:"approval",
+	// so this never fired.
+	if len(osCalls) == 0 {
+		t.Error("approval event fired no OS desktop notification (R7-1 regression)")
+	} else if osCalls[0][0] != "Approval needed" {
+		t.Errorf("OS notification title = %q, want \"Approval needed\"", osCalls[0][0])
 	}
 }
 

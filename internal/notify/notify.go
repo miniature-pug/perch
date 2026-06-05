@@ -52,7 +52,11 @@ func (r runnerNotifier) Notify(title, body string) error { return r.run("notify-
 
 // New returns a dbus Notifier; falls back to notify-send if dbus is unavailable.
 func New() Notifier {
-	if _, err := dbus.SessionBusPrivate(); err == nil {
+	// Probe dbus availability with a throwaway connection; close it immediately
+	// so the probe never leaks a session-bus connection. dbusNotifier opens its
+	// own short-lived connection per Notify call.
+	if conn, err := dbus.SessionBusPrivate(); err == nil {
+		_ = conn.Close()
 		return dbusNotifier{}
 	}
 	return NewWithRunner(func(name string, args ...string) error {

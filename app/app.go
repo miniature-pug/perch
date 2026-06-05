@@ -724,7 +724,7 @@ func (a *App) maybeAutoApprove(workspaceID, rawReqID string, req agent.ApprovalR
 func (a *App) dispatchNotify(evt agent.Event) {
 	var tier, title, body string
 	switch {
-	case evt.Kind == "state" && evt.State == agent.StateAwaitingApproval:
+	case evt.Kind == "approval" && evt.State == agent.StateAwaitingApproval:
 		tier, title, body = "blocking", "Approval needed", "An agent is waiting for your decision."
 	case evt.Kind == "question" && evt.State == agent.StateAwaitingInput:
 		tier, title, body = "blocking", "Question", "An agent is asking you to choose."
@@ -1126,7 +1126,11 @@ func (a *App) Approve(reqID, decision string) error {
 		// concurrent Approve(always) calls cannot interleave and lose rules.
 		// DEADLOCK GUARD: a.mu is released above before settingsMu is taken.
 		a.settingsMu.Lock()
-		s, _ := a.GetSettings()
+		s, err := a.GetSettings()
+		if err != nil {
+			a.settingsMu.Unlock()
+			return err
+		}
 		dup := false
 		for _, r := range s.AlwaysRules {
 			// Dedup on the same authoritative key used for matching (M-13: hash).
