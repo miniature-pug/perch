@@ -49,11 +49,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `shouldFocusAwaitingInput` edge predicate): never a background workspace (those
   signal via the sidebar pulse only), never from the editor/diff view (no yanking
   off unsaved work), never re-fired on a state that was already awaiting-input.
-- **Session-complete closing ritual.** When a run settles (every workspace idle/
-  done, after activity, with at least one `done`) a small glass summary card shows
-  the lines / files / sessions of the run, then dismisses — a calm closure beat.
-  Edge-triggered (`ritualShouldFire`), so it never pops on first load and never
-  re-fires on a reactive tick.
 - **Per-worktree color identity.** Each workspace gets a stable accent color
   (`worktreeColor` — deterministic djb2 hash into an 8-color theme-agnostic
   palette in `constants.ts`), shown as a left stripe on its sidebar row and on its

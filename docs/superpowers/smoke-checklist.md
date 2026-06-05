@@ -179,11 +179,6 @@ WebKit and cannot be verified headlessly — only this manual pass proves them.
 - [ ] Each session has a stable **color identity** — a left accent stripe on its
       sidebar row, and the same color on its notifications in the hub. The color
       is the same for that worktree across restarts (stable hash, not random).
-- [ ] **Closing ritual:** after at least one session has been working, once every
-      session is idle/done a small glass summary card appears (lines / files /
-      sessions of the run) and dismisses on a click or Escape. It must NOT appear
-      on a fresh launch where everything is already idle, and must not re-pop on
-      its own after dismissal until new work runs.
 
 ## Desktop notification
 - [ ] Background the window; trigger a BLOCKING event (ask the agent to do

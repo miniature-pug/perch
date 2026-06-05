@@ -11,8 +11,7 @@
   import { isPreviewable, previewKind } from "./lib/preview";
   import { focusOnMount, countUp } from "./lib/actions";
   import DiffView           from "./lib/DiffView.svelte";
-  import ClosingRitual      from "./lib/ClosingRitual.svelte";
-  import { isActiveState, shouldFocusAwaitingInput, ritualShouldFire, computeRitualStats } from "./lib/engagement";
+  import { shouldFocusAwaitingInput } from "./lib/engagement";
   import MenuBar            from "./lib/MenuBar.svelte";
   import CommandPalette     from "./lib/CommandPalette.svelte";
   import NewSessionDialog   from "./lib/NewSessionDialog.svelte";
@@ -43,11 +42,6 @@
   // pulsed when the ACTIVE agent asks for input.
   let primaryTerm    = $state<{ focus: () => void } | undefined>(undefined);
   let emphasizeInput = $state(false);
-  // #6 closing ritual: stats to show when a run settles (null = hidden).
-  // ritualArmed is plain (non-reactive) — true once activity has been seen, so the
-  // ritual fires on the active→settled edge and never on first load.
-  let ritualStats = $state<import("./lib/engagement").RitualStats | null>(null);
-  let ritualArmed = false;
 
   // Repo discovery — populated lazily when the New Session dialog opens.
   let discoveredRepoPaths = $state<string[]>([]);
@@ -74,18 +68,6 @@
       .then((c) => { if (!cancelled) previewContent = c; })
       .catch(() => { if (!cancelled) previewContent = ""; });
     return () => { cancelled = true; };
-  });
-
-  // #6: closing-ritual edge detector. Arm when any workspace becomes active; when
-  // the run settles back (none active) with at least one `done`, show the card once.
-  $effect(() => {
-    const anyActive = workspaces.some(w => isActiveState(w.state));
-    const anyDone   = workspaces.some(w => w.state === "done");
-    if (anyActive) { ritualArmed = true; return; }
-    if (ritualShouldFire(anyActive, ritualArmed, anyDone)) {
-      ritualArmed = false;
-      ritualStats = computeRitualStats(wsDiffStats, workspaces.length);
-    }
   });
 
   // Dialog / overlay state
@@ -871,15 +853,6 @@
 
     <SettingsPanel open={settingsOpen} onClose={() => { settingsOpen = false; }} />
 
-    {#if ritualStats}
-      <ClosingRitual
-        lines={ritualStats.lines}
-        files={ritualStats.files}
-        sessions={ritualStats.sessions}
-        onDismiss={() => { ritualStats = null; }}
-      />
-    {/if}
-
     {#if pendingRemovals.length > 0}
       <div class="undo-toast-stack" aria-live="polite">
         {#each pendingRemovals as pending (pending.ws.id)}
@@ -961,8 +934,7 @@
   .status-diff-added   { color: var(--perch-ok); }
   .status-diff-removed { color: var(--perch-err); }
   /* #3 — goal-gradient "files to review" pill; shrinks as the user stages. */
-  .status-review-pill { display: inline-flex; align-items: center; gap: 0.25em;
-                        padding: 0 var(--perch-sp-1);
+  .status-review-pill { padding: 0 var(--perch-sp-1);
                         border-radius: var(--perch-radius-sm);
                         background: color-mix(in srgb, var(--perch-accent) 18%, transparent);
                         color: var(--perch-text); font-size: var(--perch-fs-caption); }
