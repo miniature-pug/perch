@@ -8,6 +8,16 @@ your workspaces; selecting one opens a full interactive terminal (xterm.js)
 backed by a **direct pseudo-terminal** that the Go app spawns. Each workspace is
 a git worktree off a base branch paired with an agent.
 
+perch does **not** replace your editor, reimplement an agent's intelligence, or
+wrap a harness in a thinner UI. The agents (`claude`, `opencode`) stay the
+intelligence; your editor stays your editor. perch is the **cockpit around
+them** — *an agent cockpit that happens to let you edit, not an editor that
+happens to run agents*. It consolidates the things a bare terminal can't give
+you — live multi-session status, a visual diff with hunk-level staging, inline
+tool-call approvals, desktop notifications, a file tree, and just enough editor
+— into one window, so you can drive several agents across worktrees and move
+between them without breaking flow or leaving the app.
+
 There is **no tmux**, **no daemon**, and **no background server process**.
 perch is a single static binary. Frontend ↔ backend communication is Wails
 bindings (`window.go.app.App.<Method>`) plus Wails events — not HTTP. The only

@@ -233,7 +233,10 @@
     const vm = await createWorkspace(agent, repo, branch, model);
     workspaces = await listWorkspaces();
     newSessionOpen = false;
-    activeId = vm.id;
+    // Creating a session spawns its pty immediately (spec §7.7 "→ direct-pty
+    // spawn"). onSelect sets activeId and opens the workspace in one step, so
+    // the new session is live rather than a selected-but-dead row.
+    await onSelect(vm.id);
   }
 
   function requestRemove(ws: WorkspaceVM) {
