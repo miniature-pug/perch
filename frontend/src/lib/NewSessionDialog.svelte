@@ -1,6 +1,6 @@
 <!-- frontend/src/lib/NewSessionDialog.svelte -->
 <script lang="ts">
-  import { DEFAULT_AGENT, DEFAULT_MODEL } from "./constants";
+  import { DEFAULT_AGENT, DEFAULT_MODEL, AGENT_CLAUDE, AGENT_OPENCODE } from "./constants";
   import { focusOnMount } from "./actions";
   let {
     open, repos, loadBranches, onCreate, onClose, initialAgent = null,
@@ -54,8 +54,8 @@
       <label class="setting-row">
         <span class="setting-label">Agent</span>
         <select class="field-select" aria-label="agent" bind:value={agent} use:focusOnMount>
-          <option value="claude">Claude</option>
-          <option value="opencode">opencode</option>
+          <option value={AGENT_CLAUDE}>Claude</option>
+          <option value={AGENT_OPENCODE}>opencode</option>
         </select>
       </label>
       <label class="setting-row">
@@ -70,7 +70,7 @@
           {#each branches as b}<option value={b}>{b}</option>{/each}
         </select>
       </label>
-      {#if agent !== "opencode"}
+      {#if agent !== AGENT_OPENCODE}
         <label class="setting-row">
           <span class="setting-label">Model</span>
           <input class="field-input" type="text" aria-label="model" value={model} onchange={(e) => { model = (e.target as HTMLInputElement).value; }} />

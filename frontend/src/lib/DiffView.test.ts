@@ -86,6 +86,18 @@ test("discard refreshes file list (diffStat re-called) and fires onDiffChanged",
   expect(onDiffChanged).toHaveBeenCalledTimes(1);
 });
 
+test("renders an error message (not 'No changes') when the initial diffStat rejects", async () => {
+  const { default: DiffView } = await import("./DiffView.svelte");
+  const w = await import("./wails");
+  vi.mocked(w.diffStat).mockRejectedValueOnce(new Error("git failed"));
+
+  render(DiffView, { props: { worktree: "/wt-err" } });
+
+  await waitFor(() => expect(screen.getByText(/could not load diff/i)).toBeInTheDocument());
+  // A git error must NOT masquerade as an empty diff.
+  expect(screen.queryByText(/^no changes$/i)).toBeNull();
+});
+
 // --- Feature 3: per-hunk send-to-agent button ---
 
 test("send hunk to agent button not rendered when onSendToAgent prop is absent", async () => {

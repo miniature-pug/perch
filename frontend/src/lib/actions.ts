@@ -1,3 +1,5 @@
+import { COUNTUP_FALLBACK_MS } from "./constants";
+
 /** Focus the node immediately on mount (keyboard a11y for dialogs; avoids the autofocus lint warning). */
 export function focusOnMount(node: HTMLElement) { node.focus(); }
 
@@ -16,7 +18,7 @@ function prefersReducedMotion(): boolean {
   );
 }
 
-/** Read the --perch-dur-countup CSS custom property from :root, parsed as ms integer. Falls back to 380. */
+/** Read the --perch-dur-countup CSS custom property from :root, parsed as ms integer. Falls back to COUNTUP_FALLBACK_MS. */
 function readCountUpDuration(): number {
   try {
     const raw = getComputedStyle(document.documentElement).getPropertyValue("--perch-dur-countup").trim();
@@ -25,7 +27,7 @@ function readCountUpDuration(): number {
   } catch {
     // no-op — jsdom or env without CSS custom properties
   }
-  return 380;
+  return COUNTUP_FALLBACK_MS;
 }
 
 /**

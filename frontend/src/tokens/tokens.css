@@ -27,6 +27,10 @@
   --perch-dur-pop: 240ms;
   --perch-dur-countup: 380ms;
   --perch-pop-scale: 1.18;
+  /* Attention pulse — the looping "needs you" / "asking you" sidebar signal */
+  --perch-dur-attn-approval: 1s;
+  --perch-dur-attn-input: 1.6s;
+  --perch-attn-opacity-min: 0.45;
   /* Glass + radius */
   --perch-radius-sm: 4px;
   --perch-radius-md: 6px;

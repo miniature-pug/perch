@@ -30,6 +30,7 @@
   let files     = $state<FileDiff[]>([]);
   let expanded  = $state<Record<string, Hunk[]>>({});
   let loading   = $state(false);
+  let error     = $state(false);
   let flashFile = $state<string | null>(null);
 
   // Cancellation guard: if `worktree` changes before an in-flight diffStat resolves,
@@ -38,9 +39,10 @@
     const wt = worktree;
     let cancelled = false;
     loading = true;
+    error = false;
     diffStat(wt)
       .then((r) => { if (!cancelled) { files = r; loading = false; } })
-      .catch(() => { if (!cancelled) loading = false; });
+      .catch(() => { if (!cancelled) { loading = false; error = true; } });
     return () => { cancelled = true; };
   });
 
@@ -87,6 +89,8 @@
 <section aria-label="diff view" class="diff-view">
   {#if loading}
     <p class="diff-empty">Loading…</p>
+  {:else if error}
+    <p class="diff-empty">Could not load diff</p>
   {:else if files.length === 0}
     <p class="diff-empty">No changes</p>
   {:else}

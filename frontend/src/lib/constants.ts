@@ -15,6 +15,9 @@ export const AMBIENT_DISMISS_MS = 6000;
 export const ROUTINE_DISMISS_MS = 3000;
 export const LAYOUT_SAVE_DEBOUNCE_MS = 300;
 export const UNDO_REMOVE_DELAY_MS = 6000;
+// Fallback for the count-up duration when the CSS token --perch-dur-countup
+// cannot be read (jsdom / no computed styles). Mirrors that token's value.
+export const COUNTUP_FALLBACK_MS = 380;
 
 // ── Limits / caps ────────────────────────────────────────────────────────────
 export const CMD_RECENCY_MAX = 20;
@@ -34,7 +37,12 @@ export const RESIZE_STEP_PX = 16;
 export const DEFAULT_THEME = "gruvbox";
 export const DEFAULT_DENSITY = "dense";
 export const DEFAULT_FONT = "geist";
-export const DEFAULT_AGENT = "claude";
+// Canonical agent identifiers sent to the backend (mirror Go's model.ToolClaude
+// / model.ToolOpencode). Single-sourced so option values and dispatch never
+// drift from bare string literals.
+export const AGENT_CLAUDE = "claude";
+export const AGENT_OPENCODE = "opencode";
+export const DEFAULT_AGENT = AGENT_CLAUDE;
 export const DEFAULT_MODEL = "claude-sonnet-4-5";
 
 // ── Settings option lists ────────────────────────────────────────────────────

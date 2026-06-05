@@ -27,7 +27,7 @@
   import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead } from "./lib/stores/notifications.svelte";
   import { listWorkspaces, createWorkspace, removeWorkspace, openWorkspace, closeWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, onWorkspaceAttach, approve, branches, readFile, setWindowFocus, writeToPty, discoverRepos, diffStat } from "./lib/wails";
   import type { WorkspaceVM, ApprovalReq } from "./lib/wails";
-  import { UNDO_REMOVE_DELAY_MS, SIDEBAR_MIN_W, SIDEBAR_MAX_W, SHELL_MIN_H, SHELL_MAX_H, RESIZE_STEP_PX, THEMES, MIME_SESSION, MENTION_PREFIX } from "./lib/constants";
+  import { UNDO_REMOVE_DELAY_MS, SIDEBAR_MIN_W, SIDEBAR_MAX_W, SHELL_MIN_H, SHELL_MAX_H, RESIZE_STEP_PX, THEMES, MIME_SESSION, MENTION_PREFIX, AGENT_CLAUDE, AGENT_OPENCODE } from "./lib/constants";
 
   let workspaces      = $state<WorkspaceVM[]>([]);
   let activeId        = $state<string | null>(null);
@@ -708,13 +708,13 @@
                       <span class="empty-state-templates-label">Quick start</span>
                       <button
                         class="empty-state-btn empty-state-btn-template"
-                        onclick={() => openNewSession("claude")}
+                        onclick={() => openNewSession(AGENT_CLAUDE)}
                       >
                         Claude session
                       </button>
                       <button
                         class="empty-state-btn empty-state-btn-template"
-                        onclick={() => openNewSession("opencode")}
+                        onclick={() => openNewSession(AGENT_OPENCODE)}
                       >
                         Opencode session
                       </button>
@@ -911,8 +911,9 @@
                        z-index: var(--perch-z-approval); min-width: 320px; max-width: 560px; }
   .notification-hub-dock { position: absolute; top: 2.5rem; right: 0; z-index: var(--perch-z-notify);
                             width: 320px; max-height: 60vh; overflow-y: auto;
-                            border-left: 1px solid var(--perch-border);
-                            background: var(--perch-bg); }
+                            border-left: 1px solid var(--perch-border); }
+  /* No background here: the hub owns its own (glass) surface. An opaque dock bg
+     would sit behind the hub's backdrop-filter and defeat the frost (R7-2). */
   /* Status line — spans the full bottom of the center column; always in DOM */
   .status-line       { display: flex; align-items: center; flex-shrink: 0;
                        height: 24px; padding: 0 var(--perch-sp-1);
@@ -1063,6 +1064,9 @@
   @keyframes toast-in {
     from { opacity: 0; transform: translateY(8px); }
     to   { opacity: 1; transform: translateY(0); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .undo-toast { animation: none; }
   }
   .undo-toast-msg { flex: 1; }
   .undo-toast-btn {

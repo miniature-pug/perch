@@ -4,14 +4,17 @@
 /* @supports fallback: if backdrop-filter is unavailable (e.g. compositing disabled),
    drop the blur and use the solid tint so chrome stays legible. */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  :root { --perch-glass-bg: var(--perch-glass-bg-solid); --perch-glass-filter: none; }
+  :root { --perch-glass-bg: var(--perch-glass-bg-solid); --perch-glass-filter: none;
+          --perch-glass-shadow: var(--perch-shadow-float); }
 }
 
 /* In-app glass off-switch (a11y substitute for prefers-reduced-transparency, which does
    not fire in WebKitGTK). Set [data-glass="off"] on <html> to force solid opaque chrome. */
-[data-glass="off"] { --perch-glass-bg: var(--perch-glass-bg-solid); --perch-glass-filter: none; }
+[data-glass="off"] { --perch-glass-bg: var(--perch-glass-bg-solid); --perch-glass-filter: none;
+                     --perch-glass-shadow: var(--perch-shadow-float); }
 
 /* Future-proof: honor the OS query if WebKitGTK ever supports it. */
 @media (prefers-reduced-transparency: reduce) {
-  :root { --perch-glass-bg: var(--perch-glass-bg-solid); --perch-glass-filter: none; }
+  :root { --perch-glass-bg: var(--perch-glass-bg-solid); --perch-glass-filter: none;
+          --perch-glass-shadow: var(--perch-shadow-float); }
 }

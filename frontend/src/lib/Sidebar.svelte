@@ -207,12 +207,12 @@
 
   .status-awaiting-approval {
     color: var(--perch-warn);
-    animation: perch-attn-pulse 1s ease-in-out infinite;
+    animation: perch-attn-pulse var(--perch-dur-attn-approval) ease-in-out infinite;
   }
 
   .status-awaiting-input {
     color: var(--perch-info);
-    animation: perch-attn-pulse 1.6s ease-in-out infinite;
+    animation: perch-attn-pulse var(--perch-dur-attn-input) ease-in-out infinite;
   }
 
   .status-done {
@@ -224,7 +224,7 @@
     color: var(--perch-err);
   }
 
-  @keyframes perch-attn-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+  @keyframes perch-attn-pulse { 0%, 100% { opacity: 1; } 50% { opacity: var(--perch-attn-opacity-min); } }
   @media (prefers-reduced-motion: reduce) {
     .status-awaiting-approval, .status-awaiting-input { animation: none; }
     .status-icon.status-done { animation: none; }
