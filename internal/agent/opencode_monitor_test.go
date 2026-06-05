@@ -77,7 +77,7 @@ func TestOpencodeMonitorSSEParser(t *testing.T) {
 	if got[0].Kind != "state" || got[0].State != agent.StateRunning {
 		t.Errorf("ev[0]: want state=running, got %+v", got[0])
 	}
-	// session.next.step.started must carry sessionID (properties.sessionID) so the
+	// session.status (busy) must carry sessionID (properties.sessionID) so the
 	// app can persist it as LastSessionID and resume on the next OpenWorkspace.
 	if got[0].SessionID != "ses-1" {
 		t.Errorf("ev[0].SessionID = %q, want ses-1", got[0].SessionID)
@@ -488,14 +488,12 @@ func TestOpencodeMonitorSSE_SessionStatusCapturesSessionID(t *testing.T) {
 	}
 }
 
-// TestOpencodeMonitorSSE_SessionIDCapture verifies sessionID capture from the
-// real envelope (properties.sessionID), which is what lets app.go persist
-// LastSessionID for resume.
-func TestOpencodeMonitorSSE_SessionIDCapture(t *testing.T) {
+// serveSSE is a small helper: stand up an httptest server that streams the given
+// SSE fixture on GET /event (and 404s everything else), wire an OpencodeMonitor
+// to it, and start it. The caller drains om.Events(); cleanup is deferred here.
+func serveSSE(t *testing.T, fixture string) (*agent.OpencodeMonitor, func()) {
+	t.Helper()
 	t.Setenv("HOME", t.TempDir())
-
-	const fixture = `data: {"type":"session.next.step.started","properties":{"sessionID":"ses-xyz789"}}` + "\n\n"
-
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/event" {
 			w.Header().Set("Content-Type", "text/event-stream")
@@ -504,25 +502,93 @@ func TestOpencodeMonitorSSE_SessionIDCapture(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
-	defer srv.Close()
-
-	om := agent.NewOpencodeMonitorWithServer(agent.NewOpencode(), srv.URL, "test-pw")
+	om := agent.NewOpencodeMonitorWithServer(agent.NewOpencode(), srv.URL, "pw")
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	om.Start(ctx)
+	return om, func() { cancel(); srv.Close() }
+}
 
-	deadline := time.After(3 * time.Second)
-	var ev agent.Event
+// nextEvent reads one event from the monitor or fails on timeout.
+func nextEvent(t *testing.T, om *agent.OpencodeMonitor) agent.Event {
+	t.Helper()
 	select {
-	case ev = <-om.Events():
-	case <-deadline:
-		t.Fatal("timeout waiting for session.next.step.started event")
+	case ev := <-om.Events():
+		return ev
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for event")
+		return agent.Event{}
 	}
+}
 
-	if ev.Kind != "state" || ev.State != agent.StateRunning {
-		t.Errorf("event: want kind=state state=running, got %+v", ev)
+// TestOpencodeMonitorSSE_QuestionAsked verifies question.asked is translated to
+// the attention SIGNAL (Kind=="question", StateAwaitingInput) carrying the
+// sessionID — NOT an approval. The user answers in opencode's own attach TUI, so
+// perch never replies on the question endpoint; it only surfaces the feel.
+func TestOpencodeMonitorSSE_QuestionAsked(t *testing.T) {
+	om, done := serveSSE(t, `data: {"type":"question.asked","properties":{"sessionID":"ses-1"}}`+"\n\n")
+	defer done()
+
+	ev := nextEvent(t, om)
+	if ev.Kind != "question" {
+		t.Errorf("Kind = %q, want question", ev.Kind)
 	}
-	if ev.SessionID != "ses-xyz789" {
-		t.Errorf("SessionID = %q, want ses-xyz789", ev.SessionID)
+	if ev.State != agent.StateAwaitingInput {
+		t.Errorf("State = %q, want awaiting-input", ev.State)
+	}
+	if ev.SessionID != "ses-1" {
+		t.Errorf("SessionID = %q, want ses-1", ev.SessionID)
+	}
+	if ev.Approval != nil {
+		t.Errorf("question must carry NO approval (signal, not card), got %+v", ev.Approval)
+	}
+}
+
+// TestOpencodeMonitorSSE_QuestionReplied verifies that a question.replied (the
+// user answered in the TUI) clears the awaiting-input feel by resuming the agent
+// → StateRunning.
+func TestOpencodeMonitorSSE_QuestionReplied(t *testing.T) {
+	om, done := serveSSE(t, `data: {"type":"question.replied","properties":{"sessionID":"ses-1"}}`+"\n\n")
+	defer done()
+
+	ev := nextEvent(t, om)
+	if ev.State != agent.StateRunning {
+		t.Errorf("question.replied → want StateRunning, got %+v", ev)
+	}
+}
+
+// TestOpencodeMonitorSSE_QuestionRejected verifies that a question.rejected from
+// a non-running prior state (asked → rejected: AwaitingInput, never Running) maps
+// to a steady StateIdle — no spurious "Turn complete" toast (idleTransition only
+// yields StateDone from StateRunning).
+func TestOpencodeMonitorSSE_QuestionRejected(t *testing.T) {
+	om, done := serveSSE(t,
+		`data: {"type":"question.asked","properties":{"sessionID":"ses-1"}}`+"\n\n"+
+			`data: {"type":"question.rejected","properties":{"sessionID":"ses-1"}}`+"\n\n")
+	defer done()
+
+	asked := nextEvent(t, om)
+	if asked.State != agent.StateAwaitingInput {
+		t.Fatalf("first event: want awaiting-input, got %+v", asked)
+	}
+	rejected := nextEvent(t, om)
+	if rejected.State != agent.StateIdle {
+		t.Errorf("question.rejected (from awaiting-input) → want StateIdle, got %+v", rejected)
+	}
+}
+
+// TestOpencodeMonitorSSE_SessionError verifies the default-emitted session.error
+// maps to StateErrored with the human message extracted from the {name,message}
+// error object.
+func TestOpencodeMonitorSSE_SessionError(t *testing.T) {
+	om, done := serveSSE(t,
+		`data: {"type":"session.error","properties":{"sessionID":"ses-1","error":{"name":"X","message":"boom"}}}`+"\n\n")
+	defer done()
+
+	ev := nextEvent(t, om)
+	if ev.State != agent.StateErrored {
+		t.Errorf("State = %q, want errored", ev.State)
+	}
+	if ev.Err != "boom" {
+		t.Errorf("Err = %q, want boom", ev.Err)
 	}
 }

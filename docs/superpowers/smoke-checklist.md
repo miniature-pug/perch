@@ -55,6 +55,28 @@ real pty, real desktop notifications, a real agent).
 - [ ] Sidebar status returns to idle/done
 - [ ] (Keyboard) Command palette / approval is reachable and operable by keyboard
 
+## Agent question (AskUserQuestion / question.asked) — CRITICAL (signal, not card)
+A question is an attention SIGNAL, not an approval: the user answers it inside the
+agent's own pane TUI, and perch must NOT pop an approval card or block the agent.
+- [ ] (claude) Ask the agent something that makes it use `AskUserQuestion` (e.g. a
+      prompt that triggers a multiple-choice). Confirm: the sidebar row shows the
+      QUESTION feel — a `?` / "asking you", cyan (`--perch-info`), slow pulse — that
+      is VISUALLY DISTINCT from the approval feel (`⚠` "needs you", amber, fast
+      pulse); the question is answered IN the agent's pane TUI; perch does NOT pop an
+      approval card for it and does NOT block the agent waiting on one.
+- [ ] (opencode) Same, via opencode's `question.asked`: the row shows the cyan
+      slow-pulse "asking you" feel, the question is answered in the attach TUI, and
+      perch surfaces no approval card and never replies on the question endpoint.
+- [ ] After answering, the feel clears: replying resumes **running**; rejecting/
+      cancelling falls back to a steady **idle** (no spurious "Turn complete" toast).
+
+> NOTE: headless/mock tests lock the CONTRACT — the claude PreToolUse `tool_name`
+> branch + internal auto-allow (the agent is never blocked), and the opencode
+> `question.asked`/`replied`/`rejected` translation — but they CANNOT prove a real
+> `claude` actually emits an `AskUserQuestion` PreToolUse, nor that a real
+> `opencode` emits `question.asked`. Only this manual step proves the real
+> round-trip. (Same honest gate as bug-1b's terminal pane and bug-2's resume.)
+
 ## Workspace + turn loop (opencode) — only mock-covered, verify on a real binary
 The entire opencode side-channel is validated by httptest mocks against a
 source-read of the v1.15.12 contract; there is no automated real-binary test.

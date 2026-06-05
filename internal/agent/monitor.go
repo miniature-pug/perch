@@ -14,8 +14,13 @@ const (
 	StateRunning          State = "running"
 	StateIdle             State = "idle"
 	StateAwaitingApproval State = "awaiting-approval"
-	StateDone             State = "done"
-	StateErrored          State = "errored"
+	// StateAwaitingInput: the agent is asking the USER a question/choice (claude
+	// AskUserQuestion, opencode question.asked) — distinct from awaiting-approval
+	// (a tool-run permission). The user answers in the agent's own pane TUI; perch
+	// only surfaces it as a glanceable signal, it does not render the question.
+	StateAwaitingInput State = "awaiting-input"
+	StateDone          State = "done"
+	StateErrored       State = "errored"
 )
 
 type Caps struct {
@@ -52,8 +57,9 @@ type Event struct {
 	State       State        `json:"state,omitempty"`
 	Approval    *ApprovalReq `json:"approval,omitempty"`
 	Err         string       `json:"err,omitempty"`
-	// SessionID is populated on SessionStart events so the app layer can
-	// persist the active session id for resume on the next OpenWorkspace.
+	// SessionID is populated whenever the agent reports its session id (claude
+	// SessionStart; opencode session.status) so the app layer can persist it for
+	// resume on the next OpenWorkspace.
 	SessionID string `json:"sessionId,omitempty"`
 }
 

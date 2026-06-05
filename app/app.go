@@ -725,6 +725,8 @@ func (a *App) dispatchNotify(evt agent.Event) {
 	switch {
 	case evt.Kind == "state" && evt.State == agent.StateAwaitingApproval:
 		tier, title, body = "blocking", "Approval needed", "An agent is waiting for your decision."
+	case evt.Kind == "question" && evt.State == agent.StateAwaitingInput:
+		tier, title, body = "blocking", "Question", "An agent is asking you to choose."
 	case evt.Kind == "state" && evt.State == agent.StateDone:
 		tier, title, body = "ambient", "Turn complete", "Agent finished a turn."
 	case evt.Kind == "state" && evt.State == agent.StateErrored:

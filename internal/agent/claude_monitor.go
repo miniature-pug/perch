@@ -75,21 +75,36 @@ func (m *ClaudeMonitor) translateAndEmit(ctx context.Context, he hooklistener.Ho
 	// §8 defines no specced UI consumer for a Claude attention-notification
 	// signal. Removing the dead case keeps the code honest.
 	case "PreToolUse":
-		sum := he.ToolName
-		if len(he.ToolInput) > 0 && len(he.ToolInput) < toolInputSummaryCutoff {
-			sum += ": " + string(he.ToolInput)
+		if he.ToolName == toolAskUserQuestion {
+			// AskUserQuestion is the agent asking the USER to choose, not a request
+			// to act on the system — so it is an attention SIGNAL, not an approval.
+			// Surface StateAwaitingInput (the "question" sidebar feel + a blocking
+			// notify) and auto-allow the hook immediately so claude proceeds to
+			// render the question in its own pane TUI, where the user answers.
+			// Gating it behind perch's approval card would double-prompt and need-
+			// lessly block the agent; auto-allow is safe because the tool has no
+			// system side effect to approve. ExitPlanMode is deliberately NOT
+			// treated this way — auto-allowing it would skip the user's plan review,
+			// so it stays on the normal approval path below.
+			m.listener.Decide(he.ReqID, hooklistener.Decision{Allow: true})
+			ev = Event{Kind: "question", State: StateAwaitingInput}
+		} else {
+			sum := he.ToolName
+			if len(he.ToolInput) > 0 && len(he.ToolInput) < toolInputSummaryCutoff {
+				sum += ": " + string(he.ToolInput)
+			}
+			fullInput := string(he.ToolInput)
+			// M-13: compute hash of the FULL (untruncated) input before truncation so
+			// two inputs sharing a 4096-byte prefix produce distinct hashes.
+			h := sha256.Sum256([]byte(fullInput))
+			inputHash := hex.EncodeToString(h[:])
+			input := fullInput
+			if len(input) > MaxApprovalInputLen {
+				input = input[:MaxApprovalInputLen]
+			}
+			ev = Event{Kind: "approval", State: StateAwaitingApproval,
+				Approval: &ApprovalReq{ReqID: he.ReqID, Tool: he.ToolName, Summary: sum, Input: input, InputHash: inputHash}}
 		}
-		fullInput := string(he.ToolInput)
-		// M-13: compute hash of the FULL (untruncated) input before truncation so
-		// two inputs sharing a 4096-byte prefix produce distinct hashes.
-		h := sha256.Sum256([]byte(fullInput))
-		inputHash := hex.EncodeToString(h[:])
-		input := fullInput
-		if len(input) > MaxApprovalInputLen {
-			input = input[:MaxApprovalInputLen]
-		}
-		ev = Event{Kind: "approval", State: StateAwaitingApproval,
-			Approval: &ApprovalReq{ReqID: he.ReqID, Tool: he.ToolName, Summary: sum, Input: input, InputHash: inputHash}}
 	default:
 		return
 	}
@@ -133,6 +148,12 @@ func (m *ClaudeMonitor) LastApprovalTool() string {
 // ClaudeMonitor and OpencodeMonitor. Sized to absorb bursts without blocking
 // the emitter goroutine.
 const monitorEventChanBuf = 64
+
+// toolAskUserQuestion is the claude built-in tool the agent calls to ask the
+// user a multiple-choice question. perch treats its PreToolUse as an attention
+// SIGNAL (StateAwaitingInput) and auto-allows it so claude renders the question
+// in its own pane TUI — see the PreToolUse case in translateAndEmit.
+const toolAskUserQuestion = "AskUserQuestion"
 
 // toolInputSummaryCutoff is the maximum raw ToolInput byte length that is
 // included verbatim in the approval-event Summary. Inputs at or above this

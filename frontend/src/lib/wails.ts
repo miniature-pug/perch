@@ -5,10 +5,10 @@ export interface WorkspaceVM {
   id: string; worktreePath: string; agent: string; title: string; branch: string;
   state: AgentState; caps: AgentCaps; paneId: string; lastActive: string;
 }
-export type AgentState = "running"|"idle"|"awaiting-approval"|"done"|"errored";
+export type AgentState = "running"|"idle"|"awaiting-approval"|"awaiting-input"|"done"|"errored";
 export interface AgentCaps { approvals: boolean; attention: boolean; }
 export interface AgentEvent {
-  sessionId?: string; workspaceId: string; kind: "state"|"approval";
+  sessionId?: string; workspaceId: string; kind: "state"|"approval"|"question";
   state?: AgentState; approval?: ApprovalReq; err?: string;
 }
 export interface ApprovalReq { reqId: string; tool: string; summary: string; input?: string; }

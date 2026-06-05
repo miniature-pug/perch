@@ -513,6 +513,32 @@ describe("App.svelte live event wiring (4.25.4)", () => {
     );
   });
 
+  it("onAgentEvent: a 'question' event flips state to awaiting-input and shows NO approval card (signal-only)", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    // Select Alpha so it is the active workspace (otherwise "no dock" is vacuous).
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    await tick();
+
+    // Fire a question event: kind "question", no approval payload.
+    const cb = captured.agent.at(-1)!;
+    cb({ workspaceId: "ws-1", kind: "question", state: "awaiting-input" });
+    await tick();
+
+    // Sidebar maps "awaiting-input" → "asking you".
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Alpha" })).toHaveTextContent("asking you")
+    );
+
+    // A question is signal-only: NO approval dock, NO Allow button.
+    expect(document.querySelector("[data-zone='approval-dock']")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Allow" })).not.toBeInTheDocument();
+  });
+
   it("onNotify: blocking tier calls addBlocking and appears in notifications store", async () => {
     const { listWorkspaces } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);

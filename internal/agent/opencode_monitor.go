@@ -306,15 +306,6 @@ func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
 
 	var ev Event
 	switch env.Type {
-	case "session.next.step.started":
-		// Carry sessionID so the app can persist it as LastSessionID and pass it
-		// back as resumeID on the next OpenWorkspace (mirrors ClaudeMonitor's
-		// SessionStart). The field is `sessionID` (v1.15.12 session-event.ts Base).
-		var p struct {
-			SessionID string `json:"sessionID"`
-		}
-		_ = json.Unmarshal(env.Properties, &p)
-		ev = Event{Kind: "state", State: StateRunning, SessionID: p.SessionID}
 	case "session.status":
 		// The session-level status is the authoritative idle/running signal and,
 		// crucially, the only DEFAULT-emitted event that carries the sessionID
@@ -350,12 +341,41 @@ func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
 	case "session.idle":
 		// Deprecated alias of session.status{type:idle}; same transition rule.
 		ev = idleTransition(prev)
-	case "session.next.step.failed":
+	case "session.error":
+		// opencode's default-emitted error event. (session.next.step.failed also
+		// carries errors but is gated behind OPENCODE_EXPERIMENTAL_EVENT_SYSTEM,
+		// which perch never sets — so session.error is the only error signal perch
+		// can rely on.) Properties: {sessionID?, error} where error is a bare string
+		// or {message,name} (v1.15.12 session-event.ts Error).
 		var p struct {
-			Error json.RawMessage `json:"error"`
+			SessionID string          `json:"sessionID"`
+			Error     json.RawMessage `json:"error"`
 		}
 		_ = json.Unmarshal(env.Properties, &p)
-		ev = Event{Kind: "state", State: StateErrored, Err: errMessage(p.Error)}
+		ev = Event{Kind: "state", State: StateErrored, Err: errMessage(p.Error), SessionID: p.SessionID}
+	case "question.asked":
+		// The agent asks the USER a free-form choice — distinct from permission.asked
+		// (a tool-run approval). Like claude's AskUserQuestion this is an attention
+		// SIGNAL: the user answers in opencode's own attach TUI in the same pane, so
+		// perch only surfaces StateAwaitingInput and does NOT reply on
+		// POST /question/:id/reply (the TUI client owns the reply). The feel is
+		// cleared by question.replied / question.rejected below. (v1.15.12
+		// question/index.ts: question.asked is emitted unconditionally, no flag.)
+		var p struct {
+			SessionID string `json:"sessionID"`
+		}
+		_ = json.Unmarshal(env.Properties, &p)
+		ev = Event{Kind: "question", State: StateAwaitingInput, SessionID: p.SessionID}
+	case "question.replied", "question.rejected":
+		// The question was resolved in the TUI — clear the awaiting-input feel.
+		// replied → the agent resumes working (StateRunning); rejected → no active
+		// turn, so fall back to a steady idle (idleTransition from awaiting-input is
+		// never StateDone, so this fires no spurious "Turn complete" toast).
+		if env.Type == "question.replied" {
+			ev = Event{Kind: "state", State: StateRunning}
+		} else {
+			ev = idleTransition(prev)
+		}
 	case "permission.asked":
 		var p struct {
 			ID         string   `json:"id"`
@@ -408,7 +428,7 @@ func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
 	m.send(ctx, ev)
 }
 
-// errMessage extracts a human string from a session.next.step.failed error,
+// errMessage extracts a human string from a session.error error payload,
 // which may be a bare string or an object with a message/name field.
 func errMessage(raw json.RawMessage) string {
 	if len(raw) == 0 {

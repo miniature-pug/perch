@@ -19,6 +19,7 @@
     running:             { icon: "◐", label: "running" },
     idle:                { icon: "◯", label: "idle" },
     "awaiting-approval": { icon: "⚠", label: "needs you" },
+    "awaiting-input":    { icon: "?", label: "asking you" },
     done:                { icon: "✓", label: "done" },
     errored:             { icon: "✗", label: "error" },
   } as const;
@@ -53,7 +54,7 @@
 <nav aria-label="sessions" class="sidebar">
   <ul class="workspace-list">
     {#each workspaces as ws (ws.id)}
-      {@const st = STATUS[ws.state as keyof typeof STATUS] ?? { icon: "?", label: ws.state }}
+      {@const st = STATUS[ws.state as keyof typeof STATUS] ?? { icon: "·", label: ws.state }}
       {@const ds = diffStats[ws.id]}
       <li
         class:active={ws.id === activeId}
@@ -193,15 +194,26 @@
   }
 
   .status-awaiting-approval {
-    color: var(--perch-accent);
+    color: var(--perch-warn);
+    animation: perch-attn-pulse 1s ease-in-out infinite;
+  }
+
+  .status-awaiting-input {
+    color: var(--perch-info);
+    animation: perch-attn-pulse 1.6s ease-in-out infinite;
   }
 
   .status-done {
-    color: var(--perch-text-dim);
+    color: var(--perch-ok);
   }
 
   .status-errored {
     color: var(--perch-err);
+  }
+
+  @keyframes perch-attn-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+  @media (prefers-reduced-motion: reduce) {
+    .status-awaiting-approval, .status-awaiting-input { animation: none; }
   }
 
   /* ── Session title ────────────────────────────────────────────── */

@@ -14,6 +14,8 @@ const workspaces = [
     branch: "feat/done", state: "done", caps: {}, paneId: "p4", lastActive: "" },
   { id: "ws_e", worktreePath: "/wt/e", agent: "claude", title: "errored-work",
     branch: "feat/err", state: "errored", caps: {}, paneId: "p5", lastActive: "" },
+  { id: "ws_q", worktreePath: "/wt/q", agent: "claude", title: "asking-work",
+    branch: "feat/ask", state: "awaiting-input", caps: {}, paneId: "p6", lastActive: "" },
 ];
 
 test("renders status icon+label for all states", async () => {
@@ -27,6 +29,28 @@ test("renders status icon+label for all states", async () => {
   expect(screen.getByText(/needs you/i)).toBeInTheDocument();
   expect(screen.getByText(/✓/)).toBeInTheDocument();
   expect(screen.getByText(/✗/)).toBeInTheDocument();
+});
+
+test("awaiting-input maps to the question feel: status-awaiting-input class + 'asking you' label", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {} } });
+
+  const askBtn = screen.getByRole("button", { name: /asking-work/ });
+  const icon = askBtn.querySelector(".status-icon")!;
+  expect(icon).toBeInTheDocument();
+  expect(icon.classList.contains("status-awaiting-input")).toBe(true);
+  expect(icon.textContent).toContain("?");
+  expect(askBtn).toHaveTextContent("asking you");
+});
+
+test("done state renders the ✓ icon with status-done class", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {} } });
+
+  const doneBtn = screen.getByRole("button", { name: /done-work/ });
+  const icon = doneBtn.querySelector(".status-icon")!;
+  expect(icon.classList.contains("status-done")).toBe(true);
+  expect(icon.textContent).toContain("✓");
 });
 
 test("clicking a workspace calls onSelect", async () => {

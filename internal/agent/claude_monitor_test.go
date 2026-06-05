@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -210,6 +211,142 @@ func TestClaudeMonitorEventTranslation(t *testing.T) {
 	// (translateAndEmit sets m.state BEFORE the channel send, so this is race-free.)
 	if m.CurrentState() != agent.StateDone {
 		t.Errorf("CurrentState after Stop = %q, want %q", m.CurrentState(), agent.StateDone)
+	}
+}
+
+// postHook POSTs a hook payload to the listener's /hook and returns the response
+// body string. PreToolUse blocks in the handler until Decide() is called, so
+// callers that POST a PreToolUse normally run this in a goroutine.
+func postHook(t *testing.T, l *hooklistener.Listener, payload string) string {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, "http://"+l.Addr()+"/hook", strings.NewReader(payload))
+	if err != nil {
+		t.Errorf("new request: %v", err)
+		return ""
+	}
+	req.Header.Set("Authorization", "Bearer "+l.Token())
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Errorf("post hook: %v", err)
+		return ""
+	}
+	defer func() { _ = resp.Body.Close() }()
+	b, _ := io.ReadAll(resp.Body)
+	return string(b)
+}
+
+// TestClaudeMonitorAskUserQuestion_AutoAllow is the CRITICAL guard for the
+// question signal: a PreToolUse for AskUserQuestion must NOT raise an approval
+// card and must NOT block the agent. The monitor itself auto-allows the hook
+// (calls Decide internally) BEFORE the test ever touches Approve/Decide, so:
+//   - the emitted Event is Kind=="question"/StateAwaitingInput with a NIL Approval
+//   - the /hook POST returns "permissionDecision":"allow" on its own
+//
+// The POST runs in a goroutine guarded by a result channel + timeout: if the
+// source ever stops auto-allowing, the handler hangs on <-p.ch forever and this
+// test FAILS (timeout) rather than passing against a mock. Mocks cannot prove
+// the real binary emits AskUserQuestion's PreToolUse — that is the manual smoke
+// step — but this proves the auto-allow translation contract end to end.
+func TestClaudeMonitorAskUserQuestion_AutoAllow(t *testing.T) {
+	m, l, cleanup := newMonitorWithTestListener(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.Start(ctx)
+
+	respCh := make(chan string, 1)
+	go func() {
+		respCh <- postHook(t, l,
+			`{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_input":{"question":"pick one"},"session_id":"s","cwd":"/p"}`)
+	}()
+
+	// The monitor must emit the question signal.
+	var ev agent.Event
+	select {
+	case ev = <-m.Events():
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for question event")
+	}
+	if ev.Kind != "question" {
+		t.Errorf("Kind = %q, want question", ev.Kind)
+	}
+	if ev.State != agent.StateAwaitingInput {
+		t.Errorf("State = %q, want awaiting-input", ev.State)
+	}
+	if ev.Approval != nil {
+		t.Errorf("question must carry NO approval (signal, not card), got %+v", ev.Approval)
+	}
+
+	// The POST must complete on its OWN — the test never calls Approve/Decide.
+	// If the source did not auto-allow, the handler is still blocked on <-p.ch and
+	// this select times out.
+	select {
+	case body := <-respCh:
+		if !strings.Contains(body, `"permissionDecision":"allow"`) {
+			t.Errorf("hook response = %q, want it to contain permissionDecision allow", body)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("AskUserQuestion PreToolUse did not auto-allow: /hook POST never returned " +
+			"(monitor failed to Decide internally — the agent would be blocked)")
+	}
+}
+
+// TestClaudeMonitorPreToolUse_NonQuestionBlocksUntilDecide is the regression
+// counterpart: a NON-question PreToolUse (Write) must take the approval path —
+// Kind=="approval"/StateAwaitingApproval — and BLOCK until Decide supplies a
+// verdict. It must NOT auto-allow. The POST goroutine stays pending until the
+// test calls Approve; we assert it is still pending before, then completes after.
+func TestClaudeMonitorPreToolUse_NonQuestionBlocksUntilDecide(t *testing.T) {
+	m, l, cleanup := newMonitorWithTestListener(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.Start(ctx)
+
+	respCh := make(chan string, 1)
+	go func() {
+		respCh <- postHook(t, l,
+			`{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"path":"/x"},"session_id":"s","cwd":"/p"}`)
+	}()
+
+	var ev agent.Event
+	select {
+	case ev = <-m.Events():
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for approval event")
+	}
+	if ev.Kind != "approval" {
+		t.Fatalf("Kind = %q, want approval", ev.Kind)
+	}
+	if ev.State != agent.StateAwaitingApproval {
+		t.Errorf("State = %q, want awaiting-approval", ev.State)
+	}
+	if ev.Approval == nil || ev.Approval.Tool != "Write" {
+		t.Fatalf("Approval: want Tool=Write, got %+v", ev.Approval)
+	}
+
+	// The handler must STILL be blocked — no auto-allow for a non-question tool.
+	select {
+	case body := <-respCh:
+		t.Fatalf("Write PreToolUse must block until Decide, but the POST returned early: %q", body)
+	case <-time.After(150 * time.Millisecond):
+		// expected: still pending
+	}
+
+	// Now supply the verdict; the POST must complete with allow.
+	if err := m.Approve(ev.Approval.ReqID, agent.Decision{Allow: true}); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	select {
+	case body := <-respCh:
+		if !strings.Contains(body, `"permissionDecision":"allow"`) {
+			t.Errorf("after Approve, hook response = %q, want permissionDecision allow", body)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("POST never completed after Approve")
 	}
 }
 
