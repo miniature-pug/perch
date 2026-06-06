@@ -12,6 +12,7 @@ import { test, expect } from "@playwright/test";
 import path from "path";
 import fs from "fs";
 import { buildInitScriptContent } from "./_mock";
+import { PREVIEW_PORT } from "../preview-port.mjs";
 
 // Relative to cwd (frontend/) where playwright runs — matches existing spec convention
 const SCREENSHOT_DIR = "./e2e/__screenshots__";
@@ -87,7 +88,7 @@ test("all 9 --perch-bg values are distinct", async ({ browser }) => {
   const bgByTheme: Record<string, string> = {};
 
   for (const theme of THEMES) {
-    const context = await browser.newContext({ baseURL: "http://localhost:4173" });
+    const context = await browser.newContext({ baseURL: `http://localhost:${PREVIEW_PORT}` });
     await context.addInitScript({ content: buildInitScriptContent({ settings: { theme } }) });
     const pg = await context.newPage();
     await pg.goto("/");

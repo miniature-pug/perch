@@ -154,7 +154,7 @@
   }
 
   .btn-danger:focus-visible {
-    outline: 2px solid var(--perch-err);
+    outline: var(--perch-ring-w) solid var(--perch-err);
     outline-offset: 2px;
   }
 </style>

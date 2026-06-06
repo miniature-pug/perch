@@ -11,6 +11,7 @@ import { test, expect } from "@playwright/test";
 import path from "path";
 import fs from "fs";
 import { buildInitScriptContent, WORKSPACE_FIXTURE } from "./_mock";
+import { PREVIEW_PORT } from "../preview-port.mjs";
 
 const SCREENSHOT_DIR = "./e2e/__screenshots__";
 
@@ -111,7 +112,7 @@ test("split mode: splitting and un-splitting removes secondary pane", async ({ p
 
 test("empty state renders when no workspace is selected", async ({ browser }) => {
   // Separate browser context to avoid stacking init scripts from beforeEach
-  const context = await browser.newContext({ baseURL: "http://localhost:4173" });
+  const context = await browser.newContext({ baseURL: `http://localhost:${PREVIEW_PORT}` });
   await context.addInitScript({ content: buildInitScriptContent({ workspaces: [] }) });
   const page = await context.newPage();
   await page.goto("/");

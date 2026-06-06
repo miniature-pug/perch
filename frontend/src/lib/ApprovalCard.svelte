@@ -174,7 +174,7 @@
   }
 
   .btn-always:focus-visible {
-    outline: 2px solid var(--perch-warn);
+    outline: var(--perch-ring-w) solid var(--perch-warn);
     outline-offset: 2px;
   }
 
