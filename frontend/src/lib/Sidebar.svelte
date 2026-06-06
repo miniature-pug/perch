@@ -50,6 +50,16 @@
     if (!draggedId || draggedId === targetId) return;
     onReorder?.(draggedId, targetId);
   }
+
+  function formatAge(isoOrEmpty: string): string {
+    if (!isoOrEmpty) return "";
+    const d = new Date(isoOrEmpty);
+    if (isNaN(d.getTime())) return "";
+    const days = Math.floor((Date.now() - d.getTime()) / 86400000);
+    if (days < 1) return "today";
+    if (days === 1) return "1d ago";
+    return `${days}d ago`;
+  }
 </script>
 
 <nav aria-label="sessions" class="sidebar">
@@ -75,6 +85,8 @@
           <span class="status-icon status-{ws.state}" aria-hidden="true">{st.icon}</span>
           <span class="workspace-title">{ws.title}</span>
           <span class="workspace-branch dim">{ws.branch}</span>
+          <span class="workspace-agent dim">{ws.agent}</span>
+          <span class="workspace-age dim">{formatAge(ws.lastActive)}</span>
           {#if ds && (ds.added > 0 || ds.removed > 0)}
             <span class="sidebar-diffstat" aria-label="+{ds.added} minus {ds.removed}">
               <span class="diff-added">+<span use:countUp={ds.added}></span></span>
@@ -88,6 +100,11 @@
         </button>
       </li>
     {/each}
+    {#if workspaces.length === 0}
+      <li class="sidebar-empty-hint" data-testid="sidebar-empty-hint">
+        No sessions yet
+      </li>
+    {/if}
   </ul>
   <button class="new-session-cta" onclick={() => onNew()} aria-label="New session">+ New session</button>
 </nav>
@@ -252,6 +269,34 @@
     white-space: nowrap;
     flex-shrink: 0;
     max-width: 60px;
+  }
+
+  /* ── Agent name ──────────────────────────────────────────────── */
+  .workspace-agent {
+    font-size: var(--perch-fs-caption);
+    color: var(--perch-text-dim);
+    flex-shrink: 0;
+    max-width: 60px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* ── Last-active age ──────────────────────────────────────────── */
+  .workspace-age {
+    font-size: var(--perch-fs-caption);
+    color: var(--perch-text-dim);
+    flex-shrink: 0;
+  }
+
+  /* ── Empty hint ───────────────────────────────────────────────── */
+  .sidebar-empty-hint {
+    padding: calc(var(--perch-sp-1) * var(--perch-density-scale) * 2)
+             calc(var(--perch-sp-1) * var(--perch-density-scale) * 1.5);
+    color: var(--perch-text-dim);
+    font-size: var(--perch-fs-caption);
+    font-style: italic;
+    list-style: none;
   }
 
   /* ── Diffstat per-row ────────────────────────────────────────── */

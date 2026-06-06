@@ -267,3 +267,28 @@ test("workspace-row --row-color is stable and deterministic per id", async () =>
   expect(btnA.getAttribute("style") ?? "").toContain(worktreeColor("ws_a"));
   expect(btnB.getAttribute("style") ?? "").toContain(worktreeColor("ws_b"));
 });
+
+// ---------------------------------------------------------------------------
+// Feature: agent name + relative last-active age in session rows; empty hint
+// ---------------------------------------------------------------------------
+
+test("row renders branch · agent · relative last-active", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  const recentIso = new Date(Date.now() - 2 * 86400000).toISOString();
+  const ws: WorkspaceVM[] = [{
+    id: "ws-r", worktreePath: "/wt/r", agent: "opencode", title: "feat-r",
+    branch: "feat/resume", state: "idle", caps: { approvals: false, attention: false },
+    paneId: "pr", lastActive: recentIso,
+  }];
+  render(Sidebar, { props: { workspaces: ws, activeId: null, onSelect: () => {}, onNew: () => {} } });
+  expect(screen.getByText(/feat\/resume/)).toBeInTheDocument();
+  expect(screen.getByText(/opencode/i)).toBeInTheDocument();
+  expect(screen.getByText(/2d ago/i)).toBeInTheDocument();
+});
+
+test("empty hint renders when workspaces is empty", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  render(Sidebar, { props: { workspaces: [], activeId: null, onSelect: () => {}, onNew: () => {} } });
+  expect(screen.getByTestId("sidebar-empty-hint")).toBeInTheDocument();
+  expect(screen.getByTestId("sidebar-empty-hint")).toHaveTextContent(/no sessions/i);
+});
