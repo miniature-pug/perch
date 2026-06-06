@@ -108,6 +108,7 @@ vi.mock("./lib/wails", () => ({
   forceRemoveWorkspace:  vi.fn(async () => {}),
   listStaleSessions:     vi.fn(async () => []),
   cleanupSessions:       vi.fn(async () => {}),
+  homeShellCwd:          vi.fn(async () => "/home/user"),
 }));
 
 // NOTE: layout and mode stores are NOT mocked — we use the real $state runes stores.
@@ -3092,5 +3093,42 @@ describe("App.svelte dirty worktree force-remove", () => {
 
     await fireEvent.click(screen.getByRole("button", { name: /force remove/i }));
     await waitFor(() => expect(forceRemoveWorkspace).toHaveBeenCalledWith("ws-1"));
+  });
+});
+
+describe("App.svelte home-view persistent shell (4.4b)", () => {
+  it("home view renders welcome card AND a ShellDrawer with paneId shell-home", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]); // no sessions → home view
+    const { default: App } = await import("./App.svelte");
+    render(App, {});
+    await waitFor(() => expect(screen.getByText(/welcome to perch/i)).toBeInTheDocument());
+    const probe = await waitFor(() => screen.getByTestId("shell-drawer-probe"));
+    expect(probe.getAttribute("data-pane-id")).toBe("shell-home");
+  });
+
+  it("home shell paneId shell-home is not a session shell paneId", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    const { default: App } = await import("./App.svelte");
+    render(App, {});
+    const probe = await waitFor(() => screen.getByTestId("shell-drawer-probe")); // MUST exist (teeth)
+    const paneId = probe.getAttribute("data-pane-id") ?? "";
+    expect(paneId).toBe("shell-home");
+    expect(paneId).not.toMatch(/^shell-ws-/);
+  });
+
+  it("selecting a session switches away from home view to session view", async () => {
+    const { listWorkspaces, openWorkspace } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App, {});
+    await waitFor(() => screen.getByText("Alpha"));
+    await fireEvent.click(screen.getByRole("button", { name: /Alpha/i }));
+    // resume preview → confirm Open (4.2 flow)
+    const openBtn = await waitFor(() => screen.getByRole("button", { name: /^open$/i }));
+    await fireEvent.click(openBtn);
+    await waitFor(() => expect(openWorkspace).toHaveBeenCalled());
+    expect(screen.queryByText(/welcome to perch/i)).toBeNull();
   });
 });

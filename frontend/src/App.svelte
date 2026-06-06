@@ -26,7 +26,7 @@
   import NotificationHub    from "./lib/NotificationHub.svelte";
   import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead } from "./lib/stores/notifications.svelte";
   import CleanupPanel from "./lib/CleanupPanel.svelte";
-  import { listWorkspaces, createWorkspace, workspaceForBranch, removeWorkspace, openWorkspace, closeWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, onWorkspaceAttach, approve, branches, readFile, setWindowFocus, writeToPty, discoverRepos, diffStat, listStaleSessions, forceRemoveWorkspace } from "./lib/wails";
+  import { listWorkspaces, createWorkspace, workspaceForBranch, removeWorkspace, openWorkspace, closeWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, onWorkspaceAttach, approve, branches, readFile, setWindowFocus, writeToPty, discoverRepos, diffStat, listStaleSessions, forceRemoveWorkspace, homeShellCwd as fetchHomeShellCwd } from "./lib/wails";
   import type { WorkspaceVM, ApprovalReq, StaleSessionVM } from "./lib/wails";
   import { UNDO_REMOVE_DELAY_MS, SIDEBAR_MIN_W, SIDEBAR_MAX_W, SHELL_MIN_H, SHELL_MAX_H, RESIZE_STEP_PX, THEMES, MIME_SESSION, MENTION_PREFIX, AGENT_CLAUDE, AGENT_OPENCODE } from "./lib/constants";
 
@@ -79,6 +79,7 @@
   let helpOpen              = $state(false);
   let settingsOpen          = $state(false);
   let staleSessions         = $state<StaleSessionVM[]>([]);
+  let homeShellCwdValue     = $state<string>("");
   let staleBannerDismissed  = $state(false);
   let cleanupOpen           = $state(false);
   let confirmDirty          = $state<WorkspaceVM | null>(null);
@@ -232,6 +233,11 @@
       staleSessions = await listStaleSessions();
     } catch {
       // non-fatal — never block startup
+    }
+    try {
+      homeShellCwdValue = await fetchHomeShellCwd();
+    } catch {
+      homeShellCwdValue = "";
     }
   });
 
@@ -764,32 +770,44 @@
                   {/key}
                 {/if}
               {:else}
-                <div class="empty-state" data-testid="empty-state">
-                  <div class="empty-state-card">
-                    <h2 class="empty-state-title">Welcome to perch</h2>
-                    <p class="empty-state-hint">Start an AI coding session in any local git repo.</p>
-                    <button
-                      class="empty-state-btn empty-state-btn-primary"
-                      onclick={() => openNewSession()}
-                    >
-                      New Session
-                    </button>
-                    <div class="empty-state-templates">
-                      <span class="empty-state-templates-label">Quick start</span>
+                <div class="empty-state home-view" data-testid="empty-state">
+                  <div class="home-welcome">
+                    <div class="empty-state-card">
+                      <h2 class="empty-state-title">Welcome to perch</h2>
+                      <p class="empty-state-hint">Start an AI coding session in any local git repo.</p>
                       <button
-                        class="empty-state-btn empty-state-btn-template"
-                        onclick={() => openNewSession(AGENT_CLAUDE)}
+                        class="empty-state-btn empty-state-btn-primary"
+                        onclick={() => openNewSession()}
                       >
-                        Claude session
+                        New Session
                       </button>
-                      <button
-                        class="empty-state-btn empty-state-btn-template"
-                        onclick={() => openNewSession(AGENT_OPENCODE)}
-                      >
-                        Opencode session
-                      </button>
+                      <div class="empty-state-templates">
+                        <span class="empty-state-templates-label">Quick start</span>
+                        <button
+                          class="empty-state-btn empty-state-btn-template"
+                          onclick={() => openNewSession(AGENT_CLAUDE)}
+                        >
+                          Claude session
+                        </button>
+                        <button
+                          class="empty-state-btn empty-state-btn-template"
+                          onclick={() => openNewSession(AGENT_OPENCODE)}
+                        >
+                          Opencode session
+                        </button>
+                      </div>
                     </div>
                   </div>
+                  {#if homeShellCwdValue}
+                    <div class="home-shell-zone">
+                      <ShellDrawer
+                        paneId="shell-home"
+                        cwd={homeShellCwdValue}
+                        collapsed={layout.collapsed["shell-home"] ?? false}
+                        onToggleCollapse={() => layout.setCollapsed("shell-home", !layout.collapsed["shell-home"])}
+                      />
+                    </div>
+                  {/if}
                 </div>
               {/if}
             {/snippet}
@@ -1131,6 +1149,11 @@
   .empty-state-btn-template:focus-visible {
     outline: 2px solid var(--perch-accent); outline-offset: 2px;
   }
+
+  /* Home view: vertical split — welcome card above, persistent shell below */
+  .home-view { display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; width: 100%; height: 100%; overflow: hidden; }
+  .home-welcome { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+  .home-shell-zone { flex: none; height: 220px; border-top: 1px solid var(--perch-border); overflow: hidden; }
 
   /* Split pane session picker */
   .split-picker {
