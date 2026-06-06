@@ -66,6 +66,16 @@ All three specs map to code with zero cut corners.
 
 ---
 
+## Resolution
+
+All 13 actions landed in 4 commits on `feat/perch-v1`:
+- `c530da0` — G-1 (`registry.ConfigDirMode`), G-2 (`hooklistener.LoopbackHost`), G-3 (`TestApp_ListStaleSessions_UnmergedNotSafe`, teeth-confirmed), C-1 (`gui-build` mask).
+- `202b83d` — F-1..F-6 (radius-sm/ring-w/fs-caption/scrollbar-w/scrollbar-radius/opacity-disabled tokens), FE-1 (`ThemeName` removed).
+- `fcbef35` — D-1 (`@codemirror/theme-one-dark` dropped + lockfile), B-1 (preview-port single-source via `preview-port.mjs`), B-2 (`wails.json` → `npm ci`).
+- `9c11278` — reviewer residuals: F-2 completed (focus-ring **width** tokenized in 2 remaining non-accent rings, `ConfirmDialog`/`ApprovalCard`); B-1 completed (`PREVIEW_PORT` imported into `e2e/views.spec.ts` + `e2e/themes.spec.ts`, which still hard-coded `4173` — pre-existing, now single-sourced). Port `4173` now exists in exactly one place.
+
+A full review (`git diff 0d9c431..HEAD`) verified all changes correct, no excluded literal touched, no import cycle, G-3 teeth, staging hygiene (no `frontend/dist/index.html`). The container gate (`make test-all`) is **GREEN at `9c11278`**: 16 Go pkgs race+integration, golangci-lint, vet, govulncheck, vitest 397, Playwright e2e 61 — and the new `e2e` `.mjs` import resolves in-container.
+
 ## Honest ceiling
 
 Unchanged from prior rounds: WebKit + real-agent + attach-D-Bus + Playwright visual/feel behavior is **user-gated manual smoke** (`docs/superpowers/smoke-checklist.md`). No automated audit substitutes for it.
