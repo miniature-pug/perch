@@ -1,6 +1,18 @@
 // Typed seam over Wails-injected globals. Components import ONLY from here.
 // Event names: colon-separated per the frozen Wails event table.
 
+export interface StaleSessionVM {
+  id: string;
+  title: string;
+  branch: string;
+  agent: string;
+  lastActive: string; // ISO timestamp
+  added: number;
+  removed: number;
+  clean: boolean;
+  merged: boolean;
+  safe: boolean;
+}
 export interface WorkspaceVM {
   id: string; worktreePath: string; agent: string; title: string; branch: string;
   state: AgentState; caps: AgentCaps; paneId: string; lastActive: string;
@@ -33,6 +45,9 @@ interface App {
   OpenWorkspace(id: string): Promise<void>;
   CloseWorkspace(id: string): Promise<void>;
   RemoveWorkspace(id: string): Promise<void>;
+  ForceRemoveWorkspace(id: string): Promise<void>;
+  ListStaleSessions(): Promise<StaleSessionVM[]>;
+  CleanupSessions(ids: string[], force: boolean): Promise<void>;
   WriteToPty(paneId: string, data: number[]): Promise<void>;
   ResizePty(paneId: string, cols: number, rows: number): Promise<void>;
   OpenShell(paneId: string, cwd: string): Promise<void>;
@@ -70,7 +85,10 @@ export const createWorkspace      = (agent: string, repoPath: string, baseRef: s
 export const workspaceForBranch   = (repoPath: string, branch: string)                                                    => app().WorkspaceForBranch(repoPath, branch);
 export const openWorkspace   = (id: string)                                       => app().OpenWorkspace(id);
 export const closeWorkspace  = (id: string)                                       => app().CloseWorkspace(id);
-export const removeWorkspace = (id: string)                                       => app().RemoveWorkspace(id);
+export const removeWorkspace      = (id: string)                                  => app().RemoveWorkspace(id);
+export const forceRemoveWorkspace = (id: string)                                  => app().ForceRemoveWorkspace(id);
+export const listStaleSessions    = ()                                            => app().ListStaleSessions();
+export const cleanupSessions      = (ids: string[], force: boolean)               => app().CleanupSessions(ids, force);
 // PTY
 export const writeToPty = (paneId: string, data: number[])                        => app().WriteToPty(paneId, data);
 export const resizePty  = (paneId: string, cols: number, rows: number)            => app().ResizePty(paneId, cols, rows);

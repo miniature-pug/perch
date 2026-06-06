@@ -2,7 +2,9 @@
 // and assert the exported function signatures match the pinned contracts.
 // These tests pass when the module exports the correct shapes; they fail when
 // old signatures or removed exports remain.
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, test } from "vitest";
+import { forceRemoveWorkspace, listStaleSessions, cleanupSessions } from "./wails";
+import type { StaleSessionVM } from "./wails";
 
 describe("wails.ts contract (Phase 2)", () => {
   it("createWorkspace export accepts (agent, repoPath, baseRef, branch, worktree)", async () => {
@@ -20,4 +22,10 @@ describe("wails.ts contract (Phase 2)", () => {
     const mod = await import("./constants");
     expect((mod as Record<string, unknown>)["DEFAULT_MODEL"]).toBeUndefined();
   });
+});
+
+test("cleanup bindings are exported", () => {
+  expect(typeof forceRemoveWorkspace).toBe("function");
+  expect(typeof listStaleSessions).toBe("function");
+  expect(typeof cleanupSessions).toBe("function");
 });
