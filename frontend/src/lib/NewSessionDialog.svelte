@@ -154,13 +154,13 @@
         {/if}
 
         <!-- Use existing branch sub-toggle -->
-        <label class="setting-row">
+        <div class="setting-row">
           <span class="setting-label"></span>
           <label class="sub-toggle">
             <input type="checkbox" aria-label="use existing branch" bind:checked={useExisting} />
             <span>Use existing branch</span>
           </label>
-        </label>
+        </div>
       {:else}
         <!-- Non-worktree: single branch dropdown -->
         <label class="setting-row">
