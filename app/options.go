@@ -34,6 +34,11 @@ const (
 	singleInstanceID = "com.miniature-pug.perch"
 )
 
+// defaultWindowBg is the webview background painted before the SPA mounts and
+// behind any chrome not yet styled. Matches the default (gruvbox) theme's
+// --perch-bg (#282828) so launch shows no white flash.
+var defaultWindowBg = options.RGBA{R: 40, G: 40, B: 40, A: 255}
+
 // Run launches the Wails desktop app. assets is the embedded SPA (from the repo
 // root package). Production builds expose NO listening TCP port: IPC travels over
 // the WebKit2GTK script-message channel and assets are served via the wails://
@@ -47,9 +52,10 @@ func Run(assets embed.FS, roots []string) error {
 	}
 	app := NewApp(store, roots)
 	return wails.Run(&options.App{
-		Title:  appTitle,
-		Width:  defaultWindowWidth,
-		Height: defaultWindowHeight,
+		Title:            appTitle,
+		Width:            defaultWindowWidth,
+		Height:           defaultWindowHeight,
+		BackgroundColour: &defaultWindowBg,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
