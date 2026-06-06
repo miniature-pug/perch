@@ -483,8 +483,12 @@ describe("App.svelte Stage content routing (4.25.2)", () => {
     await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
     await tick();
 
-    const drawer = await screen.findByTestId("shell-drawer-probe");
-    const paneId = drawer.dataset.paneId!;
+    // After the home-shell-mount fix there may be TWO shell-drawer-probes in the DOM
+    // (shell-home hidden + shell-ws-1 visible).  Filter to the session shell explicitly.
+    const probes = await screen.findAllByTestId("shell-drawer-probe");
+    const drawer = probes.find(p => p.getAttribute("data-pane-id") === "shell-ws-1");
+    expect(drawer).toBeDefined();
+    const paneId = drawer!.dataset.paneId!;
     expect(paneId).toBe("shell-ws-1");
     expect(paneId.startsWith("shell-")).toBe(true);
     // Mirror Go's validateSessionID charset: no colon, no other invalid chars.
@@ -3093,6 +3097,27 @@ describe("App.svelte dirty worktree force-remove", () => {
 
     await fireEvent.click(screen.getByRole("button", { name: /force remove/i }));
     await waitFor(() => expect(forceRemoveWorkspace).toHaveBeenCalledWith("ws-1"));
+  });
+});
+
+describe("App.svelte home shell mount persistence (4.4c)", () => {
+  it("home shell stays mounted (shell-home) after navigating into a session", async () => {
+    const { listWorkspaces, openWorkspace } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App, {});
+    await waitFor(() => screen.getByText("Alpha"));
+    const homeOnHome = screen.getAllByTestId("shell-drawer-probe").filter(p => p.getAttribute("data-pane-id") === "shell-home");
+    expect(homeOnHome.length).toBe(1); // present on home
+    // open a session via the 4.2 resume-preview flow
+    await fireEvent.click(screen.getByRole("button", { name: /Alpha/i }));
+    const openBtn = await waitFor(() => screen.getByRole("button", { name: /^open$/i }));
+    await fireEvent.click(openBtn);
+    await waitFor(() => expect(openWorkspace).toHaveBeenCalled());
+    // home shell-home probe STILL mounted (would be 0 if it were still inside {:else})
+    const homeAfter = screen.getAllByTestId("shell-drawer-probe").filter(p => p.getAttribute("data-pane-id") === "shell-home");
+    expect(homeAfter.length).toBe(1);
+    expect(screen.queryByText(/welcome to perch/i)).toBeNull();
   });
 });
 

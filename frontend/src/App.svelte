@@ -798,16 +798,20 @@
                       </div>
                     </div>
                   </div>
-                  {#if homeShellCwdValue}
-                    <div class="home-shell-zone">
-                      <ShellDrawer
-                        paneId="shell-home"
-                        cwd={homeShellCwdValue}
-                        collapsed={layout.collapsed["shell-home"] ?? false}
-                        onToggleCollapse={() => layout.setCollapsed("shell-home", !layout.collapsed["shell-home"])}
-                      />
-                    </div>
-                  {/if}
+                </div>
+              {/if}
+              <!-- Home shell: lives OUTSIDE the active/home conditional so the xterm instance
+                   (and its pty/scroll buffer) is never unmounted when a session is opened.
+                   Hidden via inline display style when a session is active; the inline style
+                   is required because jsdom only reflects inline styles in visibility assertions. -->
+              {#if homeShellCwdValue}
+                <div class="home-shell-zone" style:display={active ? 'none' : ''}>
+                  <ShellDrawer
+                    paneId="shell-home"
+                    cwd={homeShellCwdValue}
+                    collapsed={layout.collapsed["shell-home"] ?? false}
+                    onToggleCollapse={() => layout.setCollapsed("shell-home", !layout.collapsed["shell-home"])}
+                  />
                 </div>
               {/if}
             {/snippet}
