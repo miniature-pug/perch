@@ -510,6 +510,7 @@ func (a *App) CreateWorkspace(agentName, repoPath, baseRef, branch string, workt
 		Agent:        agentName,
 		Title:        handle,
 		Branch:       branch,
+		BaseRef:      baseRef,
 		LastActive:   now,
 	}
 	if err := a.store.Upsert(w); err != nil {

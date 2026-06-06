@@ -33,6 +33,7 @@ type Workspace struct {
 	LastSessionID string    `json:"lastSessionID"`
 	Title         string    `json:"title"`
 	Branch        string    `json:"branch"`
+	BaseRef       string    `json:"baseRef,omitempty"` // branch the worktree was created from; "" for old/in-repo records
 	LastActive    time.Time `json:"lastActive"`
 }
 

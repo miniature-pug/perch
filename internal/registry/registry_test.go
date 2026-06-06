@@ -228,6 +228,76 @@ func TestWorkspace_ModelFieldGone(t *testing.T) {
 	_ = got.RepoPath
 }
 
+// TestWorkspace_BaseRefRoundTrip verifies that BaseRef survives an
+// Upsert→Load→Get JSON round-trip (required by Phase-3 stale-cleanup merge checks).
+func TestWorkspace_BaseRefRoundTrip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	s, err := registry.Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	now := time.Now().Truncate(time.Second)
+	w := registry.Workspace{
+		ID:           "ws-br1",
+		RepoPath:     "/home/me/proj",
+		WorktreePath: "/home/me/proj__worktrees/feat-x",
+		Worktree:     true,
+		Agent:        "claude",
+		Title:        "feat-x",
+		Branch:       "feat/x",
+		BaseRef:      "main",
+		LastActive:   now,
+	}
+	if err := s.Upsert(w); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	// In-memory Get.
+	got, ok := s.Get("ws-br1")
+	if !ok {
+		t.Fatal("Get returned not-found after Upsert")
+	}
+	if got.BaseRef != "main" {
+		t.Errorf("BaseRef = %q, want %q", got.BaseRef, "main")
+	}
+
+	// Reload from disk — persistence check.
+	s2, err := registry.Load(dir)
+	if err != nil {
+		t.Fatalf("Load after Upsert: %v", err)
+	}
+	got2, ok := s2.Get("ws-br1")
+	if !ok {
+		t.Fatal("Get after reload returned not-found")
+	}
+	if got2.BaseRef != "main" {
+		t.Errorf("BaseRef after reload = %q, want %q", got2.BaseRef, "main")
+	}
+
+	// Empty BaseRef (non-worktree / legacy record) must survive too.
+	w2 := registry.Workspace{
+		ID:           "ws-br2",
+		RepoPath:     "/home/me/proj",
+		WorktreePath: "/home/me/proj",
+		Agent:        "opencode",
+		Title:        "main",
+		Branch:       "main",
+		BaseRef:      "",
+		LastActive:   now,
+	}
+	if err := s.Upsert(w2); err != nil {
+		t.Fatalf("Upsert empty BaseRef: %v", err)
+	}
+	got3, ok := s.Get("ws-br2")
+	if !ok {
+		t.Fatal("Get empty-BaseRef record returned not-found")
+	}
+	if got3.BaseRef != "" {
+		t.Errorf("BaseRef = %q, want empty string for legacy record", got3.BaseRef)
+	}
+}
+
 func TestDefaultConfigDir(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 

@@ -533,6 +533,38 @@ func TestApp_CreateWorkspace_WorktreeNewBranch(t *testing.T) {
 	}
 }
 
+// TestApp_CreateWorkspace_PersistsBaseRef verifies that the baseRef argument
+// supplied to CreateWorkspace is stored in the registry record as BaseRef.
+// This field is required by Phase-3 stale-cleanup merge checks.
+func TestApp_CreateWorkspace_PersistsBaseRef(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	repo := makeTestRepo(t, root)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+
+	a := &App{
+		store:    store,
+		roots:    []string{root},
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+	}
+
+	vm, err := a.CreateWorkspace("claude", repo, "main", "feat/br-test", true)
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+	w, ok := store.Get(vm.ID)
+	if !ok {
+		t.Fatal("workspace not persisted")
+	}
+	if w.BaseRef != "main" {
+		t.Errorf("BaseRef = %q, want %q", w.BaseRef, "main")
+	}
+}
+
 // ── Worktree mode: existing branch ────────────────────────────────────────────
 
 // TestApp_CreateWorkspace_WorktreeExistingBranch verifies that worktree=true +
