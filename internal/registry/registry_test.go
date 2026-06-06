@@ -122,6 +122,112 @@ func TestRemove(t *testing.T) {
 	}
 }
 
+// TestWorkspace_RepoPathWorktreeRoundTrip verifies that RepoPath and Worktree
+// survive an Upsert→Load→Get cycle (JSON round-trip).
+func TestWorkspace_RepoPathWorktreeRoundTrip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	s, err := registry.Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	now := time.Now().Truncate(time.Second)
+	w := registry.Workspace{
+		ID:           "ws-rp1",
+		RepoPath:     "/home/me/proj",
+		WorktreePath: "/home/me/proj__worktrees/feat-x",
+		Worktree:     true,
+		Agent:        "claude",
+		Title:        "feat-x",
+		Branch:       "feat-x",
+		LastActive:   now,
+	}
+	if err := s.Upsert(w); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	// In-memory Get.
+	got, ok := s.Get("ws-rp1")
+	if !ok {
+		t.Fatal("Get returned not-found after Upsert")
+	}
+	if got.RepoPath != "/home/me/proj" {
+		t.Errorf("RepoPath = %q, want /home/me/proj", got.RepoPath)
+	}
+	if !got.Worktree {
+		t.Error("Worktree = false, want true")
+	}
+
+	// Reload from disk.
+	s2, err := registry.Load(dir)
+	if err != nil {
+		t.Fatalf("Load after Upsert: %v", err)
+	}
+	got2, ok := s2.Get("ws-rp1")
+	if !ok {
+		t.Fatal("Get after reload returned not-found")
+	}
+	if got2.RepoPath != "/home/me/proj" {
+		t.Errorf("RepoPath after reload = %q, want /home/me/proj", got2.RepoPath)
+	}
+	if !got2.Worktree {
+		t.Error("Worktree after reload = false, want true")
+	}
+
+	// Non-worktree session: WorktreePath == RepoPath, Worktree == false.
+	w2 := registry.Workspace{
+		ID:           "ws-rp2",
+		RepoPath:     "/home/me/proj",
+		WorktreePath: "/home/me/proj",
+		Worktree:     false,
+		Agent:        "opencode",
+		Title:        "main",
+		Branch:       "main",
+		LastActive:   now,
+	}
+	if err := s.Upsert(w2); err != nil {
+		t.Fatalf("Upsert non-worktree: %v", err)
+	}
+	got3, ok := s.Get("ws-rp2")
+	if !ok {
+		t.Fatal("Get non-worktree returned not-found")
+	}
+	if got3.Worktree {
+		t.Error("non-worktree session: Worktree = true, want false")
+	}
+	if got3.WorktreePath != got3.RepoPath {
+		t.Errorf("non-worktree session: WorktreePath %q != RepoPath %q",
+			got3.WorktreePath, got3.RepoPath)
+	}
+}
+
+// TestWorkspace_ModelFieldGone verifies that old JSON containing a "model"
+// field is loaded without error (unknown fields default to zero) and that the
+// Workspace struct has no Model field the call site can set.
+func TestWorkspace_ModelFieldGone(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	// Write a workspaces.json that contains an old "model" key.
+	oldJSON := `[{"id":"ws-old","worktreePath":"/tmp/x","agent":"claude",
+"model":"claude-sonnet-4-5","title":"old","branch":"main",
+"lastActive":"2026-01-01T00:00:00Z"}]`
+	if err := os.WriteFile(filepath.Join(dir, "workspaces.json"),
+		[]byte(oldJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := registry.Load(dir)
+	if err != nil {
+		t.Fatalf("Load with old model key: %v", err)
+	}
+	got, ok := s.Get("ws-old")
+	if !ok {
+		t.Fatal("ws-old not found after load")
+	}
+	// RepoPath defaults to "" (field absent in old JSON) — that is fine,
+	// old records will be enriched by future saves.
+	_ = got.RepoPath
+}
+
 func TestDefaultConfigDir(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 

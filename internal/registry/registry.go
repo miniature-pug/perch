@@ -23,13 +23,14 @@ const (
 // Workspace is the persistent record for one perch workspace.
 // JSON tags are frozen — do not rename. New fields may be added.
 // Missing fields in stored JSON default to the Go zero value on load
-// (e.g. Model=="" for records written before model plumbing was added).
+// (e.g. RepoPath=="" for records written before RepoPath was added).
 type Workspace struct {
 	ID            string    `json:"id"`
-	WorktreePath  string    `json:"worktreePath"`
+	RepoPath      string    `json:"repoPath"`      // source repo root
+	WorktreePath  string    `json:"worktreePath"`  // linked tree; == RepoPath when Worktree==false
+	Worktree      bool      `json:"worktree"`      // true=isolated tree, false=in-repo permanent
 	Agent         string    `json:"agent"`
 	LastSessionID string    `json:"lastSessionID"`
-	Model         string    `json:"model,omitempty"`
 	Title         string    `json:"title"`
 	Branch        string    `json:"branch"`
 	LastActive    time.Time `json:"lastActive"`
