@@ -182,9 +182,9 @@
     scrollbar-width: thin;
     scrollbar-color: var(--perch-border) transparent;
   }
-  .scrollable::-webkit-scrollbar { width: 6px; }
+  .scrollable::-webkit-scrollbar { width: var(--perch-scrollbar-w); }
   .scrollable::-webkit-scrollbar-track { background: transparent; }
-  .scrollable::-webkit-scrollbar-thumb { background: var(--perch-border); border-radius: 3px; }
+  .scrollable::-webkit-scrollbar-thumb { background: var(--perch-border); border-radius: var(--perch-scrollbar-radius); }
   .scrollable::-webkit-scrollbar-thumb:hover { background: var(--perch-text-dim); }
 
   /* ---------- File list panel ---------- */
@@ -218,7 +218,7 @@
   .file-row:last-child { border-bottom: none; }
   .file-row:hover { background: color-mix(in srgb, var(--perch-accent) 10%, transparent); }
   .file-row[aria-expanded="true"] { background: color-mix(in srgb, var(--perch-accent) 16%, transparent); }
-  .file-row:focus-visible { outline: 2px solid var(--perch-accent); outline-offset: -2px; }
+  .file-row:focus-visible { outline: var(--perch-ring-w) solid var(--perch-accent); outline-offset: -2px; }
 
   .file-status-icon {
     flex-shrink: 0;
@@ -333,7 +333,7 @@
     background: var(--perch-bg);
     color: var(--perch-text);
     border: 1px solid var(--perch-border-strong);
-    border-radius: 4px;
+    border-radius: var(--perch-radius-sm);
     font-family: var(--perch-font-sans);
     font-size: var(--perch-fs-caption);
     cursor: pointer;
@@ -343,7 +343,7 @@
       background   var(--perch-dur) var(--perch-ease);
   }
   .btn:hover { border-color: var(--perch-accent); color: var(--perch-accent); }
-  .btn:focus-visible { outline: 2px solid var(--perch-accent); outline-offset: 2px; }
+  .btn:focus-visible { outline: var(--perch-ring-w) solid var(--perch-accent); outline-offset: 2px; }
 
   .btn-danger {
     color: var(--perch-err);

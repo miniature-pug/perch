@@ -136,7 +136,7 @@
   }
 
   .workspace-list::-webkit-scrollbar {
-    width: 6px;
+    width: var(--perch-scrollbar-w);
   }
 
   .workspace-list::-webkit-scrollbar-track {
@@ -145,7 +145,7 @@
 
   .workspace-list::-webkit-scrollbar-thumb {
     background: var(--perch-border);
-    border-radius: 3px;
+    border-radius: var(--perch-scrollbar-radius);
   }
 
   .workspace-list::-webkit-scrollbar-thumb:hover {
@@ -201,13 +201,13 @@
   }
 
   .workspace-row:focus-visible {
-    outline: 2px solid var(--perch-accent);
+    outline: var(--perch-ring-w) solid var(--perch-accent);
     outline-offset: -2px;
   }
 
   /* ── Status icon — colored per state ─────────────────────────── */
   .status-icon {
-    font-size: 12px;
+    font-size: var(--perch-fs-caption);
     flex-shrink: 0;
     width: 16px;
     text-align: center;
@@ -356,7 +356,7 @@
   }
 
   .new-session-cta:focus-visible {
-    outline: 2px solid var(--perch-accent);
+    outline: var(--perch-ring-w) solid var(--perch-accent);
     outline-offset: 2px;
   }
 </style>

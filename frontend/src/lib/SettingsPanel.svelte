@@ -224,7 +224,7 @@
     background: var(--perch-bg);
     color: var(--perch-text);
     border: 1px solid var(--perch-border-strong);
-    border-radius: 4px;
+    border-radius: var(--perch-radius-sm);
     padding: 2px 6px;
     font-size: var(--perch-fs-body);
     font-family: var(--perch-font-sans);
@@ -240,7 +240,7 @@
   .dnd-switch {
     padding: 2px 10px;
     border: 1px solid var(--perch-border-strong);
-    border-radius: 4px;
+    border-radius: var(--perch-radius-sm);
     background: var(--perch-bg);
     color: var(--perch-text);
     cursor: pointer;
@@ -260,7 +260,7 @@
     margin: 0 0 var(--perch-sp-1) 0;
     padding: 6px 8px;
     border: 1px solid var(--perch-warn);
-    border-radius: 4px;
+    border-radius: var(--perch-radius-sm);
     background: color-mix(in srgb, var(--perch-warn) 8%, var(--perch-bg));
     color: var(--perch-text-dim, var(--perch-text));
     font-size: var(--perch-fs-code);
@@ -328,7 +328,7 @@
     background: var(--perch-bg);
     color: var(--perch-text);
     border: 1px solid var(--perch-border-strong);
-    border-radius: 4px;
+    border-radius: var(--perch-radius-sm);
     cursor: pointer;
     font-size: var(--perch-fs-body);
     flex-shrink: 0;
@@ -345,7 +345,7 @@
     background: var(--perch-bg);
     color: var(--perch-text);
     border: 1px solid var(--perch-border-strong);
-    border-radius: 4px;
+    border-radius: var(--perch-radius-sm);
     font-size: var(--perch-fs-body);
     cursor: pointer;
   }

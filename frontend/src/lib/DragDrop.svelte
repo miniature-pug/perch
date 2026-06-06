@@ -90,7 +90,7 @@
     justify-content: center;
     background: color-mix(in srgb, var(--perch-accent) 15%, transparent);
     border: 2px dashed var(--perch-accent);
-    border-radius: 4px;
+    border-radius: var(--perch-radius-sm);
     pointer-events: none;
   }
 

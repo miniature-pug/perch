@@ -130,7 +130,7 @@
     background: var(--perch-bg);
     color: var(--perch-text);
     border: 1px solid var(--perch-border-strong);
-    border-radius: 4px;
+    border-radius: var(--perch-radius-sm);
     font-size: var(--perch-fs-body);
     cursor: pointer;
   }

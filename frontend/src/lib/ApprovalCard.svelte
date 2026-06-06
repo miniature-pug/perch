@@ -115,7 +115,7 @@
     background: var(--perch-bg);
     color: var(--perch-text);
     border: 1px solid var(--perch-border-strong);
-    border-radius: 4px;
+    border-radius: var(--perch-radius-sm);
     font-family: var(--perch-font-sans);
     font-size: var(--perch-fs-body);
     cursor: pointer;
@@ -134,12 +134,12 @@
   }
 
   .btn:focus-visible {
-    outline: 2px solid var(--perch-accent);
+    outline: var(--perch-ring-w) solid var(--perch-accent);
     outline-offset: 2px;
   }
 
   .btn:disabled {
-    opacity: 0.4;
+    opacity: var(--perch-opacity-disabled);
     cursor: not-allowed;
     pointer-events: none;
   }

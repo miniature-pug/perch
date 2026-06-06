@@ -55,7 +55,7 @@
     background: transparent;
     color: var(--perch-text-dim);
     border: 1px solid transparent;
-    border-radius: 4px;
+    border-radius: var(--perch-radius-sm);
     font-family: var(--perch-font-sans);
     font-size: var(--perch-fs-caption);
     cursor: pointer;
@@ -72,7 +72,7 @@
   }
 
   .stage-bar button:focus-visible {
-    outline: 2px solid var(--perch-accent);
+    outline: var(--perch-ring-w) solid var(--perch-accent);
     outline-offset: 2px;
   }
 

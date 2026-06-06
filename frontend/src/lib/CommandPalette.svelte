@@ -207,9 +207,9 @@
     scrollbar-color: var(--perch-border) transparent;
   }
 
-  .palette-list::-webkit-scrollbar { width: 6px; }
+  .palette-list::-webkit-scrollbar { width: var(--perch-scrollbar-w); }
   .palette-list::-webkit-scrollbar-track { background: transparent; }
-  .palette-list::-webkit-scrollbar-thumb { background: var(--perch-border); border-radius: 3px; }
+  .palette-list::-webkit-scrollbar-thumb { background: var(--perch-border); border-radius: var(--perch-scrollbar-radius); }
   .palette-list::-webkit-scrollbar-thumb:hover { background: var(--perch-text-dim); }
 
   /* Group header row — dim uppercase label, non-interactive */
@@ -256,7 +256,7 @@
   }
 
   .palette-item:focus-visible {
-    outline: 2px solid var(--perch-accent);
+    outline: var(--perch-ring-w) solid var(--perch-accent);
     outline-offset: -2px;
   }
 
@@ -272,7 +272,7 @@
     color: var(--perch-text-dim);
     background: var(--perch-bg-elev);
     border: 1px solid var(--perch-border);
-    border-radius: 4px;
+    border-radius: var(--perch-radius-sm);
     padding: 1px 4px;
     flex-shrink: 0;
     line-height: var(--perch-lh-code);

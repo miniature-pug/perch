@@ -133,9 +133,9 @@
     scrollbar-width: thin;
     scrollbar-color: var(--perch-border) transparent;
   }
-  .scrollable::-webkit-scrollbar { width: 6px; }
+  .scrollable::-webkit-scrollbar { width: var(--perch-scrollbar-w); }
   .scrollable::-webkit-scrollbar-track { background: transparent; }
-  .scrollable::-webkit-scrollbar-thumb { background: var(--perch-border); border-radius: 3px; }
+  .scrollable::-webkit-scrollbar-thumb { background: var(--perch-border); border-radius: var(--perch-scrollbar-radius); }
   .scrollable::-webkit-scrollbar-thumb:hover { background: var(--perch-text-dim); }
 
   /* ---------- Tree structure ---------- */
@@ -180,7 +180,7 @@
   }
   .tree-node[draggable="true"]:active { opacity: 0.7; }
   .tree-node:focus-visible {
-    outline: 2px solid var(--perch-accent);
+    outline: var(--perch-ring-w) solid var(--perch-accent);
     outline-offset: -2px;
   }
 
@@ -207,7 +207,7 @@
     width: 16px;
     text-align: center;
     flex-shrink: 0;
-    font-size: 12px;
+    font-size: var(--perch-fs-caption);
     color: var(--perch-text-dim);
   }
 
@@ -251,7 +251,7 @@
     background: color-mix(in srgb, var(--perch-accent) 10%, transparent);
   }
   .context-menu [role="menuitem"]:focus-visible {
-    outline: 2px solid var(--perch-accent);
+    outline: var(--perch-ring-w) solid var(--perch-accent);
     outline-offset: -2px;
   }
 </style>

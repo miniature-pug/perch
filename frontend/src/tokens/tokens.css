@@ -31,10 +31,15 @@
   --perch-dur-attn-approval: 1s;
   --perch-dur-attn-input: 1.6s;
   --perch-attn-opacity-min: 0.45;
+  /* Interaction feedback — state */
+  --perch-opacity-disabled: 0.4;
   /* Glass + radius */
   --perch-radius-sm: 4px;
   --perch-radius-md: 6px;
   --perch-radius-lg: 10px;
+  /* Scrollbar */
+  --perch-scrollbar-w: 6px;
+  --perch-scrollbar-radius: 3px;
   --perch-glass-filter: blur(10px) saturate(1.4);
   --perch-glass-shadow: 0 8px 32px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.08);
   /* Stacking order — one named scale so layer relationships are explicit.

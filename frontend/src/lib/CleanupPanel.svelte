@@ -131,7 +131,7 @@
   }
   .cleanup-header { display: flex; align-items: center; padding: var(--perch-sp-2) var(--perch-sp-3); border-bottom: 1px solid var(--perch-border); gap: var(--perch-sp-2); }
   .cleanup-title { margin: 0; flex: 1; font-size: var(--perch-fs-body); font-weight: 600; }
-  .cleanup-close { background: transparent; border: none; color: var(--perch-text-dim); cursor: pointer; font-size: 16px; padding: 2px 6px; border-radius: 4px; }
+  .cleanup-close { background: transparent; border: none; color: var(--perch-text-dim); cursor: pointer; font-size: 16px; padding: 2px 6px; border-radius: var(--perch-radius-sm); }
   .cleanup-close:hover { color: var(--perch-text); background: color-mix(in srgb, var(--perch-text) 8%, transparent); }
   .cleanup-body { flex: 1; overflow-y: auto; padding: var(--perch-sp-2) var(--perch-sp-3); }
   .cleanup-table { width: 100%; border-collapse: collapse; font-size: var(--perch-fs-caption); }
@@ -144,11 +144,11 @@
   .warn-badge  { color: var(--perch-warn); }
   .clean-badge { color: var(--perch-ok); }
   .dim { color: var(--perch-text-dim); }
-  .cleanup-open-btn { background: transparent; border: 1px solid var(--perch-border); color: var(--perch-text-dim); border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: var(--perch-fs-caption); }
+  .cleanup-open-btn { background: transparent; border: 1px solid var(--perch-border); color: var(--perch-text-dim); border-radius: var(--perch-radius-sm); padding: 2px 8px; cursor: pointer; font-size: var(--perch-fs-caption); }
   .cleanup-open-btn:hover { border-color: var(--perch-accent); color: var(--perch-accent); }
   .cleanup-footer { display: flex; justify-content: flex-end; padding: var(--perch-sp-2) var(--perch-sp-3); border-top: 1px solid var(--perch-border); }
-  .cleanup-remove-btn { background: var(--perch-bg); color: var(--perch-err); border: 1px solid var(--perch-err); border-radius: 4px; padding: 4px 16px; cursor: pointer; font-family: var(--perch-font-sans); font-size: var(--perch-fs-body); }
-  .cleanup-remove-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .cleanup-remove-btn { background: var(--perch-bg); color: var(--perch-err); border: 1px solid var(--perch-err); border-radius: var(--perch-radius-sm); padding: 4px 16px; cursor: pointer; font-family: var(--perch-font-sans); font-size: var(--perch-fs-body); }
+  .cleanup-remove-btn:disabled { opacity: var(--perch-opacity-disabled); cursor: not-allowed; }
   .cleanup-remove-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--perch-err) 10%, var(--perch-bg)); }
   .cleanup-error { color: var(--perch-err); font-size: var(--perch-fs-caption); margin-top: var(--perch-sp-1); }
 </style>

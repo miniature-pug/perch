@@ -44,9 +44,9 @@
     scrollbar-width: thin;
     scrollbar-color: var(--perch-border) transparent;
   }
-  .preview::-webkit-scrollbar { width: 6px; }
+  .preview::-webkit-scrollbar { width: var(--perch-scrollbar-w); }
   .preview::-webkit-scrollbar-track { background: transparent; }
-  .preview::-webkit-scrollbar-thumb { background: var(--perch-border); border-radius: 3px; }
+  .preview::-webkit-scrollbar-thumb { background: var(--perch-border); border-radius: var(--perch-scrollbar-radius); }
   .preview::-webkit-scrollbar-thumb:hover { background: var(--perch-text-dim); }
 
   /* ---------- Prose area ---------- */
@@ -131,7 +131,7 @@
   :global(.prose pre) {
     background: var(--perch-surface);
     border: 1px solid var(--perch-border);
-    border-radius: 4px;
+    border-radius: var(--perch-radius-sm);
     padding: var(--perch-sp-2);
     overflow-x: auto;
     margin: 0 0 var(--perch-sp-2) 0;

@@ -149,7 +149,7 @@
     background: transparent;
     color: var(--perch-text);
     border: 1px solid transparent;
-    border-radius: 4px;
+    border-radius: var(--perch-radius-sm);
     font-family: var(--perch-font-sans);
     font-size: var(--perch-fs-body);
     cursor: pointer;
@@ -172,7 +172,7 @@
   }
 
   .menu-root > button:focus-visible {
-    outline: 2px solid var(--perch-accent);
+    outline: var(--perch-ring-w) solid var(--perch-accent);
     outline-offset: 2px;
   }
 
@@ -212,7 +212,7 @@
   }
 
   .dropdown li:focus-visible {
-    outline: 2px solid var(--perch-accent);
+    outline: var(--perch-ring-w) solid var(--perch-accent);
     outline-offset: -2px;
   }
 
@@ -228,7 +228,7 @@
     background: transparent;
     color: var(--perch-text-dim);
     border: 1px solid transparent;
-    border-radius: 4px;
+    border-radius: var(--perch-radius-sm);
     cursor: pointer;
     flex-shrink: 0;
     margin-left: auto;
@@ -245,7 +245,7 @@
   }
 
   .bell:focus-visible {
-    outline: 2px solid var(--perch-accent);
+    outline: var(--perch-ring-w) solid var(--perch-accent);
     outline-offset: 2px;
   }
 

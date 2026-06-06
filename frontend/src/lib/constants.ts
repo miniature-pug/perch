@@ -50,7 +50,6 @@ export const THEMES = [
 ] as const;
 export const DENSITIES = ["dense", "comfortable", "ultra"] as const;
 export const FONTS = ["geist", "ibm-plex", "inter"] as const;
-export type ThemeName = (typeof THEMES)[number];
 export type Density = (typeof DENSITIES)[number];
 
 // ── Drag-and-drop MIME types ─────────────────────────────────────────────────

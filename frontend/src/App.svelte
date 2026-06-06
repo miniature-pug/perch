@@ -1095,7 +1095,7 @@
     z-index: var(--perch-z-sidebar-rail);
   }
   .sidebar-toggle-rail:hover { color: var(--perch-text); background: color-mix(in srgb, var(--perch-accent) 10%, transparent); }
-  .sidebar-toggle-rail:focus-visible { outline: 2px solid var(--perch-accent); outline-offset: -2px; }
+  .sidebar-toggle-rail:focus-visible { outline: var(--perch-ring-w) solid var(--perch-accent); outline-offset: -2px; }
   /* When sidebar is collapsed the rail keeps its border but the aside is width:0 */
   .sidebar-toggle-rail.sidebar-collapsed { border-right: 1px solid var(--perch-border); }
 
@@ -1127,7 +1127,7 @@
   .empty-state-btn {
     display: inline-flex; align-items: center; justify-content: center;
     padding: 6px 20px;
-    border-radius: 4px;
+    border-radius: var(--perch-radius-sm);
     font-family: var(--perch-font-sans); font-size: var(--perch-fs-body);
     cursor: pointer;
     transition: filter var(--perch-dur) var(--perch-ease),
@@ -1157,7 +1157,7 @@
     border-color: var(--perch-accent); color: var(--perch-accent);
   }
   .empty-state-btn-template:focus-visible {
-    outline: 2px solid var(--perch-accent); outline-offset: 2px;
+    outline: var(--perch-ring-w) solid var(--perch-accent); outline-offset: 2px;
   }
 
   /* Home view: vertical split — welcome card above, persistent shell below */
@@ -1178,7 +1178,7 @@
   .split-picker-select {
     padding: 4px 8px;
     background: var(--perch-surface); color: var(--perch-text);
-    border: 1px solid var(--perch-border-strong); border-radius: 4px;
+    border: 1px solid var(--perch-border-strong); border-radius: var(--perch-radius-sm);
     font-family: var(--perch-font-sans); font-size: var(--perch-fs-body);
     cursor: pointer;
   }
@@ -1215,13 +1215,13 @@
   .undo-toast-btn {
     padding: 3px 10px;
     background: var(--perch-accent); color: var(--perch-accent-fg);
-    border: none; border-radius: 4px;
+    border: none; border-radius: var(--perch-radius-sm);
     font-family: var(--perch-font-sans); font-size: var(--perch-fs-body);
     cursor: pointer;
     transition: filter var(--perch-dur) var(--perch-ease);
   }
   .undo-toast-btn:hover { filter: brightness(1.1); }
-  .undo-toast-btn:focus-visible { outline: 2px solid var(--perch-accent); outline-offset: 2px; }
+  .undo-toast-btn:focus-visible { outline: var(--perch-ring-w) solid var(--perch-accent); outline-offset: 2px; }
 
   .stale-banner { display: flex; align-items: center; gap: var(--perch-sp-2); padding: 6px var(--perch-sp-3); background: color-mix(in srgb, var(--perch-warn) 15%, var(--perch-bg)); border-bottom: 1px solid color-mix(in srgb, var(--perch-warn) 40%, transparent); font-size: var(--perch-fs-caption); color: var(--perch-text); flex-shrink: 0; }
   .stale-banner-link { background: transparent; border: none; color: var(--perch-accent); cursor: pointer; font-size: var(--perch-fs-caption); text-decoration: underline; }
@@ -1238,7 +1238,7 @@
   .resume-preview-actions { display: flex; gap: var(--perch-sp-1); justify-content: flex-end; padding-top: var(--perch-sp-1); border-top: 1px solid var(--perch-border); }
   .btn { display: inline-flex; align-items: center; justify-content: center; padding: 5px 14px; border-radius: var(--perch-radius-sm); font-family: var(--perch-font-sans); font-size: var(--perch-fs-body); cursor: pointer; transition: filter var(--perch-dur) var(--perch-ease); background: var(--perch-surface); color: var(--perch-text); border: 1px solid var(--perch-border-strong); }
   .btn:hover { filter: brightness(1.08); }
-  .btn:focus-visible { outline: 2px solid var(--perch-accent); outline-offset: 2px; }
+  .btn:focus-visible { outline: var(--perch-ring-w) solid var(--perch-accent); outline-offset: 2px; }
   .btn-primary { background: var(--perch-accent); color: var(--perch-accent-fg); border-color: var(--perch-accent); font-weight: 600; }
   .btn-primary:hover { filter: brightness(1.1); }
 </style>

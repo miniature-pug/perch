@@ -348,7 +348,7 @@
     background: var(--perch-bg-elev);
     color: var(--perch-accent);
     border: 1px solid var(--perch-accent);
-    border-radius: 4px;
+    border-radius: var(--perch-radius-sm);
     font-family: var(--perch-font-mono);
     font-size: var(--perch-fs-code);
     cursor: pointer;
@@ -361,7 +361,7 @@
     background: color-mix(in srgb, var(--perch-accent) 15%, var(--perch-bg-elev));
   }
   .send-to-agent-btn:focus-visible {
-    outline: 2px solid var(--perch-accent);
+    outline: var(--perch-ring-w) solid var(--perch-accent);
     outline-offset: 2px;
   }
 </style>

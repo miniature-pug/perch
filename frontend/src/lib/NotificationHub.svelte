@@ -82,7 +82,7 @@
     background: var(--perch-bg);
     color: var(--perch-text-dim);
     border: 1px solid var(--perch-border-strong);
-    border-radius: 4px;
+    border-radius: var(--perch-radius-sm);
     font-family: var(--perch-font-sans);
     font-size: var(--perch-fs-caption);
     cursor: pointer;
@@ -97,7 +97,7 @@
   }
 
   .hub-toolbar button:focus-visible {
-    outline: 2px solid var(--perch-accent);
+    outline: var(--perch-ring-w) solid var(--perch-accent);
     outline-offset: 2px;
   }
 
@@ -131,9 +131,9 @@
     scrollbar-color: var(--perch-border) transparent;
   }
 
-  .notif-list::-webkit-scrollbar { width: 6px; }
+  .notif-list::-webkit-scrollbar { width: var(--perch-scrollbar-w); }
   .notif-list::-webkit-scrollbar-track { background: transparent; }
-  .notif-list::-webkit-scrollbar-thumb { background: var(--perch-border); border-radius: 3px; }
+  .notif-list::-webkit-scrollbar-thumb { background: var(--perch-border); border-radius: var(--perch-scrollbar-radius); }
   .notif-list::-webkit-scrollbar-thumb:hover { background: var(--perch-text-dim); }
 
   /* Base notification row — grid: [icon] [title dismiss] / [icon] [body] */
@@ -185,7 +185,7 @@
     grid-column: 1;
     grid-row: 1 / 3;
     align-self: center;
-    font-size: 12px;
+    font-size: var(--perch-fs-caption);
     line-height: 1;
     display: flex;
     align-items: center;
@@ -233,7 +233,7 @@
     background: transparent;
     color: var(--perch-text-dim);
     border: 1px solid transparent;
-    border-radius: 4px;
+    border-radius: var(--perch-radius-sm);
     cursor: pointer;
     font-size: var(--perch-fs-caption);
     transition: color var(--perch-dur) var(--perch-ease),
@@ -248,7 +248,7 @@
   }
 
   .dismiss-btn:focus-visible {
-    outline: 2px solid var(--perch-accent);
+    outline: var(--perch-ring-w) solid var(--perch-accent);
     outline-offset: 2px;
   }
 
