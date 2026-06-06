@@ -1254,6 +1254,36 @@ func TestApp_Layout_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestApp_Settings_StaleThreshold_DefaultAndRoundTrip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	a := &App{
+		store:        store,
+		emit:         func(string, ...any) {},
+		bridges:      map[string]*internalpty.Bridge{},
+		monitors:     map[string]agent.Monitor{},
+		settingsPath: filepath.Join(cfgDir, "settings.json"),
+	}
+	def, err := a.GetSettings()
+	if err != nil {
+		t.Fatalf("GetSettings default: %v", err)
+	}
+	if def.StaleThresholdDays != defaultStaleThresholdDays {
+		t.Errorf("default StaleThresholdDays = %d, want %d", def.StaleThresholdDays, defaultStaleThresholdDays)
+	}
+	if err := a.SaveSettings(Settings{Theme: "gruvbox", Density: "dense", StaleThresholdDays: 14}); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+	got, err := a.GetSettings()
+	if err != nil {
+		t.Fatalf("GetSettings after save: %v", err)
+	}
+	if got.StaleThresholdDays != 14 {
+		t.Errorf("StaleThresholdDays round-trip = %d, want 14", got.StaleThresholdDays)
+	}
+}
+
 func TestApp_GetSettings_ReturnsDefaultOnMissing(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cfgDir := t.TempDir()

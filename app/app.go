@@ -68,6 +68,9 @@ const (
 	defaultTheme   = "gruvbox"
 	defaultDensity = "dense"
 	defaultFont    = "geist"
+	// defaultStaleThresholdDays is the number of days of inactivity after which a
+	// worktree session is considered stale and shown in the cleanup panel banner.
+	defaultStaleThresholdDays = 30
 )
 
 // spawnPtyFunc and newMonitorFunc are injectable seams (real funcs in NewApp,
@@ -388,12 +391,13 @@ func (a *App) ListWorkspaces() []WorkspaceVM {
 
 // Settings is the persisted user preference blob.
 type Settings struct {
-	Theme         string       `json:"theme"`
-	Density       string       `json:"density"`
-	Font          string       `json:"font"`
-	DND           bool         `json:"dnd"`
-	GlassDisabled bool         `json:"glassDisabled,omitempty"`
-	AlwaysRules   []AlwaysRule `json:"alwaysRules"`
+	Theme              string       `json:"theme"`
+	Density            string       `json:"density"`
+	Font               string       `json:"font"`
+	DND                bool         `json:"dnd"`
+	GlassDisabled      bool         `json:"glassDisabled,omitempty"`
+	StaleThresholdDays int          `json:"staleThresholdDays,omitempty"`
+	AlwaysRules        []AlwaysRule `json:"alwaysRules"`
 }
 
 // AlwaysRule persists an "always allow" approval rule.
@@ -946,7 +950,7 @@ func (a *App) GetSettings() (Settings, error) {
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			// source of truth for settings defaults; frontend mirrors these in frontend/src/lib/constants.ts
-			return Settings{Theme: defaultTheme, Density: defaultDensity, Font: defaultFont}, nil
+			return Settings{Theme: defaultTheme, Density: defaultDensity, Font: defaultFont, StaleThresholdDays: defaultStaleThresholdDays}, nil
 		}
 		return Settings{}, err
 	}
@@ -991,6 +995,19 @@ func (a *App) saveSettingsLocked(s Settings) error {
 		return err
 	}
 	return atomicWriteApp(a.settingsPath, data)
+}
+
+// staleThreshold returns the configured stale threshold, falling back to the
+// default when the stored value is zero (old settings files without the field).
+func (a *App) staleThreshold() (int, error) {
+	s, err := a.GetSettings()
+	if err != nil {
+		return 0, err
+	}
+	if s.StaleThresholdDays <= 0 {
+		return defaultStaleThresholdDays, nil
+	}
+	return s.StaleThresholdDays, nil
 }
 
 // GetLayout reads the opaque layout JSON blob from disk.
