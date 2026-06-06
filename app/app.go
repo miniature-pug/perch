@@ -1082,8 +1082,13 @@ func (a *App) OpenShell(paneID, cwd string) error {
 	if err := validateSessionID(paneID); err != nil {
 		return fmt.Errorf("invalid pane id: %w", err)
 	}
-	if err := validateWorktreeUnderRoots(cwd, a.roots); err != nil {
-		return fmt.Errorf("invalid shell cwd: %w", err)
+	// The home shell pane ("shell-home") has an OS-derived cwd (HomeShellCwd) that is
+	// not user IPC input and is almost never under a configured project root, so the
+	// root-containment guard is bypassed for it alone. All other panes still validate.
+	if paneID != "shell-home" {
+		if err := validateWorktreeUnderRoots(cwd, a.roots); err != nil {
+			return fmt.Errorf("invalid shell cwd: %w", err)
+		}
 	}
 	event := ptyDataEventPrefix + paneID
 	exitEvent := ptyExitEventPrefix + paneID
@@ -1111,6 +1116,18 @@ func (a *App) GetSettings() (Settings, error) {
 		return Settings{}, err
 	}
 	return s, nil
+}
+
+// HomeShellCwd returns the working directory for the home shell pane: the process
+// cwd (os.Getwd), falling back to the user's home dir, then "/". Never empty.
+func (a *App) HomeShellCwd() string {
+	if cwd, err := os.Getwd(); err == nil && cwd != "" {
+		return cwd
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return home
+	}
+	return "/"
 }
 
 // SaveSettings atomically writes settings to disk. It is the public Wails-bound

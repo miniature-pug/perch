@@ -1135,6 +1135,87 @@ func TestApp_RemoveWorkspace_RemovesFromRegistry(t *testing.T) {
 	}
 }
 
+func TestApp_HomeShellCwd_ReturnsGetwd(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	a := &App{
+		store:    store,
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+	}
+	cwd := a.HomeShellCwd()
+	if cwd == "" {
+		t.Error("HomeShellCwd returned empty string")
+	}
+	if !filepath.IsAbs(cwd) {
+		t.Errorf("HomeShellCwd = %q, want absolute path", cwd)
+	}
+}
+
+func TestApp_HomeShellCwd_NeverEmpty(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	a := &App{
+		store:    store,
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+	}
+	if got := a.HomeShellCwd(); got == "" {
+		t.Error("HomeShellCwd must never return empty")
+	}
+}
+
+func TestApp_OpenShell_HomeShellPaneID_NotRequiresRoot(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	homeCwd := t.TempDir() // NOT under any configured root
+	spawned := false
+	a := &App{
+		store:    store,
+		roots:    []string{"/some/project/root"},
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+		spawnPty: func(_ context.Context, cwd string, argv []string, dataEvent, exitEvent string,
+			emit internalpty.EmitFunc, cols, rows uint16) (*internalpty.Bridge, error) {
+			spawned = true
+			if cwd != homeCwd {
+				return nil, fmt.Errorf("unexpected cwd %q, want %q", cwd, homeCwd)
+			}
+			return internalpty.NewBridgeForTest(func() error { return nil }), nil
+		},
+	}
+	if err := a.OpenShell("shell-home", homeCwd); err != nil {
+		t.Fatalf("OpenShell(shell-home): %v", err)
+	}
+	if !spawned {
+		t.Error("pty not spawned for shell-home")
+	}
+}
+
+func TestApp_OpenShell_NonHomePane_StillRequiresRoot(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	outside := t.TempDir() // not under roots
+	a := &App{
+		store: store, roots: []string{"/some/project/root"},
+		emit: func(string, ...any) {}, bridges: map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+		spawnPty: func(_ context.Context, _ string, _ []string, _, _ string, _ internalpty.EmitFunc, _, _ uint16) (*internalpty.Bridge, error) {
+			return internalpty.NewBridgeForTest(func() error { return nil }), nil
+		},
+	}
+	if err := a.OpenShell("shell-ws-1", outside); err == nil {
+		t.Error("expected non-home shell with out-of-root cwd to be rejected")
+	}
+}
+
 func TestApp_OpenShell_SpawnsAndEmits(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("SHELL", "/bin/sh")
