@@ -18,20 +18,8 @@ func TestResumeArgs(t *testing.T) {
 
 func TestNewArgs(t *testing.T) {
 	c := NewClaude()
-	tests := []struct {
-		name string
-		opts NewOpts
-		want []string
-	}{
-		{"none", NewOpts{}, nil},
-		{"model", NewOpts{Model: "opus"}, []string{"--model", "opus"}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := c.NewArgs(tt.opts); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("NewArgs(%+v) = %v, want %v", tt.opts, got, tt.want)
-			}
-		})
+	if got := c.NewArgs(); got != nil {
+		t.Errorf("NewArgs() = %v, want nil", got)
 	}
 }
 

@@ -171,7 +171,7 @@ const perchMonitorSentinel = "perch-monitor-hook"
 
 var perchMonitorEvents = []string{"PreToolUse", "Stop", "StopFailure", "SessionStart"}
 
-func (m *ClaudeMonitor) Prepare(ctx context.Context, workspaceID, cwd, resumeID, model string) (string, error) {
+func (m *ClaudeMonitor) Prepare(ctx context.Context, workspaceID, cwd, resumeID string) (string, error) {
 	m.cwd = cwd
 	if m.listener == nil {
 		l, err := hooklistener.New()
@@ -186,11 +186,9 @@ func (m *ClaudeMonitor) Prepare(ctx context.Context, workspaceID, cwd, resumeID,
 	}
 	var args []string
 	if resumeID != "" {
-		// Resume: ignore model — the session already has a model.
 		args = m.adapter.ResumeArgs(resumeID)
 	} else {
-		// Fresh start: thread model through NewOpts so --model <m> is emitted.
-		args = m.adapter.NewArgs(NewOpts{Model: model})
+		args = m.adapter.NewArgs()
 	}
 	// The returned command is written verbatim into the pane's pty (see
 	// pty.Bridge.Write — raw passthrough, no transformation). The trailing

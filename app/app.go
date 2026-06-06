@@ -409,8 +409,7 @@ type AlwaysRule struct {
 
 // CreateWorkspace validates inputs, resolves/creates the worktree, persists the
 // workspace to the registry, and returns its WorkspaceVM. It does NOT start the
-// agent — call OpenWorkspace for that. The model arg is stored in the workspace
-// record and passed to the agent via Prepare on fresh-start (non-resume) opens.
+// agent — call OpenWorkspace for that.
 func (a *App) CreateWorkspace(agentName, repoPath, branch, model string) (WorkspaceVM, error) {
 	// Gate 1: repoPath must exist under a configured root.
 	if err := validateWorktreeUnderRoots(repoPath, a.roots); err != nil {
@@ -510,7 +509,7 @@ func (a *App) OpenWorkspace(id string) error {
 		return fmt.Errorf("new monitor: %w", err)
 	}
 
-	launchCmd, err := mon.Prepare(wctx, id, w.WorktreePath, w.LastSessionID, w.Model)
+	launchCmd, err := mon.Prepare(wctx, id, w.WorktreePath, w.LastSessionID)
 	if err != nil {
 		cancel()
 		_ = br.Close()

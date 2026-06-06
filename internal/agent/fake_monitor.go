@@ -22,19 +22,17 @@ type FakeMonitor struct {
 	lastTool     string
 	tornDown     bool
 	launchCmd    string
-	// capturedModel and capturedResumeID hold the last args passed to Prepare.
-	// Test-only: read via CapturedModel() / CapturedResumeID().
-	capturedModel    string
+	// capturedResumeID holds the last resumeID arg passed to Prepare.
+	// Test-only: read via CapturedResumeID().
 	capturedResumeID string
 }
 
 func NewFakeMonitor(seq []Event) *FakeMonitor {
 	return &FakeMonitor{sequence: seq, events: make(chan Event, len(seq)+4), launchCmd: "claude --fake"}
 }
-func (f *FakeMonitor) Prepare(_ context.Context, workspaceID, _, resumeID, model string) (string, error) {
+func (f *FakeMonitor) Prepare(_ context.Context, workspaceID, _, resumeID string) (string, error) {
 	f.mu.Lock()
 	f.capturedResumeID = resumeID
-	f.capturedModel = model
 	cmd := f.launchCmd
 	f.mu.Unlock()
 	go func() {
@@ -52,13 +50,6 @@ func (f *FakeMonitor) Prepare(_ context.Context, workspaceID, _, resumeID, model
 		}
 	}()
 	return cmd, nil
-}
-
-// CapturedModel returns the model arg last passed to Prepare. Test-only.
-func (f *FakeMonitor) CapturedModel() string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.capturedModel
 }
 
 // CapturedResumeID returns the resumeID arg last passed to Prepare. Test-only.

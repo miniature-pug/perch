@@ -191,7 +191,7 @@ func TestOpencodeMonitorPrepare_Resume(t *testing.T) {
 	om := agent.NewOpencodeMonitorWithServer(agent.NewOpencode(), "http://localhost:1234", "pw")
 	ctx := context.Background()
 
-	fresh, err := om.Prepare(ctx, "ws-1", "/some/dir", "", "")
+	fresh, err := om.Prepare(ctx, "ws-1", "/some/dir", "")
 	if err != nil {
 		t.Fatalf("Prepare fresh: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestOpencodeMonitorPrepare_Resume(t *testing.T) {
 		t.Errorf("fresh launch must not carry --session: %q", fresh)
 	}
 
-	resume, err := om.Prepare(ctx, "ws-1", "/some/dir", "ses-abc123", "")
+	resume, err := om.Prepare(ctx, "ws-1", "/some/dir", "ses-abc123")
 	if err != nil {
 		t.Fatalf("Prepare resume: %v", err)
 	}
@@ -229,7 +229,7 @@ func TestOpencodeMonitorPrepare_SelfAssignsPortAndPassword(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewMonitor: %v", err)
 	}
-	cmd, err := mon.Prepare(context.Background(), "ws", "/dir", "", "")
+	cmd, err := mon.Prepare(context.Background(), "ws", "/dir", "")
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -278,7 +278,7 @@ func TestOpencodeMonitorPrepare_LaunchIncantationRunsInShell(t *testing.T) {
 		t.Fatalf("NewMonitor: %v", err)
 	}
 	cwd := t.TempDir()
-	cmd, err := mon.Prepare(context.Background(), "ws", cwd, "", "")
+	cmd, err := mon.Prepare(context.Background(), "ws", cwd, "")
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}

@@ -58,11 +58,7 @@ func (o Opencode) ResumeArgs(sessionID string) []string {
 	return []string{"--session", sessionID}
 }
 
-// NewArgs builds the launch args for a fresh interactive session.
-func (o Opencode) NewArgs(opts NewOpts) []string {
-	var args []string
-	if opts.Model != "" {
-		args = append(args, "--model", opts.Model)
-	}
-	return args
-}
+// NewArgs builds the launch args for a fresh interactive session. perch does
+// not pass --model; opencode attach accepts no --model flag (model selection
+// is the harness's concern).
+func (o Opencode) NewArgs() []string { return nil }

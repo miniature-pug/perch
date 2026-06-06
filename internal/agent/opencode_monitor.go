@@ -131,11 +131,11 @@ func (m *OpencodeMonitor) Capabilities() Caps {
 // a loopback-only server that dies with the pane, so on-screen exposure is low risk.
 //
 // resumeID, when set, becomes `--session <id>` on attach (opencode resumes that
-// session). The model param is intentionally NOT wired: `opencode attach` accepts
-// no --model/--agent (those live only on the standalone TUI command, which cannot
-// drive the serve+attach HTTP backend perch needs), so model selection is deferred
-// to opencode's in-TUI picker. This is a documented deviation, not a cut corner.
-func (m *OpencodeMonitor) Prepare(_ context.Context, _, _, resumeID, _ string) (string, error) {
+// session). perch does not pass a model flag; `opencode attach` accepts no
+// --model/--agent (those live only on the standalone TUI command, which cannot
+// drive the serve+attach HTTP backend perch needs), so model selection is the
+// harness's concern.
+func (m *OpencodeMonitor) Prepare(_ context.Context, _, _, resumeID string) (string, error) {
 	if m.serverURL == "" {
 		port, err := freeLoopbackPort()
 		if err != nil {

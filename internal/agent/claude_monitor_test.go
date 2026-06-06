@@ -44,7 +44,7 @@ func TestClaudeMonitorPrepare(t *testing.T) {
 	foreign := `{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"foreign-tool notify"}]}]}}`
 	_ = os.WriteFile(filepath.Join(claudeDir, "settings.json"), []byte(foreign), 0o644)
 
-	cmd, err := m.Prepare(context.Background(), "ws1", worktree, "", "")
+	cmd, err := m.Prepare(context.Background(), "ws1", worktree, "")
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestClaudeMonitorSettingsFileMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	// No pre-existing .claude/settings.json → Prepare creates it fresh.
-	if _, err := m.Prepare(context.Background(), "wsM", worktree, "", ""); err != nil {
+	if _, err := m.Prepare(context.Background(), "wsM", worktree, ""); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
 	fi, err := os.Stat(filepath.Join(worktree, ".claude", "settings.json"))
@@ -157,7 +157,7 @@ func TestClaudeMonitorSettingsFileModePreExisting(t *testing.T) {
 	}
 
 	// Run Prepare — must force the file down to 0600.
-	if _, err := m.Prepare(context.Background(), "wsMPE", worktree, "", ""); err != nil {
+	if _, err := m.Prepare(context.Background(), "wsMPE", worktree, ""); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
 
@@ -412,7 +412,7 @@ func TestClaudeMonitorPrepare_LaunchCommandSubmitsToShell(t *testing.T) {
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	cwd := t.TempDir()
-	cmd, err := m.Prepare(context.Background(), "ws-submit", cwd, "", "")
+	cmd, err := m.Prepare(context.Background(), "ws-submit", cwd, "")
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -462,4 +462,22 @@ func TestClaudeMonitorPrepare_LaunchCommandSubmitsToShell(t *testing.T) {
 	mu.Unlock()
 	t.Errorf("launch command never executed in the shell: sentinel %q absent from pty output %q "+
 		"(command written but not submitted — missing trailing newline?)", sentinel, got)
+}
+
+// TestClaudeNewArgs_NoModel verifies NewArgs returns an empty slice (no --model ever).
+func TestClaudeNewArgs_NoModel(t *testing.T) {
+	c := agent.NewClaude()
+	args := c.NewArgs()
+	if len(args) != 0 {
+		t.Errorf("NewArgs() = %v, want []", args)
+	}
+}
+
+// TestOpencodeNewArgs_NoModel verifies NewArgs returns an empty slice.
+func TestOpencodeNewArgs_NoModel(t *testing.T) {
+	o := agent.NewOpencode()
+	args := o.NewArgs()
+	if len(args) != 0 {
+		t.Errorf("NewArgs() = %v, want []", args)
+	}
 }

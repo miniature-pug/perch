@@ -27,14 +27,8 @@ type Adapter interface {
 	ResumeArgs(sessionID string) []string
 
 	// NewArgs returns the launch argument slice for a brand-new interactive
-	// session, configured by opts. Fields in opts that do not apply to this
-	// tool are silently ignored.
-	NewArgs(opts NewOpts) []string
-}
-
-// NewOpts carries the per-session configuration for a fresh launch.
-type NewOpts struct {
-	// Model is the provider/model string passed to the tool's model flag —
-	// claude --model / opencode -m. Empty means "use the tool's default."
-	Model string
+	// session. perch does not pass a model flag — the harness chooses its own
+	// model. For claude this returns nil; for opencode it also returns nil
+	// (opencode attach accepts no --model).
+	NewArgs() []string
 }

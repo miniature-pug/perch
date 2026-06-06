@@ -58,11 +58,6 @@ func (c Claude) ResumeArgs(sessionID string) []string {
 	return []string{"--resume", sessionID}
 }
 
-// NewArgs builds the launch args for a fresh session.
-func (c Claude) NewArgs(opts NewOpts) []string {
-	var args []string
-	if opts.Model != "" {
-		args = append(args, "--model", opts.Model)
-	}
-	return args
-}
+// NewArgs builds the launch args for a fresh session. perch does not pass
+// --model; model selection is the harness's concern.
+func (c Claude) NewArgs() []string { return nil }

@@ -17,21 +17,9 @@ func TestOpencode_ResumeArgs(t *testing.T) {
 }
 
 func TestOpencode_NewArgs(t *testing.T) {
-	c := NewOpencode()
-	tests := []struct {
-		name string
-		opts NewOpts
-		want []string
-	}{
-		{"none", NewOpts{}, nil},
-		{"model", NewOpts{Model: "anthropic/claude"}, []string{"--model", "anthropic/claude"}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := c.NewArgs(tt.opts); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("NewArgs(%+v) = %v, want %v", tt.opts, got, tt.want)
-			}
-		})
+	o := NewOpencode()
+	if got := o.NewArgs(); got != nil {
+		t.Errorf("NewArgs() = %v, want nil", got)
 	}
 }
 
@@ -62,6 +50,6 @@ func TestOpencode_ZeroValueDefaults(t *testing.T) {
 	if o.bin() != "opencode" {
 		t.Errorf("zero-value bin() = %q, want opencode", o.bin())
 	}
-	_ = o.Detect()           // default exec.LookPath; PATH-dependent, just no panic
-	_ = o.NewArgs(NewOpts{}) // pure
+	_ = o.Detect()    // default exec.LookPath; PATH-dependent, just no panic
+	_ = o.NewArgs()   // pure; returns nil
 }
