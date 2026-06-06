@@ -186,6 +186,33 @@ func TestUnreadableSubdir(t *testing.T) {
 	assertPaths(t, got, []string{good})
 }
 
+// TestHiddenDirSkip verifies that hidden (dot-prefixed) directories are never
+// descended into during a scan, so tool/config caches like ~/.pyenv or ~/.npm
+// are never returned as repo candidates.
+//
+//   - A normal repo (proj/.git) IS returned.
+//   - A top-level hidden dir containing a .git (.pyenv/.git) is NOT returned.
+//   - A repo nested inside a hidden dir (.cache/inner/.git) is NOT returned
+//     because the walk never descends into the hidden directory.
+func TestHiddenDirSkip(t *testing.T) {
+	root := t.TempDir()
+
+	// Normal visible repo — must be found.
+	proj := makeDir(t, root, "proj")
+	makeGitDir(t, proj)
+
+	// Hidden dir that looks like a pyenv install — must NOT be found.
+	pyenv := makeDir(t, root, ".pyenv")
+	makeGitDir(t, pyenv)
+
+	// Repo nested inside a hidden cache dir — must NOT be found.
+	cacheInner := makeDir(t, root, ".cache", "inner")
+	makeGitDir(t, cacheInner)
+
+	got := mustScan(t, root, Options{MaxDepth: 5})
+	assertPaths(t, got, []string{proj})
+}
+
 // TestRootNotExist verifies that Scan returns an error (not a silent empty
 // result) when the root directory does not exist.
 func TestRootNotExist(t *testing.T) {

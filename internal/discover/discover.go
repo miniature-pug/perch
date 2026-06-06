@@ -39,8 +39,10 @@ type Options struct {
 }
 
 // Scan walks the filesystem rooted at root and returns the absolute paths of
-// every directory that contains a child named ".git" (either a directory for a
-// normal repo or a regular file for a linked worktree / submodule).
+// directories that contain a child named ".git" (either a directory for a
+// normal repo or a regular file for a linked worktree / submodule). Hidden
+// (dot-prefixed) directories are never descended into, so tool/config caches
+// such as ~/.pyenv or ~/.npm are never returned as candidates.
 //
 // Behaviour summary:
 //   - root must exist; if it does not Scan returns an error.
@@ -128,6 +130,15 @@ func Scan(root string, opts Options) ([]string, error) {
 		}
 		depth := depthOf(rel)
 		if depth > maxDepth {
+			return fs.SkipDir
+		}
+
+		// Hidden-directory gate: never descend into dot-prefixed directories.
+		// Tool/config caches such as ~/.pyenv, ~/.npm, and ~/.cache often contain
+		// a .git entry of their own but are never the user's project repos.
+		// The scan root itself is exempt (handled above), so a root that is itself
+		// a hidden directory is still scanned.
+		if strings.HasPrefix(name, ".") {
 			return fs.SkipDir
 		}
 
