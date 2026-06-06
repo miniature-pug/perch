@@ -3,7 +3,7 @@
 // These tests pass when the module exports the correct shapes; they fail when
 // old signatures or removed exports remain.
 import { describe, it, expect, test } from "vitest";
-import { forceRemoveWorkspace, listStaleSessions, cleanupSessions } from "./wails";
+import { forceRemoveWorkspace, listStaleSessions, cleanupSessions, homeShellCwd } from "./wails";
 import type { StaleSessionVM } from "./wails";
 
 describe("wails.ts contract (Phase 2)", () => {
@@ -28,4 +28,8 @@ test("cleanup bindings are exported", () => {
   expect(typeof forceRemoveWorkspace).toBe("function");
   expect(typeof listStaleSessions).toBe("function");
   expect(typeof cleanupSessions).toBe("function");
+});
+
+test("homeShellCwd is exported", () => {
+  expect(typeof homeShellCwd).toBe("function");
 });

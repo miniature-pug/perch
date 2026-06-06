@@ -68,6 +68,7 @@ interface App {
   GetSettings(): Promise<AppSettings>;
   SaveSettings(s: AppSettings): Promise<void>;
   SetWindowFocus(focused: boolean): Promise<void>;
+  HomeShellCwd(): Promise<string>;
 }
 
 declare global {
@@ -115,6 +116,7 @@ export const getSettings     = ()                                               
 export const saveSettings    = (s: AppSettings)                                      => app().SaveSettings(s);
 // Window focus reporting
 export const setWindowFocus  = (focused: boolean)                                   => app().SetWindowFocus(focused);
+export const homeShellCwd    = ()                                                    => app().HomeShellCwd();
 
 // Event name constants — MUST match Go's ptyDataEventPrefix / ptyExitEventPrefix in app/app.go.
 // Any rename here requires a matching rename on the Go side.
