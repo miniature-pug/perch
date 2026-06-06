@@ -81,3 +81,31 @@ A full review (`git diff 0d9c431..HEAD`) verified all changes correct, no exclud
 Unchanged from prior rounds: WebKit + real-agent + attach-D-Bus + Playwright visual/feel behavior is **user-gated manual smoke** (`docs/superpowers/smoke-checklist.md`). No automated audit substitutes for it.
 
 **NOT pushed; merge to main is user-only.**
+
+---
+
+# Round-10 Addendum — 2026-06-05
+
+**State:** Round-9 branch since pushed to `origin/feat/perch-v1`. Code unchanged since gate-green code-HEAD `9c11278` (only docs commits `0ce35cc`, `9a94d02` followed). So round 10 was **not** a fresh full fan-out — that would re-audit ground settled at this exact commit (the recorded "manufacturing findings" failure mode). Scope was narrowed (advisor-confirmed) to where yield is still possible: the round-9 delta's semantics, docs accuracy (gate validates no prose), and a fresh-eyes falsifiability pass instructed to return convergence when nothing clears the bar.
+
+**Method:** 3 read-only Sonnet agents.
+
+## Results
+
+- **Round-9 delta (semantics):** CONVERGENCE — every token swap value-preserving (token def == replaced literal at every site), Go const renames exact, `preview-port.mjs` truly single-sourced, no over-centralization. No falsifiable findings.
+- **Fresh-eyes parity / dead-code / centralization:** CONVERGENCE — all 3 specs sampled to code; dead-code candidates re-verified against round-7 adjudication (all have prod/black-box callers); `86400000` ms/day divisor (2 prod + 2 test sites) correctly **declined** as a self-evident math constant (naming adds indirection — recorded anti-pattern). No findings beyond settled decisions.
+- **Docs accuracy:** the round's only yield. One real defect that fanned into a 3-file cluster.
+
+## Action — DOC-1: gui-build mask overclaim (3 files) + z-index ladder floor
+
+| Sub | File | Defect (primary-source-verified) | Fix |
+|-----|------|----------------------------------|-----|
+| a | `containers/README.md` §65-66, §88-90 | "Both `test-e2e` and `gui-build` export `PERCH_MASK_DIST=1` … set automatically" and the verify command "no manual prefix needed" are **false**. `run.sh:35` reads `PERCH_MASK_DIST` from the **host** shell, not the in-container make env; `gui-build` is not in `DZ`, so it is never dispatched through `run.sh` — its `ifeq(CONTAINERIZE,1)` export is inert in every path. The documented `… CONTAINERIZE=0` verify command (a) skips the `ifeq` block and (b) leaves the host var unset → `vite build` clobbers the host stub. | Verify command prefixed `PERCH_MASK_DIST=1 …`; prose corrected: `test-e2e` auto-masks via dispatch, `gui-build` is native-by-default and its in-container verify check needs the host-side prefix. |
+| b | `CHANGELOG.md` :40-41 | Same overclaim ("now also exports it automatically, removing the need for a manual prefix"). | Reframed as spec-§6.2 parity; notes the host-prefix caveat, points to `containers/README.md`. |
+| c | `ARCHITECTURE.md` :276 | z-index ladder described as `--perch-z-editor-send` through `--perch-z-command-palette`; actual floor is `--perch-z-sidebar-rail: 1` (`tokens.css:48`), below `--perch-z-editor-send: 10`. | Floor corrected to `--perch-z-sidebar-rail`. |
+
+**Why docs-only, not a deferral:** the code is spec-correct. `gui-build` native-by-default is intentional (it is the host GUI build, not a containerized gate target); the spec-§128 parity export is present. The defect was purely the prose claiming an effect the export cannot have. Making `gui-build` auto-mask would mean wrongly auto-containerizing the host build or adding a target for a once-run manual check — over-engineering. The project already tolerates stub regeneration in `CONTAINERIZE=0` paths (devcontainer caveat §100-104).
+
+**Landed:** `648a317` (docs-only). No gate run — zero code touched since `9c11278`; the container gate validates code/tests, not markdown, and cannot be affected.
+
+**NOT pushed; merge to main is user-only.**
