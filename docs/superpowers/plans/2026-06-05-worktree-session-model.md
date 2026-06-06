@@ -1707,10 +1707,27 @@ HomeShellCwd(): Promise<string>
   		}
   		worktreePath = treePath
   	} else {
-  		// Non-worktree mode: run in the repo root. CheckoutBranch unconditionally;
-  		// git is a no-op if already on that branch and fails fast on dirty conflict.
-  		if err := gitpkg.CheckoutBranch(ctx, a.runner(), repoPath, branch); err != nil {
-  			return WorkspaceVM{}, fmt.Errorf("checkout branch: %w", err)
+  		// Non-worktree mode: run in the repo root. Only switch branches when the
+  		// target differs from the current branch. Bare `git checkout` only fails on
+  		// *conflict*, so a dirty-but-non-conflicting tree would silently carry
+  		// uncommitted changes across the switch; refuse instead and ask the user to
+  		// clean first (spec §4). Attaching to the current branch needs no switch, so
+  		// a dirty tree is allowed there.
+  		current, err := gitpkg.CurrentBranch(ctx, a.runner(), repoPath)
+  		if err != nil {
+  			return WorkspaceVM{}, fmt.Errorf("current branch: %w", err)
+  		}
+  		if branch != current {
+  			dirty, err := gitpkg.WorktreeDirty(ctx, a.runner(), repoPath)
+  			if err != nil {
+  				return WorkspaceVM{}, fmt.Errorf("check worktree: %w", err)
+  			}
+  			if dirty {
+  				return WorkspaceVM{}, fmt.Errorf("checkout branch: %w", gitpkg.ErrWorktreeDirty)
+  			}
+  			if err := gitpkg.CheckoutBranch(ctx, a.runner(), repoPath, branch); err != nil {
+  				return WorkspaceVM{}, fmt.Errorf("checkout branch: %w", err)
+  			}
   		}
   		worktreePath = repoPath
   	}

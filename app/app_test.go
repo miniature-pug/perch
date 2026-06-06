@@ -16,6 +16,7 @@ import (
 	fspkg "github.com/Miniature-Pug/perch/internal/fs"
 	git "github.com/Miniature-Pug/perch/internal/git"
 	"github.com/Miniature-Pug/perch/internal/notify"
+	"github.com/Miniature-Pug/perch/internal/proc"
 	internalpty "github.com/Miniature-Pug/perch/internal/pty"
 	"github.com/Miniature-Pug/perch/internal/registry"
 )
@@ -611,6 +612,128 @@ func TestApp_CreateWorkspace_NonWorktree(t *testing.T) {
 	}
 	if w.Worktree {
 		t.Error("Worktree = true, want false for non-worktree session")
+	}
+}
+
+// TestApp_CreateWorkspace_NonWorktree_DirtyBranchSwitch_Fails verifies that a
+// non-worktree session asking to switch to a DIFFERENT branch is refused when the
+// working tree is dirty (non-conflicting changes would otherwise be silently
+// carried across the switch). The error must wrap ErrWorktreeDirty and no
+// registry record may be created.
+func TestApp_CreateWorkspace_NonWorktree_DirtyBranchSwitch_Fails(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	repo := makeTestRepo(t, root) // on main, committed
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	// Create the target branch so the switch would otherwise be valid.
+	cmd := exec.Command("git", "-C", repo, "branch", "feat/x")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git branch: %v: %s", err, out)
+	}
+	// Make the tree dirty with a NON-conflicting untracked file. Bare
+	// `git checkout` would succeed here and carry the file across — that's the bug.
+	if err := os.WriteFile(filepath.Join(repo, "foo.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	a := &App{
+		store:    store,
+		roots:    []string{root},
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+	}
+
+	before := len(a.ListWorkspaces())
+	_, err := a.CreateWorkspace("claude", repo, "", "feat/x", false)
+	if !errors.Is(err, git.ErrWorktreeDirty) {
+		t.Fatalf("want errors.Is(err, ErrWorktreeDirty); got %v", err)
+	}
+	if got := len(a.ListWorkspaces()); got != before {
+		t.Errorf("registry record created on refusal: count %d, want %d", got, before)
+	}
+	// The branch must NOT have been switched.
+	cur, cerr := git.CurrentBranch(context.Background(), proc.ExecRunner{}, repo)
+	if cerr != nil {
+		t.Fatalf("CurrentBranch: %v", cerr)
+	}
+	if cur != "main" {
+		t.Errorf("branch switched to %q despite dirty refusal; want main", cur)
+	}
+}
+
+// TestApp_CreateWorkspace_NonWorktree_SameBranchDirty_OK verifies that attaching a
+// non-worktree session to the CURRENT branch succeeds even when the tree is dirty
+// (no switch is needed, so dirtiness is allowed).
+func TestApp_CreateWorkspace_NonWorktree_SameBranchDirty_OK(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	repo := makeTestRepo(t, root) // on main
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	// Dirty the tree.
+	if err := os.WriteFile(filepath.Join(repo, "foo.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	a := &App{
+		store:    store,
+		roots:    []string{root},
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+	}
+
+	vm, err := a.CreateWorkspace("claude", repo, "", "main", false)
+	if err != nil {
+		t.Fatalf("CreateWorkspace same-branch dirty: %v", err)
+	}
+	if _, ok := store.Get(vm.ID); !ok {
+		t.Fatal("workspace must be persisted")
+	}
+}
+
+// TestApp_CreateWorkspace_NonWorktree_CleanSwitch_OK verifies that switching to a
+// different branch with a CLEAN tree still performs the checkout and succeeds.
+func TestApp_CreateWorkspace_NonWorktree_CleanSwitch_OK(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	repo := makeTestRepo(t, root) // on main, clean
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	cmd := exec.Command("git", "-C", repo, "branch", "feat/clean")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git branch: %v: %s", err, out)
+	}
+
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	a := &App{
+		store:    store,
+		roots:    []string{root},
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+	}
+
+	vm, err := a.CreateWorkspace("claude", repo, "", "feat/clean", false)
+	if err != nil {
+		t.Fatalf("CreateWorkspace clean switch: %v", err)
+	}
+	if _, ok := store.Get(vm.ID); !ok {
+		t.Fatal("workspace must be persisted")
+	}
+	cur, cerr := git.CurrentBranch(context.Background(), proc.ExecRunner{}, repo)
+	if cerr != nil {
+		t.Fatalf("CurrentBranch: %v", cerr)
+	}
+	if cur != "feat/clean" {
+		t.Errorf("branch = %q, want feat/clean (checkout must have fired)", cur)
 	}
 }
 

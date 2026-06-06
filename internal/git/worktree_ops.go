@@ -124,6 +124,21 @@ func DeleteBranch(ctx context.Context, r proc.Runner, repoRoot, branch string, f
 	return nil
 }
 
+// CurrentBranch returns the short name of the currently checked-out branch in the
+// repo at repoRoot. Returns the literal "HEAD" if detached. It runs
+// `git -C <repoRoot> rev-parse --abbrev-ref HEAD`.
+func CurrentBranch(ctx context.Context, r proc.Runner, repoRoot string) (string, error) {
+	stdout, stderr, err := r.Run(ctx, "git", "-C", repoRoot, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		msg := string(bytes.TrimSpace(stderr))
+		if msg != "" {
+			return "", fmt.Errorf("git: CurrentBranch: rev-parse %s: %w (stderr: %s)", repoRoot, err, msg)
+		}
+		return "", fmt.Errorf("git: CurrentBranch: rev-parse %s: %w", repoRoot, err)
+	}
+	return string(bytes.TrimSpace(stdout)), nil
+}
+
 // CheckoutBranch runs `git -C <repoRoot> checkout <branch>`. git fails (and
 // returns a non-zero exit) if the current working tree has changes that conflict
 // with the target branch. branch is validated with ValidRef for V3-A parity.

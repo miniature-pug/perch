@@ -481,6 +481,57 @@ func TestCheckoutBranch_Real_Success(t *testing.T) {
 	}
 }
 
+// ── CurrentBranch ─────────────────────────────────────────────────────────────
+
+// TestCurrentBranch_CallArgs verifies the exact argv for "rev-parse --abbrev-ref HEAD".
+func TestCurrentBranch_CallArgs(t *testing.T) {
+	r := proc.NewFakeRunner()
+	wantArgs := []string{"-C", "/repos/proj", "rev-parse", "--abbrev-ref", "HEAD"}
+	r.Respond(proc.FakeResult{Stdout: []byte("main\n")}, "git", wantArgs...)
+
+	branch, err := git.CurrentBranch(context.Background(), r, "/repos/proj")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if branch != "main" {
+		t.Errorf("branch = %q, want %q", branch, "main")
+	}
+	if !reflect.DeepEqual(r.Calls[0], proc.Call{Name: "git", Args: wantArgs}) {
+		t.Errorf("Calls[0] = %+v, want %+v", r.Calls[0],
+			proc.Call{Name: "git", Args: wantArgs})
+	}
+}
+
+// TestCurrentBranch_Real verifies the returned name on a real temp repo, both on
+// the initial branch and after switching to a newly created one.
+func TestCurrentBranch_Real(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := initRepo(t) // git init -b main + initial commit
+	r := proc.ExecRunner{}
+
+	branch, err := git.CurrentBranch(context.Background(), r, repo)
+	if err != nil {
+		t.Fatalf("CurrentBranch on main: %v", err)
+	}
+	if branch != "main" {
+		t.Errorf("branch = %q, want %q", branch, "main")
+	}
+
+	// Create and switch to another branch; CurrentBranch must follow.
+	cmd := exec.Command("git", "checkout", "-b", "feat-current")
+	cmd.Dir = repo
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git checkout -b: %v\n%s", err, out)
+	}
+	branch, err = git.CurrentBranch(context.Background(), r, repo)
+	if err != nil {
+		t.Fatalf("CurrentBranch on feat-current: %v", err)
+	}
+	if branch != "feat-current" {
+		t.Errorf("branch = %q, want %q", branch, "feat-current")
+	}
+}
+
 // ── ErrWorktreeDirty (package var) ───────────────────────────────────────────
 
 // TestErrWorktreeDirty_IsSentinel confirms the var is exported and distinct.
