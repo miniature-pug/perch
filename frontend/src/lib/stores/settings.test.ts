@@ -67,4 +67,19 @@ describe("settings store", () => {
       expect.objectContaining({ glassDisabled: false }),
     );
   });
+
+  // Issue B: staleThresholdDays must round-trip through load → setTheme → saveSettings
+  it("staleThresholdDays is preserved in SaveSettings payload after unrelated UI change", async () => {
+    const w = await import("../wails");
+    vi.mocked(w.getSettings).mockResolvedValueOnce({
+      theme: "gruvbox", density: "dense", font: "geist", dnd: false,
+      glassDisabled: false, alwaysRules: [], staleThresholdDays: 14,
+    });
+    const { settings } = await import("./settings.svelte");
+    await settings.load();
+    await settings.setTheme("tokyo-night");
+    expect(vi.mocked(w.saveSettings)).toHaveBeenCalledWith(
+      expect.objectContaining({ staleThresholdDays: 14 }),
+    );
+  });
 });

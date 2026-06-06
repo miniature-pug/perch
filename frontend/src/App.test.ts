@@ -3157,3 +3157,62 @@ describe("App.svelte home-view persistent shell (4.4b)", () => {
     expect(screen.queryByText(/welcome to perch/i)).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Issue A: stale banner / CleanupPanel refresh after cleanup
+// ---------------------------------------------------------------------------
+describe("App.svelte CleanupPanel onClose refetches stale sessions", () => {
+  const staleSession = {
+    id: "ws-old", title: "old", branch: "feat/old", agent: "claude",
+    lastActive: new Date(0).toISOString(), added: 0, removed: 0,
+    clean: true, merged: true, safe: true,
+  };
+
+  it("listStaleSessions is called again after Remove selected completes (banner count refreshed)", async () => {
+    const { listStaleSessions, cleanupSessions } = await import("./lib/wails");
+    // First call (onMount): returns one stale session so the banner appears.
+    // Subsequent calls (after cleanup): return [] so the banner should disappear.
+    (listStaleSessions as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce([staleSession])
+      .mockResolvedValue([]);
+
+    const { default: App } = await import("./App.svelte");
+    render(App, {});
+
+    // Banner must appear
+    await waitFor(() =>
+      expect(screen.getByTestId("stale-banner")).toBeInTheDocument()
+    );
+    const callsBefore = (listStaleSessions as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    // Open the CleanupPanel via the Review button
+    await fireEvent.click(screen.getByRole("button", { name: /review/i }));
+    await tick();
+
+    // The panel should be open — "Remove selected" button is present (1 safe session = checked)
+    const removeBtn = await screen.findByRole("button", { name: /remove selected/i });
+    expect(removeBtn).toBeInTheDocument();
+    expect(removeBtn).not.toBeDisabled();
+
+    // Click Remove selected → ConfirmDialog appears
+    await fireEvent.click(removeBtn);
+    await tick();
+    // Confirm
+    const confirmBtn = await screen.findByRole("button", { name: /^remove$/i });
+    await fireEvent.click(confirmBtn);
+    await tick();
+
+    // cleanupSessions must have been called
+    await waitFor(() => expect(cleanupSessions).toHaveBeenCalled());
+
+    // listStaleSessions must have been called again (refetch on close)
+    await waitFor(() => {
+      expect((listStaleSessions as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(callsBefore);
+    });
+
+    // Banner must be gone (refetch returned [])
+    await waitFor(() =>
+      expect(screen.queryByTestId("stale-banner")).not.toBeInTheDocument()
+    );
+  });
+});

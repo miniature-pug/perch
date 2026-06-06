@@ -975,7 +975,13 @@
       <div class="modal-overlay" role="presentation">
         <CleanupPanel
           sessions={staleSessions}
-          onClose={() => { cleanupOpen = false; }}
+          onClose={async () => {
+            cleanupOpen = false;
+            try {
+              staleSessions = await listStaleSessions();
+              workspaces = await listWorkspaces();
+            } catch { /* non-fatal */ }
+          }}
           onOpen={(id) => { cleanupOpen = false; onSelect(id); }}
         />
       </div>
