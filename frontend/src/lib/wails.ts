@@ -28,7 +28,8 @@ export interface RepoInfo { path: string; name: string; branch: string; worktree
 
 interface App {
   ListWorkspaces(): Promise<WorkspaceVM[]>;
-  CreateWorkspace(agent: string, repoPath: string, branch: string, model: string): Promise<WorkspaceVM>;
+  CreateWorkspace(agent: string, repoPath: string, baseRef: string, branch: string, worktree: boolean): Promise<WorkspaceVM>;
+  WorkspaceForBranch(repoPath: string, branch: string): Promise<{ id: string; found: boolean }>;
   OpenWorkspace(id: string): Promise<void>;
   CloseWorkspace(id: string): Promise<void>;
   RemoveWorkspace(id: string): Promise<void>;
@@ -65,7 +66,8 @@ const app = (): App => window.go.app.App;
 
 // Workspace
 export const listWorkspaces  = ()                                                 => app().ListWorkspaces();
-export const createWorkspace = (agent: string, repoPath: string, branch: string, model: string) => app().CreateWorkspace(agent, repoPath, branch, model);
+export const createWorkspace      = (agent: string, repoPath: string, baseRef: string, branch: string, worktree: boolean) => app().CreateWorkspace(agent, repoPath, baseRef, branch, worktree);
+export const workspaceForBranch   = (repoPath: string, branch: string)                                                    => app().WorkspaceForBranch(repoPath, branch);
 export const openWorkspace   = (id: string)                                       => app().OpenWorkspace(id);
 export const closeWorkspace  = (id: string)                                       => app().CloseWorkspace(id);
 export const removeWorkspace = (id: string)                                       => app().RemoveWorkspace(id);

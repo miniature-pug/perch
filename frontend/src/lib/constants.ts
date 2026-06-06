@@ -43,8 +43,6 @@ export const DEFAULT_FONT = "geist";
 export const AGENT_CLAUDE = "claude";
 export const AGENT_OPENCODE = "opencode";
 export const DEFAULT_AGENT = AGENT_CLAUDE;
-export const DEFAULT_MODEL = "claude-sonnet-4-5";
-
 // ── Settings option lists ────────────────────────────────────────────────────
 export const THEMES = [
   "gruvbox", "tokyo-night", "catppuccin", "dracula", "nord",
