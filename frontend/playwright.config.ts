@@ -1,9 +1,12 @@
 import { defineConfig, devices } from "@playwright/test";
+import { PREVIEW_PORT } from "./preview-port.mjs";
+
+const baseURL = `http://localhost:${PREVIEW_PORT}`;
 
 export default defineConfig({
   testDir: "./e2e",
   use: {
-    baseURL: "http://localhost:4173",
+    baseURL,
   },
   projects: [
     {
@@ -13,7 +16,7 @@ export default defineConfig({
   ],
   webServer: {
     command: "npm run preview",
-    url: "http://localhost:4173",
+    url: baseURL,
     reuseExistingServer: false,
     timeout: 30000,
   },
