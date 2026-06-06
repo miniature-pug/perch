@@ -160,3 +160,39 @@ if !errors.Is(err, gitpkg.ErrBranchExists) {
 A code commit that is frozen and converged across multiple audit rounds can still harbor a latent bug on an unexercised path. A genuine adversarial falsification pass — empirical repro, hard bar, primary sources — is the discriminator between convergence and complacency. This is distinct from the manufacturing-findings trap: the bug on this path was never previously settled or exercised; it was simply missed. Convergence claims are valid only for paths that have been tested or falsifiably inspected.
 
 **NOT pushed; merge to main is user-only.**
+
+---
+
+# Round-12 Addendum — 2026-06-06
+
+## State
+
+Code last changed at `ddc7266` (the round-11 fix). The only code delta since the last full-codebase fan-out (round 9, gate-green `9c11278`) is that fix — `app/app.go` 4 lines + `app/app_test.go` 40 lines; everything else since is docs. A fresh every-file fan-out at this commit would re-litigate ground round 9 already read and rounds 10/11 re-verified — the manufacturing-findings trap. Scope was advisor-confirmed narrow: (1) verify the round-11 fix is complete + symmetric, (2) one genuine adversarial pass that generalizes BUG-11-1's *shape* across the whole Go tree, (3) verify round-11's new doc prose.
+
+## Method
+
+2 read-only Sonnet agents + advisor scoping. The falsification pass was framed as "find every instance of the structural shape, empirically repro candidates, report NONE if clean" — not convergence-primed.
+
+## Results — CONVERGENCE
+
+- **Round-11 fix:** complete + symmetric. All three `CreateWorkspace` modes (new-branch, existing-branch, non-worktree) propagate wrapped errors; `worktreePath` is set only after success. No swallow remains. No further edit warranted.
+- **Error-swallow shape sweep (whole Go tree, excl. vendor):** NONE. ~24 candidate sites enumerated (every `if !errors.Is`, `if errors.Is`-no-return, `_ =` discard, `//nolint`, and non-returning `if err != nil`); each discarded with reason. No site repeats the BUG-11-1 shape (swallowed error from a resource-creating op → later code uses/persists state referencing the never-created resource). Real-git empirical repro was on standby for any candidate; none qualified.
+- **`CleanupSessions` inverse-shape:** correct, not a mirror bug. It intentionally keeps the record when `RemoveWorktree` fails — the worktree still exists on disk, so record+tree stay consistent and the session is retryable. Distinct from BUG-11-1 (a *removal* failing, where keep-on-failure is right; vs a *creation* failing, where persist-on-failure was the bug).
+- **Tests encoding buggy contracts:** NONE.
+- **Round-11 doc prose:** all 19 factual claims (CHANGELOG §Round-11 + the Round-11 Addendum above) verified against primary sources — `app/app.go`, `app/app_test.go`, `internal/git/worktree.go`, `internal/git/worktree_ops.go`, git history, and a fresh empirical repro confirming `git worktree add -b <existing-branch>` exits 255 with no directory created. NONE inaccurate.
+
+## Declined observation (no silent drop)
+
+**DECL-12-1 — `app/app.go:1412` `_ = a.saveSettingsLocked(s)` in `Approve`.** The post-decision always-rule persist discards its write error, while the sibling `GetSettings` read error 20 lines above is surfaced (`return err`, added round-7 `d590b18`). Considered and **declined** (not a fix):
+- **Defensible asymmetry, not a proven corner.** A failed `GetSettings` *must* abort — you cannot dedup/append against rules you couldn't read. A failed `saveSettingsLocked` is post-success: `mon.Approve` already took effect in-session and the rule exists in memory; persistence is best-effort "remember for next time." "Surface the fatal read, best-effort the post-success write" is a coherent design. Blame is consistent with both "missed" and "deliberately scoped" — no positive evidence of a defect.
+- **The mirror fix is not unambiguously correct.** Changing `_ =` to `return err` would make `Approve()` return an error *after the approval already succeeded* — likely surfacing "approval failed" in the UI when it did not. The semantically-correct treatment (a non-fatal "rule didn't persist" warning on a separate channel) is a design change, out of scope for a convergence audit.
+- **No gate-exercised test is feasible.** The only way to fail the write while `GetSettings` still succeeds (ENOENT→defaults) is a read-only directory — uid-dependent. The container gate runs as root, so a permission-injection regression test would skip in the gate; a fix whose test skips in the actual gate is the "half-assed testing" the mandate forbids.
+- **Consequence is fail-safe:** an unpersisted always-rule means the user is re-prompted next session (never silent auto-allow). Low severity.
+
+The user can overrule if they want the persist-failure made visible; doing so is a small design task (separate warning channel), not the 3-line mirror.
+
+## Outcome
+
+Round 12 = convergence. No code changed → no gate re-run (the container gate validates code/tests, not markdown; established rounds 10–11). The round-11 fix stands as the last code change. Eleven-plus rounds in, the risk profile is self-inflicted regressions, and restraint on DECL-12-1 is the higher-quality call.
+
+**NOT pushed; merge to main is user-only.**
