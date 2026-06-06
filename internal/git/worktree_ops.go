@@ -76,8 +76,15 @@ func WorktreeDirty(ctx context.Context, r proc.Runner, treePath string) (bool, e
 // `git -C <repoRoot> branch --merged <base> --format=%(refname:short)` and
 // checking whether branch appears in the output. Using --format avoids the
 // leading "* " marker on the current branch that `git branch --merged` emits
-// in default format.
+// in default format. Both branch and base are validated with ValidRef for
+// V3-A flag-injection parity.
 func BranchMerged(ctx context.Context, r proc.Runner, repoRoot, branch, base string) (bool, error) {
+	if err := ValidRef(branch); err != nil {
+		return false, fmt.Errorf("git: BranchMerged: invalid branch: %w: %w", ErrInvalidRef, err)
+	}
+	if err := ValidRef(base); err != nil {
+		return false, fmt.Errorf("git: BranchMerged: invalid base: %w: %w", ErrInvalidRef, err)
+	}
 	stdout, stderr, err := r.Run(ctx, "git", "-C", repoRoot,
 		"branch", "--merged", base, "--format=%(refname:short)")
 	if err != nil {

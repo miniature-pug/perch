@@ -278,6 +278,37 @@ func TestBranchMerged_Real(t *testing.T) {
 	}
 }
 
+// TestBranchMerged_FlagInjection verifies that a leading-dash base (and a
+// leading-dash branch) is rejected before any git call.
+func TestBranchMerged_FlagInjection(t *testing.T) {
+	t.Run("leading-dash base", func(t *testing.T) {
+		r := proc.NewFakeRunner()
+		_, err := git.BranchMerged(context.Background(), r, "/repos/proj", "feat-x", "--evil")
+		if err == nil {
+			t.Fatal("must reject leading-dash base")
+		}
+		if !errors.Is(err, git.ErrInvalidRef) {
+			t.Errorf("want errors.Is(err, ErrInvalidRef); got %v", err)
+		}
+		if len(r.Calls) != 0 {
+			t.Errorf("must not call git; got %d calls", len(r.Calls))
+		}
+	})
+	t.Run("leading-dash branch", func(t *testing.T) {
+		r := proc.NewFakeRunner()
+		_, err := git.BranchMerged(context.Background(), r, "/repos/proj", "--evil", "main")
+		if err == nil {
+			t.Fatal("must reject leading-dash branch")
+		}
+		if !errors.Is(err, git.ErrInvalidRef) {
+			t.Errorf("want errors.Is(err, ErrInvalidRef); got %v", err)
+		}
+		if len(r.Calls) != 0 {
+			t.Errorf("must not call git; got %d calls", len(r.Calls))
+		}
+	})
+}
+
 // ── DeleteBranch ─────────────────────────────────────────────────────────────
 
 // TestDeleteBranch_CallArgs_Safe verifies "-d" is used when force=false.
@@ -458,6 +489,16 @@ func TestErrWorktreeDirty_IsSentinel(t *testing.T) {
 		t.Fatal("ErrWorktreeDirty must be non-nil")
 	}
 	if !errors.Is(git.ErrWorktreeDirty, git.ErrWorktreeDirty) {
+		t.Error("errors.Is identity check failed")
+	}
+}
+
+// TestErrBranchInUse_IsSentinel confirms the var is exported and distinct.
+func TestErrBranchInUse_IsSentinel(t *testing.T) {
+	if git.ErrBranchInUse == nil {
+		t.Fatal("ErrBranchInUse must be non-nil")
+	}
+	if !errors.Is(git.ErrBranchInUse, git.ErrBranchInUse) {
 		t.Error("errors.Is identity check failed")
 	}
 }
