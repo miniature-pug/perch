@@ -210,6 +210,17 @@ and more. Agent strings (`"claude"`, `"opencode"`) are no longer used as raw
 literals; all comparison and dispatch sites use `model.ToolClaude` and
 `model.ToolOpencode`.
 
+Two cross-package constants are exported so the owning package is the single
+source:
+
+- **`hooklistener.LoopbackHost`** (`"127.0.0.1"`) — the loopback address used
+  by `ClaudeMonitor` and `OpencodeMonitor`; exported from `hooklistener` (the
+  canonical network owner). `agent` already imports `hooklistener`, so no new
+  import edge is introduced.
+- **`registry.ConfigDirMode`** (`0o700`) — the config-directory creation mode;
+  exported from `registry` (the canonical config-dir owner) and referenced by
+  `app`.
+
 ### Single XDG config-dir resolver
 
 The XDG config-dir computation (`$XDG_CONFIG_HOME/perch`, falling back to
@@ -219,6 +230,8 @@ The XDG config-dir computation (`$XDG_CONFIG_HOME/perch`, falling back to
 - `config.DefaultGlobalPath()` delegates to it (`filepath.Join(registry.DefaultConfigDir(), "config.toml")`).
 - The application-directory name `"perch"` is defined exactly once as the
   unexported constant `registry.appName`.
+- The config-directory creation mode (`0o700`) is the exported constant
+  `registry.ConfigDirMode`; `app` uses it directly instead of a local copy.
 
 Previously both `internal/config` and `internal/registry` each contained their
 own copy of this resolution logic; they now share a single source.
@@ -247,6 +260,10 @@ Wails event names (`EVT_AGENT`, `EVT_FS_CHANGED`, `EVT_NOTIFY`,
 named `EVT_*` constants in `frontend/src/lib/wails.ts` (the IPC seam), kept
 separate from non-IPC tuning values.
 
+The Vite preview port (`4173`) is single-sourced in
+`frontend/preview-port.mjs`, which is consumed by `vite.config.ts`,
+`playwright.config.ts`, and the e2e spec files.
+
 ### CSS design-token additions
 
 `frontend/src/tokens/tokens.css` was extended with:
@@ -261,6 +278,12 @@ separate from non-IPC tuning values.
   resolved: `--perch-z-undo-toast: 300`, `--perch-z-command-palette: 310`.
 - `--perch-fs-shell` / `--perch-lh-shell` — shell font-size and line-height
   tokens; `Terminal.svelte` reads these instead of hardcoding `13px`/`1.5`.
+- `--perch-scrollbar-w: 6px` — custom scrollbar width; replaces 6 inline
+  `::-webkit-scrollbar { width: 6px }` literals.
+- `--perch-scrollbar-radius: 3px` — scrollbar thumb radius; replaces 6 inline
+  `-webkit-scrollbar-thumb { border-radius: 3px }` literals.
+- `--perch-opacity-disabled: 0.4` — disabled-control opacity policy; replaces 4
+  inline `:disabled { opacity: 0.4 }` literals.
 
 `SettingsPanel`'s dead/wrong hex fallbacks were removed; all colour references
 now use the token system.

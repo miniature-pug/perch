@@ -6,6 +6,50 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.1.0] - Unreleased
 
+### Round 9 — centralization & cleanup (2026-06-05)
+
+A 10-agent full-codebase parity + quality re-audit (`docs/audit-2026-06-05-round9.md`).
+Parity was clean (0 cut corners); all yield was centralization/cleanup debt. No
+feature or behavior change.
+
+#### Added
+
+- **3 new CSS design tokens** — `--perch-scrollbar-w: 6px`,
+  `--perch-scrollbar-radius: 3px`, `--perch-opacity-disabled: 0.4`; existing
+  hardcoded literals at 25+ component sites replaced with these and the
+  pre-existing `--perch-radius-sm`, `--perch-ring-w`, `--perch-fs-caption`.
+- **`registry.ConfigDirMode`** (exported `0o700`) — the config-dir creation mode
+  was duplicated in `app/app.go` and `internal/registry`; exported from registry
+  (the canonical config-dir owner) so `app` references it directly.
+- **`hooklistener.LoopbackHost`** (exported `"127.0.0.1"`) — the loopback const
+  was duplicated in `hooklistener` and `agent/opencode_monitor`, each carrying
+  a false "single source of truth" comment; exported from hooklistener (the
+  canonical network owner); `agent` already imports hooklistener so no new import
+  edge.
+- **`TestApp_ListStaleSessions_UnmergedNotSafe`** — the stale-session
+  `safe = clean && merged` conjunct had no isolated test for the `merged=false`
+  case (only a combined clean+merged test existed); new case confirms the guard.
+- **`frontend/preview-port.mjs`** — single source for Vite preview port `4173`;
+  consumed by `vite.config.ts`, `playwright.config.ts`, `e2e/views.spec.ts`, and
+  `e2e/themes.spec.ts` so the port exists in exactly one place.
+
+#### Changed
+
+- **`gui-build: export PERCH_MASK_DIST = 1`** — spec §6.2 names both
+  `test-e2e` and `gui-build` as the two frontend-building targets that must
+  export this flag; previously only `test-e2e` did. `gui-build` now also exports
+  it automatically, removing the need for a manual prefix.
+- **`wails.json` `"frontend:install": "npm ci"`** (was `npm install`) — aligns
+  with the reproducibility contract used by every Makefile path.
+
+#### Removed
+
+- **`export type ThemeName`** (`frontend/src/lib/constants.ts`) — zero consumers;
+  cannot wire to the Go `string` contract. Removed.
+- **`@codemirror/theme-one-dark`** — declared in `frontend/package.json` but
+  unused (the one-dark perch theme is a CSS block, not this package); removed
+  from dependencies and the lockfile.
+
 ### Worktree session model — removal/cleanup, stale sessions, resume preview, home shell (2026-06-05)
 
 Implements the worktree-native session model described in
