@@ -16,8 +16,10 @@ const (
 	appName = "perch"
 	// workspacesFile is the filename of the persistent workspace registry.
 	workspacesFile = "workspaces.json"
-	// configDirMode is the permission bits used when creating the perch config directory.
-	configDirMode = 0o700
+	// ConfigDirMode is the permission bits used when creating the perch config
+	// directory. Exported so callers (e.g. app) can use the same value without
+	// duplicating it.
+	ConfigDirMode = 0o700
 )
 
 // Workspace is the persistent record for one perch workspace.
@@ -61,7 +63,7 @@ func DefaultConfigDir() string {
 // Load reads workspaces.json from configDir. A missing file is not an error
 // and returns an empty store. configDir is created if it does not exist.
 func Load(configDir string) (*Store, error) {
-	if err := os.MkdirAll(configDir, configDirMode); err != nil {
+	if err := os.MkdirAll(configDir, ConfigDirMode); err != nil {
 		return nil, fmt.Errorf("registry: mkdir %s: %w", configDir, err)
 	}
 	path := filepath.Join(configDir, workspacesFile)

@@ -2728,6 +2728,57 @@ func TestApp_ListStaleSessions_SafeFlag(t *testing.T) {
 	}
 }
 
+// TestApp_ListStaleSessions_UnmergedNotSafe verifies the merged conjunct of
+// Safe==clean&&merged: a clean worktree whose branch is NOT present in
+// `git branch --merged <base>` output must yield Clean==true, Merged==false,
+// Safe==false.  Reverting the conjunct to `safe := clean` in app.go would make
+// this test fail because Safe would become true.
+func TestApp_ListStaleSessions_UnmergedNotSafe(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	repo := t.TempDir()
+	tree := t.TempDir()
+	now := time.Now()
+	_ = store.Upsert(registry.Workspace{
+		ID: "ws-unmerged", RepoPath: repo, WorktreePath: tree,
+		Worktree: true, Agent: "claude", Title: "t", Branch: "feat/unmerged",
+		BaseRef: "main", LastActive: now.Add(-31 * 24 * time.Hour),
+	})
+	r := proc.NewFakeRunner()
+	// WorktreeDirty: status --porcelain returns empty → clean
+	r.Respond(proc.FakeResult{Stdout: []byte("")}, "git", "-C", tree, "status", "--porcelain")
+	// BranchMerged: branch --merged lists a different branch, not feat/unmerged → Merged==false
+	r.Respond(proc.FakeResult{Stdout: []byte("other-branch\n")}, "git", "-C", repo, "branch", "--merged", "main", "--format=%(refname:short)")
+	// DiffStat: diff --numstat (no changes)
+	r.Respond(proc.FakeResult{Stdout: []byte("")}, "git", "-C", tree, "diff", "--numstat")
+	// DiffStat: diff --cached --numstat (no changes)
+	r.Respond(proc.FakeResult{Stdout: []byte("")}, "git", "-C", tree, "diff", "--cached", "--numstat")
+	a := &App{
+		store: store, roots: []string{repo, tree}, run: r,
+		emit: func(string, ...any) {}, bridges: map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{}, cancels: map[string]context.CancelFunc{},
+		settingsPath: filepath.Join(cfgDir, "settings.json"),
+	}
+	stale, err := a.ListStaleSessions()
+	if err != nil {
+		t.Fatalf("ListStaleSessions: %v", err)
+	}
+	if len(stale) != 1 {
+		t.Fatalf("got %d sessions, want 1", len(stale))
+	}
+	s := stale[0]
+	if !s.Clean {
+		t.Errorf("expected Clean==true, got %+v", s)
+	}
+	if s.Merged {
+		t.Errorf("expected Merged==false, got %+v", s)
+	}
+	if s.Safe {
+		t.Errorf("expected Safe==false (clean but unmerged), got %+v", s)
+	}
+}
+
 func TestApp_CleanupSessions_RemovesTreeAndDeletesBranch(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cfgDir := t.TempDir()

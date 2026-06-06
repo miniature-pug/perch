@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Miniature-Pug/perch/internal/hooklistener"
 )
 
 // OpencodeMonitor drives the opencode agent. opencode has no hook system; instead
@@ -42,14 +44,10 @@ type OpencodeMonitor struct {
 }
 
 const (
-	// loopbackHost is the single source of truth for the loopback address used by
-	// both the server URL and the `--hostname` flag below. Centralizing it keeps the
-	// two references in lockstep.
-	loopbackHost = "127.0.0.1"
-
 	// loopbackServerURLFmt is the format string used to build the opencode serve
-	// URL from a free loopback port number.
-	loopbackServerURLFmt = "http://" + loopbackHost + ":%d"
+	// URL from a free loopback port number. Uses hooklistener.LoopbackHost as the
+	// single source of truth for the loopback address.
+	loopbackServerURLFmt = "http://" + hooklistener.LoopbackHost + ":%d"
 
 	// opencodeServePollMaxIters and opencodeServePollIntervalSec bound the readiness
 	// poll baked into serveAndAttachFmt (budget: 50×0.2s≈10s). They are string consts
@@ -90,7 +88,7 @@ const (
 	// the shell command and must not be changed without updating the comment above
 	// that documents the ~10 s budget.
 	serveAndAttachFmt = " ( export OPENCODE_SERVER_PASSWORD=%s;" +
-		" opencode serve --port %s --hostname " + loopbackHost + " >/dev/null 2>&1 &" +
+		" opencode serve --port %s --hostname " + hooklistener.LoopbackHost + " >/dev/null 2>&1 &" +
 		" i=0; while [ $i -lt " + opencodeServePollMaxIters + " ]; do curl -s -o /dev/null %s && break; i=$((i+1)); sleep " + opencodeServePollIntervalSec + "; done;" +
 		" exec %s )\n"
 )
@@ -187,7 +185,7 @@ func (m *OpencodeMonitor) Teardown() error { return nil }
 // it. There is a small race between release and `opencode serve` binding it; if
 // another process steals the port, serve fails and Start reports StateErrored.
 func freeLoopbackPort() (int, error) {
-	l, err := net.Listen("tcp", loopbackHost+":0")
+	l, err := net.Listen("tcp", hooklistener.LoopbackHost+":0")
 	if err != nil {
 		return 0, err
 	}

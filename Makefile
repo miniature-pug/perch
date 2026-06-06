@@ -73,6 +73,7 @@ shell: | image        ## drop into an interactive shell in perch-dev
 # masks frontend/dist (spec §5.3) — Go targets keep the committed go:embed stub.
 DZ := test test-integration test-front test-e2e lint vet vulncheck
 ifeq ($(CONTAINERIZE),1)
+gui-build: export PERCH_MASK_DIST = 1
 test-e2e: export PERCH_MASK_DIST = 1
 $(DZ): | image
 	@bash containers/run.sh dev make CONTAINERIZE=0 $@

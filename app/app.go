@@ -53,7 +53,6 @@ const (
 	homeShellPaneID = "shell-home"
 
 	// File-permission modes.
-	configDirMode    = 0o700
 	settingsFileMode = 0o600
 
 	// UUIDv4 byte masks applied in newWorkspaceID.
@@ -1213,7 +1212,7 @@ func (a *App) SaveLayout(layoutJSON string) error {
 // so the invariant is auditable and consistent with claude_monitor.go's atomicWrite.
 func atomicWriteApp(path string, data []byte) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, configDirMode); err != nil {
+	if err := os.MkdirAll(dir, registry.ConfigDirMode); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(dir, ".tmp-")
