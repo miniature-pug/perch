@@ -957,6 +957,47 @@ describe("App.svelte NewSessionDialog (4.25.6a)", () => {
       expect(screen.getByRole("dialog", { name: "new session" })).toBeInTheDocument()
     );
   });
+
+  it("handleCreate calls onSelect with existing session id when WorkspaceForBranch returns found=true", async () => {
+    const { listWorkspaces, createWorkspace, workspaceForBranch } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: "ws-existing", title: "Existing", branch: "feat/taken", state: "idle" as const,
+        worktreePath: "/tmp/existing", agent: "claude", paneId: "p-existing", lastActive: "",
+        caps: { approvals: false, attention: false },
+      },
+    ]);
+    (workspaceForBranch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ id: "ws-existing", found: true });
+
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await screen.findByRole("button", { name: "Existing" });
+
+    // Open dialog
+    await fireEvent.click(screen.getByRole("button", { name: "New session" }));
+    await waitFor(() => screen.getByRole("dialog", { name: "new session" }));
+
+    // Wait for branch options (starting point) to load
+    await waitFor(() => screen.getByLabelText(/starting point/i));
+
+    // Set branch name to the taken branch name
+    await fireEvent.input(screen.getByLabelText(/^branch name$/i), { target: { value: "feat/taken" } });
+
+    // Create — should trigger resume, not a new workspace
+    await fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await tick();
+
+    // workspaceForBranch was called
+    expect(workspaceForBranch).toHaveBeenCalledWith(expect.any(String), "feat/taken");
+
+    // createWorkspace was NOT called — resumed instead
+    expect(createWorkspace).not.toHaveBeenCalled();
+
+    // Dialog closed
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "new session" })).not.toBeInTheDocument()
+    );
+  });
 });
 
 describe("App.svelte ConfirmDialog (workspace remove) (4.25.6a)", () => {
