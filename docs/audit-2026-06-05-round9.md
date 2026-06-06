@@ -110,3 +110,53 @@ Unchanged from prior rounds: WebKit + real-agent + attach-D-Bus + Playwright vis
 **Landed:** `648a317` (docs-only). No gate run — zero code touched since `9c11278`; the container gate validates code/tests, not markdown, and cannot be affected.
 
 **NOT pushed; merge to main is user-only.**
+
+---
+
+# Round-11 Addendum — 2026-06-06
+
+**State:** Code had been frozen at gate-green code-HEAD `9c11278` since round 8 (rounds 8, 9, and 10 each converged; round 10 was docs-only). This round's audit surface = the `9c11278..HEAD` docs diff (verified accurate against primary sources) + a fresh-eyes adversarial falsification pass over the code. That falsification pass found the codebase was **NOT fully converged** — one gate-blind logic bug remained on an unexercised path.
+
+**Method:** 2 read-only Sonnet agents — docs-prose verification (re-checking the 5 round-10 claims against run.sh/Makefile/tokens.css) + adversarial falsification pass over the code (hard empirical-repro bar). Scope narrowed from a fresh full fan-out (advisor-confirmed): a full re-audit would re-litigate settled decisions at this exact commit (the recorded manufacturing-findings failure mode); yield is still possible on unexercised paths.
+
+## Results
+
+### Docs-prose: CONVERGENCE
+
+All 5 round-10 docs-prose claims re-checked against primary sources:
+
+| Claim | File | Primary source | Verdict |
+|-------|------|----------------|---------|
+| `test-e2e` auto-masks via dispatch; `gui-build` needs host-side `PERCH_MASK_DIST=1` prefix | `containers/README.md` §65-66, §88-90 | `run.sh:35` reads from host shell; `gui-build` not in DZ → never dispatched | CONFIRMED |
+| Verify command prefixed `PERCH_MASK_DIST=1 …` | `containers/README.md` §88-90 | Makefile `ifeq(CONTAINERIZE,1)` branch skipped by CONTAINERIZE=0 | CONFIRMED |
+| CHANGELOG: spec-§6.2 parity export; host-prefix caveat for gui-build | `CHANGELOG.md` :40-41 | Same run.sh/Makefile analysis | CONFIRMED |
+| z-index ladder floor = `--perch-z-sidebar-rail: 1` | `ARCHITECTURE.md` :276 | `tokens.css:48` | CONFIRMED |
+| Round-10 operational note on gui-build mask | container-framework spec §95 | Same run.sh analysis | CONFIRMED |
+
+No new inaccuracy introduced by round-10's fixes.
+
+### BUG-11-1 (HIGH, data-integrity, gate-blind): `CreateWorkspace` swallowed `ErrBranchExists` → broken workspace persisted
+
+**Finding:** `app/app.go` `CreateWorkspace`, new-branch mode (`baseRef != ""`), contained the guard:
+
+```go
+if !errors.Is(err, gitpkg.ErrBranchExists) {
+    return ...
+}
+```
+
+`git worktree add -b <branch>` exits 255 and creates **no worktree directory** when the branch already exists (verified empirically). The swallow fell through and persisted a workspace record whose `WorktreePath` pointed at a directory git never created — every subsequent `OpenWorkspace` on it then failed with "no such file or directory".
+
+**Root cause / blame:** the swallow was a stale remnant of the pre-two-mode design. Commit 2983d63 added the comment "an already-existing branch is not fatal" when the single `CreateWorkspace` path needed to handle both new-branch and existing-branch cases. Commit 64043ff rewrote the function into two modes (new-branch path via `AddWorktree -b`; existing-branch path via `AddWorktreeExisting` — no `-b`, reached via the UI "use existing branch" toggle) but carried the swallow forward unexamined. In the two-mode design a name collision in new-branch mode is a genuine user error that must surface.
+
+**Gate-blindness:** no existing test exercised the new-branch path with an already-existing branch name; the container gate (and all prior audit rounds) were blind to the bug.
+
+**Fix (commit `ddc7266`):** removed the swallow so any `AddWorktree` error returns directly. `ErrBranchExists` propagates wrapped; `errors.Is` semantics are preserved at every call site. Regression test `TestApp_CreateWorkspace_NewBranch_BranchAlreadyExists_Fails` asserts the returned error wraps `ErrBranchExists` and that no broken workspace is persisted (workspace list remains empty after the failed call).
+
+**Gate re-run:** `make test-all` ALL GREEN at `ddc7266` — 16 Go pkgs race+integration, golangci-lint, vet, govulncheck clean, vitest 397, Playwright e2e 61.
+
+## Lesson
+
+A code commit that is frozen and converged across multiple audit rounds can still harbor a latent bug on an unexercised path. A genuine adversarial falsification pass — empirical repro, hard bar, primary sources — is the discriminator between convergence and complacency. This is distinct from the manufacturing-findings trap: the bug on this path was never previously settled or exercised; it was simply missed. Convergence claims are valid only for paths that have been tested or falsifiably inspected.
+
+**NOT pushed; merge to main is user-only.**

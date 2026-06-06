@@ -6,6 +6,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.1.0] - Unreleased
 
+### Round 11 — ErrBranchExists swallow fix (2026-06-06)
+
+A fresh-eyes adversarial falsification pass over the code (code had been
+frozen at `9c11278` since round 8). Full audit details in
+`docs/audit-2026-06-05-round9.md` (Round-11 Addendum).
+
+#### Fixed
+
+- **`CreateWorkspace` (new-branch mode) swallowed `ErrBranchExists` and
+  persisted a broken workspace.** `git worktree add -b <branch>` exits 255
+  and creates no worktree directory when the branch already exists; the
+  prior code matched `!errors.Is(err, gitpkg.ErrBranchExists)` and fell
+  through, writing a registry record whose `WorktreePath` pointed at a
+  directory git never created — every subsequent `OpenWorkspace` on it
+  failed with "no such file or directory". The swallow was a stale remnant
+  of the pre-two-mode design (comment "an already-existing branch is not
+  fatal" from commit 2983d63, carried unexamined into the 64043ff two-mode
+  rewrite). The current design has a separate `AddWorktreeExisting` path
+  (no `-b`) reached via the UI's "use existing branch" toggle, so a name
+  collision in new-branch mode is a genuine user error that must surface.
+  Fix (commit `ddc7266`): removed the swallow so any `AddWorktree` error
+  returns directly; `ErrBranchExists` propagates wrapped, preserving
+  `errors.Is` semantics. Regression test
+  `TestApp_CreateWorkspace_NewBranch_BranchAlreadyExists_Fails` asserts
+  the error wraps `ErrBranchExists` and no broken workspace is persisted.
+  Gate re-run ALL GREEN (16 Go pkgs race+integration, golangci-lint, vet,
+  govulncheck, vitest 397, e2e 61). (bug was gate-blind — no prior test
+  exercised this path)
+
 ### Round 9 — centralization & cleanup (2026-06-05)
 
 A 10-agent full-codebase parity + quality re-audit (`docs/audit-2026-06-05-round9.md`).
