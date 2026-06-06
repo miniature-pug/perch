@@ -2770,3 +2770,39 @@ func TestApp_CleanupSessions_RemovesTreeAndDeletesBranch(t *testing.T) {
 		t.Error("branch not deleted by CleanupSessions")
 	}
 }
+
+func TestApp_CleanupSessions_WorktreeRemoveFails_KeepsRecord(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	repo := t.TempDir()
+	tree := t.TempDir()
+	_ = store.Upsert(registry.Workspace{
+		ID: "ws-dirty", RepoPath: repo, WorktreePath: tree,
+		Worktree: true, Agent: "claude", Title: "t", Branch: "feat/dirty",
+		BaseRef: "main", LastActive: time.Now().Add(-40 * 24 * time.Hour),
+	})
+	r := proc.NewFakeRunner()
+	// worktree remove FAILS
+	r.Respond(proc.FakeResult{Err: fmt.Errorf("fatal: contains modified or untracked files")}, "git", "-C", repo, "worktree", "remove", tree)
+	a := &App{
+		store: store, roots: []string{repo, tree}, run: r,
+		emit: func(string, ...any) {}, bridges: map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{}, cancels: map[string]context.CancelFunc{},
+		settingsPath: filepath.Join(cfgDir, "settings.json"),
+	}
+	err := a.CleanupSessions([]string{"ws-dirty"}, false)
+	if err == nil {
+		t.Fatal("expected error when worktree remove fails")
+	}
+	// Record MUST be kept (not orphaned).
+	if _, ok := store.Get("ws-dirty"); !ok {
+		t.Error("record removed despite worktree-remove failure — orphaned tree")
+	}
+	// Branch delete MUST NOT have been attempted.
+	for _, c := range r.Calls {
+		if c.Name == "git" && len(c.Args) >= 4 && c.Args[2] == "branch" && c.Args[3] == "-d" {
+			t.Error("branch delete attempted after worktree-remove failure")
+		}
+	}
+}

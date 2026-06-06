@@ -1065,9 +1065,14 @@ func (a *App) CleanupSessions(ids []string, force bool) error {
 		}
 		_ = a.CloseWorkspace(id)
 		if err := gitpkg.RemoveWorktree(ctx, a.runner(), w.RepoPath, w.WorktreePath, force); err != nil {
+			// Worktree removal failed (e.g. dirty tree, force=false): keep the record so
+			// the session is retryable and the tree is never orphaned. Skip branch delete.
 			errs = append(errs, fmt.Errorf("remove worktree %s: %w", id, err))
+			continue
 		}
 		if err := gitpkg.DeleteBranch(ctx, a.runner(), w.RepoPath, w.Branch, force); err != nil {
+			// Branch kept (e.g. unmerged with -d) — safe; the tree is already gone, so still
+			// drop the record below.
 			errs = append(errs, fmt.Errorf("delete branch %s: %w", id, err))
 		}
 		if err := a.store.Remove(id); err != nil {
