@@ -2549,3 +2549,143 @@ func TestApp_RemoveWorkspace_NonWorktreeSession_NeverCallsRemoveWorktree(t *test
 		}
 	}
 }
+
+func TestApp_ListStaleSessions_FiltersThresholdAndWorktreeOnly(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	repoA := t.TempDir()
+	treeA := t.TempDir()
+	repoB := t.TempDir()
+	now := time.Now()
+	_ = store.Upsert(registry.Workspace{
+		ID: "ws-stale", RepoPath: repoA, WorktreePath: treeA,
+		Worktree: true, Agent: "claude", Title: "old-feat", Branch: "feat/old",
+		BaseRef: "main", LastActive: now.Add(-31 * 24 * time.Hour),
+	})
+	freshTree := t.TempDir()
+	_ = store.Upsert(registry.Workspace{
+		ID: "ws-fresh", RepoPath: repoA, WorktreePath: freshTree,
+		Worktree: true, Agent: "claude", Title: "new-feat", Branch: "feat/new",
+		BaseRef: "main", LastActive: now.Add(-1 * 24 * time.Hour),
+	})
+	_ = store.Upsert(registry.Workspace{
+		ID: "ws-nonwt", RepoPath: repoB, WorktreePath: repoB,
+		Worktree: false, Agent: "claude", Title: "main-session", Branch: "main",
+		LastActive: now.Add(-60 * 24 * time.Hour),
+	})
+	r := proc.NewFakeRunner()
+	// DiffStat command 1: status --porcelain (also consumed by WorktreeDirty)
+	r.Respond(proc.FakeResult{Stdout: []byte("")}, "git", "-C", treeA, "status", "--porcelain")
+	// BranchMerged uses --format=%(refname:short)
+	r.Respond(proc.FakeResult{Stdout: []byte("feat/old\nmain\n")}, "git", "-C", repoA, "branch", "--merged", "main", "--format=%(refname:short)")
+	// DiffStat command 2: diff --numstat
+	r.Respond(proc.FakeResult{Stdout: []byte("")}, "git", "-C", treeA, "diff", "--numstat")
+	// DiffStat command 3: diff --cached --numstat
+	r.Respond(proc.FakeResult{Stdout: []byte("")}, "git", "-C", treeA, "diff", "--cached", "--numstat")
+	settingsPath := filepath.Join(cfgDir, "settings.json")
+	a := &App{
+		store: store, roots: []string{repoA, repoB, treeA, freshTree}, run: r,
+		emit: func(string, ...any) {}, bridges: map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{}, cancels: map[string]context.CancelFunc{},
+		settingsPath: settingsPath,
+	}
+	stale, err := a.ListStaleSessions()
+	if err != nil {
+		t.Fatalf("ListStaleSessions: %v", err)
+	}
+	if len(stale) != 1 {
+		t.Fatalf("expected 1 stale session, got %d: %+v", len(stale), stale)
+	}
+	if stale[0].ID != "ws-stale" {
+		t.Errorf("wrong session returned: %s", stale[0].ID)
+	}
+}
+
+func TestApp_ListStaleSessions_SafeFlag(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	repo := t.TempDir()
+	tree := t.TempDir()
+	now := time.Now()
+	_ = store.Upsert(registry.Workspace{
+		ID: "ws-s", RepoPath: repo, WorktreePath: tree,
+		Worktree: true, Agent: "claude", Title: "t", Branch: "feat/s",
+		BaseRef: "main", LastActive: now.Add(-31 * 24 * time.Hour),
+	})
+	r := proc.NewFakeRunner()
+	// DiffStat command 1 / WorktreeDirty: status --porcelain (empty = clean)
+	r.Respond(proc.FakeResult{Stdout: []byte("")}, "git", "-C", tree, "status", "--porcelain")
+	// BranchMerged
+	r.Respond(proc.FakeResult{Stdout: []byte("feat/s\n")}, "git", "-C", repo, "branch", "--merged", "main", "--format=%(refname:short)")
+	// DiffStat command 2: diff --numstat — return 3 added, 1 removed for feat/s.go
+	r.Respond(proc.FakeResult{Stdout: []byte("3\t1\tfeat/s.go\n")}, "git", "-C", tree, "diff", "--numstat")
+	// DiffStat command 3: diff --cached --numstat
+	r.Respond(proc.FakeResult{Stdout: []byte("")}, "git", "-C", tree, "diff", "--cached", "--numstat")
+	a := &App{
+		store: store, roots: []string{repo, tree}, run: r,
+		emit: func(string, ...any) {}, bridges: map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{}, cancels: map[string]context.CancelFunc{},
+		settingsPath: filepath.Join(cfgDir, "settings.json"),
+	}
+	stale, err := a.ListStaleSessions()
+	if err != nil {
+		t.Fatalf("ListStaleSessions: %v", err)
+	}
+	if len(stale) != 1 {
+		t.Fatalf("got %d sessions", len(stale))
+	}
+	if !stale[0].Clean || !stale[0].Merged || !stale[0].Safe {
+		t.Errorf("expected Clean+Merged+Safe, got %+v", stale[0])
+	}
+	if stale[0].Added != 3 {
+		t.Errorf("expected Added=3, got %d", stale[0].Added)
+	}
+	if stale[0].Removed != 1 {
+		t.Errorf("expected Removed=1, got %d", stale[0].Removed)
+	}
+}
+
+func TestApp_CleanupSessions_RemovesTreeAndDeletesBranch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	repo := t.TempDir()
+	tree := t.TempDir()
+	_ = store.Upsert(registry.Workspace{
+		ID: "ws-clean", RepoPath: repo, WorktreePath: tree,
+		Worktree: true, Agent: "claude", Title: "t", Branch: "feat/clean",
+		BaseRef: "main", LastActive: time.Now().Add(-35 * 24 * time.Hour),
+	})
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{}, "git", "-C", repo, "worktree", "remove", tree)
+	r.Respond(proc.FakeResult{}, "git", "-C", repo, "branch", "-d", "feat/clean")
+	a := &App{
+		store: store, roots: []string{repo, tree}, run: r,
+		emit: func(string, ...any) {}, bridges: map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{}, cancels: map[string]context.CancelFunc{},
+		settingsPath: filepath.Join(cfgDir, "settings.json"),
+	}
+	if err := a.CleanupSessions([]string{"ws-clean"}, false); err != nil {
+		t.Fatalf("CleanupSessions: %v", err)
+	}
+	if _, ok := store.Get("ws-clean"); ok {
+		t.Error("workspace record still present after CleanupSessions")
+	}
+	worktreeRemoved, branchDeleted := false, false
+	for _, c := range r.Calls {
+		if c.Name == "git" && len(c.Args) >= 4 && c.Args[2] == "worktree" && c.Args[3] == "remove" {
+			worktreeRemoved = true
+		}
+		if c.Name == "git" && len(c.Args) >= 4 && c.Args[2] == "branch" && c.Args[3] == "-d" {
+			branchDeleted = true
+		}
+	}
+	if !worktreeRemoved {
+		t.Error("worktree not removed by CleanupSessions")
+	}
+	if !branchDeleted {
+		t.Error("branch not deleted by CleanupSessions")
+	}
+}

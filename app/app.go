@@ -965,6 +965,116 @@ func (a *App) ForceRemoveWorkspace(id string) error {
 	return a.store.Remove(id)
 }
 
+// StaleSessionVM is the frontend-facing view of one stale worktree session.
+type StaleSessionVM struct {
+	ID         string    `json:"id"`
+	Title      string    `json:"title"`
+	Branch     string    `json:"branch"`
+	Agent      string    `json:"agent"`
+	LastActive time.Time `json:"lastActive"`
+	Added      int       `json:"added"`
+	Removed    int       `json:"removed"`
+	Clean      bool      `json:"clean"`
+	Merged     bool      `json:"merged"`
+	Safe       bool      `json:"safe"`
+}
+
+// ListStaleSessions returns Worktree==true sessions whose LastActive is older than
+// the configured threshold. Non-worktree sessions are always excluded. Per session
+// it computes clean (no uncommitted changes), merged (branch merged into BaseRef,
+// falling back to "HEAD" for old records), and diffstat. An error computing any of
+// these is treated conservatively (dirty/unmerged/zero) so the row shows unchecked.
+func (a *App) ListStaleSessions() ([]StaleSessionVM, error) {
+	days, err := a.staleThreshold()
+	if err != nil {
+		return nil, fmt.Errorf("ListStaleSessions: read settings: %w", err)
+	}
+	cutoff := time.Now().Add(-time.Duration(days) * 24 * time.Hour)
+	ws := a.store.List()
+	ctx := context.Background()
+	var out []StaleSessionVM
+	for _, w := range ws {
+		if !w.Worktree {
+			continue
+		}
+		if !w.LastActive.Before(cutoff) {
+			continue
+		}
+		dirty, err := gitpkg.WorktreeDirty(ctx, a.runner(), w.WorktreePath)
+		if err != nil {
+			dirty = true
+		}
+		clean := !dirty
+		base := w.BaseRef
+		if base == "" {
+			base = "HEAD"
+		}
+		merged, err := gitpkg.BranchMerged(ctx, a.runner(), w.RepoPath, w.Branch, base)
+		if err != nil {
+			merged = false
+		}
+		diffs, err := gitpkg.DiffStat(ctx, a.runner(), w.WorktreePath)
+		var added, removed int
+		if err == nil {
+			for _, d := range diffs {
+				added += d.Added
+				removed += d.Removed
+			}
+		}
+		out = append(out, StaleSessionVM{
+			ID:         w.ID,
+			Title:      w.Title,
+			Branch:     w.Branch,
+			Agent:      w.Agent,
+			LastActive: w.LastActive,
+			Added:      added,
+			Removed:    removed,
+			Clean:      clean,
+			Merged:     merged,
+			Safe:       clean && merged,
+		})
+	}
+	return out, nil
+}
+
+// CleanupSessions removes the given sessions: stops the agent/pty, removes the
+// linked worktree tree (force if force==true), and deletes the branch (-d, or -D if
+// force). Non-worktree sessions are record-only (never a git op). Errors are
+// accumulated; all ids are attempted before returning.
+func (a *App) CleanupSessions(ids []string, force bool) error {
+	ctx := context.Background()
+	var errs []error
+	for _, id := range ids {
+		if err := validateSessionID(id); err != nil {
+			errs = append(errs, fmt.Errorf("invalid id %q: %w", id, err))
+			continue
+		}
+		w, ok := a.store.Get(id)
+		if !ok {
+			continue
+		}
+		if !w.Worktree {
+			_ = a.CloseWorkspace(id)
+			_ = a.store.Remove(id)
+			continue
+		}
+		_ = a.CloseWorkspace(id)
+		if err := gitpkg.RemoveWorktree(ctx, a.runner(), w.RepoPath, w.WorktreePath, force); err != nil {
+			errs = append(errs, fmt.Errorf("remove worktree %s: %w", id, err))
+		}
+		if err := gitpkg.DeleteBranch(ctx, a.runner(), w.RepoPath, w.Branch, force); err != nil {
+			errs = append(errs, fmt.Errorf("delete branch %s: %w", id, err))
+		}
+		if err := a.store.Remove(id); err != nil {
+			errs = append(errs, fmt.Errorf("remove record %s: %w", id, err))
+		}
+	}
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	return nil
+}
+
 // OpenShell spawns a $SHELL -l pty for the shell drawer pane (paneID) in cwd.
 // Output flows to the "pty:data:<paneID>" event. Separate from agent panes so
 // the shell drawer has its own independent pty.
