@@ -48,7 +48,7 @@ vi.mock("./lib/wails", () => ({
   saveSettings:    vi.fn(async () => {}),
   revealInFiles:   vi.fn(async () => {}),
   approve:         vi.fn(async () => {}),
-  createWorkspace: vi.fn(async (_agent: string, _repo: string, _branch: string, _model: string) => ({
+  createWorkspace: vi.fn(async (_agent: string, _repoPath: string, _baseRef: string, _branch: string, _worktree: boolean) => ({
     id: "ws-new", title: "New", branch: "main", state: "idle",
     worktreePath: "/tmp/new", agent: "claude", paneId: "p-new", lastActive: "",
     caps: { approvals: false, attention: false },
