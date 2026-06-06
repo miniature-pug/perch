@@ -104,7 +104,10 @@ vi.mock("./lib/wails", () => ({
     }
     return [];
   }),
-  setWindowFocus:  vi.fn(async () => {}),
+  setWindowFocus:        vi.fn(async () => {}),
+  forceRemoveWorkspace:  vi.fn(async () => {}),
+  listStaleSessions:     vi.fn(async () => []),
+  cleanupSessions:       vi.fn(async () => {}),
 }));
 
 // NOTE: layout and mode stores are NOT mocked — we use the real $state runes stores.
@@ -2841,5 +2844,83 @@ describe("App.svelte Feature 4: onWorkspaceAttach routes to matching workspace",
     await tick();
 
     expect(openWorkspace).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stale-banner (on mount listStaleSessions)
+// ---------------------------------------------------------------------------
+describe("App.svelte stale-session banner", () => {
+  it("shows stale banner when listStaleSessions returns sessions", async () => {
+    const { listStaleSessions } = await import("./lib/wails");
+    (listStaleSessions as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: "ws-old", title: "old", branch: "feat/old", agent: "claude",
+        lastActive: new Date(0).toISOString(), added: 0, removed: 0,
+        clean: true, merged: true, safe: true },
+    ]);
+    const { default: App } = await import("./App.svelte");
+    render(App, {});
+    await waitFor(() => expect(screen.getByTestId("stale-banner")).toBeInTheDocument());
+    expect(screen.getByTestId("stale-banner")).toHaveTextContent(/1 session/i);
+  });
+
+  it("does not show stale banner when listStaleSessions returns empty", async () => {
+    const { listStaleSessions } = await import("./lib/wails");
+    (listStaleSessions as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    const { default: App } = await import("./App.svelte");
+    render(App, {});
+    await tick();
+    expect(screen.queryByTestId("stale-banner")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Dirty-worktree force-remove path
+// ---------------------------------------------------------------------------
+describe("App.svelte dirty worktree force-remove", () => {
+  it("dirty worktree on remove surfaces a force-confirm that calls forceRemoveWorkspace", async () => {
+    vi.useFakeTimers();
+    const { listWorkspaces, removeWorkspace, forceRemoveWorkspace } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    // Wails marshals Go errors to STRINGS — reject with a bare string, exactly like production.
+    (removeWorkspace as ReturnType<typeof vi.fn>).mockRejectedValue("worktree has uncommitted changes");
+    (forceRemoveWorkspace as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+
+    const { default: App } = await import("./App.svelte");
+    render(App, {});
+    await waitFor(() => screen.getByText("Alpha"));
+
+    // 1. Select Alpha and trigger requestRemove via command palette → session:remove
+    const alphaBtn = screen.getByRole("button", { name: "Alpha" });
+    await fireEvent.click(alphaBtn);
+    await tick();
+
+    await fireEvent.keyDown(document.body, { key: ":" });
+    await tick();
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "command palette" })).toBeInTheDocument()
+    );
+    await fireEvent.click(screen.getByRole("option", { name: /remove session/i }));
+    await tick();
+
+    // 2. Confirm the remove ConfirmDialog (confirmLabel = "Remove")
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "confirm" })).toBeInTheDocument()
+    );
+    await fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    await tick();
+
+    // 3. Advance the undo timer so the deferred removeWorkspace() runs and rejects
+    vi.advanceTimersByTime(7000);
+    await vi.runAllTimersAsync();
+
+    vi.useRealTimers();
+
+    // After the rejection, the force-confirm dialog must appear (confirmLabel "Force remove").
+    await waitFor(() => expect(screen.getByRole("button", { name: /force remove/i })).toBeInTheDocument());
+    expect(forceRemoveWorkspace).not.toHaveBeenCalled();
+
+    await fireEvent.click(screen.getByRole("button", { name: /force remove/i }));
+    await waitFor(() => expect(forceRemoveWorkspace).toHaveBeenCalledWith("ws-1"));
   });
 });

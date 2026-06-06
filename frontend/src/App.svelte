@@ -25,8 +25,9 @@
   import ApprovalCard       from "./lib/ApprovalCard.svelte";
   import NotificationHub    from "./lib/NotificationHub.svelte";
   import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead } from "./lib/stores/notifications.svelte";
-  import { listWorkspaces, createWorkspace, workspaceForBranch, removeWorkspace, openWorkspace, closeWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, onWorkspaceAttach, approve, branches, readFile, setWindowFocus, writeToPty, discoverRepos, diffStat } from "./lib/wails";
-  import type { WorkspaceVM, ApprovalReq } from "./lib/wails";
+  import CleanupPanel from "./lib/CleanupPanel.svelte";
+  import { listWorkspaces, createWorkspace, workspaceForBranch, removeWorkspace, openWorkspace, closeWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, onWorkspaceAttach, approve, branches, readFile, setWindowFocus, writeToPty, discoverRepos, diffStat, listStaleSessions, forceRemoveWorkspace } from "./lib/wails";
+  import type { WorkspaceVM, ApprovalReq, StaleSessionVM } from "./lib/wails";
   import { UNDO_REMOVE_DELAY_MS, SIDEBAR_MIN_W, SIDEBAR_MAX_W, SHELL_MIN_H, SHELL_MAX_H, RESIZE_STEP_PX, THEMES, MIME_SESSION, MENTION_PREFIX, AGENT_CLAUDE, AGENT_OPENCODE } from "./lib/constants";
 
   let workspaces      = $state<WorkspaceVM[]>([]);
@@ -77,6 +78,10 @@
   let notifOpen             = $state(false);
   let helpOpen              = $state(false);
   let settingsOpen          = $state(false);
+  let staleSessions         = $state<StaleSessionVM[]>([]);
+  let staleBannerDismissed  = $state(false);
+  let cleanupOpen           = $state(false);
+  let confirmDirty          = $state<WorkspaceVM | null>(null);
 
   const active          = $derived(workspaces.find(w => w.id === activeId) ?? null);
   const unreadCount     = $derived(getItems().filter(n => !n.read).length);
@@ -223,6 +228,11 @@
     workspaces = await listWorkspaces();
     // Refresh diffstats for all loaded workspaces (fire-and-forget, event-driven updates thereafter).
     for (const ws of workspaces) refreshDiffStat(ws);
+    try {
+      staleSessions = await listStaleSessions();
+    } catch {
+      // non-fatal — never block startup
+    }
   });
 
   onDestroy(() => {
@@ -311,9 +321,12 @@
         await removeWorkspace(wsToRemove.id);
         workspaces = await listWorkspaces();
         if (activeId === wsToRemove.id) activeId = workspaces[0]?.id ?? null;
-      } catch {
+      } catch (err) {
         // If the backend call fails, put the workspace back.
         workspaces = await listWorkspaces();
+        if (String(err).includes("uncommitted changes")) {
+          confirmDirty = wsToRemove;
+        }
       }
     }, UNDO_REMOVE_DELAY_MS);
 
@@ -341,6 +354,19 @@
 
   function handleCancelRemove() {
     confirmRemove = null;
+  }
+
+  async function handleForceRemove() {
+    if (!confirmDirty) return;
+    const ws = confirmDirty;
+    confirmDirty = null;
+    try {
+      await forceRemoveWorkspace(ws.id);
+      workspaces = await listWorkspaces();
+      if (activeId === ws.id) activeId = workspaces[0]?.id ?? null;
+    } catch {
+      workspaces = await listWorkspaces();
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -617,6 +643,14 @@
   <div class="app-root" onpointerdowncapture={onAppPointerDown}>
     <MenuBar onCommand={(id) => runCommand(id)} {unreadCount} />
 
+    {#if staleSessions.length > 0 && !staleBannerDismissed}
+      <div class="stale-banner" data-testid="stale-banner">
+        <span>{staleSessions.length} session{staleSessions.length !== 1 ? 's' : ''} unused — review</span>
+        <button class="stale-banner-link" onclick={() => { cleanupOpen = true; }}>Review</button>
+        <button class="stale-banner-dismiss" onclick={() => { staleBannerDismissed = true; }} aria-label="dismiss">✕</button>
+      </div>
+    {/if}
+
     <div class="main-area">
       <!-- Sidebar toggle rail — always visible, survives collapsed state -->
       <button
@@ -866,10 +900,30 @@
       message={confirmRemove ? `Remove workspace "${confirmRemove.title}"?` : ""}
       confirmLabel="Remove"
       destructive={true}
-      note="Removes this session from perch. The worktree and its files remain on disk."
+      note="Removes this session and its worktree from disk. The branch is kept."
       onConfirm={handleConfirmRemove}
       onCancel={handleCancelRemove}
     />
+
+    <ConfirmDialog
+      open={confirmDirty !== null}
+      message={confirmDirty ? `"${confirmDirty.title}" has uncommitted changes. Force remove and discard them?` : ""}
+      confirmLabel="Force remove"
+      destructive={true}
+      note="Uncommitted changes in the worktree will be permanently discarded."
+      onConfirm={handleForceRemove}
+      onCancel={() => { confirmDirty = null; }}
+    />
+
+    {#if cleanupOpen}
+      <div class="modal-overlay" role="presentation">
+        <CleanupPanel
+          sessions={staleSessions}
+          onClose={() => { cleanupOpen = false; }}
+          onOpen={(id) => { cleanupOpen = false; onSelect(id); }}
+        />
+      </div>
+    {/if}
 
     <HelpDialog open={helpOpen} onClose={() => { helpOpen = false; }} />
 
@@ -1101,4 +1155,9 @@
   }
   .undo-toast-btn:hover { filter: brightness(1.1); }
   .undo-toast-btn:focus-visible { outline: 2px solid var(--perch-accent); outline-offset: 2px; }
+
+  .stale-banner { display: flex; align-items: center; gap: var(--perch-sp-2); padding: 6px var(--perch-sp-3); background: color-mix(in srgb, var(--perch-warn) 15%, var(--perch-bg)); border-bottom: 1px solid color-mix(in srgb, var(--perch-warn) 40%, transparent); font-size: var(--perch-fs-caption); color: var(--perch-text); flex-shrink: 0; }
+  .stale-banner-link { background: transparent; border: none; color: var(--perch-accent); cursor: pointer; font-size: var(--perch-fs-caption); text-decoration: underline; }
+  .stale-banner-dismiss { margin-left: auto; background: transparent; border: none; color: var(--perch-text-dim); cursor: pointer; font-size: 14px; }
+  .modal-overlay { position: fixed; inset: 0; background: var(--perch-scrim); display: flex; align-items: center; justify-content: center; z-index: var(--perch-z-modal); }
 </style>
