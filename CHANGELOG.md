@@ -6,6 +6,60 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.1.0] - Unreleased
 
+### Worktree session model — removal/cleanup, stale sessions, resume preview, home shell (2026-06-05)
+
+Implements the worktree-native session model described in
+`docs/superpowers/specs/2026-06-05-worktree-session-model-design.md` (Phases 3
+and 4).
+
+#### Added
+
+- **`RemoveWorkspace` now removes the linked worktree tree from disk** for
+  worktree sessions (`git worktree remove`). A dirty tree returns
+  `ErrWorktreeDirty` (aliased from `internal/git`); the frontend surfaces a
+  force-confirm path. The **branch is never deleted** by remove — that is the
+  cleanup panel's job. Non-worktree (in-repo) sessions remain record-only: no git
+  op touches the repo root or its branch.
+- **`ForceRemoveWorkspace(id)`** — force-removes the linked worktree tree
+  (discards uncommitted changes); branch kept. Bound to the frontend force-confirm
+  path.
+- **`ListStaleSessions()` / `CleanupSessions(ids, force)`** — enumerate worktree
+  sessions unused past `StaleThresholdDays` (with per-row dirty/merged state) and
+  bulk-remove them (`git worktree remove` + `git branch -d` / `-D`). Non-worktree
+  sessions are excluded from both.
+- **`HomeShellCwd()`** — returns perch's launch directory (or `$HOME`) for the
+  home shell pane; `OpenShell` bypasses worktree-root containment for the
+  `"shell-home"` pane ID (constant `homeShellPaneID`).
+- **`Settings.StaleThresholdDays`** (default 30) + `staleThreshold()` helper —
+  controls when a worktree session is considered stale. Persisted in
+  `settings.json`.
+- **`registry.Workspace.BaseRef`** — the branch the worktree was created from;
+  persisted by `CreateWorkspace`; used for the cleanup merged-check.
+- **`CleanupPanel.svelte`** — stale-session cleanup UI: one row per stale worktree
+  session with checkbox, branch, agent, last-active, diffstat, state badge, and
+  Open button. Default-checked: safe rows (clean tree AND branch merged into base);
+  dirty/unmerged rows unchecked with a ⚠ badge. Select-all toggles all. Remove
+  selected → confirm → frees trees and branches.
+- **Stale banner** — on launch, if any worktree session exceeds `StaleThresholdDays`,
+  a dismissible banner appears with the count; dismissing hides it for the session.
+- **Sidebar row relabel** — each row now shows `branch · agent · relative last-active`
+  (e.g. "3d ago") instead of the title alone, making saved sessions obviously
+  resumable.
+- **"No sessions yet" empty hint** — the sidebar shows an empty-state hint when
+  the workspace list is empty.
+- **Resume preview** — clicking a sidebar row shows a modal preview (branch, agent,
+  last-active, diffstat) with Cancel and Open; Open resumes the session.
+- **Home view** — when no session is active the main area is a vertical split:
+  welcome card (upper) + a persistent `shell-home` ShellDrawer (lower). The home
+  shell stays mounted across session navigation (navigating into and back out of a
+  session does not kill a running command).
+
+#### Changed
+
+- **`RemoveWorkspace` behavior** — previously dropped the registry record only
+  (worktree left on disk). Now removes the linked tree for worktree sessions; see
+  "Added" above.
+
 ### Round 7 — converged-state audit: notification bug, glass defeat, centralization (2026-06-05)
 
 A 9-agent read-only audit of the rounds 3–6 delta (`docs/audit-2026-06-05-round7.md`).
@@ -377,8 +431,9 @@ defeat, and a set of tidies.
 - **Worktree-per-session** — `CreateWorkspace` derives a linked-worktree path
   from the repository and the slugified branch (validated to stay under the
   configured roots) and runs `git worktree add`. `RemoveWorkspace` closes the
-  session's panes and drops the registry record but leaves the worktree on disk,
-  so a removal can be undone and the agent's history survives.
+  session's panes and drops the registry record. *(Note: the original behavior
+  left the worktree on disk; Phase 3 changed this — `RemoveWorkspace` now
+  removes the linked tree for worktree sessions. See the Phase 3 entry above.)*
 
 - **Global config** — `~/.config/perch/config.toml` supplies the allowed `roots`
   directories; with no config the launch directory is the sole root. Agent

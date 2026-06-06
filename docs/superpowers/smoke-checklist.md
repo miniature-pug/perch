@@ -201,3 +201,21 @@ WebKit and cannot be verified headlessly — only this manual pass proves them.
 - [ ] Command palette → Remove workspace → ConfirmDialog
 - [ ] Confirm → workspace gone from sidebar and from `~/.config/perch/workspaces.json`
 - [ ] Close the GUI → no crash, no orphaned process (check `ps` for stray shells)
+
+## Phase 3 — Removal & stale cleanup
+
+- [ ] Remove a CLEAN worktree session: confirm dialog says "Removes this session and its worktree from disk. The branch is kept." — the tree and registry record are gone; the branch still exists.
+- [ ] Remove a DIRTY worktree session: a force-confirm appears ("has uncommitted changes / Force remove"). Cancel leaves everything intact; Force removes the tree (changes discarded), branch kept.
+- [ ] Remove a NON-worktree (in-repo) session: the registry record disappears; the repo root and its branch are untouched (no git op).
+- [ ] With two sessions older than StaleThresholdDays (set the threshold low, e.g. via settings.json, to trigger): the stale banner appears on relaunch with the correct count; dismissing hides it for the session.
+- [ ] Open the cleanup panel: safe rows (clean && merged) are checked; unmerged/dirty rows are unchecked with a ⚠ badge; Select-all checks all; Remove selected confirms then frees the trees and branches.
+- [ ] Cleanup panel [Open] button opens that session correctly.
+
+## Phase 4 — Sidebar resume + home shell
+
+- [ ] Sidebar row shows: branch name · agent name · relative last-active (e.g. "3d ago").
+- [ ] Sidebar with no sessions shows the "No sessions yet" hint.
+- [ ] Clicking a sidebar row shows the resume preview (branch, agent, last-active, diffstat); Cancel leaves the session closed; Open resumes it.
+- [ ] Home screen (no active session): welcome card in the upper half; a live shell drawer in the lower half; the shell cwd is perch's launch directory (or $HOME).
+- [ ] Home-shell BUFFER survival (manual-only — unit tests gate-verify the ShellDrawer stays MOUNTED across navigation, but the real pty + xterm scroll buffer surviving a real WebKit navigation can only be checked here): run a command in the home shell, open a session, return home — the earlier command/output is still visible in scroll history.
+- [ ] Home shell and a session shell are independent ptys (type in one; the other is unaffected).

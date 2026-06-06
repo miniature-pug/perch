@@ -54,7 +54,7 @@ flowchart TD
     apppkg -->|"new Monitor"| monitor
     apppkg -->|"read/write"| registry
     apppkg -->|"load config"| config
-    apppkg -->|"worktree add + diff/staging\n(removal leaves the dir on disk)"| git
+    apppkg -->|"worktree add + diff/staging\n(remove deletes tree for worktree sessions;\nnon-worktree: record-only)"| git
     apppkg -->|"file tree / watch"| fs
     apppkg -->|"project scan"| discover
 

@@ -11,8 +11,8 @@ flowchart TD
     end
 
     subgraph Registry["Workspace registry — ~/.config/perch/ (XDG)"]
-        workspacesjson["workspaces.json\nWorkspace[]: id, worktreePath,\nagent, model, branch, title,\nlastSessionID, lastActive"]
-        settingsjson["settings.json\n(AlwaysRules, prefs)"]
+        workspacesjson["workspaces.json\nWorkspace[]: id, worktreePath, repoPath,\nworktree, agent, branch, baseRef,\ntitle, lastSessionID, lastActive"]
+        settingsjson["settings.json\n(AlwaysRules, StaleThresholdDays, prefs)"]
         layoutjson["layout.json\n(saved UI layout)"]
     end
 

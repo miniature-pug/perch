@@ -92,8 +92,12 @@ API the Svelte frontend calls over the IPC bridge:
 | `WriteToPty(paneID, data)` | Forward keystrokes from the terminal tab to the pty |
 | `ResizePty(paneID, cols, rows)` | Propagate terminal resize to the pty |
 | `CloseWorkspace(id)` | Tear down the pty bridge + Monitor for a workspace |
-| `RemoveWorkspace(id)` | Remove the worktree + registry entry |
-| `OpenShell(paneID, cwd)` | Spawn an auxiliary login-shell pty |
+| `RemoveWorkspace(id)` | Remove a session: for worktree sessions runs `git worktree remove` (errors `ErrWorktreeDirty` on uncommitted changes); for non-worktree sessions drops the record only. Branch never deleted. |
+| `ForceRemoveWorkspace(id)` | Force-remove the linked worktree tree (discards uncommitted changes); branch kept. |
+| `ListStaleSessions()` | Return worktree sessions unused past `StaleThresholdDays` with per-row dirty/merged state. |
+| `CleanupSessions(ids, force)` | Bulk-remove stale sessions: `git worktree remove` + `git branch -d` (or `-D` when force). |
+| `HomeShellCwd()` | Return the cwd for the home shell (launch directory or `$HOME`). |
+| `OpenShell(paneID, cwd)` | Spawn an auxiliary login-shell pty; `paneID == "shell-home"` bypasses worktree-root containment. |
 | `Approve(reqID, decision)` | Resolve a pending `PreToolUse` approval (allow / always / deny) |
 | `DiffStat / Hunks / StageHunk / DiscardHunk` | git diff view + staging per worktree |
 | `Branches` | git metadata for a repo |
@@ -303,16 +307,19 @@ Workspaces are persisted as a single JSON store at
 | Field | Contents |
 |-------|----------|
 | `id` | Stable workspace identifier (charset-validated). |
-| `worktreePath` | Absolute path to the git worktree. |
+| `worktreePath` | Absolute path to the git worktree (equals `repoPath` for non-worktree sessions). |
+| `repoPath` | Absolute path to the source repository root. |
+| `worktree` | `true` for an isolated linked-tree session; `false` for a non-worktree (in-repo) session. |
 | `agent` | `claude` or `opencode`. |
-| `model` | Model passed at create time (`omitempty` — absent means the agent's default). |
 | `branch` | Worktree branch. |
+| `baseRef` | Branch the worktree was created from (used for cleanup merged-check). |
 | `title` | Display label. |
 | `lastSessionID` | Resume id for the agent (passed to `Monitor.Prepare`). |
 | `lastActive` | Timestamp for ordering. |
 
-Settings (`settings.json`, including persisted `AlwaysRules`) and saved layout
-(`layout.json`) live in the same config directory.
+Settings (`settings.json`, including persisted `AlwaysRules` and
+`StaleThresholdDays` — default 30, controls the stale-cleanup banner trigger)
+and saved layout (`layout.json`) live in the same config directory.
 
 ### Discovery pipeline
 
@@ -421,9 +428,13 @@ See `docs/diagrams/worktree-lifecycle.mmd` for the full flowchart.
 2. The pty bridge and Monitor are torn down (Monitor `Teardown` removes the
    per-workspace hook entries from `.claude/settings.json` and closes the
    listener).
-3. The workspace record is removed from `workspaces.json`. The worktree
-   directory is **left on disk** — so the removal can be undone and the agent's
-   conversation history survives.
+3. The workspace record is removed from `workspaces.json`.
+   - **Worktree session** — `git worktree remove` deletes the linked tree from
+     disk. If the tree has uncommitted changes (`ErrWorktreeDirty`), a
+     force-confirm is required (`ForceRemoveWorkspace`). The branch is **never**
+     deleted by remove — that is the cleanup panel's job.
+   - **Non-worktree (in-repo) session** — the record is dropped; the repo root
+     and its branch are never touched (no git op).
 
 ---
 
