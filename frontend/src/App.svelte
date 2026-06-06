@@ -25,7 +25,7 @@
   import ApprovalCard       from "./lib/ApprovalCard.svelte";
   import NotificationHub    from "./lib/NotificationHub.svelte";
   import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead } from "./lib/stores/notifications.svelte";
-  import { listWorkspaces, createWorkspace, removeWorkspace, openWorkspace, closeWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, onWorkspaceAttach, approve, branches, readFile, setWindowFocus, writeToPty, discoverRepos, diffStat } from "./lib/wails";
+  import { listWorkspaces, createWorkspace, workspaceForBranch, removeWorkspace, openWorkspace, closeWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, onWorkspaceAttach, approve, branches, readFile, setWindowFocus, writeToPty, discoverRepos, diffStat } from "./lib/wails";
   import type { WorkspaceVM, ApprovalReq } from "./lib/wails";
   import { UNDO_REMOVE_DELAY_MS, SIDEBAR_MIN_W, SIDEBAR_MAX_W, SHELL_MIN_H, SHELL_MAX_H, RESIZE_STEP_PX, THEMES, MIME_SESSION, MENTION_PREFIX, AGENT_CLAUDE, AGENT_OPENCODE } from "./lib/constants";
 
@@ -253,14 +253,36 @@
     newSessionInitialAgent = typeof initialAgent === "string" ? initialAgent : null;
   }
 
-  async function handleCreate(agent: string, repo: string, branch: string, model: string) {
-    const vm = await createWorkspace(agent, repo, branch, model);
-    workspaces = await listWorkspaces();
-    newSessionOpen = false;
-    // Creating a session spawns its pty immediately (spec §7.7 "→ direct-pty
-    // spawn"). onSelect sets activeId and opens the workspace in one step, so
-    // the new session is live rather than a selected-but-dead row.
-    await onSelect(vm.id);
+  async function handleCreate(agent: string, repo: string, baseRef: string, branch: string, worktree: boolean) {
+    // Guard: if the branch is already owned by a perch session, offer resume instead.
+    const existing = await workspaceForBranch(repo, branch);
+    if (existing.found) {
+      // Branch already in use — resume that session rather than creating a duplicate.
+      newSessionOpen = false;
+      newSessionInitialAgent = null;
+      await onSelect(existing.id);
+      return;
+    }
+    try {
+      const vm = await createWorkspace(agent, repo, baseRef, branch, worktree);
+      workspaces = await listWorkspaces();
+      newSessionOpen = false;
+      // Creating a session spawns its pty immediately (spec §7.7 "→ direct-pty
+      // spawn"). onSelect sets activeId and opens the workspace in one step, so
+      // the new session is live rather than a selected-but-dead row.
+      await onSelect(vm.id);
+    } catch (e) {
+      const msg = String(e);
+      if (msg.includes("uncommitted changes")) {
+        // ErrWorktreeDirty: non-worktree session can't switch to a different branch
+        // while the working tree has uncommitted changes (Phase 1 dirty-guard).
+        addBlocking("", "Cannot switch branch",
+          "Your working tree has uncommitted changes. Commit or stash them before switching to a different branch.");
+      } else {
+        addBlocking("", "Failed to create session", msg);
+      }
+      // Keep the dialog open so the user can correct their choice.
+    }
   }
 
   function requestRemove(ws: WorkspaceVM) {

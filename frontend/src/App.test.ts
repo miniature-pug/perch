@@ -76,11 +76,12 @@ vi.mock("./lib/wails", () => ({
   revealInFiles:   vi.fn(async () => {}),
   readFile:        vi.fn(async () => "# mock content"),
   approve:         vi.fn(async () => {}),
-  createWorkspace: vi.fn(async (_agent: string, _repo: string, _branch: string, _model: string) => ({
+  createWorkspace: vi.fn(async (_agent: string, _repo: string, _baseRef: string, _branch: string, _worktree: boolean) => ({
     id: "ws-new", title: "New", branch: "main", state: "idle",
     worktreePath: "/tmp/new", agent: "claude", paneId: "p-new", lastActive: "",
     caps: { approvals: false, attention: false },
   })),
+  workspaceForBranch: vi.fn(async (_repoPath: string, _branch: string) => ({ id: "", found: false })),
   removeWorkspace: vi.fn(async () => {}),
   writeToPty:      vi.fn(async () => {}),
   branches:        vi.fn(async (_repo: string) => ["main", "feat/x"]),
@@ -848,32 +849,89 @@ describe("App.svelte NewSessionDialog (4.25.6a)", () => {
       expect(screen.getByRole("dialog", { name: "new session" })).toBeInTheDocument()
     );
 
-    // Wait for branch options to load from the mock loadBranches
+    // Wait for "starting point" select options to load (confirms branches loaded from mock)
     await waitFor(() => {
-      const branchSelect = screen.getByLabelText(/branch/i) as HTMLSelectElement;
-      expect(branchSelect.options.length).toBeGreaterThan(0);
+      const startingPointSelect = screen.getByLabelText(/starting point/i) as HTMLSelectElement;
+      expect(startingPointSelect.options.length).toBeGreaterThan(0);
     });
 
-    // Select specific values so we can assert exact args
-    await fireEvent.change(screen.getByLabelText(/repo/i),   { target: { value: "/tmp/alpha" } });
+    // Select repo — the new dialog defaults to worktree=true, new-branch mode.
+    // baseRef will be "main" (first branch from the mock). Set branch name manually.
+    await fireEvent.change(screen.getByLabelText(/^repo$/i), { target: { value: "/tmp/alpha" } });
+    // Wait for branches to load for new repo
     await waitFor(() => {
-      const branchSelect = screen.getByLabelText(/branch/i) as HTMLSelectElement;
-      expect(branchSelect.options.length).toBeGreaterThan(0);
+      const startingPointSelect = screen.getByLabelText(/starting point/i) as HTMLSelectElement;
+      expect(startingPointSelect.options.length).toBeGreaterThan(0);
     });
-    await fireEvent.change(screen.getByLabelText(/branch/i), { target: { value: "feat/x" } });
-    await fireEvent.change(screen.getByLabelText(/model/i),  { target: { value: "claude-sonnet-4-5" } });
+    // Set branch name via the text input (new-branch mode, aria-label="branch name")
+    await fireEvent.input(screen.getByLabelText(/^branch name$/i), { target: { value: "feat/x" } });
 
     // Hit the "Create" button inside the dialog
     const createBtn = screen.getByRole("button", { name: "Create" });
     await fireEvent.click(createBtn);
     await tick();
 
-    // createWorkspace must have been called with the selected agent/repo/branch/model
-    expect(createWorkspace).toHaveBeenCalledWith("claude", "/tmp/alpha", "feat/x", "claude-sonnet-4-5");
+    // createWorkspace must have been called with the 5-arg signature:
+    // agent="claude", repo="/tmp/alpha", baseRef="main" (first branch from mock), branch="feat/x", worktree=true
+    expect(createWorkspace).toHaveBeenCalledWith("claude", "/tmp/alpha", "main", expect.stringMatching(/^[A-Za-z0-9._\/-]+$/), true);
 
     // Dialog must close
     await waitFor(() =>
       expect(screen.queryByRole("dialog", { name: "new session" })).not.toBeInTheDocument()
+    );
+  });
+
+  it("handleCreate surfaces ErrWorktreeDirty as a blocking notification and keeps dialog open", async () => {
+    const { listWorkspaces, createWorkspace } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
+        worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
+        caps: { approvals: false, attention: false },
+      },
+    ]);
+    // Simulate the Go backend returning ErrWorktreeDirty (wrapped by fmt.Errorf).
+    // The real string is "checkout branch: worktree has uncommitted changes".
+    vi.mocked(createWorkspace).mockRejectedValueOnce(
+      new Error("checkout branch: worktree has uncommitted changes")
+    );
+
+    const { getItems } = await import("./lib/stores/notifications.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    await screen.findByRole("button", { name: "Alpha" });
+    const notifBefore = getItems().length;
+
+    // Open dialog
+    const newBtn = screen.getByRole("button", { name: "New session" });
+    await fireEvent.click(newBtn);
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "new session" })).toBeInTheDocument()
+    );
+
+    // Wait for starting point branches to load
+    await waitFor(() => {
+      const sp = screen.getByLabelText(/starting point/i) as HTMLSelectElement;
+      expect(sp.options.length).toBeGreaterThan(0);
+    });
+
+    // Hit Create — createWorkspace rejects with dirty-tree error
+    const createBtn = screen.getByRole("button", { name: "Create" });
+    await fireEvent.click(createBtn);
+    await tick();
+
+    // A blocking notification must appear with a clean-tree message
+    await waitFor(() => {
+      const items = getItems();
+      expect(items.length).toBeGreaterThan(notifBefore);
+      const dirty = items.find(n => n.title === "Cannot switch branch");
+      expect(dirty).toBeDefined();
+    });
+
+    // Dialog must STAY open so the user can correct their choice
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "new session" })).toBeInTheDocument()
     );
   });
 
