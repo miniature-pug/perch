@@ -1190,7 +1190,7 @@ func TestApp_OpenShell_HomeShellPaneID_NotRequiresRoot(t *testing.T) {
 			return internalpty.NewBridgeForTest(func() error { return nil }), nil
 		},
 	}
-	if err := a.OpenShell("shell-home", homeCwd); err != nil {
+	if err := a.OpenShell(homeShellPaneID, homeCwd); err != nil {
 		t.Fatalf("OpenShell(shell-home): %v", err)
 	}
 	if !spawned {

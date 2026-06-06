@@ -47,6 +47,11 @@ const (
 	ptyDataEventPrefix = "pty:data:"
 	ptyExitEventPrefix = "pty:exit:"
 
+	// homeShellPaneID is the reserved pane id for the home-screen shell. OpenShell
+	// bypasses root-containment for this pane id (its cwd is OS-derived via
+	// HomeShellCwd, not user IPC input). Must match the frontend ShellDrawer paneId.
+	homeShellPaneID = "shell-home"
+
 	// File-permission modes.
 	configDirMode    = 0o700
 	settingsFileMode = 0o600
@@ -1085,7 +1090,7 @@ func (a *App) OpenShell(paneID, cwd string) error {
 	// The home shell pane ("shell-home") has an OS-derived cwd (HomeShellCwd) that is
 	// not user IPC input and is almost never under a configured project root, so the
 	// root-containment guard is bypassed for it alone. All other panes still validate.
-	if paneID != "shell-home" {
+	if paneID != homeShellPaneID {
 		if err := validateWorktreeUnderRoots(cwd, a.roots); err != nil {
 			return fmt.Errorf("invalid shell cwd: %w", err)
 		}
