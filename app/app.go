@@ -466,9 +466,7 @@ func (a *App) CreateWorkspace(agentName, repoPath, baseRef, branch string, workt
 				return WorkspaceVM{}, fmt.Errorf("invalid baseRef: %w", err)
 			}
 			if err := gitpkg.AddWorktree(ctx, a.runner(), repoPath, branch, treePath, baseRef); err != nil {
-				if !errors.Is(err, gitpkg.ErrBranchExists) {
-					return WorkspaceVM{}, fmt.Errorf("create worktree: %w", err)
-				}
+				return WorkspaceVM{}, fmt.Errorf("create worktree: %w", err)
 			}
 		} else {
 			// Existing-branch mode: git worktree add <tree> <branch>.

@@ -809,6 +809,46 @@ func TestApp_CreateWorkspace_ErrBranchInUse(t *testing.T) {
 	}
 }
 
+// TestApp_CreateWorkspace_NewBranch_BranchAlreadyExists_Fails verifies that
+// new-branch mode (baseRef != "") surfaces ErrBranchExists and does NOT persist
+// a broken workspace when the branch name already exists in git.
+func TestApp_CreateWorkspace_NewBranch_BranchAlreadyExists_Fails(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	repo := makeTestRepo(t, root)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+
+	// Pre-create the branch in git so AddWorktree -b will fail with "already exists".
+	cmd := exec.Command("git", "-C", repo, "branch", "feat/dupe")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git branch feat/dupe: %v: %s", err, out)
+	}
+
+	a := &App{
+		store:    store,
+		roots:    []string{root},
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+	}
+
+	countBefore := len(store.List())
+
+	_, err := a.CreateWorkspace("claude", repo, "main", "feat/dupe", true)
+	if err == nil {
+		t.Fatal("CreateWorkspace returned nil error, want ErrBranchExists")
+	}
+	if !errors.Is(err, git.ErrBranchExists) {
+		t.Errorf("want errors.Is(err, git.ErrBranchExists), got %v", err)
+	}
+	// No broken workspace record must have been persisted.
+	if got := len(store.List()); got != countBefore {
+		t.Errorf("workspace count = %d, want %d (no record should be persisted)", got, countBefore)
+	}
+}
+
 // TestApp_CreateWorkspace_NonWorktreeBranchSharing verifies that two
 // non-worktree sessions on the same branch are allowed (not ErrBranchInUse).
 func TestApp_CreateWorkspace_NonWorktreeBranchSharing(t *testing.T) {
