@@ -1,44 +1,95 @@
 <!-- frontend/src/lib/NewSessionDialog.svelte -->
 <script lang="ts">
-  import { DEFAULT_AGENT, DEFAULT_MODEL, AGENT_CLAUDE, AGENT_OPENCODE } from "./constants";
+  import { untrack } from "svelte";
+  import { DEFAULT_AGENT, AGENT_CLAUDE, AGENT_OPENCODE } from "./constants";
   import { focusOnMount } from "./actions";
+
+  const SLUG_RE = /^[A-Za-z0-9._\/-]+$/;
+
+  function suggestBranch(agent: string): string {
+    return `${agent}/work`;
+  }
+
+  function slugValid(name: string): boolean {
+    return SLUG_RE.test(name);
+  }
+
   let {
     open, repos, loadBranches, onCreate, onClose, initialAgent = null,
   }: {
-    open: boolean; repos: string[];
+    open: boolean;
+    repos: string[];
     loadBranches: (repo: string) => Promise<string[]>;
-    onCreate: (agent: string, repo: string, branch: string, model: string) => void;
+    onCreate: (agent: string, repo: string, baseRef: string, branch: string, worktree: boolean) => void;
     onClose: () => void;
     initialAgent?: string | null;
   } = $props();
 
-  let agent    = $state(DEFAULT_AGENT);
-  let repo     = $state("");
-  let branch   = $state("");
-  let model    = $state(DEFAULT_MODEL);
-  let branches = $state<string[]>([]);
+  let agent       = $state(DEFAULT_AGENT);
+  let repo        = $state("");
+  let worktree    = $state(true);
+  let useExisting = $state(false);
+  let baseRef     = $state("");
+  let branchName  = $state("");
+  let branchSel   = $state("");
+  let branches    = $state<string[]>([]);
 
-  // Reset dialog fields when opened; load branches per selected repo.
-  $effect(() => { if (open) { agent = initialAgent ?? DEFAULT_AGENT; repo = repos[0] ?? ""; model = DEFAULT_MODEL; } });
+  // Reset dialog state when opened. Wrapped in untrack so the write to `agent`
+  // (and subsequent reads of `agent` inside suggestBranch) do not register
+  // this effect as a subscriber to `agent` — otherwise any user change to the
+  // agent dropdown would re-fire this effect and snap agent back to DEFAULT_AGENT.
+  $effect(() => {
+    if (open) untrack(() => {
+      agent       = initialAgent ?? DEFAULT_AGENT;
+      repo        = repos[0] ?? "";
+      worktree    = true;
+      useExisting = false;
+      branchName  = suggestBranch(agent);
+      branchSel   = "";
+      baseRef     = "";
+    });
+  });
 
-  // Load branches whenever repo changes (and is non-empty).
-  // Cancellation guard: switching repos rapidly can leave an older loadBranches
-  // in flight; its stale resolve must not clobber the newer repo's branch list.
+  // Update branch suggestion when agent changes.
+  $effect(() => {
+    if (worktree && !useExisting) {
+      branchName = suggestBranch(agent);
+    }
+  });
+
+  // Load branches when repo changes; cancellation guard prevents stale resolves.
   $effect(() => {
     const currentRepo = repo;
-    if (!currentRepo) { branches = []; branch = ""; return; }
+    if (!currentRepo) { branches = []; baseRef = ""; branchSel = ""; return; }
     let cancelled = false;
     loadBranches(currentRepo).then((list) => {
       if (cancelled) return;
       branches = list;
-      branch   = list[0] ?? "";
+      baseRef  = list[0] ?? "";
+      branchSel = list[0] ?? "";
     });
     return () => { cancelled = true; };
   });
 
+  // Derived validity
+  const nameValid  = $derived(!worktree || useExisting || slugValid(branchName));
+  const canCreate  = $derived(
+    !!repo &&
+    (!worktree || useExisting ? !!branchSel : (!!branchName && nameValid))
+  );
+
   function handleCreate() {
-    if (!repo || !branch) return;
-    onCreate(agent, repo, branch, model);
+    if (!canCreate) return;
+    if (!worktree) {
+      // non-worktree: baseRef="" always
+      onCreate(agent, repo, "", branchSel, false);
+    } else if (useExisting) {
+      // existing branch: baseRef="" signals no -b
+      onCreate(agent, repo, "", branchSel, true);
+    } else {
+      // new branch from baseRef
+      onCreate(agent, repo, baseRef, branchName, true);
+    }
   }
 
   function handleKey(e: KeyboardEvent) {
@@ -51,38 +102,86 @@
        tabindex="-1" onkeydown={handleKey}>
     <div class="dialog">
       <h2>New Session</h2>
+
+      <!-- Repo -->
+      <label class="setting-row">
+        <span class="setting-label">Repo</span>
+        <select class="field-select" aria-label="repo" bind:value={repo} use:focusOnMount>
+          {#each repos as r}<option value={r}>{r}</option>{/each}
+        </select>
+      </label>
+
+      <!-- Worktree toggle -->
+      <label class="setting-row">
+        <span class="setting-label">Worktree</span>
+        <input type="checkbox" aria-label="worktree" bind:checked={worktree} />
+      </label>
+
+      {#if worktree}
+        <!-- Starting point (base-ref) — visible only in new-branch mode -->
+        {#if !useExisting}
+          <label class="setting-row">
+            <span class="setting-label">Starting point</span>
+            <select class="field-select" aria-label="starting point" bind:value={baseRef}>
+              {#each branches as b}<option value={b}>{b}</option>{/each}
+            </select>
+          </label>
+        {/if}
+
+        <!-- Branch — new-name text input or existing dropdown -->
+        {#if !useExisting}
+          <div class="setting-row">
+            <span class="setting-label">Branch</span>
+            <div class="branch-new-col">
+              <input
+                class="field-input"
+                type="text"
+                aria-label="branch name"
+                bind:value={branchName}
+              />
+              {#if branchName && !nameValid}
+                <span class="field-error">Branch name contains invalid characters</span>
+              {/if}
+            </div>
+          </div>
+        {:else}
+          <label class="setting-row">
+            <span class="setting-label">Branch</span>
+            <select class="field-select" aria-label="branch" bind:value={branchSel}>
+              {#each branches as b}<option value={b}>{b}</option>{/each}
+            </select>
+          </label>
+        {/if}
+
+        <!-- Use existing branch sub-toggle -->
+        <label class="setting-row">
+          <span class="setting-label"></span>
+          <label class="sub-toggle">
+            <input type="checkbox" aria-label="use existing branch" bind:checked={useExisting} />
+            <span>Use existing branch</span>
+          </label>
+        </label>
+      {:else}
+        <!-- Non-worktree: single branch dropdown -->
+        <label class="setting-row">
+          <span class="setting-label">Branch</span>
+          <select class="field-select" aria-label="branch" bind:value={branchSel}>
+            {#each branches as b}<option value={b}>{b}</option>{/each}
+          </select>
+        </label>
+      {/if}
+
+      <!-- Agent -->
       <label class="setting-row">
         <span class="setting-label">Agent</span>
-        <select class="field-select" aria-label="agent" bind:value={agent} use:focusOnMount>
+        <select class="field-select" aria-label="agent" bind:value={agent}>
           <option value={AGENT_CLAUDE}>Claude</option>
           <option value={AGENT_OPENCODE}>opencode</option>
         </select>
       </label>
-      <label class="setting-row">
-        <span class="setting-label">Repo</span>
-        <select class="field-select" aria-label="repo" bind:value={repo}>
-          {#each repos as r}<option value={r}>{r}</option>{/each}
-        </select>
-      </label>
-      <label class="setting-row">
-        <span class="setting-label">Branch</span>
-        <select class="field-select" aria-label="branch" bind:value={branch}>
-          {#each branches as b}<option value={b}>{b}</option>{/each}
-        </select>
-      </label>
-      {#if agent !== AGENT_OPENCODE}
-        <label class="setting-row">
-          <span class="setting-label">Model</span>
-          <input class="field-input" type="text" aria-label="model" value={model} onchange={(e) => { model = (e.target as HTMLInputElement).value; }} />
-        </label>
-      {:else}
-        <div class="setting-row">
-          <span class="setting-label">Model</span>
-          <span class="setting-note">Selected in the opencode TUI</span>
-        </div>
-      {/if}
+
       <div class="dialog-actions">
-        <button class="btn btn-primary" onclick={handleCreate}>Create</button>
+        <button class="btn btn-primary" onclick={handleCreate} disabled={!canCreate}>Create</button>
         <button class="btn" onclick={onClose}>Cancel</button>
       </div>
     </div>
@@ -90,7 +189,6 @@
 {/if}
 
 <style>
-  /* Overlay scrim */
   .dialog-overlay {
     position: fixed;
     inset: 0;
@@ -101,7 +199,6 @@
     z-index: var(--perch-z-modal);
   }
 
-  /* Modal card */
   .dialog {
     background: var(--perch-glass-bg);
     -webkit-backdrop-filter: var(--perch-glass-filter);
@@ -117,7 +214,6 @@
     font-size: var(--perch-fs-body);
   }
 
-  /* Section heading */
   .dialog h2 {
     font-size: var(--perch-fs-body);
     font-weight: 600;
@@ -127,29 +223,24 @@
     padding-bottom: 4px;
   }
 
-  /* Label + field rows */
   .setting-row {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: var(--perch-sp-2);
     margin-bottom: var(--perch-sp-1);
   }
 
   .setting-label {
-    min-width: 60px;
+    min-width: 100px;
+    padding-top: 3px;
     color: var(--perch-text);
     font-size: var(--perch-fs-body);
     flex-shrink: 0;
   }
 
-  .setting-note {
-    font-size: var(--perch-fs-body);
-    color: var(--perch-text-dim);
-  }
-
-  /* Select field */
   .field-select {
     flex: 1;
+    min-width: 0;
     background: var(--perch-bg);
     color: var(--perch-text);
     border: 1px solid var(--perch-border-strong);
@@ -161,15 +252,21 @@
     transition: border-color var(--perch-dur) var(--perch-ease);
   }
 
+  .field-select option {
+    background: var(--perch-bg);
+    color: var(--perch-text);
+  }
+
   .field-select:focus {
     outline: 2px solid var(--perch-accent);
     outline-offset: 0;
     border-color: var(--perch-accent);
   }
 
-  /* Text input */
   .field-input {
     flex: 1;
+    min-width: 0;
+    width: 100%;
     background: var(--perch-bg);
     color: var(--perch-text);
     border: 1px solid var(--perch-border-strong);
@@ -191,7 +288,29 @@
     color: var(--perch-text-dim);
   }
 
-  /* Action row — right-aligned */
+  .branch-new-col {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .field-error {
+    font-size: var(--perch-fs-body);
+    color: var(--perch-danger, #e06c75);
+  }
+
+  .sub-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--perch-fs-body);
+    color: var(--perch-text-dim);
+    cursor: pointer;
+    user-select: none;
+  }
+
   .dialog-actions {
     display: flex;
     align-items: center;
@@ -202,7 +321,6 @@
     border-top: 1px solid var(--perch-border);
   }
 
-  /* Shared button base */
   .btn {
     display: inline-flex;
     align-items: center;
@@ -240,7 +358,6 @@
     pointer-events: none;
   }
 
-  /* Create — primary accent fill */
   .btn-primary {
     background: var(--perch-accent);
     color: var(--perch-accent-fg);
