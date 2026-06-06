@@ -273,7 +273,7 @@ The Vite preview port (`4173`) is single-sourced in
 - `--perch-scrim` — overlay backdrop colour (previously inlined in 5
   components).
 - `--perch-z-*` stacking scale — a complete named z-index ladder
-  (`--perch-z-editor-send` through `--perch-z-command-palette`). The previous
+  (`--perch-z-sidebar-rail` through `--perch-z-command-palette`). The previous
   z-index 300/300 collision between the command palette and the undo toast is
   resolved: `--perch-z-undo-toast: 300`, `--perch-z-command-palette: 310`.
 - `--perch-fs-shell` / `--perch-lh-shell` — shell font-size and line-height

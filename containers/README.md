@@ -62,8 +62,11 @@ seeds from the *image layer* (toolchain-only → empty), not the host bind-mount
   (`test-e2e` and `gui-build`), via `PERCH_MASK_DIST=1`. Those run `vite
   build`, which would otherwise clobber the tracked `//go:embed frontend/dist`
   stub. Go targets must **not** mask it, or the embed finds an empty dir and
-  fails to compile. Both `test-e2e` and `gui-build` export `PERCH_MASK_DIST=1`
-  in the Makefile, so the flag is set automatically.
+  fails to compile. `test-e2e` exports `PERCH_MASK_DIST=1` in the Makefile, so
+  the mask is applied automatically when `make` dispatches it through `run.sh`.
+  `gui-build` builds natively by default (it is the host GUI build) and is not
+  dispatched through `run.sh`, so its mask is opt-in: set `PERCH_MASK_DIST=1` on
+  the host when you run the in-container verify check (below).
 
 Named cache volumes (`perch-go-build`, the baked Playwright browsers) persist
 across runs for speed.
@@ -82,12 +85,13 @@ To confirm the from-scratch base can link the GUI (cgo + WebKit), the `gui-build
 surface is exercised in the image directly:
 
 ```sh
-bash containers/run.sh dev make gui-build CONTAINERIZE=0
+PERCH_MASK_DIST=1 bash containers/run.sh dev make gui-build CONTAINERIZE=0
 ```
 
-`gui-build` exports `PERCH_MASK_DIST=1` in the Makefile, which keeps the host
-`frontend/dist` stub intact while `vite build` writes the masked volume — no
-manual prefix needed.
+`PERCH_MASK_DIST=1` (read by `run.sh` from the host invocation) masks
+`frontend/dist`, so `vite build` writes the throwaway volume and the tracked
+`//go:embed frontend/dist` stub on the host stays intact. Without the prefix
+the check still passes, but it regenerates the host stub — don't commit it.
 
 ## devcontainer
 

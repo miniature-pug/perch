@@ -36,9 +36,11 @@ feature or behavior change.
 #### Changed
 
 - **`gui-build: export PERCH_MASK_DIST = 1`** — spec §6.2 names both
-  `test-e2e` and `gui-build` as the two frontend-building targets that must
-  export this flag; previously only `test-e2e` did. `gui-build` now also exports
-  it automatically, removing the need for a manual prefix.
+  `test-e2e` and `gui-build` as the two frontend-building targets that export
+  this flag; previously only `test-e2e` did. Brings the Makefile to spec parity.
+  (`gui-build` is native-by-default and not dispatched through `run.sh`, so its
+  in-container verify check still needs `PERCH_MASK_DIST=1` as a host prefix —
+  see `containers/README.md`.)
 - **`wails.json` `"frontend:install": "npm ci"`** (was `npm install`) — aligns
   with the reproducibility contract used by every Makefile path.
 
