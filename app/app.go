@@ -909,15 +909,57 @@ func (a *App) CloseWorkspace(id string) error {
 	return nil
 }
 
-// RemoveWorkspace closes the workspace (pump + monitor + pty) and removes it
-// from the registry permanently.
+// ErrWorktreeDirty aliases the git-package sentinel so app callers and tests can
+// match it with errors.Is without importing gitpkg directly.
+var ErrWorktreeDirty = gitpkg.ErrWorktreeDirty
+
+// RemoveWorkspace closes the workspace and removes it from the registry. For
+// Worktree==true sessions it also removes the linked worktree tree from disk; a
+// dirty tree returns ErrWorktreeDirty and leaves the record intact (caller should
+// offer a force-confirm calling ForceRemoveWorkspace). The branch is never deleted
+// here. For Worktree==false (in-repo permanent) sessions only the registry record
+// is dropped — the repo root and its branch are never touched.
 func (a *App) RemoveWorkspace(id string) error {
-	// L-11: validate workspace id before touching the store.
-	// CloseWorkspace also validates, but we validate here first so RemoveWorkspace
-	// returns a clear validation error rather than silently calling CloseWorkspace
-	// (which would return the same error) before the store.Remove.
 	if err := validateSessionID(id); err != nil {
 		return fmt.Errorf("invalid workspace id: %w", err)
+	}
+	w, ok := a.store.Get(id)
+	if !ok {
+		return nil // already gone — idempotent
+	}
+	if w.Worktree {
+		ctx := context.Background()
+		dirty, err := gitpkg.WorktreeDirty(ctx, a.runner(), w.WorktreePath)
+		if err != nil {
+			return fmt.Errorf("check worktree dirty: %w", err)
+		}
+		if dirty {
+			return ErrWorktreeDirty
+		}
+		if err := gitpkg.RemoveWorktree(ctx, a.runner(), w.RepoPath, w.WorktreePath, false); err != nil {
+			return fmt.Errorf("remove worktree: %w", err)
+		}
+	}
+	_ = a.CloseWorkspace(id)
+	return a.store.Remove(id)
+}
+
+// ForceRemoveWorkspace force-removes the linked worktree tree (discarding any
+// uncommitted changes) then drops the registry record. The branch is kept. For
+// Worktree==false sessions it behaves like RemoveWorkspace (record-only drop).
+func (a *App) ForceRemoveWorkspace(id string) error {
+	if err := validateSessionID(id); err != nil {
+		return fmt.Errorf("invalid workspace id: %w", err)
+	}
+	w, ok := a.store.Get(id)
+	if !ok {
+		return nil
+	}
+	if w.Worktree {
+		ctx := context.Background()
+		if err := gitpkg.RemoveWorktree(ctx, a.runner(), w.RepoPath, w.WorktreePath, true); err != nil {
+			return fmt.Errorf("force-remove worktree: %w", err)
+		}
 	}
 	_ = a.CloseWorkspace(id)
 	return a.store.Remove(id)

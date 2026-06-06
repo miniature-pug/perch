@@ -2420,3 +2420,132 @@ func TestApp_DiscoverRepos_EmptyWhenNoRepos(t *testing.T) {
 		t.Errorf("DiscoverRepos returned %d repos; want 0 (empty dir)", len(repos))
 	}
 }
+
+func TestApp_RemoveWorkspace_WorktreeSession_RemovesTree(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	tree := t.TempDir()
+	repo := t.TempDir()
+	_ = store.Upsert(registry.Workspace{
+		ID: "ws-wt", RepoPath: repo, WorktreePath: tree, Worktree: true,
+		Agent: "claude", Title: "feat", Branch: "feat/x",
+	})
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Stdout: []byte("")}, "git", "-C", tree, "status", "--porcelain")
+	r.Respond(proc.FakeResult{}, "git", "-C", repo, "worktree", "remove", tree)
+	a := &App{
+		store: store, roots: []string{repo, tree}, run: r,
+		emit: func(string, ...any) {}, bridges: map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{}, cancels: map[string]context.CancelFunc{},
+	}
+	if err := a.RemoveWorkspace("ws-wt"); err != nil {
+		t.Fatalf("RemoveWorkspace: %v", err)
+	}
+	if _, ok := store.Get("ws-wt"); ok {
+		t.Error("workspace record still present after RemoveWorkspace")
+	}
+	found := false
+	for _, c := range r.Calls {
+		if c.Name == "git" && len(c.Args) >= 4 && c.Args[2] == "worktree" && c.Args[3] == "remove" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("git worktree remove not called for Worktree==true session")
+	}
+}
+
+func TestApp_RemoveWorkspace_DirtyWorktree_ReturnsErrWorktreeDirty(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	tree := t.TempDir()
+	repo := t.TempDir()
+	_ = store.Upsert(registry.Workspace{
+		ID: "ws-dirty", RepoPath: repo, WorktreePath: tree, Worktree: true,
+		Agent: "claude", Title: "feat", Branch: "feat/y",
+	})
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Stdout: []byte(" M file.go\n")}, "git", "-C", tree, "status", "--porcelain")
+	a := &App{
+		store: store, roots: []string{repo, tree}, run: r,
+		emit: func(string, ...any) {}, bridges: map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{}, cancels: map[string]context.CancelFunc{},
+	}
+	err := a.RemoveWorkspace("ws-dirty")
+	if !errors.Is(err, ErrWorktreeDirty) {
+		t.Errorf("expected ErrWorktreeDirty, got %v", err)
+	}
+	if _, ok := store.Get("ws-dirty"); !ok {
+		t.Error("workspace record removed despite ErrWorktreeDirty")
+	}
+	// No worktree remove must have been attempted.
+	for _, c := range r.Calls {
+		if c.Name == "git" && len(c.Args) >= 4 && c.Args[2] == "worktree" && c.Args[3] == "remove" {
+			t.Error("worktree remove attempted on dirty tree (non-force)")
+		}
+	}
+}
+
+func TestApp_ForceRemoveWorkspace_ForcesTree(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	tree := t.TempDir()
+	repo := t.TempDir()
+	_ = store.Upsert(registry.Workspace{
+		ID: "ws-force", RepoPath: repo, WorktreePath: tree, Worktree: true,
+		Agent: "claude", Title: "feat", Branch: "feat/z",
+	})
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{}, "git", "-C", repo, "worktree", "remove", "--force", tree)
+	a := &App{
+		store: store, roots: []string{repo, tree}, run: r,
+		emit: func(string, ...any) {}, bridges: map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{}, cancels: map[string]context.CancelFunc{},
+	}
+	if err := a.ForceRemoveWorkspace("ws-force"); err != nil {
+		t.Fatalf("ForceRemoveWorkspace: %v", err)
+	}
+	if _, ok := store.Get("ws-force"); ok {
+		t.Error("workspace record still present after ForceRemoveWorkspace")
+	}
+	found := false
+	for _, c := range r.Calls {
+		if c.Name == "git" && len(c.Args) >= 5 && c.Args[2] == "worktree" && c.Args[3] == "remove" && c.Args[4] == "--force" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("git worktree remove --force not called")
+	}
+}
+
+func TestApp_RemoveWorkspace_NonWorktreeSession_NeverCallsRemoveWorktree(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	repo := t.TempDir()
+	_ = store.Upsert(registry.Workspace{
+		ID: "ws-nonwt", RepoPath: repo, WorktreePath: repo, Worktree: false,
+		Agent: "claude", Title: "main-session", Branch: "main",
+	})
+	r := proc.NewFakeRunner()
+	a := &App{
+		store: store, roots: []string{repo}, run: r,
+		emit: func(string, ...any) {}, bridges: map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{}, cancels: map[string]context.CancelFunc{},
+	}
+	if err := a.RemoveWorkspace("ws-nonwt"); err != nil {
+		t.Fatalf("RemoveWorkspace non-worktree: %v", err)
+	}
+	if _, ok := store.Get("ws-nonwt"); ok {
+		t.Error("non-worktree workspace record still present")
+	}
+	for _, c := range r.Calls {
+		if c.Name == "git" {
+			t.Errorf("unexpected git call on non-worktree removal: %+v", c)
+		}
+	}
+}
