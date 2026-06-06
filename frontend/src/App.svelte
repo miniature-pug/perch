@@ -246,10 +246,24 @@
     for (const p of pendingRemovals) clearTimeout(p.timer);
   });
 
-  async function onSelect(id: string) {
+  // Resume preview state: the workspace pending confirmation before opening.
+  let previewWs = $state<WorkspaceVM | null>(null);
+
+  function onSelect(id: string) {
+    const ws = workspaces.find(w => w.id === id) ?? null;
+    if (!ws) return;
+    previewWs = ws;
+  }
+
+  async function confirmPreview() {
+    if (!previewWs) return;
+    const id = previewWs.id;
+    previewWs = null;
     activeId = id;
     await openWorkspace(id);
   }
+
+  function cancelPreview() { previewWs = null; }
 
   function openNewSession(initialAgent?: string) {
     newSessionOpen = true;
@@ -915,6 +929,26 @@
       onCancel={() => { confirmDirty = null; }}
     />
 
+    {#if previewWs}
+      <div class="modal-overlay" role="presentation">
+        <div class="resume-preview" data-testid="resume-preview" role="dialog" aria-modal="true" aria-label="Resume session">
+          <h2 class="resume-preview-title">Resume: {previewWs.title}</h2>
+          <dl class="resume-preview-meta">
+            <dt>Branch</dt><dd>{previewWs.branch}</dd>
+            <dt>Agent</dt><dd>{previewWs.agent}</dd>
+            <dt>Last active</dt><dd>{previewWs.lastActive ? new Date(previewWs.lastActive).toLocaleString() : "—"}</dd>
+            {#if wsDiffStats[previewWs.id] && ((wsDiffStats[previewWs.id]?.added ?? 0) > 0 || (wsDiffStats[previewWs.id]?.removed ?? 0) > 0)}
+              <dt>Changes</dt><dd class="diff-inline">+{wsDiffStats[previewWs.id].added} &minus;{wsDiffStats[previewWs.id].removed}</dd>
+            {/if}
+          </dl>
+          <div class="resume-preview-actions">
+            <button class="btn btn-primary" onclick={confirmPreview}>Open</button>
+            <button class="btn" onclick={cancelPreview}>Cancel</button>
+          </div>
+        </div>
+      </div>
+    {/if}
+
     {#if cleanupOpen}
       <div class="modal-overlay" role="presentation">
         <CleanupPanel
@@ -1160,4 +1194,18 @@
   .stale-banner-link { background: transparent; border: none; color: var(--perch-accent); cursor: pointer; font-size: var(--perch-fs-caption); text-decoration: underline; }
   .stale-banner-dismiss { margin-left: auto; background: transparent; border: none; color: var(--perch-text-dim); cursor: pointer; font-size: 14px; }
   .modal-overlay { position: fixed; inset: 0; background: var(--perch-scrim); display: flex; align-items: center; justify-content: center; z-index: var(--perch-z-modal); }
+
+  /* Resume preview modal */
+  .resume-preview { background: var(--perch-glass-bg); -webkit-backdrop-filter: var(--perch-glass-filter); backdrop-filter: var(--perch-glass-filter); border: 1px solid var(--perch-glass-border); border-radius: var(--perch-radius-lg); padding: var(--perch-sp-3); min-width: 320px; max-width: 480px; color: var(--perch-text); font-family: var(--perch-font-sans); }
+  .resume-preview-title { margin: 0 0 var(--perch-sp-2) 0; font-size: var(--perch-fs-body); font-weight: 600; }
+  .resume-preview-meta { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0 0 var(--perch-sp-2) 0; font-size: var(--perch-fs-caption); }
+  .resume-preview-meta dt { color: var(--perch-text-dim); }
+  .resume-preview-meta dd { margin: 0; }
+  .diff-inline { font-family: var(--perch-font-mono); }
+  .resume-preview-actions { display: flex; gap: var(--perch-sp-1); justify-content: flex-end; padding-top: var(--perch-sp-1); border-top: 1px solid var(--perch-border); }
+  .btn { display: inline-flex; align-items: center; justify-content: center; padding: 5px 14px; border-radius: var(--perch-radius-sm); font-family: var(--perch-font-sans); font-size: var(--perch-fs-body); cursor: pointer; transition: filter var(--perch-dur) var(--perch-ease); background: var(--perch-surface); color: var(--perch-text); border: 1px solid var(--perch-border-strong); }
+  .btn:hover { filter: brightness(1.08); }
+  .btn:focus-visible { outline: 2px solid var(--perch-accent); outline-offset: 2px; }
+  .btn-primary { background: var(--perch-accent); color: var(--perch-accent-fg); border-color: var(--perch-accent); font-weight: 600; }
+  .btn-primary:hover { filter: brightness(1.1); }
 </style>

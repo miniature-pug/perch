@@ -148,12 +148,14 @@ it("4.25.7 full-composition smoke: assembly → select → view-switch → appro
   expect(document.querySelector(".empty-state")).toBeInTheDocument();
 
   // -------------------------------------------------------------------------
-  // Step 2 — Select workspace → openWorkspace called, Terminal probe mounts
+  // Step 2 — Select workspace → resume preview appears → confirm → openWorkspace called, Terminal probe mounts
   // -------------------------------------------------------------------------
   await fireEvent.click(alphaBtn);
-  await tick();
-
-  expect(openWorkspace).toHaveBeenCalledWith("ws-1");
+  // Resume preview modal appears — confirm to open the session
+  await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+  expect(openWorkspace).not.toHaveBeenCalled();
+  await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+  await waitFor(() => expect(openWorkspace).toHaveBeenCalledWith("ws-1"));
 
   const terminal = await screen.findByTestId("terminal");
   expect(terminal).toBeInTheDocument();
