@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -390,7 +391,7 @@ func TestApp_CreateWorkspace_HappyPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, args := range [][]string{
-		{"init", "-q", repo},
+		{"init", "-q", "-b", "main", repo},
 		{"-C", repo, "-c", "user.email=t@t", "-c", "user.name=t",
 			"commit", "--allow-empty", "-qm", "init"},
 	} {
@@ -412,7 +413,7 @@ func TestApp_CreateWorkspace_HappyPath(t *testing.T) {
 		monitors: map[string]agent.Monitor{},
 	}
 
-	vm, err := a.CreateWorkspace("claude", repo, "feat/hello", "claude-opus-4-5")
+	vm, err := a.CreateWorkspace("claude", repo, "main", "feat/hello", true)
 	if err != nil {
 		t.Fatalf("CreateWorkspace: %v", err)
 	}
@@ -440,7 +441,7 @@ func TestApp_CreateWorkspace_RejectsOutsideRoot(t *testing.T) {
 		monitors: map[string]agent.Monitor{},
 	}
 
-	if _, err := a.CreateWorkspace("claude", "/etc", "feat/x", ""); err == nil {
+	if _, err := a.CreateWorkspace("claude", "/etc", "main", "feat/x", true); err == nil {
 		t.Fatal("must reject path outside roots")
 	}
 }
@@ -460,8 +461,300 @@ func TestApp_CreateWorkspace_RejectsInvalidAgent(t *testing.T) {
 		bridges:  map[string]*internalpty.Bridge{},
 		monitors: map[string]agent.Monitor{},
 	}
-	if _, err := a.CreateWorkspace("ghost", sub, "feat/x", ""); err == nil {
+	if _, err := a.CreateWorkspace("ghost", sub, "main", "feat/x", true); err == nil {
 		t.Fatal("must reject unknown agent")
+	}
+}
+
+// ── helpers shared by CreateWorkspace tests ───────────────────────────────────
+
+// makeTestRepo creates a temp git repo under root, inits it with an empty
+// commit on main, and returns its path.
+func makeTestRepo(t *testing.T, root string) string {
+	t.Helper()
+	repo := filepath.Join(root, "proj")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main", repo},
+		{"-C", repo, "-c", "user.email=t@t", "-c", "user.name=t",
+			"commit", "--allow-empty", "-qm", "init"},
+	} {
+		cmd := exec.Command("git", args...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	return repo
+}
+
+// ── Worktree mode: new branch ─────────────────────────────────────────────────
+
+// TestApp_CreateWorkspace_WorktreeNewBranch verifies that worktree=true +
+// baseRef != "" runs AddWorktree (with -b) and stores RepoPath+Worktree=true.
+func TestApp_CreateWorkspace_WorktreeNewBranch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	repo := makeTestRepo(t, root)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+
+	a := &App{
+		store:    store,
+		roots:    []string{root},
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+	}
+
+	vm, err := a.CreateWorkspace("claude", repo, "main", "feat/hello", true)
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+	if vm.ID == "" {
+		t.Fatal("ID must be non-empty")
+	}
+	w, ok := store.Get(vm.ID)
+	if !ok {
+		t.Fatal("workspace not persisted")
+	}
+	if w.RepoPath != repo {
+		t.Errorf("RepoPath = %q, want %q", w.RepoPath, repo)
+	}
+	if !w.Worktree {
+		t.Error("Worktree = false, want true")
+	}
+	// WorktreePath must not equal RepoPath for a worktree session.
+	if w.WorktreePath == repo {
+		t.Errorf("WorktreePath == RepoPath for a worktree session; want a linked tree path")
+	}
+}
+
+// ── Worktree mode: existing branch ────────────────────────────────────────────
+
+// TestApp_CreateWorkspace_WorktreeExistingBranch verifies that worktree=true +
+// baseRef=="" calls AddWorktreeExisting (no -b) and stores RepoPath/Worktree.
+func TestApp_CreateWorkspace_WorktreeExistingBranch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	repo := makeTestRepo(t, root)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	// Create the branch that we want to check out into a worktree.
+	cmd := exec.Command("git", "-C", repo, "branch", "feat-existing")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git branch: %v: %s", err, out)
+	}
+
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	a := &App{
+		store:    store,
+		roots:    []string{root},
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+	}
+
+	// baseRef == "" → existing-branch mode.
+	vm, err := a.CreateWorkspace("opencode", repo, "", "feat-existing", true)
+	if err != nil {
+		t.Fatalf("CreateWorkspace existing branch: %v", err)
+	}
+	w, ok := store.Get(vm.ID)
+	if !ok {
+		t.Fatal("workspace not persisted")
+	}
+	if w.RepoPath != repo {
+		t.Errorf("RepoPath = %q, want %q", w.RepoPath, repo)
+	}
+	if !w.Worktree {
+		t.Error("Worktree = false, want true")
+	}
+}
+
+// ── Non-worktree mode ─────────────────────────────────────────────────────────
+
+// TestApp_CreateWorkspace_NonWorktree verifies that worktree=false stores
+// WorktreePath==RepoPath and Worktree=false without creating a linked tree.
+func TestApp_CreateWorkspace_NonWorktree(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	repo := makeTestRepo(t, root)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+
+	a := &App{
+		store:    store,
+		roots:    []string{root},
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+	}
+
+	vm, err := a.CreateWorkspace("claude", repo, "", "main", false)
+	if err != nil {
+		t.Fatalf("CreateWorkspace non-worktree: %v", err)
+	}
+	w, ok := store.Get(vm.ID)
+	if !ok {
+		t.Fatal("workspace not persisted")
+	}
+	if w.RepoPath != repo {
+		t.Errorf("RepoPath = %q, want %q", w.RepoPath, repo)
+	}
+	if w.WorktreePath != repo {
+		t.Errorf("WorktreePath = %q, want %q (== RepoPath)", w.WorktreePath, repo)
+	}
+	if w.Worktree {
+		t.Error("Worktree = true, want false for non-worktree session")
+	}
+}
+
+// ── ErrBranchInUse ────────────────────────────────────────────────────────────
+
+// TestApp_CreateWorkspace_ErrBranchInUse verifies that attempting to create a
+// *worktree* session for a branch already tracked by another worktree session
+// returns ErrBranchInUse. Non-worktree sessions sharing a branch are allowed
+// (spec §4: "like two terminals").
+func TestApp_CreateWorkspace_ErrBranchInUse(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	repo := makeTestRepo(t, root)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+
+	// Pre-seed a worktree session tracking "feat-taken" in this repo.
+	_ = store.Upsert(registry.Workspace{
+		ID:           "ws-existing",
+		RepoPath:     repo,
+		WorktreePath: filepath.Join(root, "proj__worktrees", "feat-taken"),
+		Worktree:     true,
+		Agent:        "claude",
+		Branch:       "feat-taken",
+		Title:        "feat-taken",
+		LastActive:   time.Now(),
+	})
+
+	a := &App{
+		store:    store,
+		roots:    []string{root},
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+	}
+
+	_, err := a.CreateWorkspace("claude", repo, "main", "feat-taken", true)
+	if !errors.Is(err, git.ErrBranchInUse) {
+		t.Errorf("want ErrBranchInUse, got %v", err)
+	}
+}
+
+// TestApp_CreateWorkspace_NonWorktreeBranchSharing verifies that two
+// non-worktree sessions on the same branch are allowed (not ErrBranchInUse).
+func TestApp_CreateWorkspace_NonWorktreeBranchSharing(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	repo := makeTestRepo(t, root)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+
+	// Pre-seed an existing non-worktree session on "main".
+	_ = store.Upsert(registry.Workspace{
+		ID:           "ws-nwt-1",
+		RepoPath:     repo,
+		WorktreePath: repo,
+		Worktree:     false,
+		Agent:        "claude",
+		Branch:       "main",
+		Title:        "main",
+		LastActive:   time.Now(),
+	})
+
+	a := &App{
+		store:    store,
+		roots:    []string{root},
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+	}
+
+	// A second non-worktree session on "main" must NOT return ErrBranchInUse.
+	_, err := a.CreateWorkspace("opencode", repo, "", "main", false)
+	if err != nil {
+		t.Fatalf("non-worktree branch sharing: unexpected error %v", err)
+	}
+}
+
+// ── WorkspaceForBranch ────────────────────────────────────────────────────────
+
+// TestApp_WorkspaceForBranch_Hit verifies found=true when a worktree session
+// for the repo+branch exists in the registry.
+func TestApp_WorkspaceForBranch_Hit(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	_ = store.Upsert(registry.Workspace{
+		ID:           "ws-found",
+		RepoPath:     "/home/me/proj",
+		WorktreePath: "/home/me/proj__worktrees/feat-x",
+		Worktree:     true,
+		Agent:        "claude",
+		Branch:       "feat-x",
+		Title:        "feat-x",
+		LastActive:   time.Now(),
+	})
+	a := &App{store: store, roots: []string{"/home/me"}}
+
+	id, found := a.WorkspaceForBranch("/home/me/proj", "feat-x")
+	if !found {
+		t.Fatal("want found=true")
+	}
+	if id != "ws-found" {
+		t.Errorf("id = %q, want ws-found", id)
+	}
+}
+
+// TestApp_WorkspaceForBranch_Miss verifies found=false when no matching record.
+func TestApp_WorkspaceForBranch_Miss(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	a := &App{store: store}
+
+	_, found := a.WorkspaceForBranch("/home/me/proj", "feat-x")
+	if found {
+		t.Fatal("want found=false for empty registry")
+	}
+}
+
+// TestApp_WorkspaceForBranch_IgnoresNonWorktree verifies that a non-worktree
+// session on the same repo+branch is NOT returned (WorkspaceForBranch is used
+// to detect worktree-branch conflicts only).
+func TestApp_WorkspaceForBranch_IgnoresNonWorktree(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	_ = store.Upsert(registry.Workspace{
+		ID:           "ws-nwt",
+		RepoPath:     "/home/me/proj",
+		WorktreePath: "/home/me/proj",
+		Worktree:     false,
+		Agent:        "claude",
+		Branch:       "main",
+		Title:        "main",
+		LastActive:   time.Now(),
+	})
+	a := &App{store: store}
+
+	_, found := a.WorkspaceForBranch("/home/me/proj", "main")
+	if found {
+		t.Fatal("WorkspaceForBranch must not return non-worktree sessions")
 	}
 }
 

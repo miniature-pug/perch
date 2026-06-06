@@ -410,7 +410,16 @@ type AlwaysRule struct {
 // CreateWorkspace validates inputs, resolves/creates the worktree, persists the
 // workspace to the registry, and returns its WorkspaceVM. It does NOT start the
 // agent — call OpenWorkspace for that.
-func (a *App) CreateWorkspace(agentName, repoPath, branch, model string) (WorkspaceVM, error) {
+//
+// Three modes (controlled by worktree and baseRef):
+//
+//	worktree && baseRef != ""  → new branch off baseRef, new linked tree (AddWorktree -b)
+//	worktree && baseRef == ""  → existing branch, new linked tree (AddWorktreeExisting)
+//	!worktree                  → no new tree; CheckoutBranch if branch != current;
+//	                             WorktreePath == RepoPath, Worktree=false
+//
+// Returns ErrBranchInUse if a worktree session already tracks branch in this repo.
+func (a *App) CreateWorkspace(agentName, repoPath, baseRef, branch string, worktree bool) (WorkspaceVM, error) {
 	// Gate 1: repoPath must exist under a configured root.
 	if err := validateWorktreeUnderRoots(repoPath, a.roots); err != nil {
 		return WorkspaceVM{}, err
@@ -424,21 +433,49 @@ func (a *App) CreateWorkspace(agentName, repoPath, branch, model string) (Worksp
 		return WorkspaceVM{}, fmt.Errorf("unknown agent %q", agentName)
 	}
 
-	handle := gitpkg.SlugifyBranch(branch)
-	treePath, err := gitpkg.WorktreePath(repoPath, handle, "")
-	if err != nil {
-		return WorkspaceVM{}, err
-	}
-	if !containedUnderRoots(treePath, a.roots) {
-		return WorkspaceVM{}, fmt.Errorf("derived worktree path %q escapes all configured roots", treePath)
-	}
-
 	ctx := context.Background()
-	// Create the linked worktree; an already-existing branch is not fatal.
-	if err := gitpkg.AddWorktree(ctx, a.runner(), repoPath, branch, treePath, "HEAD"); err != nil {
-		if !errors.Is(err, gitpkg.ErrBranchExists) {
-			return WorkspaceVM{}, fmt.Errorf("create worktree: %w", err)
+
+	var worktreePath string
+
+	if worktree {
+		// Collision check: reject if another worktree session already owns this branch.
+		if _, found := a.WorkspaceForBranch(repoPath, branch); found {
+			return WorkspaceVM{}, fmt.Errorf("create worktree: %w", gitpkg.ErrBranchInUse)
 		}
+
+		handle := gitpkg.SlugifyBranch(branch)
+		treePath, err := gitpkg.WorktreePath(repoPath, handle, "")
+		if err != nil {
+			return WorkspaceVM{}, err
+		}
+		if !containedUnderRoots(treePath, a.roots) {
+			return WorkspaceVM{}, fmt.Errorf("derived worktree path %q escapes all configured roots", treePath)
+		}
+
+		if baseRef != "" {
+			// New-branch mode: git worktree add -b <branch> <tree> <baseRef>.
+			if err := gitpkg.ValidRef(baseRef); err != nil {
+				return WorkspaceVM{}, fmt.Errorf("invalid baseRef: %w", err)
+			}
+			if err := gitpkg.AddWorktree(ctx, a.runner(), repoPath, branch, treePath, baseRef); err != nil {
+				if !errors.Is(err, gitpkg.ErrBranchExists) {
+					return WorkspaceVM{}, fmt.Errorf("create worktree: %w", err)
+				}
+			}
+		} else {
+			// Existing-branch mode: git worktree add <tree> <branch>.
+			if err := gitpkg.AddWorktreeExisting(ctx, a.runner(), repoPath, branch, treePath); err != nil {
+				return WorkspaceVM{}, fmt.Errorf("create worktree (existing branch): %w", err)
+			}
+		}
+		worktreePath = treePath
+	} else {
+		// Non-worktree mode: run in the repo root. CheckoutBranch unconditionally;
+		// git is a no-op if already on that branch and fails fast on dirty conflict.
+		if err := gitpkg.CheckoutBranch(ctx, a.runner(), repoPath, branch); err != nil {
+			return WorkspaceVM{}, fmt.Errorf("checkout branch: %w", err)
+		}
+		worktreePath = repoPath
 	}
 
 	id, err := newWorkspaceID()
@@ -447,9 +484,12 @@ func (a *App) CreateWorkspace(agentName, repoPath, branch, model string) (Worksp
 	}
 
 	now := time.Now()
+	handle := gitpkg.SlugifyBranch(branch)
 	w := registry.Workspace{
 		ID:           id,
-		WorktreePath: treePath,
+		RepoPath:     repoPath,
+		WorktreePath: worktreePath,
+		Worktree:     worktree,
 		Agent:        agentName,
 		Title:        handle,
 		Branch:       branch,
@@ -461,7 +501,7 @@ func (a *App) CreateWorkspace(agentName, repoPath, branch, model string) (Worksp
 
 	return WorkspaceVM{
 		ID:           id,
-		WorktreePath: treePath,
+		WorktreePath: worktreePath,
 		Agent:        agentName,
 		Title:        handle,
 		Branch:       branch,
@@ -469,6 +509,18 @@ func (a *App) CreateWorkspace(agentName, repoPath, branch, model string) (Worksp
 		LastActive:   now,
 		State:        agent.StateIdle,
 	}, nil
+}
+
+// WorkspaceForBranch returns the ID of the worktree session that is tracking
+// branch in repoPath, if any. Only worktree sessions (Worktree==true) are
+// considered; non-worktree sessions may share a branch by design (spec §4).
+func (a *App) WorkspaceForBranch(repoPath, branch string) (id string, found bool) {
+	for _, w := range a.store.List() {
+		if w.Worktree && w.RepoPath == repoPath && w.Branch == branch {
+			return w.ID, true
+		}
+	}
+	return "", false
 }
 
 // OpenWorkspace spawns a login-shell pty for the workspace, calls Monitor.Prepare

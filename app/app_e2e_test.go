@@ -88,7 +88,7 @@ func TestE2E_HeadlessFullLoop(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, args := range [][]string{
-		{"init", "-q", repo},
+		{"init", "-q", "-b", "main", repo},
 		{"-C", repo, "-c", "user.email=t@t", "-c", "user.name=t",
 			"commit", "--allow-empty", "-qm", "init"},
 	} {
@@ -147,7 +147,7 @@ func TestE2E_HeadlessFullLoop(t *testing.T) {
 
 	// ── CreateWorkspace ───────────────────────────────────────────────────────
 	// Use "feat/e2e" to avoid collision with the repo's default "main" branch.
-	vm, err := a.CreateWorkspace("claude", repo, "feat/e2e", "")
+	vm, err := a.CreateWorkspace("claude", repo, "main", "feat/e2e", true)
 	if err != nil {
 		t.Fatalf("CreateWorkspace: %v", err)
 	}
