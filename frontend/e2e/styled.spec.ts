@@ -188,6 +188,11 @@ test("ApprovalCard: card chrome is styled; Allow button is accent-colored", asyn
   if (await sidebarItem.isVisible()) {
     await sidebarItem.click();
     await page.waitForTimeout(500);
+    // Resume preview now gates session open — click "Open" to confirm.
+    const resumeOpenBtn = page.locator('[data-testid="resume-preview"] button.btn-primary');
+    await resumeOpenBtn.waitFor({ state: "visible", timeout: 5000 });
+    await resumeOpenBtn.click();
+    await page.waitForTimeout(500);
   }
 
   // Emit approval
@@ -289,6 +294,11 @@ test("Sidebar: active workspace row has different background than inactive", asy
   // Activate the first workspace
   await page.locator("text=test session").first().click();
   await page.waitForTimeout(500);
+  // Resume preview now gates session open — click "Open" to confirm.
+  const resumeOpenBtn = page.locator('[data-testid="resume-preview"] button.btn-primary');
+  await resumeOpenBtn.waitFor({ state: "visible", timeout: 5000 });
+  await resumeOpenBtn.click();
+  await page.waitForTimeout(500);
 
   const result = await page.evaluate(() => {
     const activeBtn    = document.querySelector<HTMLElement>('.workspace-row[aria-current="page"]');
@@ -325,6 +335,11 @@ test("Terminal: xterm.css loaded — .xterm-helper-textarea opacity is 0", async
   const sidebarItem = page.locator("text=test session").first();
   if (await sidebarItem.isVisible()) {
     await sidebarItem.click();
+    await page.waitForTimeout(500);
+    // Resume preview now gates session open — click "Open" to confirm.
+    const resumeOpenBtn = page.locator('[data-testid="resume-preview"] button.btn-primary');
+    await resumeOpenBtn.waitFor({ state: "visible", timeout: 5000 });
+    await resumeOpenBtn.click();
     await page.waitForTimeout(500);
   }
 
@@ -386,6 +401,11 @@ test("Editor: CodeMirror fills the pane (height > 100px, top-aligned)", async ({
   if (await sidebarItem.isVisible()) {
     await sidebarItem.click();
     await page.waitForTimeout(500);
+    // Resume preview now gates session open — click "Open" to confirm.
+    const resumeOpenBtn = page.locator('[data-testid="resume-preview"] button.btn-primary');
+    await resumeOpenBtn.waitFor({ state: "visible", timeout: 5000 });
+    await resumeOpenBtn.click();
+    await page.waitForTimeout(500);
   }
 
   // Switch to code view and open file
@@ -446,6 +466,11 @@ test("Buttons: .btn has border-radius > 0 and non-zero padding", async ({ page }
   const sidebarItem = page.locator("text=test session").first();
   if (await sidebarItem.isVisible()) {
     await sidebarItem.click();
+    await page.waitForTimeout(500);
+    // Resume preview now gates session open — click "Open" to confirm.
+    const resumeOpenBtn = page.locator('[data-testid="resume-preview"] button.btn-primary');
+    await resumeOpenBtn.waitFor({ state: "visible", timeout: 5000 });
+    await resumeOpenBtn.click();
     await page.waitForTimeout(500);
   }
 

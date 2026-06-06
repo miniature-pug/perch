@@ -42,6 +42,11 @@ test.beforeEach(async ({ page }) => {
   if (await sidebarItem.isVisible()) {
     await sidebarItem.click();
     await page.waitForTimeout(500);
+    // Resume preview now gates session open — click "Open" to confirm.
+    const resumeOpenBtn = page.locator('[data-testid="resume-preview"] button.btn-primary');
+    await resumeOpenBtn.waitFor({ state: "visible", timeout: 5000 });
+    await resumeOpenBtn.click();
+    await page.waitForTimeout(500);
   }
 
   // Agent view (default) renders Terminal in primary pane
