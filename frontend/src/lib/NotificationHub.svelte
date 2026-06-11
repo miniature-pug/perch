@@ -36,8 +36,8 @@
   <ul class="notif-list scrollable">
     {#each visible as n (n.id)}
       <li class="notif-item tier-{n.tier}" class:read={n.read} style:--item-color={worktreeColor(n.workspaceId)}>
-        <span class="notif-title">{n.title}</span>
-        <span class="notif-body">{n.body}</span>
+        <span class="notif-title" title={n.title}>{n.title}</span>
+        <span class="notif-body" title={n.body}>{n.body}</span>
         <button class="dismiss-btn" onclick={() => onDismiss(n.id)} aria-label="dismiss notification">✕</button>
       </li>
     {/each}

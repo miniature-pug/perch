@@ -111,3 +111,81 @@ func TestDiffStat_ModifiedAddedDeleted(t *testing.T) {
 		t.Errorf("c.txt status = %q, want D", c.Status)
 	}
 }
+
+func TestHunks_StagedFlag(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := initRepo(t)
+
+	gitRun := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	// file_staged.txt: create, commit, modify, then stage the modification.
+	// No further working-tree modification — this file has staged-only changes.
+	if err := os.WriteFile(filepath.Join(repo, "file_staged.txt"), []byte("original content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun("add", "file_staged.txt")
+	gitRun("commit", "-m", "add file_staged")
+
+	if err := os.WriteFile(filepath.Join(repo, "file_staged.txt"), []byte("staged content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Do NOT commit yet — file_staged.txt has a staged-but-uncommitted change.
+
+	// file_working.txt: create and commit in its own commit BEFORE staging
+	// file_staged.txt, so that the subsequent commit of file_working.txt does
+	// not accidentally sweep up the staged file_staged.txt change.
+	if err := os.WriteFile(filepath.Join(repo, "file_working.txt"), []byte("original content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun("add", "file_working.txt")
+	gitRun("commit", "-m", "add file_working")
+
+	// Now stage the modification to file_staged.txt (after file_working is committed).
+	if err := os.WriteFile(filepath.Join(repo, "file_staged.txt"), []byte("staged content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun("add", "file_staged.txt") // stage the modification — NOT committed
+
+	if err := os.WriteFile(filepath.Join(repo, "file_working.txt"), []byte("working content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// do NOT stage file_working.txt
+
+	r := proc.ExecRunner{}
+	ctx := context.Background()
+
+	// Staged file: all returned hunks should have Staged=true.
+	stagedHunks, err := git.Hunks(ctx, r, repo, "file_staged.txt")
+	if err != nil {
+		t.Fatalf("Hunks(file_staged.txt): %v", err)
+	}
+	if len(stagedHunks) == 0 {
+		t.Fatal("expected at least one hunk for file_staged.txt, got none")
+	}
+	for i, h := range stagedHunks {
+		if !h.Staged {
+			t.Errorf("file_staged.txt hunk[%d]: Staged=false, want true", i)
+		}
+	}
+
+	// Working-tree file: all returned hunks should have Staged=false.
+	workingHunks, err := git.Hunks(ctx, r, repo, "file_working.txt")
+	if err != nil {
+		t.Fatalf("Hunks(file_working.txt): %v", err)
+	}
+	if len(workingHunks) == 0 {
+		t.Fatal("expected at least one hunk for file_working.txt, got none")
+	}
+	for i, h := range workingHunks {
+		if h.Staged {
+			t.Errorf("file_working.txt hunk[%d]: Staged=true, want false", i)
+		}
+	}
+}

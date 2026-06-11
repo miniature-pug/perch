@@ -33,6 +33,7 @@
   let branchName  = $state("");
   let branchSel   = $state("");
   let branches    = $state<string[]>([]);
+  let submitting  = $state(false);
 
   // Reset dialog state when opened. Wrapped in untrack so the write to `agent`
   // (and subsequent reads of `agent` inside suggestBranch) do not register
@@ -78,17 +79,22 @@
     (!worktree || useExisting ? !!branchSel : (!!branchName && nameValid))
   );
 
-  function handleCreate() {
-    if (!canCreate) return;
-    if (!worktree) {
-      // non-worktree: baseRef="" always
-      onCreate(agent, repo, "", branchSel, false);
-    } else if (useExisting) {
-      // existing branch: baseRef="" signals no -b
-      onCreate(agent, repo, "", branchSel, true);
-    } else {
-      // new branch from baseRef
-      onCreate(agent, repo, baseRef, branchName, true);
+  async function handleCreate() {
+    if (!canCreate || submitting) return;
+    submitting = true;
+    try {
+      if (!worktree) {
+        // non-worktree: baseRef="" always
+        await Promise.resolve(onCreate(agent, repo, "", branchSel, false));
+      } else if (useExisting) {
+        // existing branch: baseRef="" signals no -b
+        await Promise.resolve(onCreate(agent, repo, "", branchSel, true));
+      } else {
+        // new branch from baseRef
+        await Promise.resolve(onCreate(agent, repo, baseRef, branchName, true));
+      }
+    } finally {
+      submitting = false;
     }
   }
 
@@ -181,7 +187,7 @@
       </label>
 
       <div class="dialog-actions">
-        <button class="btn btn-primary" onclick={handleCreate} disabled={!canCreate}>Create</button>
+        <button class="btn btn-primary" onclick={handleCreate} disabled={!canCreate || submitting}>Create</button>
         <button class="btn" onclick={onClose}>Cancel</button>
       </div>
     </div>
@@ -298,7 +304,7 @@
 
   .field-error {
     font-size: var(--perch-fs-body);
-    color: var(--perch-danger, #e06c75);
+    color: var(--perch-err);
   }
 
   .sub-toggle {

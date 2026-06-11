@@ -333,6 +333,7 @@
       const remaining = visibleWorkspaces.filter(w => w.id !== wsToRemove.id);
       activeId = remaining[0]?.id ?? null;
     }
+    if (layout.splitId === wsToRemove.id) layout.setSplitId(null);
 
     const timer = setTimeout(async () => {
       // Time's up — commit the removal for real.
@@ -368,6 +369,7 @@
     if (!entry) return;
     clearTimeout(entry.timer);
     pendingRemovals = pendingRemovals.filter(p => p.ws.id !== id);
+    if (layout.splitId === id) layout.setSplitId(null);
     // Fire-and-forget — do not await so we don't block the caller.
     removeWorkspace(id).then(() => listWorkspaces()).then(ws => { workspaces = ws; }).catch(() => {});
   }
@@ -739,7 +741,7 @@
                        onanimationend={(e) => { if (e.animationName === "perch-emphasis") emphasizeInput = false; }}
                        onpointerdown={() => { if (mode.current === "normal") mode.enterTerminal(); }}>
                     <DragDrop paneId={active.paneId} fileDrop={true}>
-                      <Terminal bind:this={primaryTerm} paneId={active.paneId} cwd={active.worktreePath} />
+                      <Terminal bind:this={primaryTerm} paneId={active.paneId} cwd={active.worktreePath} onExit={() => mode.leaveTerminal()} />
                     </DragDrop>
                   </div>
                 {:else if layout.view === "code"}
@@ -867,9 +869,9 @@
           <span class="status-mode">{mode.current.toUpperCase()}</span>
           {#if active}
             <span class="status-sep" aria-hidden="true">·</span>
-            <span class="status-session">{active.title}</span>
+            <span class="status-session" title={active.title}>{active.title}</span>
             <span class="status-sep" aria-hidden="true">·</span>
-            <span class="status-branch">{active.branch}</span>
+            <span class="status-branch" title={active.branch}>{active.branch}</span>
             <span class="status-sep" aria-hidden="true">·</span>
             <span class="status-state">{active.state}</span>
             {@const ds = wsDiffStats[active.id]}
@@ -1065,8 +1067,8 @@
                        letter-spacing: 0.06em; text-transform: uppercase;
                        color: var(--perch-accent); }
   .status-sep        { color: var(--perch-border); }
-  .status-session    { color: var(--perch-text); font-weight: 500; }
-  .status-branch     { font-family: var(--perch-font-mono); font-size: var(--perch-fs-caption); }
+  .status-session    { color: var(--perch-text); font-weight: 500; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .status-branch     { font-family: var(--perch-font-mono); font-size: var(--perch-fs-caption); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .status-state      { color: var(--perch-text-dim); }
   .status-diffstat   { display: flex; gap: var(--perch-sp-1);
                        font-family: var(--perch-font-mono); font-size: var(--perch-fs-caption); }

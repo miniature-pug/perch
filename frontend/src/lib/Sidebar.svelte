@@ -83,9 +83,9 @@
           style:--row-color={worktreeColor(ws.id)}
         >
           <span class="status-icon status-{ws.state}" aria-hidden="true">{st.icon}</span>
-          <span class="workspace-title">{ws.title}</span>
-          <span class="workspace-branch dim">{ws.branch}</span>
-          <span class="workspace-agent dim">{ws.agent}</span>
+          <span class="workspace-title" title={ws.title}>{ws.title}</span>
+          <span class="workspace-branch dim" title={ws.branch}>{ws.branch}</span>
+          <span class="workspace-agent dim" title={ws.agent}>{ws.agent}</span>
           <span class="workspace-age dim">{formatAge(ws.lastActive)}</span>
           {#if ds && (ds.added > 0 || ds.removed > 0)}
             <span class="sidebar-diffstat" aria-label="+{ds.added} minus {ds.removed}">

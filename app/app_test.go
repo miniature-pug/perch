@@ -1545,6 +1545,92 @@ func TestApp_StageHunk_RejectsPathTraversal(t *testing.T) {
 	}
 }
 
+func TestApp_StageHunk_HappyPath(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	repo := initGitRepo(t, root)
+
+	p := filepath.Join(repo, "file.txt")
+	if err := os.WriteFile(p, []byte("line1\nline2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", "file.txt")
+	runGit(t, repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "add file")
+	if err := os.WriteFile(p, []byte("line1\nchanged\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	a := &App{
+		store:    store,
+		roots:    []string{root},
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+	}
+
+	hunks, err := a.Hunks(repo, "file.txt")
+	if err != nil {
+		t.Fatalf("Hunks: %v", err)
+	}
+	if len(hunks) == 0 {
+		t.Fatal("Hunks must return at least one hunk before staging")
+	}
+
+	if err := a.StageHunk(repo, "file.txt", 0); err != nil {
+		t.Fatalf("StageHunk: %v", err)
+	}
+
+	cmd := exec.Command("git", "-C", repo, "diff", "--cached", "--name-only")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git diff --cached: %v", err)
+	}
+	if !strings.Contains(string(out), "file.txt") {
+		t.Errorf("git diff --cached --name-only = %q, want to contain %q", string(out), "file.txt")
+	}
+}
+
+func TestApp_DiscardHunk_HappyPath(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	repo := initGitRepo(t, root)
+
+	p := filepath.Join(repo, "file.txt")
+	if err := os.WriteFile(p, []byte("line1\nline2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", "file.txt")
+	runGit(t, repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "add file")
+	if err := os.WriteFile(p, []byte("line1\nchanged\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	a := &App{
+		store:    store,
+		roots:    []string{root},
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+	}
+
+	if err := a.DiscardHunk(repo, "file.txt", 0); err != nil {
+		t.Fatalf("DiscardHunk: %v", err)
+	}
+
+	cmd := exec.Command("git", "-C", repo, "diff", "--name-only")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git diff: %v", err)
+	}
+	if strings.Contains(string(out), "file.txt") {
+		t.Errorf("git diff --name-only = %q, want file.txt absent (change discarded)", string(out))
+	}
+}
+
 func TestApp_Approve_AlwaysPersistsRule(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cfgDir := t.TempDir()
@@ -1868,7 +1954,39 @@ func TestApp_Hunks_ReturnsHunks(t *testing.T) {
 		t.Fatalf("Hunks: %v", err)
 	}
 	if len(hunks) == 0 {
-		t.Error("Hunks must return at least one hunk for modified file")
+		t.Fatal("Hunks must return at least one hunk for modified file")
+	}
+	h := hunks[0]
+	if h.File != "file.txt" {
+		t.Errorf("hunks[0].File = %q, want %q", h.File, "file.txt")
+	}
+	if h.OldStart < 1 {
+		t.Errorf("hunks[0].OldStart = %d, want >= 1", h.OldStart)
+	}
+	if !strings.Contains(h.Header, "@@") {
+		t.Errorf("hunks[0].Header = %q, want to contain \"@@\"", h.Header)
+	}
+	var gotDel, gotAdd bool
+	var delText, addText string
+	for _, l := range h.Lines {
+		if l.Kind == "del" {
+			gotDel = true
+			delText = l.Text
+		}
+		if l.Kind == "add" {
+			gotAdd = true
+			addText = l.Text
+		}
+	}
+	if !gotDel {
+		t.Error("hunks[0].Lines must contain at least one del line")
+	} else if delText != "line2" {
+		t.Errorf("del line Text = %q, want %q", delText, "line2")
+	}
+	if !gotAdd {
+		t.Error("hunks[0].Lines must contain at least one add line")
+	} else if addText != "changed" {
+		t.Errorf("add line Text = %q, want %q", addText, "changed")
 	}
 }
 

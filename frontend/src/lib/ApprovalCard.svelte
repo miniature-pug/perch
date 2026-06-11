@@ -14,6 +14,14 @@
     onDenyAll?: () => void;
   } = $props();
 
+  let deciding = $state(false);
+
+  async function handleDecision(reqId: string, decision: "allow" | "deny" | "always") {
+    if (deciding) return;
+    deciding = true;
+    try { await Promise.resolve(onDecision(reqId, decision)); } finally { deciding = false; }
+  }
+
   function approveAll() {
     if (onApproveAll) { onApproveAll(); return; }
     for (const r of queue) onDecision(r.reqId, "allow");
@@ -36,9 +44,9 @@
     </header>
     <p class="approval-summary">{req.summary}</p>
     <div class="approval-actions">
-      <button class="btn btn-primary" onclick={() => onDecision(req.reqId, "allow")}>Allow</button>
-      <button class="btn" onclick={() => onDecision(req.reqId, "deny")}>Deny</button>
-      <button class="btn btn-always" onclick={() => onDecision(req.reqId, "always")}>Always</button>
+      <button class="btn btn-primary" onclick={() => handleDecision(req.reqId, "allow")} disabled={deciding}>Allow</button>
+      <button class="btn" onclick={() => handleDecision(req.reqId, "deny")} disabled={deciding}>Deny</button>
+      <button class="btn btn-always" onclick={() => handleDecision(req.reqId, "always")} disabled={deciding}>Always</button>
     </div>
     {#if queue.length > 1}
       <div class="batch-actions">

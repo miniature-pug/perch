@@ -29,6 +29,7 @@ export interface HunkLine { kind: "ctx"|"add"|"del"; text: string; }
 export interface Hunk {
   file: string; index: number; header: string;
   oldStart: number; oldLines: number; newStart: number; newLines: number; lines: HunkLine[];
+  staged?: boolean;
 }
 export interface FsNode { name: string; path: string; isDir: boolean; modified?: boolean; untracked?: boolean; }
 export interface AlwaysRule { agent: string; tool: string; pattern: string; hash?: string; }

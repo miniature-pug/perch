@@ -109,7 +109,7 @@
               aria-label={f.path}
             >
               <span class="file-status-icon" aria-hidden="true">{st.icon}</span>
-              <span class="file-path">{f.path}</span>
+              <span class="file-path" title={f.path}>{f.path}</span>
               <span class="stat-label">{st.label}</span>
               <span class="file-stats">
                 <span class="stat-add">+{f.added}</span>
@@ -136,8 +136,8 @@
                         onclick={() => sendHunk(h)}
                       >↗ send</button>
                     {/if}
-                    <button class="btn" onclick={() => stage(h)}>Stage</button>
-                    <button class="btn btn-danger" onclick={() => discard(h)}>Discard</button>
+                    <button class="btn" onclick={() => stage(h)} disabled={h.staged} title={h.staged ? "Already staged" : undefined}>Stage</button>
+                    <button class="btn btn-danger" onclick={() => discard(h)} disabled={h.staged} title={h.staged ? "Already staged" : undefined}>Discard</button>
                   </div>
                 </div>
                 <pre class="hunk-body">{#each h.lines as l}<span class="line line-{l.kind}">{l.text}{"\n"}</span>{/each}</pre>

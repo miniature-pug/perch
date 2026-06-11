@@ -36,6 +36,7 @@ type Hunk struct {
 	NewStart int        `json:"newStart"`
 	NewLines int        `json:"newLines"`
 	Lines    []HunkLine `json:"lines"`
+	Staged   bool       `json:"staged"`
 }
 
 // DiffStat returns per-file diff summaries for all uncommitted changes in worktree.
@@ -173,6 +174,7 @@ func Hunks(ctx context.Context, r proc.Runner, worktree, file string) ([]Hunk, e
 			continue
 		}
 		h.Index = len(merged)
+		h.Staged = true
 		merged = append(merged, h)
 	}
 	return merged, nil

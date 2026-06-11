@@ -66,6 +66,14 @@
     active = 0;
   });
 
+  // Scroll the active item into view when keyboard navigation changes it.
+  $effect(() => {
+    const id = activeId;
+    if (!id) return;
+    const el = document.getElementById(id);
+    if (el && typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "nearest" });
+  });
+
   let grouped = $derived((() => {
     if (query) {
       // When filtering, group normally
@@ -107,13 +115,23 @@
       saveRecent(id);
       onRun(id);
     } else if (e.key === "Escape") {
+      // Stop the bubble to the overlay's handleOverlayKey so Escape closes once.
+      e.stopPropagation();
       onClose();
     }
+  }
+
+  /** Overlay-level handler: only closes on Escape so focus falling off the input
+      (e.g. a list item is focused) still closes the palette. Navigation keys are
+      handled by handleKey on the input — the overlay must NOT re-handle them or
+      events will fire twice via bubbling. */
+  function handleOverlayKey(e: KeyboardEvent) {
+    if (e.key === "Escape") onClose();
   }
 </script>
 
 {#if open}
-  <div role="dialog" aria-modal="true" aria-label="command palette" class="palette-overlay">
+  <div role="dialog" aria-modal="true" aria-label="command palette" class="palette-overlay" tabindex="-1" onkeydown={handleOverlayKey}>
     <div class="palette">
       <input type="text" role="combobox" aria-autocomplete="list" aria-controls="palette-list"
         aria-expanded={open}
@@ -121,6 +139,9 @@
         bind:value={query} onkeydown={handleKey} placeholder="Type a command… (⌘K)"
         use:focusOnMount />
       <ul id="palette-list" role="listbox" class="palette-list scrollable">
+        {#if filtered.length === 0}
+          <li class="palette-empty" role="option" aria-selected="false" aria-disabled="true">No matching commands</li>
+        {/if}
         {#each grouped as g}
           <li class="group-header" aria-hidden="true">{g.group}:</li>
           {#each g.items as c (c.id)}
@@ -263,6 +284,20 @@
   /* Label takes remaining space */
   .item-label {
     flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+
+  /* No results row */
+  .palette-empty {
+    padding: calc(var(--perch-sp-1) * var(--perch-density-scale)) calc(var(--perch-sp-2) * var(--perch-density-scale));
+    font-size: var(--perch-fs-body);
+    font-family: var(--perch-font-sans);
+    color: var(--perch-text-dim);
+    font-style: italic;
+    list-style: none;
   }
 
   /* Keybinding badge — mono, right-aligned */

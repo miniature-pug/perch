@@ -4,7 +4,7 @@
   import { getSettings, type AppSettings } from "./wails";
   import { focusOnMount } from "./actions";
   import { settings as settingsStore } from "./stores/settings.svelte";
-  import { setDnd } from "./stores/notifications.svelte";
+  import { setDnd, addBlocking } from "./stores/notifications.svelte";
   import { THEMES, DENSITIES, FONTS, DEFAULT_THEME, DEFAULT_DENSITY, DEFAULT_FONT, type Density } from "./constants";
 
   let {
@@ -20,7 +20,11 @@
   });
 
   onMount(async () => {
-    settings = await getSettings();
+    try {
+      settings = await getSettings();
+    } catch (e) {
+      addBlocking("", "Failed to load settings", String(e));
+    }
   });
 
   function handleKey(e: KeyboardEvent) {
@@ -30,38 +34,38 @@
   async function onThemeChange(e: Event) {
     const v = (e.currentTarget as HTMLSelectElement).value;
     settings = { ...settings, theme: v };
-    await settingsStore.setTheme(v);
+    try { await settingsStore.setTheme(v); } catch (err) { addBlocking("", "Failed to save settings", String(err)); }
   }
 
   async function onDensityChange(e: Event) {
     const v = (e.currentTarget as HTMLSelectElement).value as "dense" | "comfortable" | "ultra";
     settings = { ...settings, density: v };
-    await settingsStore.setDensity(v);
+    try { await settingsStore.setDensity(v); } catch (err) { addBlocking("", "Failed to save settings", String(err)); }
   }
 
   async function onFontChange(e: Event) {
     const v = (e.currentTarget as HTMLSelectElement).value;
     settings = { ...settings, font: v };
-    await settingsStore.setFont(v);
+    try { await settingsStore.setFont(v); } catch (err) { addBlocking("", "Failed to save settings", String(err)); }
   }
 
   async function toggleDnd() {
     const next = !settings.dnd;
     settings = { ...settings, dnd: next };
     setDnd(next);
-    await settingsStore.setDnd(next);
+    try { await settingsStore.setDnd(next); } catch (err) { addBlocking("", "Failed to save settings", String(err)); }
   }
 
   async function toggleGlass() {
     const next = !(settings.glassDisabled ?? false);
     settings = { ...settings, glassDisabled: next };
-    await settingsStore.setGlass(!next);
+    try { await settingsStore.setGlass(!next); } catch (err) { addBlocking("", "Failed to save settings", String(err)); }
   }
 
   async function revokeRule(i: number) {
     const reduced = settings.alwaysRules.filter((_, j) => j !== i);
     settings = { ...settings, alwaysRules: reduced };
-    await settingsStore.setAlwaysRules(reduced);
+    try { await settingsStore.setAlwaysRules(reduced); } catch (err) { addBlocking("", "Failed to save settings", String(err)); }
   }
 </script>
 

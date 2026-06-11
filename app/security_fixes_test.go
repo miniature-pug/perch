@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -428,5 +429,71 @@ func TestSecFix_M13_TruncationCollision_DistinctHashRejects(t *testing.T) {
 	}
 	if !a.maybeAutoApprove("ws-m13", "req-a", reqA, fm) {
 		t.Fatal("maybeAutoApprove returned false for input A with matching hash — false rejection")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// RevealInFiles and Branches: validateWorktreeUnderRoots guards.
+// ---------------------------------------------------------------------------
+
+func TestSecFix_Branches_RejectsOutsideRoots(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+
+	a := newSecurityTestApp(t, []string{root})
+
+	_, err := a.Branches(outside)
+	if err == nil {
+		t.Fatal("Branches with repo outside roots must return an error")
+	}
+}
+
+func TestSecFix_Branches_AllowsInsideRoots(t *testing.T) {
+	root := t.TempDir()
+	repoDir := filepath.Join(root, "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repoDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	run("init", "-q")
+	run("-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-qm", "init")
+	run("branch", "feature-x")
+
+	a := newSecurityTestApp(t, []string{root})
+
+	branches, err := a.Branches(repoDir)
+	if err != nil {
+		t.Fatalf("Branches inside roots returned unexpected error: %v", err)
+	}
+	found := false
+	for _, b := range branches {
+		if b == "feature-x" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected branch 'feature-x' in result, got: %v", branches)
+	}
+}
+
+func TestSecFix_RevealInFiles_RejectsOutsideRoots(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+
+	a := newSecurityTestApp(t, []string{root})
+
+	err := a.RevealInFiles(filepath.Join(outside, "file.txt"))
+	if err == nil {
+		t.Fatal("RevealInFiles with path outside roots must return an error")
 	}
 }

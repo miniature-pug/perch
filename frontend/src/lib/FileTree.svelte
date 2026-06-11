@@ -25,7 +25,14 @@
     nodes = [...nodes];
   }
 
-  function openMenu(e: MouseEvent, node: TreeNode) { e.preventDefault(); menu = { node, x: e.clientX, y: e.clientY }; }
+  const MENU_APPROX_W = 180;
+  const MENU_APPROX_H = 140;
+  function openMenu(e: MouseEvent, node: TreeNode) {
+    e.preventDefault();
+    const x = Math.min(e.clientX, window.innerWidth  - MENU_APPROX_W);
+    const y = Math.min(e.clientY, window.innerHeight - MENU_APPROX_H);
+    menu = { node, x, y };
+  }
   function closeMenu() { menu = null; }
   function menuOpen()   { if (!menu) return; onOpen(menu.node.path); closeMenu(); }
   function menuReveal() { if (!menu) return; revealInFiles(menu.node.path); closeMenu(); }
@@ -85,7 +92,7 @@
               <span class="node-spacer" aria-hidden="true"></span>
               <span class="node-icon" aria-hidden="true">·</span>
             {/if}
-            <span class="node-name">{node.name}</span>
+            <span class="node-name" title={node.name}>{node.name}</span>
           </button>
           {#if node.expanded && node.children}{@render nodeList(node.children, depth + 1)}{/if}
         </li>

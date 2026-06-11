@@ -116,7 +116,7 @@
   {/each}
   <button class="bell" aria-label="notifications"
     onclick={(e) => { e.stopPropagation(); onCommand("notifications:open"); }}>
-    🔔{#if unreadCount > 0}<span class="badge">{unreadCount}</span>{/if}
+    🔔{#if unreadCount > 0}<span class="badge">{unreadCount > 99 ? '99+' : unreadCount}</span>{/if}
   </button>
 </header>
 
