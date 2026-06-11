@@ -82,7 +82,7 @@
           aria-label={ws.title}
           style:--row-color={worktreeColor(ws.id)}
         >
-          <span class="status-icon status-{ws.state}" aria-hidden="true">{st.icon}</span>
+          <span class="status-icon status-{ws.state}" aria-hidden="true" title={st.label}>{st.icon}</span>
           <span class="workspace-title" title={ws.title}>{ws.title}</span>
           <span class="workspace-branch dim" title={ws.branch}>{ws.branch}</span>
           <span class="workspace-agent dim" title={ws.agent}>{ws.agent}</span>
@@ -324,11 +324,22 @@
   }
 
   /* ── Status label ─────────────────────────────────────────────── */
+  /* Visually hidden, but kept in the DOM + accessibility tree. The colored,
+     shaped, pulsing status icon already conveys state to sighted users (hover
+     its title for the word), so the text label was redundant chrome that
+     clipped on narrow rows. Screen readers still announce it and it stays in
+     the row's textContent. Absolute positioning removes it from the flex row
+     so it no longer consumes width. */
   .status-label {
-    font-size: var(--perch-fs-caption);
-    color: var(--perch-text-dim);
-    flex-shrink: 0;
-    margin-left: auto;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
   }
 
   /* ── New session CTA ──────────────────────────────────────────── */

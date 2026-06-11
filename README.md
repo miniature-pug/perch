@@ -273,6 +273,22 @@ agent is chosen per workspace through the registry, and any keys in a repo-local
 config file are silently ignored. A malicious repo cannot influence how perch
 launches.
 
+### Repository trust / git hooks
+
+perch runs `git worktree add` and `git checkout` when creating or attaching a
+workspace. As with running those commands yourself, git may invoke the
+repository's configured hooks (`post-checkout`, `post-merge`, etc.) — this is
+standard git behavior, not a perch-specific surface. perch does **not** sandbox
+or disable hooks by design; doing so would break workflows that depend on them
+(git-lfs, submodule auto-population, and similar).
+
+The practical boundary: **only open repositories you trust.** This is the same
+level of trust required to run `git checkout` in a repo, or to point any coding
+agent at it. Note that git hooks are not transferred by `clone`/`fetch`/`push`,
+so a freshly cloned repository does not carry its author's hooks — exposure
+comes only from hooks already present in a local repo's `.git/hooks` directory
+or a `core.hooksPath` set in its `.git/config`.
+
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system-level breakdown.
 
 ---
