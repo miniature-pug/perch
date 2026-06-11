@@ -114,6 +114,7 @@ func TestOpenWorkspace_EventForwarding_StampsWorkspaceID(t *testing.T) {
 		newMonitor: func(_ string, _ agent.Adapter) (agent.Monitor, error) {
 			return fm, nil
 		},
+		newAdapter: fakeAdapterSeam(&fakeAdapter{name: "claude", detect: true}),
 	}
 
 	if err := a.OpenWorkspace("ws-stamp"); err != nil {
@@ -215,6 +216,7 @@ func TestOpenWorkspace_ApprovalReqIDComposition(t *testing.T) {
 		newMonitor: func(_ string, _ agent.Adapter) (agent.Monitor, error) {
 			return fm, nil
 		},
+		newAdapter: fakeAdapterSeam(&fakeAdapter{name: "claude", detect: true}),
 	}
 
 	if err := a.OpenWorkspace("ws-appr"); err != nil {

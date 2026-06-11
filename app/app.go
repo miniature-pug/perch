@@ -88,6 +88,11 @@ type newMonitorFunc func(tool string, adapter agent.Adapter) (agent.Monitor, err
 // NewApp, replaced with a fake in tests for headless execution).
 type newWatcherFunc func(absRoot string, onChange func(string)) (*fspkg.Watcher, error)
 
+// agentAdapterFunc is an injectable seam returning the Adapter for a tool
+// name (real agentAdapter in NewApp; a fake in tests so Detect() is
+// deterministic regardless of what is on the host PATH).
+type agentAdapterFunc func(tool string) agent.Adapter
+
 // App is the Wails bound object.
 type App struct {
 	store *registry.Store
@@ -126,6 +131,7 @@ type App struct {
 	spawnPty   spawnPtyFunc
 	newMonitor newMonitorFunc
 	newWatcher newWatcherFunc
+	newAdapter agentAdapterFunc
 
 	// debounce is the coalescing window for fs:changed events.
 	debounce time.Duration
@@ -159,6 +165,7 @@ func NewApp(store *registry.Store, roots []string) *App {
 		spawnPty:     internalpty.Spawn,
 		newMonitor:   agent.NewMonitor,
 		newWatcher:   fspkg.Watch,
+		newAdapter:   agentAdapter,
 		debounce:     fsDebounce,
 		settingsPath: filepath.Join(registry.DefaultConfigDir(), perchSettingsFile),
 		layoutPath:   filepath.Join(registry.DefaultConfigDir(), perchLayoutFile),
@@ -443,6 +450,15 @@ func (a *App) CreateWorkspace(agentName, repoPath, baseRef, branch string, workt
 
 	ctx := context.Background()
 
+	// Every mode needs a commit to branch from or check out. On an unborn HEAD
+	// (freshly init'd repo, no commits) git errors cryptically deep in worktree
+	// add / checkout; surface one clear message up front instead.
+	if has, err := gitpkg.HasCommits(ctx, a.runner(), repoPath); err != nil {
+		return WorkspaceVM{}, fmt.Errorf("check repository: %w", err)
+	} else if !has {
+		return WorkspaceVM{}, fmt.Errorf("create workspace: %w", gitpkg.ErrNoCommits)
+	}
+
 	var worktreePath string
 
 	if worktree {
@@ -576,7 +592,7 @@ func (a *App) OpenWorkspace(id string) error {
 		return fmt.Errorf("spawn pty: %w", err)
 	}
 
-	adpt := agentAdapter(w.Agent)
+	adpt := a.newAdapter(w.Agent)
 	mon, err := a.newMonitor(w.Agent, adpt)
 	if err != nil {
 		cancel()
@@ -667,7 +683,25 @@ func (a *App) OpenWorkspace(id string) error {
 	}
 
 	if launchCmd != "" {
-		_, _ = br.Write([]byte(launchCmd))
+		// adpt is non-nil here for every reachable case: newMonitor above returns
+		// an error for any tool other than claude/opencode (bailing before this
+		// point), and agentAdapter returns a non-nil adapter for both of those.
+		// A nil adpt (only possible via a test seam that decouples newAdapter from
+		// newMonitor) deliberately falls through to the write — do NOT rewrite this
+		// to `adpt == nil || !adpt.Detect()`, which would nil-panic on adpt.Name().
+		if adpt != nil && !adpt.Detect() {
+			// Agent CLI is missing from PATH. Skip writing the launch command
+			// (which would otherwise surface as a raw shell "command not found")
+			// and surface a clear, blocking signal. The shell stays usable.
+			a.emit("notify", map[string]any{
+				"tier":        "blocking",
+				"title":       "Agent not found",
+				"body":        fmt.Sprintf("%q is not installed or not on PATH. Install it, then reopen this session.", adpt.Name()),
+				"workspaceId": id,
+			})
+		} else {
+			_, _ = br.Write([]byte(launchCmd))
+		}
 	}
 
 	// Forward monitor events to the frontend. Forward-and-continue: emit and move

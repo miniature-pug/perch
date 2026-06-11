@@ -553,3 +553,67 @@ func TestErrBranchInUse_IsSentinel(t *testing.T) {
 		t.Error("errors.Is identity check failed")
 	}
 }
+
+// ── HasCommits ────────────────────────────────────────────────────────────────
+
+// TestHasCommits verifies (false, nil) on an unborn HEAD and (true, nil) after
+// the first commit is made.
+func TestHasCommits(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	// Create a bare git init (no commits yet — unborn HEAD).
+	dir := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-b", "main"},
+		{"config", "user.email", "test@example.com"},
+		{"config", "user.name", "Test"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	r := proc.ExecRunner{}
+	ctx := context.Background()
+
+	// Before any commit: unborn HEAD → (false, nil).
+	has, err := git.HasCommits(ctx, r, dir)
+	if err != nil {
+		t.Fatalf("HasCommits (no commits): unexpected error: %v", err)
+	}
+	if has {
+		t.Fatal("HasCommits (no commits): want false, got true")
+	}
+
+	// Make one commit.
+	for _, args := range [][]string{
+		{"commit", "--allow-empty", "-m", "init"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	// After first commit: born HEAD → (true, nil).
+	has, err = git.HasCommits(ctx, r, dir)
+	if err != nil {
+		t.Fatalf("HasCommits (after commit): unexpected error: %v", err)
+	}
+	if !has {
+		t.Fatal("HasCommits (after commit): want true, got false")
+	}
+}
+
+// TestErrNoCommits_IsSentinel confirms the var is exported and distinct.
+func TestErrNoCommits_IsSentinel(t *testing.T) {
+	if git.ErrNoCommits == nil {
+		t.Fatal("ErrNoCommits must be non-nil")
+	}
+	if !errors.Is(git.ErrNoCommits, git.ErrNoCommits) {
+		t.Error("errors.Is identity check failed")
+	}
+}

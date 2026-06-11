@@ -322,7 +322,33 @@ if [ -z "$INSTALL_PREFIX" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Step 5: build perch
+# Step 5: webkit2gtk-4.1 + gtk+-3.0 dev libraries (Linux GUI build deps)
+# ---------------------------------------------------------------------------
+if [ "$OS" = "Linux" ] && [ "$SKIP_BUILD" != "1" ]; then
+  _webkit_ok=1
+  if ! command -v pkg-config >/dev/null 2>&1; then
+    _webkit_ok=0
+  elif ! pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
+    _webkit_ok=0
+  elif ! pkg-config --exists gtk+-3.0 2>/dev/null; then
+    _webkit_ok=0
+  fi
+  if [ "$_webkit_ok" = "0" ]; then
+    printf 'error: the perch GUI build requires webkit2gtk-4.1 and gtk+-3.0 dev libraries (and pkg-config).\n' >&2
+    printf 'Install the missing packages, then re-run this script.\n' >&2
+    case "$PKG_MGR" in
+      apt)    printf '  sudo apt-get install -y pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev\n' >&2 ;;
+      dnf)    printf '  sudo dnf install -y pkgconf-pkg-config gtk3-devel webkit2gtk4.1-devel\n' >&2 ;;
+      pacman) printf '  sudo pacman -S pkgconf gtk3 webkit2gtk-4.1\n' >&2 ;;
+      *)      printf '  Install pkg-config, gtk3 dev, and webkit2gtk-4.1 dev via your package manager.\n' >&2 ;;
+    esac
+    exit 1
+  fi
+  printf '[ok]    webkit2gtk-4.1 and gtk+-3.0 dev libraries present\n'
+fi
+
+# ---------------------------------------------------------------------------
+# Step 6: build perch
 # ---------------------------------------------------------------------------
 if [ "$SKIP_BUILD" = "1" ]; then
   printf '[skip] perch build (--skip-build)\n'

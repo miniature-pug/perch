@@ -886,6 +886,55 @@ func TestApp_CreateWorkspace_NonWorktreeBranchSharing(t *testing.T) {
 	}
 }
 
+// TestApp_CreateWorkspace_UnbornHead_ReturnsNoCommits verifies that
+// CreateWorkspace returns ErrNoCommits (via errors.Is) and does NOT persist any
+// workspace record when called against a freshly git-init'd repo with no commits
+// (unborn HEAD).
+func TestApp_CreateWorkspace_UnbornHead_ReturnsNoCommits(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+
+	// Create repo with ZERO commits — do NOT make any commit.
+	repo := filepath.Join(root, "proj")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main", repo},
+	} {
+		cmd := exec.Command("git", args...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+
+	a := &App{
+		store:    store,
+		roots:    []string{root},
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+	}
+
+	countBefore := len(store.List())
+
+	_, err := a.CreateWorkspace("claude", repo, "HEAD", "feat/new", true)
+	if err == nil {
+		t.Fatal("CreateWorkspace returned nil error, want ErrNoCommits")
+	}
+	if !errors.Is(err, git.ErrNoCommits) {
+		t.Errorf("want errors.Is(err, git.ErrNoCommits), got %v", err)
+	}
+	// No workspace record must have been persisted.
+	if got := len(store.List()); got != countBefore {
+		t.Errorf("workspace count = %d, want %d (no record should be persisted)", got, countBefore)
+	}
+}
+
 // ── WorkspaceForBranch ────────────────────────────────────────────────────────
 
 // TestApp_WorkspaceForBranch_Hit verifies found=true when a worktree session
@@ -1007,6 +1056,7 @@ func TestApp_OpenWorkspace_WritesLaunchCmdAndEmitsEvents(t *testing.T) {
 		newMonitor: func(toolName string, _ agent.Adapter) (agent.Monitor, error) {
 			return fm, nil
 		},
+		newAdapter: fakeAdapterSeam(&fakeAdapter{name: "claude", detect: true}),
 	}
 
 	if err := a.OpenWorkspace("ws-open"); err != nil {
@@ -1044,6 +1094,123 @@ func TestApp_OpenWorkspace_WritesLaunchCmdAndEmitsEvents(t *testing.T) {
 	}
 	if !found {
 		t.Error("agent:event was not emitted after Monitor.Events() replay")
+	}
+}
+
+func TestApp_OpenWorkspace_AgentMissing_SkipsLaunchAndNotifies(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+
+	wt := t.TempDir()
+	_ = store.Upsert(registry.Workspace{
+		ID:           "ws-missing-agent",
+		WorktreePath: wt,
+		Agent:        "claude",
+		Title:        "t",
+	})
+
+	fm := agent.NewFakeMonitor(nil)
+	fm.SetLaunchCmd("claude --resume abc\n")
+
+	var mu sync.Mutex
+	var emitted []struct {
+		event string
+		data  []any
+	}
+	emit := func(event string, data ...any) {
+		mu.Lock()
+		emitted = append(emitted, struct {
+			event string
+			data  []any
+		}{event, data})
+		mu.Unlock()
+	}
+
+	var written []byte
+	var writeMu sync.Mutex
+
+	a := &App{
+		store:    store,
+		roots:    []string{wt},
+		emit:     emit,
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+		cancels:  map[string]context.CancelFunc{},
+		spawnPty: func(_ context.Context, _ string, _ []string, _, _ string,
+			_ internalpty.EmitFunc, _, _ uint16) (*internalpty.Bridge, error) {
+			b := internalpty.NewBridgeForTest(func() error { return nil })
+			b.OverrideWriteForTest(func(p []byte) (int, error) {
+				writeMu.Lock()
+				written = append(written, p...)
+				writeMu.Unlock()
+				return len(p), nil
+			})
+			return b, nil
+		},
+		newMonitor: func(_ string, _ agent.Adapter) (agent.Monitor, error) {
+			return fm, nil
+		},
+		newAdapter: fakeAdapterSeam(&fakeAdapter{name: "claude", detect: false}),
+	}
+
+	// (a) OpenWorkspace must return nil — the missing agent is non-fatal.
+	if err := a.OpenWorkspace("ws-missing-agent"); err != nil {
+		t.Fatalf("OpenWorkspace returned unexpected error: %v", err)
+	}
+
+	// Give the goroutines a moment to settle.
+	time.Sleep(50 * time.Millisecond)
+
+	// (a) launch command must NOT have been written to the bridge.
+	writeMu.Lock()
+	gotWritten := string(written)
+	writeMu.Unlock()
+	if gotWritten != "" {
+		t.Errorf("expected nothing written to pty, got %q", gotWritten)
+	}
+
+	// (b) a "notify" event with tier "blocking" mentioning the agent must have been emitted.
+	mu.Lock()
+	snapshot := make([]struct {
+		event string
+		data  []any
+	}, len(emitted))
+	copy(snapshot, emitted)
+	mu.Unlock()
+
+	var foundNotify bool
+	for _, e := range snapshot {
+		if e.event != "notify" {
+			continue
+		}
+		if len(e.data) == 0 {
+			continue
+		}
+		m, ok := e.data[0].(map[string]any)
+		if !ok {
+			continue
+		}
+		if m["tier"] != "blocking" {
+			continue
+		}
+		title, _ := m["title"].(string)
+		body, _ := m["body"].(string)
+		wsID, _ := m["workspaceId"].(string)
+		if title != "Agent not found" {
+			continue
+		}
+		if !strings.Contains(body, "claude") {
+			t.Errorf("notify body %q does not mention agent name", body)
+		}
+		if wsID != "ws-missing-agent" {
+			t.Errorf("notify workspaceId = %q, want ws-missing-agent", wsID)
+		}
+		foundNotify = true
+		break
+	}
+	if !foundNotify {
+		t.Errorf("expected a blocking notify event for missing agent; got events: %v", snapshot)
 	}
 }
 
@@ -2062,6 +2229,25 @@ func TestApp_Approve_AlwaysUsesWorkspaceAgent(t *testing.T) {
 	}
 }
 
+// fakeAdapter is a minimal agent.Adapter implementation for tests. It lets tests
+// force Detect() to return a known value regardless of what is on the host PATH.
+type fakeAdapter struct {
+	name   string
+	detect bool
+}
+
+func (f *fakeAdapter) Name() string                    { return f.name }
+func (f *fakeAdapter) Detect() bool                    { return f.detect }
+func (f *fakeAdapter) ResumeArgs(sessionID string) []string { return []string{f.name, "--resume", sessionID} }
+func (f *fakeAdapter) NewArgs() []string               { return nil }
+
+// fakeAdapterSeam returns an agentAdapterFunc that always injects the supplied
+// fakeAdapter, ignoring the tool name. Use this wherever OpenWorkspace is called
+// from a test so Detect() is deterministic (no PATH dependency).
+func fakeAdapterSeam(fa *fakeAdapter) agentAdapterFunc {
+	return func(_ string) agent.Adapter { return fa }
+}
+
 // makeWatcherSeam returns a newWatcherFunc that captures the registered onChange
 // closure into *capturedOnChange and returns an inert real watcher on a temp dir.
 func makeWatcherSeam(t *testing.T, capturedOnChange *func(string)) newWatcherFunc {
@@ -2114,7 +2300,8 @@ func newWatcherTestApp(t *testing.T, wt string, capturedOnChange *func(string)) 
 		newMonitor: func(_ string, _ agent.Adapter) (agent.Monitor, error) {
 			return agent.NewFakeMonitor(nil), nil
 		},
-		newWatcher: makeWatcherSeam(t, capturedOnChange),
+		newWatcher:  makeWatcherSeam(t, capturedOnChange),
+		newAdapter:  fakeAdapterSeam(&fakeAdapter{name: "claude", detect: true}),
 	}
 
 	snapshot := func() []struct {
@@ -2242,6 +2429,7 @@ func TestApp_OpenWorkspace_SessionIDPersistedOnSessionStart(t *testing.T) {
 		newMonitor: func(_ string, _ agent.Adapter) (agent.Monitor, error) {
 			return fm, nil
 		},
+		newAdapter: fakeAdapterSeam(&fakeAdapter{name: "claude", detect: true}),
 	}
 
 	if err := a.OpenWorkspace("ws-ses"); err != nil {
@@ -2298,6 +2486,7 @@ func TestApp_OpenWorkspace_ResumeUsesLastSessionID(t *testing.T) {
 			lastFM = fm
 			return fm, nil
 		},
+		newAdapter: fakeAdapterSeam(&fakeAdapter{name: "claude", detect: true}),
 	}
 
 	if err := a.OpenWorkspace("ws-resume"); err != nil {

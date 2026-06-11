@@ -124,6 +124,7 @@ func TestSecFix_L10_ShellMetacharSessionID_NotPersisted(t *testing.T) {
 		newMonitor: func(_ string, _ agent.Adapter) (agent.Monitor, error) {
 			return fm, nil
 		},
+		newAdapter: fakeAdapterSeam(&fakeAdapter{name: "claude", detect: true}),
 	}
 
 	if err := a.OpenWorkspace(workspaceID); err != nil {

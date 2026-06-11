@@ -19,6 +19,30 @@ var ErrWorktreeDirty = errors.New("worktree has uncommitted changes")
 // already checked out by a tracked perch session.
 var ErrBranchInUse = errors.New("branch already checked out by a session")
 
+// ErrNoCommits is returned (wrapped) when an operation needs a commit to exist
+// but the repository has an unborn HEAD (freshly init'd, zero commits).
+var ErrNoCommits = errors.New("git: repository has no commits yet")
+
+// HasCommits reports whether repoRoot has at least one commit (a born HEAD).
+// It runs `git -C <repoRoot> rev-parse --verify --quiet HEAD`. On an unborn
+// HEAD git exits non-zero with empty stdout AND empty stderr — that is the
+// canonical unborn signal and yields (false, nil). A non-empty stderr (e.g.
+// "fatal: not a git repository") is a real error and is returned wrapped.
+func HasCommits(ctx context.Context, r proc.Runner, repoRoot string) (bool, error) {
+	stdout, stderr, err := r.Run(ctx, "git", "-C", repoRoot, "rev-parse", "--verify", "--quiet", "HEAD")
+	if err != nil {
+		if len(bytes.TrimSpace(stdout)) == 0 && len(bytes.TrimSpace(stderr)) == 0 {
+			return false, nil // unborn HEAD
+		}
+		msg := string(bytes.TrimSpace(stderr))
+		if msg != "" {
+			return false, fmt.Errorf("git: HasCommits: rev-parse %s: %w (stderr: %s)", repoRoot, err, msg)
+		}
+		return false, fmt.Errorf("git: HasCommits: rev-parse %s: %w", repoRoot, err)
+	}
+	return true, nil
+}
+
 // AddWorktreeExisting runs `git -C <repoRoot> worktree add <treePath> <branch>`.
 // It checks out an existing branch into a new linked worktree (no -b; the branch
 // must already exist). branch is validated with ValidRef for V3-A flag-injection
