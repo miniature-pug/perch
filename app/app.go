@@ -1147,16 +1147,35 @@ func (a *App) GetSettings() (Settings, error) {
 	data, err := os.ReadFile(a.settingsPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			// source of truth for settings defaults; frontend mirrors these in frontend/src/lib/constants.ts
-			return Settings{Theme: defaultTheme, Density: defaultDensity, Font: defaultFont, StaleThresholdDays: defaultStaleThresholdDays}, nil
+			return defaultSettings(), nil
 		}
 		return Settings{}, err
 	}
 	var s Settings
 	if err := json.Unmarshal(data, &s); err != nil {
-		return Settings{}, err
+		backupPath, renameErr := quarantineCorrupt(a.settingsPath)
+		if renameErr == nil {
+			fmt.Fprintf(os.Stderr, "perch: settings %s was corrupt and has been quarantined to %s; using defaults\n", a.settingsPath, backupPath)
+		} else {
+			fmt.Fprintf(os.Stderr, "perch: settings %s was corrupt; quarantine to %s failed (%v); using defaults\n", a.settingsPath, backupPath, renameErr)
+		}
+		return defaultSettings(), nil
 	}
 	return s, nil
+}
+
+// defaultSettings is the source of truth for settings defaults; the frontend
+// mirrors these in frontend/src/lib/constants.ts. Returned on first run (no
+// settings file) and when an existing settings file is corrupt.
+func defaultSettings() Settings {
+	return Settings{Theme: defaultTheme, Density: defaultDensity, Font: defaultFont, StaleThresholdDays: defaultStaleThresholdDays}
+}
+
+// quarantineCorrupt renames path to a timestamped .corrupt-* backup and
+// returns the backup path. The caller logs the outcome.
+func quarantineCorrupt(path string) (string, error) {
+	backupPath := path + ".corrupt-" + time.Now().UTC().Format("20060102T150405Z")
+	return backupPath, os.Rename(path, backupPath)
 }
 
 // HomeShellCwd returns the working directory for the home shell pane: the process

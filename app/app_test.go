@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -3202,5 +3203,64 @@ func TestApp_CleanupSessions_WorktreeRemoveFails_KeepsRecord(t *testing.T) {
 		if c.Name == "git" && len(c.Args) >= 4 && c.Args[2] == "branch" && c.Args[3] == "-d" {
 			t.Error("branch delete attempted after worktree-remove failure")
 		}
+	}
+}
+
+// TestApp_GetSettings_CorruptJSON_QuarantinesAndReturnsDefaults verifies that
+// GetSettings does not return an error when settings.json contains invalid JSON,
+// quarantines the corrupt file, and returns default settings.
+func TestApp_GetSettings_CorruptJSON_QuarantinesAndReturnsDefaults(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+
+	corruptData := []byte(`[{bad`)
+	settingsFile := filepath.Join(cfgDir, "settings.json")
+	if err := os.WriteFile(settingsFile, corruptData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	a := &App{
+		store:        store,
+		emit:         func(string, ...any) {},
+		bridges:      map[string]*internalpty.Bridge{},
+		monitors:     map[string]agent.Monitor{},
+		settingsPath: settingsFile,
+	}
+
+	s, err := a.GetSettings()
+	if err != nil {
+		t.Fatalf("GetSettings returned error on corrupt JSON: %v", err)
+	}
+	if s.Theme != defaultTheme {
+		t.Errorf("Theme = %q, want %q", s.Theme, defaultTheme)
+	}
+	if s.Density != defaultDensity {
+		t.Errorf("Density = %q, want %q", s.Density, defaultDensity)
+	}
+	if s.Font != defaultFont {
+		t.Errorf("Font = %q, want %q", s.Font, defaultFont)
+	}
+	if s.StaleThresholdDays != defaultStaleThresholdDays {
+		t.Errorf("StaleThresholdDays = %d, want %d", s.StaleThresholdDays, defaultStaleThresholdDays)
+	}
+	// original file should be gone (renamed away)
+	if _, err := os.Stat(settingsFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected original settings.json to be gone, got: %v", err)
+	}
+	// backup should exist with original bytes
+	matches, err := filepath.Glob(settingsFile + ".corrupt-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) == 0 {
+		t.Fatal("expected a .corrupt-* backup file, found none")
+	}
+	got, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, corruptData) {
+		t.Fatalf("backup data mismatch: got %q, want %q", got, corruptData)
 	}
 }

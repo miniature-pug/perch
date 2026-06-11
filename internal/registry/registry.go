@@ -77,7 +77,13 @@ func Load(configDir string) (*Store, error) {
 	}
 	var items []Workspace
 	if err := json.Unmarshal(data, &items); err != nil {
-		return nil, fmt.Errorf("registry: parse %s: %w", path, err)
+		backupPath, renameErr := quarantine(path)
+		if renameErr == nil {
+			fmt.Fprintf(os.Stderr, "registry: %s was corrupt and has been quarantined to %s; starting with an empty workspace list\n", path, backupPath)
+		} else {
+			fmt.Fprintf(os.Stderr, "registry: %s was corrupt; quarantine to %s failed (%v); starting with an empty workspace list\n", path, backupPath, renameErr)
+		}
+		return s, nil
 	}
 	for _, w := range items {
 		s.items[w.ID] = w
@@ -122,6 +128,13 @@ func (s *Store) Remove(id string) error {
 	defer s.mu.Unlock()
 	delete(s.items, id)
 	return s.flush()
+}
+
+// quarantine renames path to a timestamped .corrupt-* backup and returns the
+// backup path. The caller logs the outcome; quarantine itself is silent.
+func quarantine(path string) (string, error) {
+	backupPath := path + ".corrupt-" + time.Now().UTC().Format("20060102T150405Z")
+	return backupPath, os.Rename(path, backupPath)
 }
 
 // flush writes all items to disk atomically (temp file + rename).

@@ -2,6 +2,8 @@
 package registry_test
 
 import (
+	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -321,4 +323,44 @@ func TestDefaultConfigDir(t *testing.T) {
 			t.Fatalf("got %s, want %s", got, want)
 		}
 	})
+}
+
+func TestLoad_CorruptJSON_QuarantinesAndReturnsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	configDir := filepath.Join(dir, "perch")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	corruptData := []byte(`[{bad`)
+	registryPath := filepath.Join(configDir, "workspaces.json")
+	if err := os.WriteFile(registryPath, corruptData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := registry.Load(configDir)
+	if err != nil {
+		t.Fatalf("Load returned error on corrupt JSON: %v", err)
+	}
+	if n := len(store.List()); n != 0 {
+		t.Fatalf("expected 0 workspaces, got %d", n)
+	}
+	// original file should be gone (renamed)
+	if _, err := os.Stat(registryPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected original workspaces.json to be gone, got: %v", err)
+	}
+	// backup should exist with original bytes
+	matches, err := filepath.Glob(registryPath + ".corrupt-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) == 0 {
+		t.Fatal("expected a .corrupt-* backup file, found none")
+	}
+	got, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, corruptData) {
+		t.Fatalf("backup data mismatch: got %q, want %q", got, corruptData)
+	}
 }
