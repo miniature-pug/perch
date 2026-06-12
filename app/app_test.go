@@ -3264,3 +3264,32 @@ func TestApp_GetSettings_CorruptJSON_QuarantinesAndReturnsDefaults(t *testing.T)
 		t.Fatalf("backup data mismatch: got %q, want %q", got, corruptData)
 	}
 }
+
+// TestApp_ListStaleSessions_EmptyStore_ReturnsNonNilEmptySlice verifies that
+// ListStaleSessions returns an empty non-nil slice (not nil) when no workspaces
+// exist. A nil return marshals to JSON null and crashes the Svelte frontend.
+func TestApp_ListStaleSessions_EmptyStore_ReturnsNonNilEmptySlice(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	a := &App{
+		store:        store,
+		roots:        []string{t.TempDir()},
+		run:          proc.NewFakeRunner(),
+		emit:         func(string, ...any) {},
+		bridges:      map[string]*internalpty.Bridge{},
+		monitors:     map[string]agent.Monitor{},
+		cancels:      map[string]context.CancelFunc{},
+		settingsPath: filepath.Join(cfgDir, "settings.json"),
+	}
+	out, err := a.ListStaleSessions()
+	if err != nil {
+		t.Fatalf("ListStaleSessions: %v", err)
+	}
+	if out == nil {
+		t.Fatal("ListStaleSessions must return non-nil slice (nil marshals to JSON null, crashing frontend)")
+	}
+	if len(out) != 0 {
+		t.Errorf("expected empty slice, got %d entries", len(out))
+	}
+}

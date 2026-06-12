@@ -230,7 +230,7 @@
     // Refresh diffstats for all loaded workspaces (fire-and-forget, event-driven updates thereafter).
     for (const ws of workspaces) refreshDiffStat(ws);
     try {
-      staleSessions = await listStaleSessions();
+      staleSessions = (await listStaleSessions()) ?? [];
     } catch {
       // non-fatal — never block startup
     }
@@ -980,7 +980,7 @@
           onClose={async () => {
             cleanupOpen = false;
             try {
-              staleSessions = await listStaleSessions();
+              staleSessions = (await listStaleSessions()) ?? [];
               workspaces = await listWorkspaces();
             } catch { /* non-fatal */ }
           }}

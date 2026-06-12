@@ -244,3 +244,16 @@ test("style block contains min-width: 0 for .field-select and .field-input", () 
   const count = (styleText.match(/min-width:\s*0/g) ?? []).length;
   expect(count).toBeGreaterThanOrEqual(2);
 });
+
+// ── 10. Null-safety: loadBranches resolves null ───────────────────────────────
+
+test("does not crash and branch list is empty when loadBranches resolves null", async () => {
+  const { default: D } = await import("./NewSessionDialog.svelte");
+  const loadBranches = vi.fn(async (_repo: string) => null as unknown as string[]);
+  render(D, { props: defaultProps({ loadBranches }) });
+  // Dialog must render without throwing
+  await waitFor(() => expect(screen.getByRole("dialog", { name: /new session/i })).toBeInTheDocument());
+  // No branch options should be rendered in the "starting point" select (branches treated as [])
+  const startingPointSelect = screen.getByRole("combobox", { name: /starting point/i });
+  expect(startingPointSelect.querySelectorAll("option").length).toBe(0);
+});

@@ -65,9 +65,9 @@
     let cancelled = false;
     loadBranches(currentRepo).then((list) => {
       if (cancelled) return;
-      branches = list;
-      baseRef  = list[0] ?? "";
-      branchSel = list[0] ?? "";
+      branches = list ?? [];
+      baseRef  = branches[0] ?? "";
+      branchSel = branches[0] ?? "";
     });
     return () => { cancelled = true; };
   });

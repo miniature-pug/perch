@@ -23,7 +23,7 @@ func Branches(ctx context.Context, r proc.Runner, repo string) ([]string, error)
 	if err != nil {
 		return nil, fmt.Errorf("git branch: %w: %s", err, strings.TrimSpace(string(errOut)))
 	}
-	var branches []string
+	branches := make([]string, 0)
 	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
 		if b := strings.TrimSpace(line); b != "" {
 			branches = append(branches, b)

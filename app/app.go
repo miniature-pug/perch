@@ -1028,7 +1028,7 @@ func (a *App) ListStaleSessions() ([]StaleSessionVM, error) {
 	cutoff := time.Now().Add(-time.Duration(days) * 24 * time.Hour)
 	ws := a.store.List()
 	ctx := context.Background()
-	var out []StaleSessionVM
+	out := make([]StaleSessionVM, 0)
 	for _, w := range ws {
 		if !w.Worktree {
 			continue

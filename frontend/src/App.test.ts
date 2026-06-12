@@ -3216,3 +3216,16 @@ describe("App.svelte CleanupPanel onClose refetches stale sessions", () => {
     );
   });
 });
+
+describe("App.svelte staleSessions null-safety (nil-slice guard)", () => {
+  it("does not crash and shows no stale-banner when listStaleSessions resolves null", async () => {
+    const { listStaleSessions } = await import("./lib/wails");
+    (listStaleSessions as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    // Wait for onMount to complete — any throw would surface here
+    await waitFor(() => expect(document.querySelector("[data-zone='sidebar']")).toBeInTheDocument());
+    // staleSessions should be treated as [] → no stale-banner
+    expect(document.querySelector('[data-testid="stale-banner"]')).not.toBeInTheDocument();
+  });
+});
