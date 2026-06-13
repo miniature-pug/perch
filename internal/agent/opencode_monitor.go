@@ -155,21 +155,21 @@ func (m *OpencodeMonitor) Prepare(_ context.Context, _, _, resumeID string) (str
 	attach := "opencode attach " + m.serverURL
 	if resumeID != "" {
 		// resumeID charset is [A-Za-z0-9_-], validated by app.validateSessionID
-		// in the event pump (L-10 fix) before any session id is persisted to the
-		// registry, so plain concatenation is safe as a single shell token.
+		// in the event pump before any session id is persisted to the registry,
+		// so plain concatenation is safe as a single shell token.
 		attach += " --session " + resumeID
 	}
-	// L-18: opencode also accepts --continue/-c to resume the most-recent session
+	// opencode also accepts --continue/-c to resume the most-recent session
 	// without knowing its ID. We deliberately do NOT wire that flag here because
 	// there is no mechanism in the call path for a caller to express "continue
 	// intent" as distinct from "I have no session id": app.OpenWorkspace always
 	// passes w.LastSessionID (a concrete ID or ""). An empty resumeID means the
 	// workspace is fresh, not that --continue should be used. Adding --continue
 	// support would require a new signal in the Monitor.Prepare signature, which
-	// is a shared interface (ClaudeMonitor, FakeMonitor also implement it) — a
-	// multi-file interface change outside the scope of this fix. If a "resume
-	// most recent" UX is later desired, extend app.OpenWorkspace / the registry
-	// to pass a "continueLatest bool" through to Prepare, then add the flag here.
+	// is a shared interface (ClaudeMonitor, FakeMonitor also implement it): a
+	// multi-file interface change. If a "resume most recent" UX is later desired,
+	// extend app.OpenWorkspace / the registry to pass a "continueLatest bool"
+	// through to Prepare, then add the flag here.
 
 	// Leading space keeps the password out of history-ignoring shells. The poll
 	// caps at ~10s (50 × 0.2s) then falls through to attach, which will surface
@@ -294,7 +294,7 @@ type sseEnvelope struct {
 
 // idleTransition maps an opencode idle signal to a lifecycle state given the
 // prior state: a busy→idle transition is a completed turn (StateDone, drives the
-// §8 ambient toast); any other idle is a steady idle (StateIdle, no toast).
+// ambient toast); any other idle is a steady idle (StateIdle, no toast).
 func idleTransition(prev State) Event {
 	if prev == StateRunning {
 		return Event{Kind: "state", State: StateDone}
@@ -335,8 +335,8 @@ func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
 		}
 		switch p.Status.Type {
 		case "idle":
-			// H-6: a busy→idle transition means the agent finished a turn → StateDone
-			// so dispatchNotify fires the §8 ambient toast. An idle that does NOT
+			// A busy→idle transition means the agent finished a turn → StateDone
+			// so dispatchNotify fires the ambient toast. An idle that does NOT
 			// follow a running state (e.g. the session reporting idle at connect, or
 			// a duplicate idle / the deprecated session.idle alias firing too) is a
 			// steady idle → StateIdle, no spurious "Turn complete" toast.
@@ -403,7 +403,7 @@ func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
 		// FAIL CLOSED — compute hash only when the request carries distinguishing
 		// patterns; otherwise leave InputHash empty and force the user to approve
 		// every time. Never collapse distinct operations to one key.
-		// M-13: hash is computed from the FULL (untruncated) input before truncation.
+		// The hash is computed from the FULL (untruncated) input before truncation.
 		input := ""
 		inputHash := ""
 		if len(p.Patterns) > 0 {

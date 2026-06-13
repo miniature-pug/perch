@@ -1,5 +1,5 @@
 /**
- * (e) settings.spec.ts
+ * settings.spec.ts
  *
  * Open SettingsPanel; toggle theme (assert data-theme changes), density, font;
  * toggle DND; revoke an always-rule; assert SaveSettings called exactly once

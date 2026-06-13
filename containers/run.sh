@@ -4,7 +4,7 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # containers/run.sh <image> <cmd...> — run a command inside a perch container.
 #
-# The single definition of "how perch runs in a container" (spec §6.2), reused
+# The single definition of "how perch runs in a container", reused
 # by every `make` target. <image> is the short name under containers/ (e.g.
 # `dev` → perch-dev:latest). Everything after it is the command to exec.
 #
@@ -19,7 +19,7 @@ set -euo pipefail
 #   - frontend/dist         : masked ONLY when PERCH_MASK_DIST is set (the
 #     frontend-building targets, which run `vite build`). Go targets must NOT
 #     mask it or `//go:embed frontend/dist` finds an empty dir and fails to
-#     compile (spec §5.3). Default: unmasked → committed stub is read, nothing
+#     compile. Default: unmasked → committed stub is read, nothing
 #     is written, host stays clean.
 # ---------------------------------------------------------------------------
 

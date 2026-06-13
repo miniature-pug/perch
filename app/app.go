@@ -117,7 +117,7 @@ type App struct {
 	// read-modify-write sequence in Approve and the GetSettings read in
 	// maybeAutoApprove. It must NEVER be acquired while a.mu is held (lock order:
 	// a.mu first, then settingsMu — but never nest a.mu inside settingsMu).
-	// M-12 fix: prevents concurrent Approve(always) calls from losing rules.
+	// Prevents concurrent Approve(always) calls from losing rules.
 	settingsMu sync.Mutex
 
 	// pending maps a composed approval reqID ("<raw>:<workspaceID>") to the
@@ -238,7 +238,7 @@ func (a *App) shutdown(_ context.Context) {
 	a.bridges = map[string]*internalpty.Bridge{}
 	a.monitors = map[string]agent.Monitor{}
 	a.cancels = map[string]context.CancelFunc{}
-	// L-12: reset pending approvals on shutdown so stale entries cannot outlive
+	// Reset pending approvals on shutdown so stale entries cannot outlive
 	// their workspaces.
 	a.pending = map[string]agent.ApprovalReq{}
 	a.mu.Unlock()
@@ -418,7 +418,7 @@ type AlwaysRule struct {
 	Pattern string `json:"pattern"` // truncated display value; NOT the security boundary
 	// Hash is the hex-encoded sha256 of the FULL (untruncated) tool input at the
 	// time the user clicked "always". maybeAutoApprove matches on Hash, not Pattern,
-	// so two inputs sharing a 4096-byte prefix cannot collide (M-13 fix).
+	// so two inputs sharing a 4096-byte prefix cannot collide.
 	Hash string `json:"hash,omitempty"`
 }
 
@@ -496,8 +496,8 @@ func (a *App) CreateWorkspace(agentName, repoPath, baseRef, branch string, workt
 		// target differs from the current branch. Bare `git checkout` only fails on
 		// *conflict*, so a dirty-but-non-conflicting tree would silently carry
 		// uncommitted changes across the switch; refuse instead and ask the user to
-		// clean first (spec §4). Attaching to the current branch needs no switch, so
-		// a dirty tree is allowed there.
+		// clean first. Attaching to the current branch needs no switch, so a dirty
+		// tree is allowed there.
 		current, err := gitpkg.CurrentBranch(ctx, a.runner(), repoPath)
 		if err != nil {
 			return WorkspaceVM{}, fmt.Errorf("current branch: %w", err)
@@ -553,7 +553,7 @@ func (a *App) CreateWorkspace(agentName, repoPath, baseRef, branch string, workt
 
 // WorkspaceForBranch returns the ID of the worktree session that is tracking
 // branch in repoPath, if any. Only worktree sessions (Worktree==true) are
-// considered; non-worktree sessions may share a branch by design (spec §4).
+// considered; non-worktree sessions may share a branch by design.
 func (a *App) WorkspaceForBranch(repoPath, branch string) (id string, found bool) {
 	for _, w := range a.store.List() {
 		if w.Worktree && w.RepoPath == repoPath && w.Branch == branch {
@@ -571,7 +571,7 @@ func (a *App) WorkspaceForBranch(repoPath, branch string) (id string, found bool
 //
 // mon.Start(wctx) is REQUIRED: without it no events ever flow from a real monitor.
 func (a *App) OpenWorkspace(id string) error {
-	// L-11: validate workspace id before touching the store.
+	// Validate workspace id before touching the store.
 	if err := validateSessionID(id); err != nil {
 		return fmt.Errorf("invalid workspace id: %w", err)
 	}
@@ -716,12 +716,12 @@ func (a *App) OpenWorkspace(id string) error {
 				if !ok {
 					return
 				}
-				// BUG 4 fix: stamp WorkspaceID so the frontend can match events to
-				// the correct workspace (evt.workspaceId == "" before this fix).
+				// Stamp WorkspaceID so the frontend can match events to the correct
+				// workspace.
 				evt.WorkspaceID = id
-				// BUG 5 fix: compose the approval ReqID as "<raw>:<workspaceID>" so
-				// that Approve() can parse and route it via strings.LastIndex(":").
-				// Copy the ApprovalReq to avoid mutating the monitor's own pointee.
+				// Compose the approval ReqID as "<raw>:<workspaceID>" so that Approve()
+				// can parse and route it via strings.LastIndex(":"). Copy the
+				// ApprovalReq to avoid mutating the monitor's own pointee.
 				if evt.Approval != nil {
 					rawReqID := evt.Approval.ReqID
 					a2 := *evt.Approval
@@ -744,7 +744,7 @@ func (a *App) OpenWorkspace(id string) error {
 				}
 				// Session-resume: when the agent reports a new session id, persist
 				// it so the next OpenWorkspace call can pass it as resumeID.
-				// L-10: validate the session id before persisting; an invalid id
+				// Validate the session id before persisting; an invalid id
 				// (e.g. containing shell metacharacters) is silently dropped so it
 				// can never be concatenated into a shell launch command later.
 				if evt.SessionID != "" && validateSessionID(evt.SessionID) == nil {
@@ -781,8 +781,8 @@ func (a *App) maybeAutoApprove(workspaceID, rawReqID string, req agent.ApprovalR
 	if w, ok := a.store.Get(workspaceID); ok && w.Agent != "" {
 		agentName = w.Agent
 	}
-	// M-12: hold settingsMu (read side) so we see a consistent snapshot of
-	// settings and don't race with a concurrent Approve(always) write.
+	// Hold settingsMu (read side) so we see a consistent snapshot of settings
+	// and don't race with a concurrent Approve(always) write.
 	// DEADLOCK GUARD: a.mu must NOT be held before settingsMu is taken; callers
 	// of maybeAutoApprove are outside any a.mu critical section.
 	a.settingsMu.Lock()
@@ -796,10 +796,10 @@ func (a *App) maybeAutoApprove(workspaceID, rawReqID string, req agent.ApprovalR
 		if r.Agent != agentName || r.Tool != req.Tool {
 			continue
 		}
-		// M-13: the SHA-256 hash of the full (untruncated) tool input is the sole
+		// The SHA-256 hash of the full (untruncated) tool input is the sole
 		// authoritative match key. Pattern is display-only (it is truncated to
 		// MaxApprovalInputLen, so two inputs sharing a 4096-byte prefix collide on
-		// Pattern — matching on it would be a privilege-escalation hole). A rule
+		// Pattern, matching on it would be a privilege-escalation hole). A rule
 		// without a Hash, or a request without an InputHash, never auto-approves
 		// (fail closed). There is no backward-compat requirement, so no legacy
 		// pattern fallback: any pre-Hash rule simply prompts once and is re-saved
@@ -826,9 +826,9 @@ func (a *App) maybeAutoApprove(workspaceID, rawReqID string, req agent.ApprovalR
 
 // dispatchNotify translates an agent.Event into a "notify" Wails event at the
 // appropriate tier and, for blocking-tier events when the window is unfocused,
-// also fires an OS desktop notification. Per SPEC §8, Do-Not-Disturb mutes only
-// tiers 2–3 (ambient + routine) and never tier 1 (blocking); since only blocking
-// events fire an OS notification, DND has no bearing on the OS-notify path.
+// also fires an OS desktop notification. Do-Not-Disturb mutes only the ambient
+// and routine tiers and never the blocking tier; since only blocking events fire
+// an OS notification, DND has no bearing on the OS-notify path.
 func (a *App) dispatchNotify(evt agent.Event) {
 	var tier, title, body string
 	switch {
@@ -853,8 +853,8 @@ func (a *App) dispatchNotify(evt agent.Event) {
 	})
 
 	// OS desktop notification: only for blocking-tier events and only when the
-	// window is unfocused. DND is deliberately NOT consulted here — SPEC §8 says
-	// DND never mutes blocking (tier 1), and only blocking fires an OS notification.
+	// window is unfocused. DND is deliberately NOT consulted here: DND never mutes
+	// the blocking tier, and only blocking fires an OS notification.
 	if tier != "blocking" {
 		return
 	}
@@ -906,7 +906,7 @@ func (a *App) ResizePty(paneID string, cols, rows uint16) error {
 // CloseWorkspace cancels the workspace pump, tears down the monitor, and closes
 // the pty — but keeps the workspace record in the registry (it can be reopened).
 func (a *App) CloseWorkspace(id string) error {
-	// L-11: validate workspace id before touching the store.
+	// Validate workspace id before touching the store.
 	if err := validateSessionID(id); err != nil {
 		return fmt.Errorf("invalid workspace id: %w", err)
 	}
@@ -921,8 +921,8 @@ func (a *App) CloseWorkspace(id string) error {
 		cancel = a.cancels[id]
 		delete(a.cancels, id)
 	}
-	// L-12: purge pending approvals belonging to this workspace so that a
-	// closed workspace does not accumulate phantom entries in the pending map.
+	// Purge pending approvals belonging to this workspace so that a closed
+	// workspace does not accumulate phantom entries in the pending map.
 	// Pending keys have the form "<raw>:<workspaceID>" (see Approve / event pump);
 	// validateSessionID forbids ':' in ids so the suffix match is unambiguous.
 	suffix := ":" + id
@@ -1314,7 +1314,7 @@ func (a *App) ReadFile(absPath string) (string, error) {
 
 // WriteFile atomically writes content to absPath.
 func (a *App) WriteFile(absPath, content string) error {
-	// L-5: validate absPath itself (not just its Dir) so a symlink-as-final-component
+	// Validate absPath itself (not just its Dir) so a symlink-as-final-component
 	// that resolves outside root is caught.
 	//
 	// Primary path: absPath resolves successfully via EvalSymlinks (file exists or is
@@ -1367,8 +1367,8 @@ func (a *App) RevealInFiles(absPath string) error {
 // CopyPath copies absPath to the system clipboard via the Wails runtime.
 // WebKit2GTK's navigator.clipboard is unreliable, so the copy happens host-side.
 func (a *App) CopyPath(absPath string) error {
-	// L-8: validate before the ctx guard so tests can exercise the security
-	// boundary without a Wails runtime (ctx == nil → clipboard no-op after validation).
+	// Validate before the ctx guard so tests can exercise the security boundary
+	// without a Wails runtime (ctx == nil → clipboard no-op after validation).
 	if err := validateWorktreeUnderRoots(absPath, a.roots); err != nil {
 		return err
 	}
@@ -1436,8 +1436,8 @@ func (a *App) Approve(reqID, decision string) error {
 		if w, ok := a.store.Get(workspaceID); ok && w.Agent != "" {
 			agentName = w.Agent
 		}
-		// M-12: hold settingsMu across the entire read-modify-write so that
-		// concurrent Approve(always) calls cannot interleave and lose rules.
+		// Hold settingsMu across the entire read-modify-write so that concurrent
+		// Approve(always) calls cannot interleave and lose rules.
 		// DEADLOCK GUARD: a.mu is released above before settingsMu is taken.
 		a.settingsMu.Lock()
 		s, err := a.GetSettings()
@@ -1447,7 +1447,7 @@ func (a *App) Approve(reqID, decision string) error {
 		}
 		dup := false
 		for _, r := range s.AlwaysRules {
-			// Dedup on the same authoritative key used for matching (M-13: hash).
+			// Dedup on the same authoritative key used for matching (the hash).
 			if r.Agent == agentName && r.Tool == req.Tool && r.Hash != "" && r.Hash == req.InputHash {
 				dup = true
 				break
@@ -1458,7 +1458,7 @@ func (a *App) Approve(reqID, decision string) error {
 				Agent:   agentName,
 				Tool:    req.Tool,
 				Pattern: req.Input,     // truncated display value
-				Hash:    req.InputHash, // M-13: hash of full input, authoritative match key
+				Hash:    req.InputHash, // hash of full input, authoritative match key
 			})
 			// settingsMu is already held here; call the unlocked inner helper to
 			// avoid a re-entrant deadlock (SaveSettings would re-take settingsMu).

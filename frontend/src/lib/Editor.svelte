@@ -34,7 +34,7 @@
   // Selection tracking for send-to-agent affordance
   let selectionText = $state<string>("");
 
-  // N-10: dirty/unsaved state — true when document has been modified since last load/save
+  // dirty/unsaved state: true when document has been modified since last load/save
   let dirty = $state<boolean>(false);
 
   // ---------------------------------------------------------------------------
@@ -133,7 +133,7 @@
       const { from, to } = update.state.selection.main;
       selectionText = from === to ? "" : update.state.sliceDoc(from, to);
     }
-    // N-10: mark dirty on any user-driven document change
+    // mark dirty on any user-driven document change
     if (update.docChanged) {
       dirty = true;
     }
@@ -161,7 +161,7 @@
         highlightSelectionMatches(),
         keymap.of([...searchKeymap, ...defaultKeymap, indentWithTab]),
         bracketMatching(),
-        // H-9: syntax highlighting via perch CSS-variable-mapped HighlightStyle
+        // syntax highlighting via perch CSS-variable-mapped HighlightStyle
         perchSyntaxHighlighting,
         selectionListener,
         languageForPath(p),
@@ -236,7 +236,7 @@
     } else if (container) {
       view = new EditorView({ state, parent: container });
     }
-    // N-10: setState/new EditorView fires docChanged via the update listener;
+    // setState/new EditorView fires docChanged via the update listener;
     // overwrite immediately so the freshly-loaded file starts clean.
     dirty = false;
     if (gutterState.changed.size > 0 || gutterState.deleted.size > 0) {
@@ -247,7 +247,6 @@
   async function save() {
     if (!path || !view) return;
     await writeFile(path, view.state.doc.toString());
-    // N-10: clear dirty flag after successful save
     dirty = false;
   }
 
@@ -255,7 +254,7 @@
     if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); save(); }
   }
 
-  // N-24: drag selected text as application/x-perch-text (matches DragDrop.svelte MIME)
+  // drag selected text as application/x-perch-text (matches DragDrop.svelte MIME)
   function handleDragStart(e: DragEvent) {
     if (!selectionText || !e.dataTransfer) return;
     e.dataTransfer.effectAllowed = "copy";
@@ -278,12 +277,11 @@
     <div bind:this={container} class="cm-host"></div>
 
     {#if dirty}
-      <!-- N-10: unsaved indicator dot -->
       <span class="dirty-dot" aria-label="Unsaved changes" title="Unsaved changes">●</span>
     {/if}
 
     {#if onSendToAgent && selectionText}
-      <!-- N-24: draggable with application/x-perch-text; button also acts as drag affordance -->
+      <!-- draggable with application/x-perch-text; button also acts as drag affordance -->
       <button
         class="send-to-agent-btn"
         aria-label="Send to agent"
@@ -324,7 +322,7 @@
     min-width: 6px;
   }
 
-  /* N-10: unsaved indicator */
+  /* unsaved indicator */
   .dirty-dot {
     position: absolute;
     top: var(--perch-sp-1, 4px);

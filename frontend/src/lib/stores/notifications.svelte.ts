@@ -12,7 +12,7 @@ let _seq  = 0;
 
 // Auto-dismiss timeouts keyed by notification id.
 // Ambient notifications dismiss after 6 s; routine after 3 s.
-// Blocking notifications NEVER auto-dismiss (spec §8).
+// Blocking notifications NEVER auto-dismiss.
 const _timers = new Map<string, ReturnType<typeof setTimeout>>();
 
 export function getItems(): Notification[] { return items; }
@@ -21,16 +21,16 @@ export function setDnd(v: boolean)          { dnd = v; }
 
 function add(tier: Tier, workspaceId: string, title: string, body: string) {
   const id = `notif-${++_seq}`;
-  // DND silences tiers 2-3 — it does NOT drop them. They are still logged to the
+  // DND silences tiers 2-3: it does NOT drop them. They are still logged to the
   // hub so the away catch-up stays complete, but recorded as already-read so they
   // never bump the unread bell badge (the only interruption these tiers have; OS
   // notifications fire for blocking only). Blocking (tier 1) is never silenced.
-  // (spec §8: "DND mutes tiers 2-3" — mute = silence the interruption, keep the record.)
+  // DND mutes tiers 2-3: mute = silence the interruption, keep the record.
   const silenced = dnd && tier !== "blocking";
   items = [{ id, workspaceId, tier, title, body, read: silenced, ts: Date.now() }, ...items];
 
-  // Auto-dismiss for non-blocking tiers that were actually surfaced (spec §8
-  // "ambient → toast 5-7s"). Silenced items are already read — no timer needed.
+  // Auto-dismiss for non-blocking tiers that were actually surfaced.
+  // Silenced items are already read, so no timer is needed.
   if (tier !== "blocking" && !silenced) {
     const delay = tier === "ambient" ? AMBIENT_DISMISS_MS : ROUTINE_DISMISS_MS;
     const t = setTimeout(() => {

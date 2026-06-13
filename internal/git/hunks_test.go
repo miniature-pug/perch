@@ -59,7 +59,7 @@ func TestHunks_StagedOnlyFile(t *testing.T) {
 		t.Fatalf("Hunks: %v", err)
 	}
 	if len(hunks) == 0 {
-		t.Fatal("Hunks() returned no hunks for a staged-only file — M-4 not fixed")
+		t.Fatal("Hunks() returned no hunks for a staged-only file")
 	}
 	// The hunk must reference MODIFIED.
 	found := false

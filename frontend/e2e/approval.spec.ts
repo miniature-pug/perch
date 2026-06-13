@@ -1,5 +1,5 @@
 /**
- * (f) approval.spec.ts
+ * approval.spec.ts
  *
  * Trigger an approval request via window.__emit("agent:event", payload):
  * - ApprovalCard renders when caps.approvals=true and an approval is in state

@@ -38,7 +38,7 @@ type ApprovalReq struct {
 	// and stored as the human-readable Pattern in an AlwaysRule.
 	// Matching is NOT done on Input — it is done on InputHash (sha256 of the
 	// full, untruncated input) so that two inputs sharing the same 4096-byte
-	// prefix cannot collide (M-13 / privilege-escalation fix).
+	// prefix cannot collide (a privilege-escalation fix).
 	Input string `json:"input"`
 	// InputHash is the hex-encoded sha256 of the FULL (untruncated) tool input.
 	// Computed by the monitor before truncating Input for display. Used as the
@@ -82,9 +82,8 @@ type Monitor interface {
 // `state State` (set from each emitted Event.State; CurrentState() returns it,
 // defaulting to StateIdle when unset) and `lastTool string` (set from
 // Event.Approval.Tool on each approval event; LastApprovalTool() returns it).
-// app.ListWorkspaces (Task 3.2) reads CurrentState(); app.Approve (Task 3.7)
-// reads LastApprovalTool() to persist an AlwaysRule. These accessors are part of
-// the frozen Monitor contract — Tasks 2.15/2.17/2.19 must implement them.
+// app.ListWorkspaces reads CurrentState(); app.Approve reads LastApprovalTool()
+// to persist an AlwaysRule. These accessors are part of the Monitor contract.
 
 func NewMonitor(tool string, adapter Adapter) (Monitor, error) {
 	switch tool {

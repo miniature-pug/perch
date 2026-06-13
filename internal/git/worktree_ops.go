@@ -45,7 +45,7 @@ func HasCommits(ctx context.Context, r proc.Runner, repoRoot string) (bool, erro
 
 // AddWorktreeExisting runs `git -C <repoRoot> worktree add <treePath> <branch>`.
 // It checks out an existing branch into a new linked worktree (no -b; the branch
-// must already exist). branch is validated with ValidRef for V3-A flag-injection
+// must already exist). branch is validated with ValidRef for flag-injection
 // parity with AddWorktree.
 func AddWorktreeExisting(ctx context.Context, r proc.Runner, repoRoot, branch, treePath string) error {
 	if err := ValidRef(branch); err != nil {
@@ -101,7 +101,7 @@ func WorktreeDirty(ctx context.Context, r proc.Runner, treePath string) (bool, e
 // checking whether branch appears in the output. Using --format avoids the
 // leading "* " marker on the current branch that `git branch --merged` emits
 // in default format. Both branch and base are validated with ValidRef for
-// V3-A flag-injection parity.
+// flag-injection parity.
 func BranchMerged(ctx context.Context, r proc.Runner, repoRoot, branch, base string) (bool, error) {
 	if err := ValidRef(branch); err != nil {
 		return false, fmt.Errorf("git: BranchMerged: invalid branch: %w: %w", ErrInvalidRef, err)
@@ -128,7 +128,7 @@ func BranchMerged(ctx context.Context, r proc.Runner, repoRoot, branch, base str
 
 // DeleteBranch runs `git -C <repoRoot> branch -d|-D <branch>`. When force is
 // false, git -d is used (git refuses to delete an unmerged branch). When force
-// is true, git -D is used. branch is validated with ValidRef for V3-A parity.
+// is true, git -D is used. branch is validated with ValidRef for flag-injection parity.
 func DeleteBranch(ctx context.Context, r proc.Runner, repoRoot, branch string, force bool) error {
 	if err := ValidRef(branch); err != nil {
 		return fmt.Errorf("git: DeleteBranch: invalid branch: %w: %w", ErrInvalidRef, err)
@@ -165,7 +165,7 @@ func CurrentBranch(ctx context.Context, r proc.Runner, repoRoot string) (string,
 
 // CheckoutBranch runs `git -C <repoRoot> checkout <branch>`. git fails (and
 // returns a non-zero exit) if the current working tree has changes that conflict
-// with the target branch. branch is validated with ValidRef for V3-A parity.
+// with the target branch. branch is validated with ValidRef for flag-injection parity.
 func CheckoutBranch(ctx context.Context, r proc.Runner, repoRoot, branch string) error {
 	if err := ValidRef(branch); err != nil {
 		return fmt.Errorf("git: CheckoutBranch: invalid branch: %w: %w", ErrInvalidRef, err)

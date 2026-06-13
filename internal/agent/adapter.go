@@ -6,8 +6,7 @@ package agent
 // Adapter is the seam between perch's orchestration logic and a specific AI
 // coding tool. Each tool (claude, opencode) provides one Adapter implementation.
 //
-// The following methods from master-plan §4 are intentionally absent from this interface:
-// ReadyHeuristic and TrustPrompt are deliberately not included here because
+// ReadyHeuristic and TrustPrompt are intentionally absent from this interface:
 // neither has an honest implementation until the TUI milestones that require
 // those UI surfaces. They will be added to this interface at those milestones.
 type Adapter interface {

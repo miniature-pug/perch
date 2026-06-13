@@ -231,7 +231,7 @@ func TestWorkspace_ModelFieldGone(t *testing.T) {
 }
 
 // TestWorkspace_BaseRefRoundTrip verifies that BaseRef survives an
-// Upsert→Load→Get JSON round-trip (required by Phase-3 stale-cleanup merge checks).
+// Upsert→Load→Get JSON round-trip (required by stale-cleanup merge checks).
 func TestWorkspace_BaseRefRoundTrip(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()

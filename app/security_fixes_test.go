@@ -1,7 +1,5 @@
-// security_fixes_test.go — RED/GREEN TDD tests for security fixes:
-// M-12, M-13, L-5, L-8, L-10, L-11, L-12.
-//
-// Each test is written to FAIL before the corresponding fix and PASS after.
+// security_fixes_test.go: tests pinning the app-boundary security guards
+// (path containment, session-id validation, approval-rule matching, atomic writes).
 package app
 
 import (
@@ -54,7 +52,7 @@ func hashInput(s string) string {
 }
 
 // ---------------------------------------------------------------------------
-// L-8: CopyPath must reject paths outside roots.
+// CopyPath must reject paths outside roots.
 // ---------------------------------------------------------------------------
 
 func TestSecFix_L8_CopyPath_RejectsOutsideRoots(t *testing.T) {
@@ -94,7 +92,7 @@ func TestSecFix_L8_CopyPath_AllowsInsideRoots(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// L-10/L-20: SessionID from event pump must be validated before persistence.
+// SessionID from event pump must be validated before persistence.
 // ---------------------------------------------------------------------------
 
 func TestSecFix_L10_ShellMetacharSessionID_NotPersisted(t *testing.T) {
@@ -149,7 +147,7 @@ func TestSecFix_L10_ShellMetacharSessionID_NotPersisted(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// L-11: OpenWorkspace, CloseWorkspace, RemoveWorkspace must validate the id.
+// OpenWorkspace, CloseWorkspace, RemoveWorkspace must validate the id.
 // ---------------------------------------------------------------------------
 
 func TestSecFix_L11_OpenWorkspace_RejectsMalformedID(t *testing.T) {
@@ -181,7 +179,7 @@ func TestSecFix_L11_RemoveWorkspace_RejectsMalformedID(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// L-12: CloseWorkspace must clean up pending approvals for that workspace.
+// CloseWorkspace must clean up pending approvals for that workspace.
 // ---------------------------------------------------------------------------
 
 func TestSecFix_L12_CloseWorkspace_ClearsPending(t *testing.T) {
@@ -220,7 +218,7 @@ func TestSecFix_L12_CloseWorkspace_ClearsPending(t *testing.T) {
 
 	// Entry for ws-l12 must be gone.
 	if _, found := a.pending["req-abc:"+wsID]; found {
-		t.Error("pending entry for closed workspace was NOT cleared (L-12 bug)")
+		t.Error("pending entry for closed workspace was NOT cleared")
 	}
 	// Entry for other workspace must survive.
 	if _, found := a.pending["req-xyz:other-ws"]; !found {
@@ -255,7 +253,7 @@ func TestSecFix_L12_Shutdown_ClearsPending(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// L-5: WriteFile must validate absPath (not just its Dir) under roots.
+// WriteFile must validate absPath (not just its Dir) under roots.
 // ---------------------------------------------------------------------------
 
 func TestSecFix_L5_WriteFile_RejectsSymlinkEscape(t *testing.T) {
@@ -303,7 +301,7 @@ func TestSecFix_L5_WriteFile_AllowsNewFileUnderRoot(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// M-12: Concurrent Approve(always) must persist BOTH always-rules (no lost update).
+// Concurrent Approve(always) must persist BOTH always-rules (no lost update).
 // ---------------------------------------------------------------------------
 
 func TestSecFix_M12_ConcurrentApproveAlways_BothRulesPersisted(t *testing.T) {
@@ -359,7 +357,7 @@ func TestSecFix_M12_ConcurrentApproveAlways_BothRulesPersisted(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// M-13: Hash-based match — distinct inputs sharing a 4096-byte prefix must NOT auto-approve.
+// Hash-based match: distinct inputs sharing a 4096-byte prefix must NOT auto-approve.
 // ---------------------------------------------------------------------------
 
 func TestSecFix_M13_TruncationCollision_DistinctHashRejects(t *testing.T) {

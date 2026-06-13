@@ -1,5 +1,5 @@
 /**
- * (d) palette.spec.ts
+ * palette.spec.ts
  *
  * Command palette:
  * - open via ":" keystroke (mode.enterCommand) — the app opens palette when mode === "command"

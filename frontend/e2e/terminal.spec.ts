@@ -1,5 +1,5 @@
 /**
- * (g) terminal.spec.ts
+ * terminal.spec.ts
  *
  * Render a pane with Terminal; emit pty:data:<paneId> event; assert xterm renders
  * the text in the DOM.

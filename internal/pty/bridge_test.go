@@ -232,8 +232,8 @@ func TestSpawn_CloseKillsProcessGroup(t *testing.T) {
 
 	// Background a SIGHUP-ignoring sleep so that killing the session leader
 	// (which sends SIGHUP to the foreground group) is NOT enough to kill it.
-	// Only a SIGKILL to the whole process group will work — which is what the
-	// fix sends via syscall.Kill(-pgid, SIGKILL).
+	// Only a SIGKILL to the whole process group will work, which is what
+	// Close sends via syscall.Kill(-pgid, SIGKILL).
 	script := "nohup sleep 30 >/dev/null 2>&1 & echo PGTESTPID=$!; sleep 5"
 	br, err := Spawn(ctx, t.TempDir(), []string{"sh", "-c", script}, "pg", "pty:exit:pg", emit, 80, 24)
 	if err != nil {

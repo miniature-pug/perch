@@ -17,10 +17,10 @@ GOVULN   := v1.3.0
 
 # Production GUI builds link webkit2gtk-4.1 (+libsoup-3.0) via the webkit2_41
 # build tag. webkit2gtk-4.0 is EOL and absent from the container base (noble),
-# so this is the single supported link for host and container alike (spec §5.1).
+# so this is the single supported link for host and container alike.
 TAGS := production webkit2_41
 
-# ── Container framework (spec 2026-06-04) ──────────────────────────────────
+# ── Container framework ────────────────────────────────────────────────────
 # Versions are single-sourced from .tool-versions; the image hardcodes none.
 IMAGE        := perch-dev
 GO_VERSION   := $(shell awk '$$1=="golang"{print $$2}' .tool-versions)
@@ -70,7 +70,7 @@ shell: | image        ## drop into an interactive shell in perch-dev
 # Every check runs in perch-dev (container-first). One DRY rule containerises the
 # whole set; re-entering with CONTAINERIZE=0 runs the target natively in-image.
 # test-e2e is the only dispatched target that runs `vite build`, so it alone
-# masks frontend/dist (spec §5.3) — Go targets keep the committed go:embed stub.
+# masks frontend/dist. Go targets keep the committed go:embed stub.
 DZ := test test-integration test-front test-e2e lint vet vulncheck
 ifeq ($(CONTAINERIZE),1)
 gui-build: export PERCH_MASK_DIST = 1

@@ -1,6 +1,6 @@
 // Package git — worktree.go contains the functions that create and resolve
 // paths for git linked worktrees. All git shell-outs go through proc.Runner so
-// that callers can inject a FakeRunner in unit tests (§20.1).
+// that callers can inject a FakeRunner in unit tests.
 package git
 
 import (
@@ -86,7 +86,7 @@ func WorktreePath(projectRoot, handle, worktreeDir string) (string, error) {
 // The caller supplies base already resolved (e.g. "HEAD" or a branch name) —
 // this function does not default it.
 //
-// Security (V3-A): branch and base are validated with ValidRef before any argv
+// Security: branch and base are validated with ValidRef before any argv
 // is built. git worktree add does not support a trailing "--" before the
 // committish positional (unlike "git checkout -- <path>"), so strict validation
 // is the correct mitigation: both values are rejected if they begin with '-',

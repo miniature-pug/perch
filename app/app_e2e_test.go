@@ -1,20 +1,20 @@
 //go:build integration
 
-// app_e2e_test.go — headless integration test locking 6 previously-fixed backend
-// "seam" bugs. The fake-agent binary drives the real ClaudeMonitor and
-// hooklistener without launching any real claude/opencode binary.
+// app_e2e_test.go: headless integration test locking backend "seam" contracts.
+// The fake-agent binary drives the real ClaudeMonitor and hooklistener without
+// launching any real claude/opencode binary.
 //
-// BUG locks:
+// Contracts locked:
 //
-//	1 (pty wire): OpenWorkspace passes dataEvent == "pty:data:pane-<id>" so the
+//	pty wire: OpenWorkspace passes dataEvent == "pty:data:pane-<id>" so the
 //	   backend emits on exactly the channel WorkspaceVM.PaneID ("pane-<id>") that
 //	   the frontend Terminal subscribes to. The fake spawnPty captures and asserts
 //	   the event name; it also fires the emit callback once to exercise the path.
-//	   NOTE: the true cross-process round-trip (real pty bytes → WebKit → xterm)
+//	   NOTE: the true cross-process round-trip (real pty bytes -> WebKit -> xterm)
 //	   is verified by the manual smoke checklist, since this test uses a fake bridge.
-//	2+3: ListWorkspaces populates PaneID, LastActive, Branch (covered in seam_bugs_test.go; re-verified here by round-trip through CreateWorkspace).
-//	4: OpenWorkspace stamps WorkspaceID on every forwarded agent:event.
-//	5: OpenWorkspace composes Approval.ReqID as "<raw>:<wsID>"; Approve parses it back correctly.
+//	ListWorkspaces populates PaneID, LastActive, Branch (covered in seam_bugs_test.go; re-verified here by round-trip through CreateWorkspace).
+//	OpenWorkspace stamps WorkspaceID on every forwarded agent:event.
+//	OpenWorkspace composes Approval.ReqID as "<raw>:<wsID>"; Approve parses it back correctly.
 package app
 
 import (
@@ -132,7 +132,7 @@ func TestE2E_HeadlessFullLoop(t *testing.T) {
 
 	// ── spawnPty seam (no real shell/agent launch) ────────────────────────────
 	// Capture the event-name args passed by OpenWorkspace so we can assert the
-	// pty data wire (bug-1): dataEvent must equal "pty:data:" + vm.PaneID.
+	// pty data wire: dataEvent must equal "pty:data:" + vm.PaneID.
 	// NOTE: the true cross-process round-trip (real pty bytes → WebKit → xterm)
 	// is smoke-tested via the manual checklist; this test uses a fake bridge.
 	var capturedDataEvent, capturedExitEvent string
@@ -162,7 +162,7 @@ func TestE2E_HeadlessFullLoop(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = a.CloseWorkspace(wsID) })
 
-	// ── BUG-1 ASSERTIONS: pty data event name matches WorkspaceVM.PaneID ─────
+	// ── pty wire: data event name matches WorkspaceVM.PaneID ─────────────────
 	//
 	// OpenWorkspace computes:
 	//   paneID   = "pane-" + id
@@ -248,7 +248,7 @@ func TestE2E_HeadlessFullLoop(t *testing.T) {
 		agentExitCh <- agentCmd.Wait()
 	}()
 
-	// ── ASSERTION 1 (bug-4): wait for agent:event with StateAwaitingApproval + WorkspaceID ──
+	// ── ASSERTION 1: wait for agent:event with StateAwaitingApproval + WorkspaceID ──
 	deadline := time.Now().Add(10 * time.Second)
 	awaiting, found := pollEvent(t, deadline, &emitMu, &emitted, func(e capturedEmit) bool {
 		if e.event != "agent:event" {
@@ -275,17 +275,17 @@ func TestE2E_HeadlessFullLoop(t *testing.T) {
 	compositeReqID := ev.Approval.ReqID
 	t.Logf("captured approval event: WorkspaceID=%q ReqID=%q", ev.WorkspaceID, compositeReqID)
 
-	// ── ASSERTION 2 (bug-4): WorkspaceID is stamped ───────────────────────────
+	// ── ASSERTION 2: WorkspaceID is stamped ───────────────────────────────────
 	if ev.WorkspaceID != wsID {
 		t.Errorf("bug-4: agent:event WorkspaceID = %q, want %q", ev.WorkspaceID, wsID)
 	}
 
-	// ── ASSERTION 3 (bug-5): ReqID has suffix ":<wsID>" ──────────────────────
+	// ── ASSERTION 3: ReqID has suffix ":<wsID>" ──────────────────────────────
 	if !strings.HasSuffix(compositeReqID, ":"+wsID) {
 		t.Errorf("bug-5: compositeReqID %q does not have suffix %q", compositeReqID, ":"+wsID)
 	}
 
-	// ── ASSERTION 4 (bug-5 round-trip): Approve with composite ReqID succeeds ──
+	// ── ASSERTION 4 (round-trip): Approve with composite ReqID succeeds ───────
 	// Capture reqID under lock then release before calling Approve (which may
 	// block on the hooklistener's pending map).
 	if err := a.Approve(compositeReqID, "allow"); err != nil {
@@ -302,9 +302,9 @@ func TestE2E_HeadlessFullLoop(t *testing.T) {
 		t.Error("timed out waiting for fake-agent to exit after Approve(allow)")
 	}
 
-	// ── ASSERTION 6 (bug-4 again): wait for terminal StateDone event with WorkspaceID ──
-	// The claude monitor translates a Stop hook → StateDone (H-6): a completed turn
-	// is what drives the §8 ambient "Turn complete" notification in dispatchNotify.
+	// ── ASSERTION 6: wait for terminal StateDone event with WorkspaceID ──────
+	// The claude monitor translates a Stop hook into StateDone: a completed turn is
+	// what drives the ambient "Turn complete" notification in dispatchNotify.
 	// (StateIdle is reserved for steady non-terminal idle, e.g. opencode idle-at-connect.)
 	termDeadline := time.Now().Add(5 * time.Second)
 	termFound := false

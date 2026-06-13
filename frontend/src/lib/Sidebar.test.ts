@@ -143,7 +143,7 @@ test("dropping a session onto its own row does NOT call onReorder", async () => 
 });
 
 // ---------------------------------------------------------------------------
-// Feature 1: diffStats prop — +/− render in sidebar rows
+// diffStats prop: +/− render in sidebar rows
 // ---------------------------------------------------------------------------
 
 test("diffStats prop: row with nonzero added/removed shows .sidebar-diffstat with +N and −N", async () => {
@@ -185,7 +185,7 @@ test("diffStats prop: row without a diffStats entry does NOT render .sidebar-dif
 });
 
 // ---------------------------------------------------------------------------
-// Feature: count-up — final values in diffstat
+// count-up: final values in diffstat
 // ---------------------------------------------------------------------------
 
 test("diffStats countUp: diff-added and diff-removed inner spans show final numeric values on mount", async () => {
@@ -203,7 +203,7 @@ test("diffStats countUp: diff-added and diff-removed inner spans show final nume
 });
 
 // ---------------------------------------------------------------------------
-// Feature: review pill — files count
+// review pill: files count
 // ---------------------------------------------------------------------------
 
 test("review pill renders when files > 0 and shows the file count", async () => {

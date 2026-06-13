@@ -1,5 +1,5 @@
 // frontend/src/App.smoke.test.ts
-// 4.25.7 — Full-composition smoke test
+// Full-composition smoke test
 // One end-to-end scenario that exercises the wired path: assembly → workspace select →
 // view switching → approval flow → notification hub.
 
@@ -121,7 +121,7 @@ beforeEach(async () => {
 // ---------------------------------------------------------------------------
 // THE SMOKE TEST
 // ---------------------------------------------------------------------------
-it("4.25.7 full-composition smoke: assembly → select → view-switch → approval → notification", async () => {
+it("full-composition smoke: assembly → select → view-switch → approval → notification", async () => {
   const { listWorkspaces, openWorkspace, approve } = await import("./lib/wails");
   (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(smokeWorkspaces);
 

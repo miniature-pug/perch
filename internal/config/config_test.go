@@ -114,7 +114,7 @@ func TestRootsHomeDirExpansion(t *testing.T) {
 	}
 }
 
-// TestDefaultGlobalPath verifies §8.1 XDG discovery: XDG_CONFIG_HOME when set,
+// TestDefaultGlobalPath verifies XDG discovery: XDG_CONFIG_HOME when set,
 // falling back to ~/.config/perch/config.toml when unset.
 func TestDefaultGlobalPath(t *testing.T) {
 	t.Run("XDG_CONFIG_HOME set", func(t *testing.T) {

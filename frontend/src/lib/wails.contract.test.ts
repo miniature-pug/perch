@@ -6,7 +6,7 @@ import { describe, it, expect, test } from "vitest";
 import { forceRemoveWorkspace, listStaleSessions, cleanupSessions, homeShellCwd } from "./wails";
 import type { StaleSessionVM } from "./wails";
 
-describe("wails.ts contract (Phase 2)", () => {
+describe("wails.ts contract", () => {
   it("createWorkspace export accepts (agent, repoPath, baseRef, branch, worktree)", async () => {
     const mod = await import("./wails");
     // Signature: 5 params. Verify function arity.

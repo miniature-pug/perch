@@ -1,5 +1,5 @@
 /**
- * (h) notifications.spec.ts
+ * notifications.spec.ts
  *
  * Trigger blocking / ambient / routine notification tiers via the "notify" event channel.
  * Assert each renders with its tier CSS class and correct structure.

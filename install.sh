@@ -1,7 +1,6 @@
 #!/bin/sh
 # install.sh — bootstrap perch and its runtime dependencies.
 # POSIX sh; no bashisms. shellcheck-clean (dialect: sh).
-# See plan.md §21.3 for the full specification.
 set -e
 
 # ---------------------------------------------------------------------------

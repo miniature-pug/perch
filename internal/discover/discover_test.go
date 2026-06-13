@@ -75,8 +75,7 @@ func assertPaths(t *testing.T, got, want []string) {
 	}
 }
 
-// TestMaxDepthBoundary verifies the exact off-by-one pin from the project's
-// discover test matrix:
+// TestMaxDepthBoundary verifies the exact off-by-one depth boundary:
 //
 //	A repo whose ".git" sits 3 levels below root (root/a/b/c/.git):
 //	  - MaxDepth:2 → NOT found   (depth 3 > 2)

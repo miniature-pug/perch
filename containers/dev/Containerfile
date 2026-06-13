@@ -1,4 +1,4 @@
-# perch-dev — the one pinned dev/test environment (spec 2026-06-04 §5.1).
+# perch-dev: the one pinned dev/test environment.
 #
 # Toolchain only; no application source is baked. The repo is bind-mounted live
 # at run time (containers/run.sh), so editing code never invalidates a layer.
@@ -18,7 +18,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # System + GUI/build libs. The GTK3 + WebKit2GTK-4.1 + xvfb set lets this one
 # image cover `gui-build` (cgo) and the future headless GUI smoke. Noble ships
 # only the -4.1 dev package (4.0 was dropped), which is why production builds
-# carry `-tags webkit2_41` (spec §5.1); libwebkit2gtk-4.1-dev pulls
+# carry `-tags webkit2_41`; libwebkit2gtk-4.1-dev pulls
 # libsoup-3.0-dev transitively.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl git xz-utils \

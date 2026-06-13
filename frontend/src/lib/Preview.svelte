@@ -59,7 +59,7 @@
     color: var(--perch-text);
   }
 
-  /* Headings — larger than body per brief */
+  /* Headings */
   :global(.prose h1) {
     font-size: 1.5em;
     font-weight: 600;

@@ -39,7 +39,7 @@ func TestAddWorktreeExisting_CallArgs(t *testing.T) {
 }
 
 // TestAddWorktreeExisting_FlagInjection verifies a leading-dash branch is
-// rejected before any git call (V3-A parity with AddWorktree).
+// rejected before any git call (flag-injection parity with AddWorktree).
 func TestAddWorktreeExisting_FlagInjection(t *testing.T) {
 	r := proc.NewFakeRunner()
 	err := git.AddWorktreeExisting(context.Background(), r,

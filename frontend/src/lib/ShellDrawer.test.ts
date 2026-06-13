@@ -16,7 +16,7 @@ test("calls openShell on mount", async () => {
   await waitFor(() => expect(w.openShell).toHaveBeenCalledWith("shell-1", "/wt"));
 });
 
-// M-16: collapsed is now a prop; onToggleCollapse is called when the button is clicked.
+// collapsed is a prop; onToggleCollapse is called when the button is clicked.
 test("collapse toggle calls onToggleCollapse when button clicked", async () => {
   const { default: ShellDrawer } = await import("./ShellDrawer.svelte");
   const onToggleCollapse = vi.fn();

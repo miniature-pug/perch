@@ -63,17 +63,17 @@ func (m *ClaudeMonitor) translateAndEmit(ctx context.Context, he hooklistener.Ho
 	case "SessionStart":
 		ev = Event{Kind: "state", State: StateRunning, SessionID: he.SessionID}
 	case "Stop":
-		// H-6: Stop means the agent finished its turn — emit StateDone so
-		// dispatchNotify can fire the §8 "Turn complete" ambient toast.
+		// Stop means the agent finished its turn, so emit StateDone and let
+		// dispatchNotify fire the "Turn complete" ambient toast.
 		ev = Event{Kind: "state", State: StateDone}
 	case "StopFailure":
 		ev = Event{Kind: "state", State: StateErrored, Err: he.ErrorType}
-	// NOTE (M-5): "Notification" is intentionally absent. §6.2 of the spec
-	// lists exactly four hooked events: PreToolUse, Stop, StopFailure, and
-	// SessionStart — "Notification" is not among them and is NOT installed in
-	// perchMonitorEvents, so the hook never fires and the case is unreachable.
-	// §8 defines no specced UI consumer for a Claude attention-notification
-	// signal. Removing the dead case keeps the code honest.
+	// NOTE: "Notification" is intentionally absent. perch hooks exactly four
+	// events: PreToolUse, Stop, StopFailure, and SessionStart. "Notification"
+	// is not among them and is NOT installed in perchMonitorEvents, so the hook
+	// never fires and the case would be unreachable. There is no UI consumer for
+	// a Claude attention-notification signal. Omitting the dead case keeps the
+	// code honest.
 	case "PreToolUse":
 		if he.ToolName == toolAskUserQuestion {
 			// AskUserQuestion is the agent asking the USER to choose, not a request
@@ -94,7 +94,7 @@ func (m *ClaudeMonitor) translateAndEmit(ctx context.Context, he hooklistener.Ho
 				sum += ": " + string(he.ToolInput)
 			}
 			fullInput := string(he.ToolInput)
-			// M-13: compute hash of the FULL (untruncated) input before truncation so
+			// Compute hash of the FULL (untruncated) input before truncation so
 			// two inputs sharing a 4096-byte prefix produce distinct hashes.
 			h := sha256.Sum256([]byte(fullInput))
 			inputHash := hex.EncodeToString(h[:])

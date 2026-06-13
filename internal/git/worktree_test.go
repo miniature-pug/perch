@@ -76,7 +76,7 @@ func TestValidRef_Accepts(t *testing.T) {
 
 // ── AddWorktree flag-injection exploit tests ──────────────────────────────────
 
-// TestAddWorktree_FlagInjection_BaseBranch is the exploit test for V3-A.
+// TestAddWorktree_FlagInjection_BaseBranch is the flag-injection exploit test.
 // A base_branch value of "--upload-pack=x" or "--no-checkout" must be rejected
 // BEFORE any git argv is issued. FakeRunner.Calls must be empty on rejection.
 // This test MUST FAIL on un-fixed code (AddWorktree would call git with the bad value).

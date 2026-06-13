@@ -98,7 +98,7 @@ test("renders an error message (not 'No changes') when the initial diffStat reje
   expect(screen.queryByText(/^no changes$/i)).toBeNull();
 });
 
-// --- Feature 3: per-hunk send-to-agent button ---
+// --- per-hunk send-to-agent button ---
 
 test("send hunk to agent button not rendered when onSendToAgent prop is absent", async () => {
   const { default: DiffView } = await import("./DiffView.svelte");

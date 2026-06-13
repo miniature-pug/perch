@@ -10,10 +10,10 @@ import (
 )
 
 // disableWebViewDropForSpike4 mitigates WebKitGTK hijacking OS file-drop events
-// before OnFileDrop fires (Wails issue #3686). Spike 4 validated that this flag,
-// combined with frontend preventDefault on dragover/drop, prevents the UI being
-// replaced by the dropped file. If a future Wails release resolves #3686, set to
-// false and remove the corresponding frontend listeners.
+// before OnFileDrop fires (Wails issue #3686). This flag, combined with frontend
+// preventDefault on dragover/drop, prevents the UI being replaced by the dropped
+// file. If a future Wails release resolves #3686, set to false and remove the
+// corresponding frontend listeners.
 const disableWebViewDropForSpike4 = true
 
 const (

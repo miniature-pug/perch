@@ -99,8 +99,8 @@ test("aria-activedescendant on input points to active option id", async () => {
   expect(input.getAttribute("aria-activedescendant")).toBe(screen.getAllByRole("option")[1].id);
 });
 
-// M-20: recency tracking (beforeEach clears "perch:cmd-recents" for each test)
-test("M-20: invoking a command via Enter saves it; re-opening with no query surfaces it in 'Recent' group first", async () => {
+// recency tracking (beforeEach clears "perch:cmd-recents" for each test)
+test("invoking a command via Enter saves it; re-opening with no query surfaces it in 'Recent' group first", async () => {
   const { default: CommandPalette } = await import("./CommandPalette.svelte");
   const onRun = vi.fn();
 
@@ -120,7 +120,7 @@ test("M-20: invoking a command via Enter saves it; re-opening with no query surf
   expect(screen.getAllByRole("option").some(el => el.textContent?.includes("Open file"))).toBe(true);
 });
 
-test("M-20: clicking a command saves it to recents; next open without query shows 'Recent' group", async () => {
+test("clicking a command saves it to recents; next open without query shows 'Recent' group", async () => {
   const { default: CommandPalette } = await import("./CommandPalette.svelte");
   const onRun = vi.fn();
 

@@ -1,5 +1,5 @@
 /**
- * (i) editor.spec.ts
+ * editor.spec.ts
  *
  * Mock readFile + hunks (git gutter); assert .perch-git-gutter renders;
  * Ctrl-S → assert WriteFile called once with edited content.

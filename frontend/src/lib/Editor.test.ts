@@ -54,7 +54,7 @@ test("mounts the git change gutter for a changed file", async () => {
   );
 });
 
-// --- Feature 1: search extension ---
+// --- search extension ---
 
 test("search extension is active: openSearchPanel renders .cm-search panel", async () => {
   const { default: Editor } = await import("./Editor.svelte");
@@ -83,7 +83,7 @@ test("search extension is active: openSearchPanel renders .cm-search panel", asy
   );
 });
 
-// --- Feature 3: send-to-agent affordance ---
+// --- send-to-agent affordance ---
 
 test("send-to-agent button is hidden when no selection", async () => {
   const { default: Editor } = await import("./Editor.svelte");
@@ -150,7 +150,7 @@ test("send-to-agent button does not render when onSendToAgent prop is absent", a
   expect(screen.queryByRole("button", { name: /send to agent/i })).toBeNull();
 });
 
-// --- N-10: dirty/unsaved indicator ---
+// --- dirty/unsaved indicator ---
 
 test("dirty dot is absent immediately after load (file is clean)", async () => {
   const { default: Editor } = await import("./Editor.svelte");
@@ -210,7 +210,7 @@ test("dirty dot disappears after Ctrl-S save", async () => {
   await waitFor(() => expect(document.querySelector(".dirty-dot")).toBeNull());
 });
 
-// --- N-24: send-to-agent button drag affordance ---
+// --- send-to-agent button drag affordance ---
 
 test("send-to-agent button is draggable and sets perch text MIME on dragstart", async () => {
   const { default: Editor } = await import("./Editor.svelte");

@@ -38,7 +38,7 @@
   let fsVersion  = $state<Record<string, number>>({});
   let wsDiffStats = $state<Record<string, { added: number; removed: number; files: number }>>({});
 
-  // #4 awaiting-input auto-focus: a ref to the primary agent terminal so we can
+  // Awaiting-input auto-focus: a ref to the primary agent terminal so we can
   // route the keyboard to it without a click, plus a transient emphasis flag
   // pulsed when the ACTIVE agent asks for input.
   let primaryTerm    = $state<{ focus: () => void } | undefined>(undefined);
@@ -142,7 +142,7 @@
   function onWindowFocus() { setWindowFocus(true).catch(() => {}); }
   function onWindowBlur()  { setWindowFocus(false).catch(() => {}); }
 
-  // Feature §5.3: aggregate +N −N diffstat per workspace.
+  // Aggregate +N −N diffstat per workspace.
   // A missing or non-git worktree must not throw; catch suppresses errors silently.
   async function refreshDiffStat(ws: WorkspaceVM) {
     try {
@@ -155,7 +155,7 @@
     }
   }
 
-  // #4: the active workspace just asked for input — route the user to its pane so
+  // The active workspace just asked for input: route the user to its pane so
   // they can answer immediately (the question is answered in the agent's own TUI).
   // Only ever called for the active workspace on the agent view (see shouldFocusAwaitingInput).
   function focusAwaitingInput() {
@@ -167,7 +167,7 @@
     });
   }
 
-  // H-11: capture-phase pointerdown on the app root — when in terminal mode and the
+  // Capture-phase pointerdown on the app root: when in terminal mode and the
   // click target is NOT inside a .terminal / [data-terminal-zone] element, leave
   // terminal mode and return to NORMAL.  We use capture so this fires before any
   // child handler, but we NEVER preventDefault/stopPropagation so other handlers
@@ -194,7 +194,7 @@
       const prev = ws.state;
       if (ev.state) ws.state = ev.state;
       if (ev.approval) approvals[ev.workspaceId] = ev.approval;
-      // #4: only the ACTIVE workspace, only the agent view, only on the edge.
+      // Only the ACTIVE workspace, only the agent view, only on the edge.
       if (ev.state && shouldFocusAwaitingInput(prev, ev.state, ev.workspaceId, activeId, layout.view)) {
         focusAwaitingInput();
       }
@@ -297,15 +297,15 @@
       const vm = await createWorkspace(agent, repo, baseRef, branch, worktree);
       workspaces = await listWorkspaces();
       newSessionOpen = false;
-      // Creating a session spawns its pty immediately (spec §7.7 "→ direct-pty
-      // spawn"). onSelect sets activeId and opens the workspace in one step, so
-      // the new session is live rather than a selected-but-dead row.
+      // Creating a session spawns its pty immediately. onSelect sets activeId
+      // and opens the workspace in one step, so the new session is live rather
+      // than a selected-but-dead row.
       await onSelect(vm.id);
     } catch (e) {
       const msg = String(e);
       if (msg.includes("uncommitted changes")) {
         // ErrWorktreeDirty: non-worktree session can't switch to a different branch
-        // while the working tree has uncommitted changes (Phase 1 dirty-guard).
+        // while the working tree has uncommitted changes.
         addBlocking("", "Cannot switch branch",
           "Your working tree has uncommitted changes. Commit or stash them before switching to a different branch.");
       } else {
@@ -433,7 +433,7 @@
         if (!active) return;
         const id = active.id;
         closeWorkspace(id).then(() => {
-          // L-14: clean up per-workspace frontend state on close
+          // Clean up per-workspace frontend state on close
           const { [id]: _a, ...restA } = approvals; approvals = restA;
           const { [id]: _f, ...restF } = fsVersion;  fsVersion = restF;
         }).catch(() => {});
@@ -498,7 +498,7 @@
 
     // NORMAL mode ---------------------------------------------------------------
 
-    // Ctrl-K / Cmd-K → command palette (spec §7.7). Check before the switch so
+    // Ctrl-K / Cmd-K → command palette. Check before the switch so
     // the plain "k" workspace-nav case does not fire when Ctrl is held.
     // Do NOT intercept when focus is inside an input or textarea (would hijack typing).
     if ((e.ctrlKey || e.metaKey) && e.key === "k") {
@@ -516,14 +516,14 @@
       if (e.key === "d") { e.preventDefault(); layout.setView("diff"); }
       else if (e.key === "e") { e.preventDefault(); layout.setView("code"); }
       else if (e.key === "t") {
-        // L-21: gt → cycle to the next view (agent → code → diff → agent)
+        // gt → cycle to the next view (agent → code → diff → agent)
         e.preventDefault();
         const views: import("./lib/stores/layout.svelte").View[] = ["agent", "code", "diff"];
         const idx = views.indexOf(layout.view);
         layout.setView(views[(idx + 1) % views.length]);
       }
       else if (e.key === "T") {
-        // L-21: gT → cycle to the previous view (agent → diff → code → agent)
+        // gT → cycle to the previous view (agent → diff → code → agent)
         e.preventDefault();
         const views: import("./lib/stores/layout.svelte").View[] = ["agent", "code", "diff"];
         const idx = views.indexOf(layout.view);
@@ -624,7 +624,7 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Send text to the active agent pane via writeToPty (spec §7.3/§7.7).
+  // Send text to the active agent pane via writeToPty.
   //
   // @mention convention (matches DragDrop.svelte):
   //   • File/path references arrive as '@'+path+' ' (the leading '@' and trailing
@@ -641,7 +641,7 @@
 
   // ---------------------------------------------------------------------------
   // Approval decision handler — called by ApprovalCard docked chrome.
-  // M-17: key deletion by the workspace that owns reqId, not necessarily activeId
+  // Key deletion by the workspace that owns reqId, not necessarily activeId
   // (the approval queue may hold entries from non-active workspaces).
   // ---------------------------------------------------------------------------
   async function onDecision(reqId: string, decision: "allow" | "deny" | "always") {
@@ -733,7 +733,7 @@
             {#snippet primary()}
               {#if active}
                 {#if layout.view === "agent"}
-                  <!-- H-10: clicking the terminal area while in NORMAL enters TERMINAL mode.
+                  <!-- Clicking the terminal area while in NORMAL enters TERMINAL mode.
                        The wrapper is a flex container that fills the pane; onpointerdown fires
                        before xterm processes the event so mode switches promptly.
                        We do NOT preventDefault/stopPropagation to preserve xterm text selection. -->
@@ -748,7 +748,7 @@
                   {#key fsVersion[active.id] ?? 0}
                     <div class="code-layout">
                       <FileTree root={active.worktreePath} onOpen={(p) => {
-                        // H-8: FileTree may send '@mention:'+path for "Send to agent".
+                        // FileTree may send '@mention:'+path for "Send to agent".
                         // Route to sendToAgent; otherwise treat as a regular file open.
                         if (p.startsWith(MENTION_PREFIX)) {
                           const path = p.slice(MENTION_PREFIX.length);
@@ -1025,14 +1025,14 @@
                       transition: outline-color var(--perch-dur) var(--perch-ease); }
   .code-layout      { display: flex; flex-direction: row; flex: 1; min-height: 0; min-width: 0; }
   .terminal-zone    { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
-  /* #4 — transient ring pulse drawing the eye when the active agent wants input. */
+  /* Transient ring pulse drawing the eye when the active agent wants input. */
   .terminal-zone.input-emphasis { animation: perch-emphasis var(--perch-dur-pop) var(--perch-ease); }
   @media (prefers-reduced-motion: reduce) {
     .terminal-zone.input-emphasis { animation: none; }
   }
   .shell-drawer-zone { flex-shrink: 0; overflow: hidden; border-top: 1px solid var(--perch-border);
                        transition: outline-color var(--perch-dur) var(--perch-ease); }
-  /* Feature A — active-zone accent ring (you-are-here cue, not a focus indicator).
+  /* Active-zone accent ring (you-are-here cue, not a focus indicator).
      Uses outline (not inset box-shadow) so it paints over opaque child panes and
      is not clipped by the zones' overflow:hidden; negative offset draws it inside. */
   [data-zone="sidebar"]:focus-within,
@@ -1053,7 +1053,7 @@
                             width: 320px; max-height: 60vh; overflow-y: auto;
                             border-left: 1px solid var(--perch-border); }
   /* No background here: the hub owns its own (glass) surface. An opaque dock bg
-     would sit behind the hub's backdrop-filter and defeat the frost (R7-2). */
+     would sit behind the hub's backdrop-filter and defeat the frost. */
   /* Status line — spans the full bottom of the center column; always in DOM */
   .status-line       { display: flex; align-items: center; flex-shrink: 0;
                        height: 24px; padding: 0 var(--perch-sp-1);
@@ -1074,7 +1074,7 @@
                        font-family: var(--perch-font-mono); font-size: var(--perch-fs-caption); }
   .status-diff-added   { color: var(--perch-ok); }
   .status-diff-removed { color: var(--perch-err); }
-  /* #3 — goal-gradient "files to review" pill; shrinks as the user stages. */
+  /* Goal-gradient "files to review" pill; shrinks as the user stages. */
   .status-review-pill { padding: 0 var(--perch-sp-1);
                         border-radius: var(--perch-radius-sm);
                         background: color-mix(in srgb, var(--perch-accent) 18%, transparent);

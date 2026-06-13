@@ -1,5 +1,5 @@
 /**
- * (b) views.spec.ts
+ * views.spec.ts
  *
  * With a mocked SELECTED workspace:
  * - agent / code / diff views via the segmented control; assert aria-pressed toggles
@@ -119,7 +119,7 @@ test("empty state renders when no workspace is selected", async ({ browser }) =>
   await page.waitForSelector("#app", { timeout: 10000 });
   await page.waitForTimeout(1500);
 
-  // First-run empty state: a "New Session" CTA + quick-start templates (SPEC §7.7).
+  // First-run empty state: a "New Session" CTA + quick-start templates.
   await expect(page.locator('[data-testid="empty-state"]')).toBeVisible();
   await expect(page.locator('.empty-state-btn-primary')).toHaveText("New Session");
   await expect(page.locator('text=Claude session')).toBeVisible();

@@ -4,7 +4,7 @@ package model
 
 // Tool identifies which AI coding agent runs in a pane.
 // Using a named type (not a bare string) means "claude"/"opencode" are defined
-// in exactly one place — preventing drift across config, state, and adapters.
+// in exactly one place, preventing drift across the rest of perch.
 type Tool string
 
 const (
@@ -18,8 +18,8 @@ func (t Tool) Valid() bool {
 }
 
 // Project is a git repository discovered under the scan root.
-// Frecency rank and last-accessed timestamp are not stored here; they live in
-// internal/state keyed by Path.
+// Frecency rank and last-accessed timestamp are not stored here; they are
+// tracked separately, keyed by Path.
 type Project struct {
 	// Path is the absolute path to the repository root.
 	Path string
@@ -38,7 +38,7 @@ type Tree struct {
 	// IsMain is true for the project's primary checkout.
 	// Linked worktrees have IsMain == false.
 	// Distinguishing these two is safety-critical: perch never removes the main
-	// checkout (§7.2 hard-error guardrail).
+	// checkout (hard-error guardrail).
 	IsMain bool
 	// Project is the owning repository. Nil for non-git trees.
 	Project *Project

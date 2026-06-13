@@ -81,9 +81,9 @@ func TestValidateSessionID_LengthBoundary(t *testing.T) {
 	}
 }
 
-// TestValidateSessionID_ShellDrawerKeyShape guards BUG-1b at the Go boundary: the
-// shell drawer's pane key was changed from "<wsid>:shell" (colon ⇒ rejected by the
-// [A-Za-z0-9_-] allowlist, so OpenShell never spawned a pty) to "shell-<wsid>".
+// TestValidateSessionID_ShellDrawerKeyShape guards the shell drawer pane key at
+// the Go boundary: the key was changed from "<wsid>:shell" (colon => rejected by
+// the [A-Za-z0-9_-] allowlist, so OpenShell never spawned a pty) to "shell-<wsid>".
 // The NEW shape must be accepted and the OLD colon shape must be rejected.
 func TestValidateSessionID_ShellDrawerKeyShape(t *testing.T) {
 	if err := validateSessionID("shell-ws-1"); err != nil {
@@ -94,10 +94,9 @@ func TestValidateSessionID_ShellDrawerKeyShape(t *testing.T) {
 	}
 }
 
-// TestApp_OpenShell_RejectsColonPaneID is the call-boundary guard for BUG-1b:
-// OpenShell validates the paneID via validateSessionID BEFORE spawning, so a
-// colon-containing key (the old "<wsid>:shell" shape) is rejected early and the
-// pty is never spawned.
+// TestApp_OpenShell_RejectsColonPaneID is the call-boundary guard: OpenShell
+// validates the paneID via validateSessionID BEFORE spawning, so a colon-containing
+// key (the old "<wsid>:shell" shape) is rejected early and the pty is never spawned.
 func TestApp_OpenShell_RejectsColonPaneID(t *testing.T) {
 	shellCwd := t.TempDir()
 	spawnCalled := false
@@ -536,7 +535,7 @@ func TestApp_CreateWorkspace_WorktreeNewBranch(t *testing.T) {
 
 // TestApp_CreateWorkspace_PersistsBaseRef verifies that the baseRef argument
 // supplied to CreateWorkspace is stored in the registry record as BaseRef.
-// This field is required by Phase-3 stale-cleanup merge checks.
+// This field is required by the stale-cleanup merge checks.
 func TestApp_CreateWorkspace_PersistsBaseRef(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
@@ -775,7 +774,7 @@ func TestApp_CreateWorkspace_NonWorktree_CleanSwitch_OK(t *testing.T) {
 // TestApp_CreateWorkspace_ErrBranchInUse verifies that attempting to create a
 // *worktree* session for a branch already tracked by another worktree session
 // returns ErrBranchInUse. Non-worktree sessions sharing a branch are allowed
-// (spec §4: "like two terminals").
+// (like two terminals).
 func TestApp_CreateWorkspace_ErrBranchInUse(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
@@ -1493,9 +1492,9 @@ func TestApp_Settings_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestAtomicWriteApp_Mode0600 verifies N-5: atomicWriteApp (used by SaveSettings
-// and SaveLayout) produces files with mode 0600 so a token-bearing settings
-// payload is never readable by group/world.
+// TestAtomicWriteApp_Mode0600 verifies atomicWriteApp (used by SaveSettings and
+// SaveLayout) produces files with mode 0600 so a token-bearing settings payload
+// is never readable by group/world.
 func TestAtomicWriteApp_Mode0600(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cfgDir := t.TempDir()
@@ -1870,9 +1869,9 @@ func newAlwaysTestApp(t *testing.T, agentName string, notifies *[]map[string]any
 func TestApp_MaybeAutoApprove_ExactMatch(t *testing.T) {
 	var notifies []map[string]any
 	a, fm := newAlwaysTestApp(t, "claude", &notifies)
-	// M-13: the authoritative match key is the sha256 hash of the full input, not
-	// the (truncated, display-only) Pattern. A rule must carry a Hash and the
-	// incoming request must carry the matching InputHash.
+	// The authoritative match key is the sha256 hash of the full input, not the
+	// (truncated, display-only) Pattern. A rule must carry a Hash and the incoming
+	// request must carry the matching InputHash.
 	_ = a.SaveSettings(Settings{AlwaysRules: []AlwaysRule{{Agent: "claude", Tool: "Bash", Pattern: "ls -la", Hash: hashInput("ls -la")}}})
 
 	req := agent.ApprovalReq{ReqID: "raw1", Tool: "Bash", Input: "ls -la", InputHash: hashInput("ls -la")}
@@ -2336,7 +2335,7 @@ func countFsChanged(events []struct {
 }
 
 // TestApp_Watcher_RegisteredOnOpen asserts that opening a workspace registers
-// an onChange closure (Test A).
+// an onChange closure.
 func TestApp_Watcher_RegisteredOnOpen(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	wt := t.TempDir()
@@ -2353,7 +2352,7 @@ func TestApp_Watcher_RegisteredOnOpen(t *testing.T) {
 
 // TestApp_Watcher_EmitsFsChanged asserts that invoking onChange once results
 // in exactly one fs:changed event (after the debounce window) with the correct
-// payload (Test B).
+// payload.
 func TestApp_Watcher_EmitsFsChanged(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	wt := t.TempDir()
@@ -2398,7 +2397,7 @@ func TestApp_Watcher_EmitsFsChanged(t *testing.T) {
 	}
 }
 
-// ── Feature 2: session resume ─────────────────────────────────────────────────
+// ── session resume ────────────────────────────────────────────────────────────
 
 // TestApp_OpenWorkspace_SessionIDPersistedOnSessionStart verifies that when the
 // monitor emits a SessionStart event carrying a session id, the app persists it
@@ -2501,7 +2500,7 @@ func TestApp_OpenWorkspace_ResumeUsesLastSessionID(t *testing.T) {
 	}
 }
 
-// ── Feature 3: gitignore-aware file tree ──────────────────────────────────────
+// ── gitignore-aware file tree ─────────────────────────────────────────────────
 
 // TestApp_ListDir_HonorsGitignore verifies that App.ListDir excludes entries
 // matching .gitignore patterns (e.g. node_modules/) from its output.
@@ -2642,9 +2641,9 @@ func TestApp_DispatchNotify_OSSuppressed_WhenFocused(t *testing.T) {
 }
 
 // TestApp_DispatchNotify_OSFires_BlockingDespiteDND asserts that a blocking-tier
-// OS notification STILL fires when DND is enabled (unfocused). Per SPEC §8, DND
-// mutes only tiers 2–3 (ambient + routine) and never tier 1 (blocking); since
-// only blocking events fire an OS notification, DND must not suppress them.
+// OS notification STILL fires when DND is enabled (unfocused). DND mutes only the
+// ambient and routine tiers and never the blocking tier; since only blocking events
+// fire an OS notification, DND must not suppress them.
 func TestApp_DispatchNotify_OSFires_BlockingDespiteDND(t *testing.T) {
 	a, fn := newNotifyTestApp(t, false /*focused*/, true /*dnd*/)
 
@@ -2729,7 +2728,7 @@ func TestApp_SetWindowFocus_UpdatesState(t *testing.T) {
 
 // TestApp_Watcher_NoEmitAfterClose asserts that after CloseWorkspace the debounce
 // goroutine has exited: additional onChange calls must not produce new fs:changed
-// events. This proves the goroutine exits on wctx cancellation (Test C — no leak).
+// events. This proves the goroutine exits on wctx cancellation (no leak).
 func TestApp_Watcher_NoEmitAfterClose(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	wt := t.TempDir()

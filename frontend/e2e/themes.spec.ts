@@ -1,5 +1,5 @@
 /**
- * (a) themes.spec.ts
+ * themes.spec.ts
  *
  * For each of the 9 themes: boot the app with that theme in settings,
  * assert --perch-bg resolves to the expected value (from themes.css),
@@ -14,7 +14,7 @@ import fs from "fs";
 import { buildInitScriptContent } from "./_mock";
 import { PREVIEW_PORT } from "../preview-port.mjs";
 
-// Relative to cwd (frontend/) where playwright runs — matches existing spec convention
+// Relative to cwd (frontend/) where playwright runs.
 const SCREENSHOT_DIR = "./e2e/__screenshots__";
 
 // Ground truth extracted directly from frontend/src/tokens/themes.css

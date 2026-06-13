@@ -4,7 +4,7 @@ import { tick } from "svelte";
 import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 
 // Stub ShellDrawer (imports xterm which crashes jsdom). Use a probe stub that
-// surfaces its paneId/cwd props so the BUG-1b regression test can assert the
+// surfaces its paneId/cwd props so the regression test can assert the
 // shell drawer is wired with a safe pane key (no colon).
 vi.mock("./lib/ShellDrawer.svelte", async () => ({
   default: (await import("./lib/__stubs__/ShellDrawerProbe.svelte")).default,
@@ -95,7 +95,7 @@ vi.mock("./lib/wails", () => ({
   diffStat:        vi.fn(async (worktreePath: string) => {
     // Return 2 files summing to +5 −2 for /tmp/alpha; empty for all others.
     // This keeps existing tests unaffected (they don't assert on diffstat values)
-    // while letting Feature 1 tests verify a known non-zero total.
+    // while letting the diffstat tests verify a known non-zero total.
     if (worktreePath === "/tmp/alpha") {
       return [
         { path: "a.ts", added: 3, removed: 1, status: "M" as const },
@@ -205,7 +205,7 @@ describe("App.svelte skeleton", () => {
   });
 });
 
-describe("App.svelte workspace wiring (4.25.1)", () => {
+describe("App.svelte workspace wiring", () => {
   it("renders workspaces returned by listWorkspaces in the Sidebar", async () => {
     const { listWorkspaces } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
@@ -264,7 +264,7 @@ describe("App.svelte workspace wiring (4.25.1)", () => {
   });
 });
 
-describe("App.svelte Stage content routing (4.25.2)", () => {
+describe("App.svelte Stage content routing", () => {
   it("view='agent' → TerminalProbe mounted with paneId and cwd from active workspace", async () => {
     const { listWorkspaces } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
@@ -465,7 +465,7 @@ describe("App.svelte Stage content routing (4.25.2)", () => {
     expect(within(secondaryPane).getByTestId("terminal").dataset.paneId).toBe("p2");
   });
 
-  // BUG-1b regression: the shell drawer pane key must be a safe shape. It was
+  // The shell drawer pane key must be a safe shape. It was
   // "{wsid}:shell" — the colon is rejected by Go's validateSessionID charset
   // [A-Za-z0-9_-], so OpenShell rejected the id and the drawer never connected to
   // a pty. It is now "shell-{wsid}". Assert the rendered paneId starts with
@@ -496,7 +496,7 @@ describe("App.svelte Stage content routing (4.25.2)", () => {
   });
 });
 
-describe("App.svelte MenuBar + CommandPalette (4.25.3)", () => {
+describe("App.svelte MenuBar + CommandPalette", () => {
   it("pressing ':' in NORMAL opens the CommandPalette (dialog appears)", async () => {
     const { default: App } = await import("./App.svelte");
     render(App);
@@ -551,7 +551,7 @@ describe("App.svelte MenuBar + CommandPalette (4.25.3)", () => {
   });
 });
 
-describe("App.svelte live event wiring (4.25.4)", () => {
+describe("App.svelte live event wiring", () => {
   it("onAgentEvent: state flip updates Sidebar status label for that workspace", async () => {
     const { listWorkspaces } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
@@ -707,7 +707,7 @@ describe("App.svelte live event wiring (4.25.4)", () => {
   });
 });
 
-describe("App.svelte approval card + notification hub (4.25.5)", () => {
+describe("App.svelte approval card + notification hub", () => {
   // Workspace with caps.approvals=true so ApprovalCard actually renders.
   const approvalWorkspaces = [
     {
@@ -897,10 +897,10 @@ describe("App.svelte approval card + notification hub (4.25.5)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 4.25.6a: Dialogs + DragDrop
+// Dialogs + DragDrop
 // ---------------------------------------------------------------------------
 
-describe("App.svelte NewSessionDialog (4.25.6a)", () => {
+describe("App.svelte NewSessionDialog", () => {
   it("Sidebar onNew / openNewSession opens the dialog; submitting calls createWorkspace and refreshes", async () => {
     const { listWorkspaces, createWorkspace } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>)
@@ -1087,7 +1087,7 @@ describe("App.svelte NewSessionDialog (4.25.6a)", () => {
   });
 });
 
-describe("App.svelte ConfirmDialog (workspace remove) (4.25.6a)", () => {
+describe("App.svelte ConfirmDialog (workspace remove)", () => {
   it("session:remove command shows ConfirmDialog; confirming hides workspace + shows undo toast (no immediate removeWorkspace)", async () => {
     const { listWorkspaces, removeWorkspace } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([
@@ -1151,7 +1151,7 @@ describe("App.svelte ConfirmDialog (workspace remove) (4.25.6a)", () => {
   });
 });
 
-describe("App.svelte DragDrop (4.25.6a)", () => {
+describe("App.svelte DragDrop", () => {
   it("dropping a file onto the agent terminal writes @path bytes via writeToPty", async () => {
     const { listWorkspaces, writeToPty } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([
@@ -1199,10 +1199,10 @@ describe("App.svelte DragDrop (4.25.6a)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 4.25.6b: Full NORMAL keymap + mode state machine
+// Full NORMAL keymap + mode state machine
 // ---------------------------------------------------------------------------
 
-describe("App.svelte keymap: j/k navigation (4.25.6b)", () => {
+describe("App.svelte keymap: j/k navigation", () => {
   it("j moves activeId DOWN through the workspace list (clamp at end); k moves UP (clamp at start)", async () => {
     const { listWorkspaces, openWorkspace } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
@@ -1251,7 +1251,7 @@ describe("App.svelte keymap: j/k navigation (4.25.6b)", () => {
   });
 });
 
-describe("App.svelte keymap: Enter opens focused session (4.25.6b)", () => {
+describe("App.svelte keymap: Enter opens focused session", () => {
   it("Enter with activeId calls openWorkspace(activeId)", async () => {
     const { listWorkspaces, openWorkspace } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
@@ -1273,7 +1273,7 @@ describe("App.svelte keymap: Enter opens focused session (4.25.6b)", () => {
   });
 });
 
-describe("App.svelte keymap: g-prefix sequences (4.25.6b)", () => {
+describe("App.svelte keymap: g-prefix sequences", () => {
   it("gd sets view to 'diff'", async () => {
     const { listWorkspaces } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
@@ -1323,7 +1323,7 @@ describe("App.svelte keymap: g-prefix sequences (4.25.6b)", () => {
   });
 });
 
-describe("App.svelte keymap: Ctrl-` toggles shell (4.25.6b)", () => {
+describe("App.svelte keymap: Ctrl-` toggles shell", () => {
   it("Ctrl-` flips layout.collapsed['shell']", async () => {
     const { listWorkspaces } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
@@ -1344,7 +1344,7 @@ describe("App.svelte keymap: Ctrl-` toggles shell (4.25.6b)", () => {
   });
 });
 
-describe("App.svelte keymap: filter UI (4.25.6b)", () => {
+describe("App.svelte keymap: filter UI", () => {
   it("'/' shows filter input; typing filters Sidebar items; Esc hides it and restores full list", async () => {
     const { listWorkspaces } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
@@ -1388,7 +1388,7 @@ describe("App.svelte keymap: filter UI (4.25.6b)", () => {
   });
 });
 
-describe("App.svelte keymap: mode transitions (4.25.6b)", () => {
+describe("App.svelte keymap: mode transitions", () => {
   it("'i' in NORMAL → mode becomes 'terminal'", async () => {
     const { listWorkspaces } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
@@ -1415,7 +1415,7 @@ describe("App.svelte keymap: mode transitions (4.25.6b)", () => {
     expect(mode.current).toBe("command");
   });
 
-  it("Ctrl-K in NORMAL → mode becomes 'command' (spec §7.7 command palette shortcut)", async () => {
+  it("Ctrl-K in NORMAL → mode becomes 'command' (command palette shortcut)", async () => {
     const { listWorkspaces } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     const { mode } = await import("./lib/stores/mode.svelte");
@@ -1448,7 +1448,7 @@ describe("App.svelte keymap: mode transitions (4.25.6b)", () => {
   });
 });
 
-describe("App.svelte keymap: TERMINAL leave sequence (4.25.6b)", () => {
+describe("App.svelte keymap: TERMINAL leave sequence", () => {
   it("Ctrl-\\ then Ctrl-n returns mode to 'normal'", async () => {
     const { listWorkspaces } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
@@ -1520,10 +1520,10 @@ describe("App.svelte keymap: TERMINAL leave sequence (4.25.6b)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 4.25.6c: New command-registry entries + bell-opens-hub + unread badge
+// New command-registry entries + bell-opens-hub + unread badge
 // ---------------------------------------------------------------------------
 
-describe("App.svelte 4.25.6c: session:close command", () => {
+describe("App.svelte session:close command", () => {
   it("dispatching session:close calls closeWorkspace(active.id) but does NOT remove the workspace from the list", async () => {
     const { listWorkspaces, closeWorkspace } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([
@@ -1557,7 +1557,7 @@ describe("App.svelte 4.25.6c: session:close command", () => {
   });
 });
 
-describe("App.svelte 4.25.6c: worktree:open command", () => {
+describe("App.svelte worktree:open command", () => {
   it("dispatching worktree:open calls openWorkspace(active.id)", async () => {
     const { listWorkspaces, openWorkspace } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([
@@ -1590,7 +1590,7 @@ describe("App.svelte 4.25.6c: worktree:open command", () => {
   });
 });
 
-describe("App.svelte 4.25.6c: agent:approve-all / deny-all", () => {
+describe("App.svelte agent:approve-all / deny-all", () => {
   const twoApprovalWorkspaces = [
     {
       id: "ws-1", title: "Alpha", branch: "main", state: "awaiting-approval" as const,
@@ -1604,7 +1604,7 @@ describe("App.svelte 4.25.6c: agent:approve-all / deny-all", () => {
     },
   ];
 
-  // SAFETY (Feature A): "Approve all pending" must scope to the ACTIVE workspace
+  // SAFETY: "Approve all pending" must scope to the ACTIVE workspace
   // ONLY — it must NEVER silently green-light a tool waiting in a different,
   // unseen workspace. With Alpha active, approve-all resolves Alpha's request and
   // leaves Beta's untouched.
@@ -1713,7 +1713,7 @@ describe("App.svelte 4.25.6c: agent:approve-all / deny-all", () => {
   });
 });
 
-describe("App.svelte 4.25.6c: notifications:open toggles hub", () => {
+describe("App.svelte notifications:open toggles hub", () => {
   it("hub not in DOM initially; clicking bell shows it; clicking again hides it", async () => {
     const { listWorkspaces } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
@@ -1741,7 +1741,7 @@ describe("App.svelte 4.25.6c: notifications:open toggles hub", () => {
   });
 });
 
-describe("App.svelte 4.25.6c: unread badge on MenuBar bell", () => {
+describe("App.svelte unread badge on MenuBar bell", () => {
   it("MenuBar badge reflects the count of unread notifications from the store", async () => {
     const { listWorkspaces } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
@@ -1799,10 +1799,10 @@ describe("App.svelte: SetWindowFocus wiring on focus/blur", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 4.25.6d: HelpDialog — opened by help:shortcuts / help:about menu commands
+// HelpDialog opened by help:shortcuts / help:about menu commands
 // ---------------------------------------------------------------------------
 
-describe("App.svelte 4.25.6d: HelpDialog opens via help:shortcuts command", () => {
+describe("App.svelte HelpDialog opens via help:shortcuts command", () => {
   it("dispatching help:shortcuts via the Help menu opens HelpDialog; closing it hides it", async () => {
     const { listWorkspaces } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
@@ -1837,10 +1837,10 @@ describe("App.svelte 4.25.6d: HelpDialog opens via help:shortcuts command", () =
 });
 
 // ---------------------------------------------------------------------------
-// Feature A (SPEC §8): Approval batching — "Approve all / Deny all" buttons
+// Approval batching: "Approve all / Deny all" buttons
 // ---------------------------------------------------------------------------
 
-describe("App.svelte Feature A: approval batch buttons (SPEC §8)", () => {
+describe("App.svelte approval batch buttons", () => {
   const twoApprovalWs = [
     {
       id: "ws-1", title: "Alpha", branch: "main", state: "awaiting-approval" as const,
@@ -1929,10 +1929,10 @@ describe("App.svelte Feature A: approval batch buttons (SPEC §8)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Feature B (SPEC §7.3/§7.7): selection→agent via onSendToAgent
+// selection→agent via onSendToAgent
 // ---------------------------------------------------------------------------
 
-describe("App.svelte Feature B: sendToAgent wires Editor→writeToPty (SPEC §7.3/§7.7)", () => {
+describe("App.svelte sendToAgent wires Editor→writeToPty", () => {
   const codeWs = [
     {
       id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
@@ -2001,10 +2001,10 @@ describe("App.svelte Feature B: sendToAgent wires Editor→writeToPty (SPEC §7.
 });
 
 // ---------------------------------------------------------------------------
-// FEATURE 1 (SPEC §7.7): Repo discovery + first-run empty state
+// Repo discovery + first-run empty state
 // ---------------------------------------------------------------------------
 
-describe("App.svelte Feature 1: discoverRepos called on dialog open; discovered repos appear in dialog", () => {
+describe("App.svelte discoverRepos called on dialog open; discovered repos appear in dialog", () => {
   it("opening the New Session dialog calls discoverRepos and discovered path appears as an option", async () => {
     const { listWorkspaces, discoverRepos } = await import("./lib/wails");
     // Fresh install — no existing workspaces
@@ -2108,10 +2108,10 @@ describe("App.svelte Feature 1: discoverRepos called on dialog open; discovered 
 });
 
 // ---------------------------------------------------------------------------
-// FEATURE 2 (SPEC §8): Deferred removal + undo toast
+// Deferred removal + undo toast
 // ---------------------------------------------------------------------------
 
-describe("App.svelte Feature 2: deferred remove — hides workspace + shows undo toast without calling removeWorkspace", () => {
+describe("App.svelte deferred remove hides workspace + shows undo toast without calling removeWorkspace", () => {
   const removeWs = [
     {
       id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
@@ -2251,10 +2251,10 @@ describe("App.svelte Feature 2: deferred remove — hides workspace + shows undo
 });
 
 // ---------------------------------------------------------------------------
-// SPEC §7.2: independent secondary pane (splitId)
+// independent secondary pane (splitId)
 // ---------------------------------------------------------------------------
 
-describe("App.svelte §7.2 split secondary pane", () => {
+describe("App.svelte split secondary pane", () => {
   it("split=true + splitId=ws-2 → secondary pane shows Beta terminal (paneId p2), primary shows Alpha (paneId p1)", async () => {
     const { listWorkspaces } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
@@ -2445,9 +2445,9 @@ describe("App.svelte session reorder (behavior 4b)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// H-8: FileTree "@mention:" prefix routed to sendToAgent (not codePath)
+// FileTree "@mention:" prefix routed to sendToAgent (not codePath)
 // ---------------------------------------------------------------------------
-describe("App.svelte H-8: FileTree @mention prefix routes to sendToAgent", () => {
+describe("App.svelte: FileTree @mention prefix routes to sendToAgent", () => {
   const codeWs = [
     {
       id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
@@ -2522,9 +2522,9 @@ describe("App.svelte H-8: FileTree @mention prefix routes to sendToAgent", () =>
 });
 
 // ---------------------------------------------------------------------------
-// M-17: onDecision deletes by owning workspace, not activeId
+// onDecision deletes by owning workspace, not activeId
 // ---------------------------------------------------------------------------
-describe("App.svelte M-17: onDecision keys deletion by reqId owner, not activeId", () => {
+describe("App.svelte: onDecision keys deletion by reqId owner, not activeId", () => {
   it("allow on ws-2 card while active switches to ws-1 mid-await: only ws-2 cleared (race-proof)", async () => {
     // This test exercises the async race:
     //   1. Beta active → click Allow on req-ws2 → approve() deferred (won't resolve yet)
@@ -2599,9 +2599,9 @@ describe("App.svelte M-17: onDecision keys deletion by reqId owner, not activeId
 });
 
 // ---------------------------------------------------------------------------
-// L-14: session:close cleans up approvals/fsVersion
+// session:close cleans up approvals/fsVersion
 // ---------------------------------------------------------------------------
-describe("App.svelte L-14: session:close cleans up per-workspace frontend state", () => {
+describe("App.svelte: session:close cleans up per-workspace frontend state", () => {
   it("after closeWorkspace resolves, approvals/fsVersion for that id are removed", async () => {
     const { listWorkspaces, closeWorkspace } = await import("./lib/wails");
     (closeWorkspace as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
@@ -2650,9 +2650,9 @@ describe("App.svelte L-14: session:close cleans up per-workspace frontend state"
 });
 
 // ---------------------------------------------------------------------------
-// L-21: gt/gT view cycling
+// gt/gT view cycling
 // ---------------------------------------------------------------------------
-describe("App.svelte L-21: g-prefix gt/gT cycles views", () => {
+describe("App.svelte: g-prefix gt/gT cycles views", () => {
   beforeEach(async () => {
     const { listWorkspaces } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
@@ -2730,9 +2730,9 @@ describe("App.svelte L-21: g-prefix gt/gT cycles views", () => {
 });
 
 // ---------------------------------------------------------------------------
-// L-22: auto-dismiss notifications
+// auto-dismiss notifications
 // ---------------------------------------------------------------------------
-describe("notifications.svelte.ts L-22: auto-dismiss non-blocking tiers", () => {
+describe("notifications.svelte.ts: auto-dismiss non-blocking tiers", () => {
   it("ambient notification is marked read after ~6s (fake timers)", async () => {
     vi.useFakeTimers();
     const { addAmbient, getItems } = await import("./lib/stores/notifications.svelte");
@@ -2797,9 +2797,9 @@ describe("notifications.svelte.ts L-22: auto-dismiss non-blocking tiers", () => 
 });
 
 // ---------------------------------------------------------------------------
-// FEATURE 1 (§5.3): diffstat counts — Sidebar row +/− and status-line diffstat
+// diffstat counts: Sidebar row +/− and status-line diffstat
 // ---------------------------------------------------------------------------
-describe("App.svelte Feature 1: diffstat counts in Sidebar and status line", () => {
+describe("App.svelte diffstat counts in Sidebar and status line", () => {
   it("Sidebar row for /tmp/alpha shows +5 and −2 after workspaces load", async () => {
     const { listWorkspaces } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
@@ -2900,9 +2900,9 @@ describe("App.svelte Feature 1: diffstat counts in Sidebar and status line", () 
 });
 
 // ---------------------------------------------------------------------------
-// FEATURE 2 (§7.7): sidebar collapse via Ctrl-b and toggle rail button
+// sidebar collapse via Ctrl-b and toggle rail button
 // ---------------------------------------------------------------------------
-describe("App.svelte Feature 2: sidebar collapse via Ctrl-b and toggle rail", () => {
+describe("App.svelte sidebar collapse via Ctrl-b and toggle rail", () => {
   it("Ctrl-b in NORMAL mode toggles layout.collapsed['sidebar'] from false to true", async () => {
     const { listWorkspaces } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
@@ -2947,9 +2947,9 @@ describe("App.svelte Feature 2: sidebar collapse via Ctrl-b and toggle rail", ()
 });
 
 // ---------------------------------------------------------------------------
-// FEATURE 4: workspace attach routing via onWorkspaceAttach
+// workspace attach routing via onWorkspaceAttach
 // ---------------------------------------------------------------------------
-describe("App.svelte Feature 4: onWorkspaceAttach routes to matching workspace", () => {
+describe("App.svelte onWorkspaceAttach routes to matching workspace", () => {
   it("attach callback with query matching a workspace title shows resume preview for that workspace", async () => {
     const { listWorkspaces, openWorkspace } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);

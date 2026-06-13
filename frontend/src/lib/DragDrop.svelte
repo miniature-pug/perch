@@ -63,7 +63,7 @@
 
   {#if !fileDrop}
     <!-- OS file drop is disabled; no file-picker IPC is available.
-         Show a non-interactive "Paste path" hint per design brief §D DragDrop. -->
+         Show a non-interactive "Paste path" hint instead. -->
     <p class="drop-hint">Paste path to open a file</p>
   {:else if children}
     {@render children()}

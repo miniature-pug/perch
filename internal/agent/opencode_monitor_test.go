@@ -369,7 +369,7 @@ func TestOpencodeMonitorSSE_SessionStatusDrivesIdle(t *testing.T) {
 	}
 }
 
-// TestOpencodeMonitorSSE_SessionIdleEmitsDone verifies H-6 for the deprecated
+// TestOpencodeMonitorSSE_SessionIdleEmitsDone verifies the deprecated
 // session.idle alias: a busy→idle transition (running then session.idle) is a
 // completed turn and must produce State==StateDone.
 func TestOpencodeMonitorSSE_SessionIdleEmitsDone(t *testing.T) {
@@ -439,7 +439,7 @@ func TestOpencodeMonitorSSE_IdleAtConnectIsSteady(t *testing.T) {
 }
 
 // TestOpencodeMonitorSSE_SessionStatusCapturesSessionID verifies sessionID
-// capture from the DEFAULT session.status event (BUG-2). session.status is the
+// capture from the DEFAULT session.status event. session.status is the
 // only DEFAULT-emitted event carrying the sessionID — the session.next.step.*
 // events that also carry it are gated behind OPENCODE_EXPERIMENTAL_EVENT_SYSTEM,
 // so without this capture resume breaks on default opencode. Both the busy and

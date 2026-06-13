@@ -1,5 +1,5 @@
 /**
- * (c) menubar.spec.ts
+ * menubar.spec.ts
  *
  * Keyboard navigation:
  * - open menu via Enter/click on trigger
