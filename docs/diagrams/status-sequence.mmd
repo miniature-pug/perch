@@ -7,7 +7,7 @@ sequenceDiagram
 
     Note over Agent,HL: hook config (URL + Bearer token) written to .claude/settings.json by ClaudeMonitor
 
-    Agent->>HL: POST PreToolUse (Bearer token) — blocks until a verdict
+    Agent->>HL: POST PreToolUse (Bearer token), blocks until a verdict
     HL->>App: agent:event (approval, reqID)
     App->>FE: agent:event (ApprovalCard)
     FE->>User: show Allow / Always / Deny
@@ -25,8 +25,8 @@ sequenceDiagram
 
     Note over Agent,User: AskUserQuestion (opencode question.asked) is an attention SIGNAL, not an approval
     Agent->>HL: POST PreToolUse AskUserQuestion
-    HL->>HL: auto-allow immediately — never blocks. ExitPlanMode stays on the approval path
-    HL->>App: agent:event — kind question, state awaiting-input
+    HL->>HL: auto-allow immediately, never blocks. ExitPlanMode stays on the approval path
+    HL->>App: agent:event (kind question, state awaiting-input)
     App->>FE: agent:event → sidebar "asking you" feel, cyan pulse. User answers in the agent's own pane TUI
 
-    Note over App,FE: opencode is equivalent — events arrive over the opencode serve SSE /event stream instead
+    Note over App,FE: opencode is equivalent: events arrive over the opencode serve SSE /event stream instead

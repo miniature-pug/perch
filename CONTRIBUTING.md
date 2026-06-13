@@ -1,170 +1,155 @@
+[perch](README.md) / Contributing
+
 # Contributing to perch
 
 ## Toolchain
 
-| Tool | Required version |
-|------|-----------------|
-| Go directive | `1.25.0` (see `go.mod`) |
-| Go toolchain | `go1.26.4` (see `go.mod` `toolchain` directive) |
-| git | any recent version (worktree + diff operations) |
-| Node.js | `22.22.3` (pinned in `.tool-versions`; for building the Svelte frontend) |
-| npm | bundled with Node v22 |
+| Tool | Version |
+|------|---------|
+| Go language floor | `1.25.0` (the `go` directive in `go.mod`) |
+| Go toolchain | `go1.26.4` (the `toolchain` directive in `go.mod`, pinned in `.tool-versions`) |
+| Node.js | `22.22.3` (pinned in `.tool-versions`), with the bundled npm |
+| git | any recent version |
 
-**GUI system libraries (Linux only)** — install once on a fresh machine:
+Install the GUI system libraries once, on Linux:
 
 ```sh
 sudo apt install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
 ```
 
-`libwebkit2gtk-4.1-dev` pulls in `libsoup-3.0-dev` transitively. WebKit2GTK 4.0
-is EOL; the container base ships only 4.1, and Ubuntu 26.04 hosts `4.1-dev`
-natively, so host and container link identically.
+`libwebkit2gtk-4.1-dev` pulls in `libsoup-3.0-dev`. WebKit2GTK 4.0 is end of
+life, so perch links 4.1; the container base and recent Debian and Ubuntu
+releases both provide the 4.1 dev package, so the host and the container link
+the same way.
 
-The production GUI binary is built with `go build -tags "production webkit2_41"`
-(the `webkit2_41` tag selects the **webkit2gtk-4.1** link), **not** the
-`wails` CLI. The `wails` CLI is incompatible with this repo's layout (`main`
-lives at `./cmd/perch`; the root package is a library). The `wails` CLI is
-therefore not required and should not be used to build or run the app.
+The production GUI binary is built with `go build -tags "production webkit2_41"`.
+The `webkit2_41` tag links WebKit2GTK 4.1, and `production` selects the Wails
+production runtime, which omits the dev reload server. The frontend is embedded
+from `frontend/dist/` regardless of tags, so build it first with `make
+gui-build`. The `wails` CLI is not used and will not build this repository,
+because `main` lives at `./cmd/perch` while the root package is a library.
 
-All Go builds are **vendored and hermetic**. The `GOFLAGS=-mod=vendor` environment
-variable is set in the Makefile so every `go` invocation reads from the committed
-`/vendor` tree — no network access is required after cloning.
+All Go builds are vendored. `GOFLAGS=-mod=vendor` is set in the Makefile and in
+the container, so every `go` command reads the committed `vendor/` tree and
+needs no network after cloning.
 
 ## Make workflow
 
-Run targets from the repo root. All targets respect the vendored build.
+Run targets from the repository root.
 
 | Target | What it does |
-|--------|-------------|
-| `make image` | Build the `perch-dev` container image (`containers/dev/Containerfile`) — the dev/test environment every check runs in |
-| `make shell` | Open an interactive shell inside the `perch-dev` image |
-| `make build` | Build `./bin/perch` with `-tags "production webkit2_41"` (trimpath, ldflags version stamp; links webkit2gtk-4.1) |
-| `make install` | Install to `GOBIN` / `~/go/bin` with `-tags "production webkit2_41"` |
-| `make run` | `build` then run `./bin/perch` (needs an X/Wayland display for the GUI) |
-| `make gui-build` | `npm --prefix frontend ci` + `npm --prefix frontend run build`, then `go build -tags "production webkit2_41"` |
-| `make gui-run` | `gui-build` then launch the binary (needs an X/Wayland display) |
-| `make test` | Unit tests (`go test -race -count=1 ./...`) — in the `perch-dev` container |
-| `make test-integration` | Integration tests (`-tags=integration`; requires git on PATH) — in the `perch-dev` container |
-| `make test-front` | Frontend typecheck (`tsc`) + unit tests (`vitest`) — in the `perch-dev` container |
-| `make test-e2e` | Playwright chromium e2e — in the `perch-dev` container (the host distro is too new to run Playwright 1.60.0 natively) |
-| `make test-all` | The everything-gate: `test test-integration test-front lint vet vulncheck test-e2e`, each in its own container with the correct artifact masks |
-| `make coverage` | Coverage report for `internal/` packages only |
-| `make lint` | golangci-lint v2.11.4 — runs the prebaked pinned binary inside the `perch-dev` image |
-| `make fmt` | `gofmt -w` + `goimports -w` (if goimports is present) |
-| `make vet` | `go vet ./...` — in the `perch-dev` container |
-| `make vulncheck` | govulncheck v1.3.0 — prebaked pinned binary inside the `perch-dev` image; scans deps for known CVEs |
-| `make verify` | Verify every module checksum against `go.sum` |
-| `make verify-all` | Quality gates only: `vet lint vulncheck test-front` (vet + lint + govulncheck + tsc + frontend unit; no integration/e2e) — in the `perch-dev` container |
-| `make tidy` | `go mod tidy` then refresh the vendor tree |
-| `make vendor` | Refresh the committed `/vendor` tree |
-| `make cross` | Build `./bin/perch-linux-amd64` with `-tags "production webkit2_41"` (Linux-only; cgo+WebKit requires per-target toolchain) |
-| `make doctor` | Build then run `perch doctor` (checks runtime deps) |
+|--------|--------------|
+| `make image` | Build the `perch-dev` container image, the environment every check runs in |
+| `make shell` | Open an interactive shell inside `perch-dev` |
+| `make build` | Build `./bin/perch` with the production tags; embeds the committed frontend stub without rebuilding it |
+| `make install` | Install to `GOBIN` with the production tags |
+| `make run` | `build`, then run `./bin/perch` |
+| `make gui-build` | `npm ci`, build the frontend, then build the binary with the production tags |
+| `make gui-run` | `gui-build`, then launch the binary |
+| `make test` | Go unit tests, with the race detector |
+| `make test-integration` | Go integration tests (`-tags=integration`); needs git |
+| `make test-front` | Frontend typecheck and unit tests |
+| `make test-e2e` | Playwright (chromium) end-to-end tests |
+| `make test-all` | The full gate: test, test-integration, test-front, lint, vet, vulncheck, test-e2e |
+| `make coverage` | Per-package coverage for `internal/` |
+| `make lint` | golangci-lint `v2.11.4`, the version baked into the image |
+| `make vet` | `go vet ./...` |
+| `make vulncheck` | govulncheck `v1.3.0`, baked into the image |
+| `make verify` | `go mod verify` against `go.sum` |
+| `make verify-all` | The quality gates only: vet, lint, vulncheck, test-front |
+| `make fmt` | `gofmt -w` and `goimports -w` |
+| `make tidy` | `go mod tidy`, then refresh the vendor tree |
+| `make vendor` | Refresh the `vendor/` tree |
+| `make cross` | Cross-build `./bin/perch-linux-amd64` |
+| `make doctor` | Build, then run `perch doctor` |
 | `make clean` | Remove `./bin/` |
 
-### Testing runs in containers
+### Checks run in the container
 
-The dev/test workflow is **container-first**. There is one image, `perch-dev`
-(`containers/dev/Containerfile`); build it with `make image`. By default every
-check — `test`, `test-integration`, `test-front`, `lint`, `vet`, `vulncheck`,
-`test-e2e` — re-enters that image and runs there. The reason is e2e: the host
-(Ubuntu 26.04) is too new for Playwright 1.60.0 to run natively, so the e2e
-suite runs in `perch-dev`, and for consistency every other gate runs there too.
-`lint` and `vulncheck` run prebaked pinned binaries baked into the image rather
-than fetching tools at runtime.
+The test workflow is container-first. There is one image, `perch-dev`, built
+from `containers/dev/Containerfile` by `make image`. By default every check
+re-enters that image and runs there, so a check produces the same result on any
+host. The image bakes a pinned Playwright and its browser, the pinned
+`golangci-lint`, and `govulncheck`, so checks never fetch tools at runtime.
 
-The `CONTAINERIZE` variable is the toggle (default `1` = re-enter the image).
-Set `CONTAINERIZE=0` to run a target natively — that is what happens **inside**
-the image and in a pipeline, where re-entry would be redundant. The generic
-container exec is `containers/run.sh`.
-
-Container runs never mutate your working tree: `frontend/node_modules` and (for
-frontend-building targets) `frontend/dist` are masked with anonymous volumes, so
-the tracked `//go:embed frontend/dist` stub is never clobbered. The
-`.devcontainer/devcontainer.json` reuses the same `perch-dev` image.
-
-See [`containers/README.md`](containers/README.md) and the design rationale in
-[`docs/superpowers/specs/2026-06-04-perch-container-framework-design.md`](docs/superpowers/specs/2026-06-04-perch-container-framework-design.md).
+The `CONTAINERIZE` variable is the toggle, defaulting to `1`. Set
+`CONTAINERIZE=0` to run a target natively, which is what happens inside the image
+and in a pipeline, where re-entry would be redundant. A container run never
+mutates your working tree: `frontend/node_modules`, and `frontend/dist` for
+frontend-building targets, are masked with anonymous volumes, so the committed
+`//go:embed frontend/dist` stub is never clobbered. The
+[container framework](containers/README.md) covers the model in full.
 
 ## GUI dev loop
 
-`wails dev` hot-reload is **not available** — the `wails` CLI cannot build this
-repo (root is a library, `main` is at `./cmd/perch`). The GUI dev loop is:
+There is no `wails dev` hot reload, because the `wails` CLI cannot build this
+layout. The loop is:
 
 ```sh
-make gui-run          # rebuild frontend + Go binary, then launch
+make gui-run          # rebuild the frontend and binary, then launch
 ```
 
-Frontend tests (typecheck + unit) run in the `perch-dev` container via:
+`make test-front` runs the frontend typecheck and unit tests in the container.
+With a local Node toolchain, `npm --prefix frontend test` works for quick
+iteration, but `make test-front` is the canonical path. For Go logic without a
+display, `make test` and `make vet` cover the non-GUI code, and the production
+build tags are not needed for unit tests.
 
-```sh
-make test-front
-```
+## The Runner principle
 
-If you have a local Node toolchain set up, `npm --prefix frontend test` still
-works for quick local iteration, but `make test-front` is the canonical path.
+Every shell-out in perch goes through `internal/proc.Runner`. This is a firm
+rule.
 
-For iterating on Go logic without a display, `make test` and `make vet` cover the
-non-GUI code paths. The `production`/`webkit2_41` build tags are not needed for
-unit tests.
+- Production code uses `proc.ExecRunner`, which wraps `os/exec`.
+- Unit tests use `proc.FakeRunner`. They assert on `.Calls`, the recorded argv,
+  and never spawn a process. A new handler or package that runs an external
+  command takes a `proc.Runner` and gets a `FakeRunner` test.
+- Integration tests, tagged `//go:build integration`, exercise real worktree,
+  pty, and git behavior against throwaway repositories and temp directories.
+  They never touch your real `$HOME` config.
 
-## §20.1 Runner principle
+## Test safety
 
-**Every shell-out in perch goes through `internal/proc.Runner`.** This is a
-non-negotiable architectural rule.
+Never run a code path that writes to your real `$HOME` config during development
+or testing.
 
-- **Production code** uses `proc.ExecRunner{}`, which wraps `os/exec`.
-- **Unit tests** use `proc.FakeRunner`. Fake tests assert on `.Calls` (the
-  recorded command argv slices) and never spawn a real process. If you write a
-  new handler or internal package that runs an external command, inject a
-  `proc.Runner` and add a unit test using `FakeRunner`.
-- **Integration tests** are tagged `//go:build integration` and exercise real
-  worktree, pty, and git behaviour against **throwaway git repos and temp
-  directories** created per test. They never touch the developer's real `$HOME`
-  config or working repos.
-
-## Dev safety
-
-**Never run the real `perch` binary or any code path that writes to real `$HOME`
-config during development or testing.**
-
-- When a test must exercise config loading, use `t.Setenv("HOME", t.TempDir())`
-  and/or `t.Setenv("XDG_CONFIG_HOME", t.TempDir())` to redirect all writes to a
-  throwaway directory that is cleaned up automatically.
-- The same applies to the perch config dir (`registry.DefaultConfigDir()`,
-  which honours `XDG_CONFIG_HOME`). Test helpers must redirect it via
-  `t.Setenv("XDG_CONFIG_HOME", t.TempDir())` before any load so the registry,
-  settings, and layout writes land in a throwaway directory.
+- A test that exercises config loading sets `t.Setenv("HOME", t.TempDir())` and
+  `t.Setenv("XDG_CONFIG_HOME", t.TempDir())`, so writes land in a throwaway
+  directory.
+- The same applies to the perch config directory, which honors
+  `XDG_CONFIG_HOME`. Redirect it before any load so the registry, settings, and
+  layout writes are sandboxed.
 
 ## Coverage
 
-The project targets **≥ 80% statement coverage per package**.
+The project targets at least 80% statement coverage per package. Run `make
+coverage` for the `internal/` totals. A new package below the target blocks the
+review gate.
 
-Run `make coverage` to see per-package totals for `internal/`. A new package
-below 80% will block the review gate.
+## Branches and commits
 
-## Branch and commit conventions
-
-- **Never commit directly to `main` or `master`.** All changes go through a
-  feature branch and a pull request.
-- **Conventional Commits** — follow the style used throughout the repo's history:
+- Never commit to `main` or `master`. Work on a feature branch and open a pull
+  request.
+- Follow Conventional Commits, the style used throughout the history:
 
   ```
   feat(scope): short imperative description
   fix(scope): short imperative description
-  refactor(scope): short imperative description
   docs(scope): short imperative description
-  test(scope): short imperative description
   ```
 
-  The scope is the affected subsystem (e.g. `gui`, `frontend`, `agent`,
-  `pty`, `hooklistener`, `registry`, `config`, `worktree`, `proc`).
-
-- **No co-author trailers.** Do not add `Co-authored-by:` lines to commits.
+  The scope is the affected subsystem, such as `gui`, `frontend`, `agent`,
+  `pty`, `hooklistener`, `registry`, or `config`.
+- Do not add `Co-authored-by` trailers.
 
 ## Where things live
 
-| Artifact | Location |
-|----------|----------|
-| Implementation plans | `docs/superpowers/plans/` |
-| Architecture diagrams (Mermaid) | `docs/diagrams/` |
-| Public architecture overview | `ARCHITECTURE.md` |
+| Topic | Location |
+|-------|----------|
+| Usage guide | [docs/usage.md](docs/usage.md) |
+| Architecture | [ARCHITECTURE.md](ARCHITECTURE.md) |
+| Backend package map | [internal/README.md](internal/README.md) |
+| Frontend map | [frontend/README.md](frontend/README.md) |
+| Container framework | [containers/README.md](containers/README.md) |
+| Architecture diagrams | [docs/diagrams/](docs/diagrams/README.md) |
+| Pre-release smoke checklist | [docs/smoke-checklist.md](docs/smoke-checklist.md) |

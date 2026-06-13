@@ -3,20 +3,20 @@ flowchart TD
         roots["roots []string\n(scan root directories)"]
     end
 
-    subgraph DiscoveryPipeline["Discovery pipeline — internal/discover"]
+    subgraph DiscoveryPipeline["Discovery pipeline (internal/discover)"]
         scan["Scan each root\n(WalkDir, bounded depth)\nfind dirs with .git entry\nprune node_modules / vendor / .git"]
         worktrees["git worktree list\nper candidate repo\n(internal/git)"]
         frecency["frecency ranking\n(rank × recency multiplier;\ncold-start → alphabetical)"]
         candidates["project + worktree list"]
     end
 
-    subgraph Registry["Workspace registry — ~/.config/perch/ (XDG)"]
+    subgraph Registry["Workspace registry (~/.config/perch, XDG)"]
         workspacesjson["workspaces.json\nWorkspace[]: id, worktreePath, repoPath,\nworktree, agent, branch, baseRef,\ntitle, lastSessionID, lastActive"]
         settingsjson["settings.json\n(AlwaysRules, StaleThresholdDays, prefs)"]
         layoutjson["layout.json\n(saved UI layout)"]
     end
 
-    subgraph Open["Open workspace — app.OpenWorkspace"]
+    subgraph Open["Open workspace (app.OpenWorkspace)"]
         ptyspawn["spawn direct pty\n+ login shell in worktree"]
         monstart["start agent Monitor\n(ClaudeMonitor / OpencodeMonitor)"]
     end

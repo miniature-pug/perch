@@ -1,16 +1,16 @@
 flowchart TD
-    subgraph CLI["cmd/perch — CLI entry-point"]
+    subgraph CLI["cmd/perch (CLI entry point)"]
         main["main.go\ndispatch"]
     end
 
     subgraph GUILayer["GUI layer"]
         apppkg["app/\nWails App + bound methods\ninput validation + event forwarding"]
-        pty["internal/pty\ndirect pty Bridge\n(creack/pty + login shell)\nxterm.js events — no tmux"]
+        pty["internal/pty\ndirect pty Bridge\n(creack/pty + login shell)\nxterm.js events, no tmux"]
         notify["internal/notify\ntiered desktop notifications\n(D-Bus, runner fallback)"]
         frontend["frontend/\nSvelte 5 SPA\nWails bindings + events"]
     end
 
-    subgraph Agents["Agent Monitor seam — internal/agent"]
+    subgraph Agents["Agent Monitor seam (internal/agent)"]
         monitor["Monitor seam\nPrepare / Start / Events\nApprove / Caps / Teardown"]
         claudemon["ClaudeMonitor"]
         opencodemon["OpencodeMonitor"]
@@ -33,7 +33,7 @@ flowchart TD
         fs["internal/fs\nfile tree + change watcher\n(Node.Modified/Untracked from git status)"]
     end
 
-    subgraph ShellSeam["Shell-out seam (§20.1)"]
+    subgraph ShellSeam["Shell-out seam"]
         proc["internal/proc\nRunner / RunStdin interface\nFakeRunner in tests"]
         git["internal/git\ngit command wrappers + diff/hunks"]
     end

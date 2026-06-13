@@ -1,10 +1,15 @@
-# Perch — Mermaid Diagrams
+[perch](../../README.md) / [Docs](../README.md) / Diagrams
 
-Render any `.mmd` file with a Mermaid-capable viewer (GitHub renders `.mmd` files in fenced code blocks; VS Code with the Mermaid Preview extension also works).
+# Diagrams
+
+Four Mermaid diagrams describe how perch fits together. GitHub renders `.mmd`
+files, and the Mermaid Preview extension renders them in VS Code.
 
 | File | What it shows |
 |------|---------------|
-| [architecture.mmd](architecture.mmd) | Component graph: `cmd/perch` dispatch, the Wails GUI layer (`app/`, `internal/pty` direct-pty bridge, `frontend/`), the agent Monitor seam (ClaudeMonitor → hooklistener, OpencodeMonitor → serve/SSE), CLI sub-commands, the registry/config layer, discovery, tiered desktop notifications (`internal/notify`), and the `proc.Runner` shell-out seam through which git calls flow. |
-| [status-sequence.mmd](status-sequence.mmd) | Hook-listener approval sequence: claude agent POSTs `PreToolUse` to its loopback hooklistener (blocks) → `app.App` emits `agent:event` → Svelte ApprovalCard → user clicks Allow → `App.Approve` → `hooklistener.Decide` unblocks the agent → state-update event re-renders the UI. Also shows the lifecycle states (running/idle/awaiting-approval/done/errored) and the `awaiting-input` question signal (AskUserQuestion / opencode `question.asked`), which is auto-allowed and surfaced as a glanceable "asking you" feel rather than an approval card. opencode is equivalent over the serve SSE stream. |
-| [worktree-lifecycle.mmd](worktree-lifecycle.mmd) | Three-path flowchart: CREATE — pick repo/branch/agent, validate (repo under roots, branch ref, known agent), derive the linked-worktree path and re-check it stays under roots, `git worktree add`, register in `workspaces.json`, open (spawn direct pty + start Monitor); REMOVE — confirm modal with a deferred-removal undo window, tear down pty + Monitor, remove the registry record; for worktree sessions `git worktree remove` deletes the tree (dirty tree → force-confirm path); branch kept. Non-worktree sessions are record-only. STALE CLEANUP — launch banner when sessions exceed `StaleThresholdDays`; `CleanupPanel` with safe-row default-check, Select-all, and bulk `git worktree remove` + `git branch -d`. |
-| [discovery-state.mmd](discovery-state.mmd) | Discovery pipeline (`roots` → scan → worktrees → GUI workspace list) and the `workspaces.json` registry (plus `settings.json` / `layout.json`); shows how selecting a workspace drives `OpenWorkspace` (direct pty + Monitor) and how `lastSessionID` feeds agent resume. |
+| [architecture.mmd](architecture.mmd) | The component graph: CLI dispatch in `cmd/perch`, the Wails GUI layer, the Monitor seam (ClaudeMonitor to its hooklistener, OpencodeMonitor to serve and SSE), the registry and config, discovery, notifications, and the `proc.Runner` shell-out seam |
+| [status-sequence.mmd](status-sequence.mmd) | The approval sequence: Claude posts a blocking `PreToolUse` to its loopback listener, the app emits an `agent:event`, the approval card takes your verdict, `hooklistener.Decide` unblocks the agent, and a state event re-renders the UI. It also shows the lifecycle states and the question signal |
+| [worktree-lifecycle.mmd](worktree-lifecycle.mmd) | The three paths: create (validate, derive the worktree path, `git worktree add`, register, open), remove (confirm with an undo window, tear down, `git worktree remove`, keep the branch), and stale cleanup (the banner and the cleanup panel) |
+| [discovery-state.mmd](discovery-state.mmd) | The discovery pipeline (roots, scan, worktrees, the session list) and the JSON stores, and how opening a session drives `OpenWorkspace` and how `lastSessionID` feeds resume |
+
+The diagrams track the system described in [ARCHITECTURE.md](../../ARCHITECTURE.md).

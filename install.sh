@@ -355,7 +355,7 @@ if [ "$SKIP_BUILD" = "1" ]; then
 else
   printf '[install] building perch -> %s/perch\n' "$INSTALL_PREFIX"
   cd "$REPO_ROOT" || die "Cannot cd to repo root: ${REPO_ROOT}"
-  go build -trimpath \
+  go build -tags "production webkit2_41" -trimpath \
     -ldflags "-s -w -X main.version=$(git describe --tags --always 2>/dev/null || printf 'dev')" \
     -o "${INSTALL_PREFIX}/perch" ./cmd/perch
   printf '[ok]    perch built at %s/perch\n' "$INSTALL_PREFIX"

@@ -1,10 +1,10 @@
 flowchart TD
     subgraph Create["CREATE path"]
         w_start(["user creates a session\n(GUI New Session dialog)"])
-        w_pick["pick repo / branch / agent / model\n(repos discovered across configured roots)"]
+        w_pick["pick repo / branch / agent\n(repos discovered across configured roots)"]
         w_validate["validate:\nrepoPath under a configured root,\nbranch via git.ValidRef,\nagent known (claude / opencode)"]
         w_derive["derive linked-worktree path\n(repo + slugified branch),\nre-check it stays under roots"]
-        w_git_add["git worktree add\n(an existing branch is tolerated)"]
+        w_git_add["git worktree add\n(new branch: -b, fails if the branch exists;\nexisting branch: no -b)"]
         w_state["record workspace\nin workspaces.json"]
         w_launch["open workspace:\nspawn direct pty + login shell,\nstart agent Monitor"]
 
@@ -32,7 +32,7 @@ flowchart TD
         d_start --> d_confirm
         d_confirm --> d_undo
         d_undo -->|"yes"| d_cancel
-        d_undo -->|"no — window elapsed"| d_teardown
+        d_undo -->|"no, window elapsed"| d_teardown
         d_teardown --> d_state2
         d_state2 --> d_worktree_check
         d_worktree_check -->|"yes (worktree session)"| d_dirty_check
