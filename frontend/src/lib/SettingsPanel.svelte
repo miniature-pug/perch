@@ -181,13 +181,11 @@
   }
 
   .dialog {
-    background: var(--perch-glass-bg);
-    -webkit-backdrop-filter: var(--perch-glass-filter);
-    backdrop-filter: var(--perch-glass-filter);
+    background: var(--perch-surface);
     color: var(--perch-text);
-    border: 1px solid var(--perch-glass-border);
+    border: 1px solid var(--perch-border-strong);
     border-radius: var(--perch-radius-lg);
-    box-shadow: var(--perch-glass-shadow);
+    box-shadow: var(--perch-shadow-float);
     padding: var(--perch-sp-3);
     min-width: 480px;
     max-width: 600px;
