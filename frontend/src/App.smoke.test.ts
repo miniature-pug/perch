@@ -165,29 +165,29 @@ it("full-composition smoke: assembly → select → view-switch → approval →
   // Step 3 — View switching via keymap (REAL keymap + REAL layout store)
   // -------------------------------------------------------------------------
 
-  // '2' → Code view → EditorProbe mounts
+  // '2' → Code view: editor visible; the terminal stays mounted (hidden) so its buffer survives
   await fireEvent.keyDown(document.body, { key: "2" });
   await tick();
   await waitFor(() => {
-    expect(screen.queryByTestId("terminal")).not.toBeInTheDocument();
-    expect(screen.getByTestId("editor")).toBeInTheDocument();
+    expect(screen.getByTestId("editor")).toBeVisible();
+    expect(screen.getByTestId("terminal")).not.toBeVisible();
   });
 
-  // '3' → Diff view → DiffProbe mounts
+  // '3' → Diff view: diff visible; the editor stays mounted (hidden)
   await fireEvent.keyDown(document.body, { key: "3" });
   await tick();
   await waitFor(() => {
-    expect(screen.queryByTestId("editor")).not.toBeInTheDocument();
-    expect(screen.getByTestId("diff")).toBeInTheDocument();
+    expect(screen.getByTestId("diff")).toBeVisible();
     expect(screen.getByTestId("diff").dataset.worktree).toBe("/tmp/alpha");
+    expect(screen.getByTestId("editor")).not.toBeVisible();
   });
 
-  // '1' → Agent view → Terminal probe is back
+  // '1' → Agent view: terminal visible again (the diff view unmounts)
   await fireEvent.keyDown(document.body, { key: "1" });
   await tick();
   await waitFor(() => {
     expect(screen.queryByTestId("diff")).not.toBeInTheDocument();
-    expect(screen.getByTestId("terminal")).toBeInTheDocument();
+    expect(screen.getByTestId("terminal")).toBeVisible();
   });
 
   // -------------------------------------------------------------------------

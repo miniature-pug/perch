@@ -732,21 +732,32 @@
                  onSplit={() => layout.toggleSplit()}>
             {#snippet primary()}
               {#if active}
-                {#if layout.view === "agent"}
-                  <!-- Clicking the terminal area while in NORMAL enters TERMINAL mode.
-                       The wrapper is a flex container that fills the pane; onpointerdown fires
-                       before xterm processes the event so mode switches promptly.
-                       We do NOT preventDefault/stopPropagation to preserve xterm text selection. -->
+                <!-- The agent terminal stays mounted whenever a session is active and is hidden
+                     (not unmounted) on the code and diff views, so its xterm scroll buffer survives
+                     a view switch. This is the same keep-alive pattern as the home shell below.
+                     Keyed by session id: switching sessions gives a fresh pane, switching views never
+                     remounts it. Clicking the zone in NORMAL enters TERMINAL mode; onpointerdown fires
+                     before xterm sees the event. We do NOT preventDefault, so text selection still works. -->
+                {#key active.id}
                   <div class="terminal-zone" class:input-emphasis={emphasizeInput} data-terminal-zone role="group" aria-label="agent terminal"
+                       style:display={layout.view === "agent" ? "" : "none"}
                        onanimationend={(e) => { if (e.animationName === "perch-emphasis") emphasizeInput = false; }}
                        onpointerdown={() => { if (mode.current === "normal") mode.enterTerminal(); }}>
                     <DragDrop paneId={active.paneId} fileDrop={true}>
                       <Terminal bind:this={primaryTerm} paneId={active.paneId} cwd={active.worktreePath} onExit={() => mode.leaveTerminal()} />
                     </DragDrop>
                   </div>
-                {:else if layout.view === "code"}
-                  {#key fsVersion[active.id] ?? 0}
-                    <div class="code-layout">
+                {/key}
+                <!-- The code layout stays mounted while a session is active and is hidden on the agent
+                     and diff views, so an in-progress Editor draft survives a view switch. FileTree and
+                     Preview are keyed on the fs version (only while this view shows, so a hidden pane does
+                     no background work) to refresh when files change. The Editor is NOT keyed on it, so a
+                     background file change never discards unsaved edits; it reloads on an external change
+                     only when it has none, via its reloadToken prop. Keyed by session id so a session
+                     switch starts a fresh layout. -->
+                {#key active.id}
+                  <div class="code-layout" style:display={layout.view === "code" ? "" : "none"}>
+                    {#key layout.view === "code" ? (fsVersion[active.id] ?? 0) : -1}
                       <FileTree root={active.worktreePath} onOpen={(p) => {
                         // FileTree may send '@mention:'+path for "Send to agent".
                         // Route to sendToAgent; otherwise treat as a regular file open.
@@ -758,14 +769,20 @@
                           codePath = p;
                         }
                       }} />
-                      {#if isPreviewable(codePath)}
+                    {/key}
+                    {#if isPreviewable(codePath)}
+                      {#key layout.view === "code" ? `${fsVersion[active.id] ?? 0}:${codePath}` : codePath}
                         <Preview path={codePath ?? ""} kind={previewKind(codePath ?? "")} content={previewContent} />
-                      {:else}
-                        <Editor path={codePath} worktree={active.worktreePath} onSendToAgent={sendToAgent} />
-                      {/if}
-                    </div>
-                  {/key}
-                {:else if layout.view === "diff"}
+                      {/key}
+                    {:else}
+                      <Editor path={codePath} worktree={active.worktreePath}
+                              reloadToken={layout.view === "code" ? (fsVersion[active.id] ?? 0) : 0}
+                              visible={layout.view === "code"}
+                              onSendToAgent={sendToAgent} />
+                    {/if}
+                  </div>
+                {/key}
+                {#if layout.view === "diff"}
                   {#key fsVersion[active.id] ?? 0}
                     <DiffView worktree={active.worktreePath} onSendToAgent={sendToAgent}
                               onDiffChanged={() => { if (active) refreshDiffStat(active); }} />
@@ -821,9 +838,13 @@
               {#if layout.split}
                 {@const splitWs = workspaces.find(w => w.id === layout.splitId) ?? null}
                 {#if splitWs}
-                  <DragDrop paneId={splitWs.paneId} fileDrop={true}>
-                    <Terminal paneId={splitWs.paneId} cwd={splitWs.worktreePath} />
-                  </DragDrop>
+                  <!-- Keyed by session id so re-picking the split session remounts the terminal and
+                       re-subscribes its pty; a Terminal subscribes to its paneId only at mount. -->
+                  {#key splitWs.id}
+                    <DragDrop paneId={splitWs.paneId} fileDrop={true}>
+                      <Terminal paneId={splitWs.paneId} cwd={splitWs.worktreePath} />
+                    </DragDrop>
+                  {/key}
                 {:else}
                   <div class="split-picker" data-testid="split-picker">
                     <p class="split-picker-hint">Pick a session for this pane</p>

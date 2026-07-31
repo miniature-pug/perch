@@ -408,32 +408,40 @@ describe("App.svelte Stage content routing", () => {
     expect(screen.queryByTestId("diff")).not.toBeInTheDocument();
   });
 
-  it("reactive re-route: switching from 'agent' to 'code' swaps probes without re-render", async () => {
+  it("view switch keeps the agent terminal mounted (hidden), never destroyed, so its buffer survives", async () => {
     const { listWorkspaces } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
     const { layout } = await import("./lib/stores/layout.svelte");
     const { default: App } = await import("./App.svelte");
     render(App);
-    // Wait for workspaces to load (restore() has run by now)
     const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
     await fireEvent.click(alphaBtn);
-    // Resume preview appears — confirm to open
+    // Resume preview appears; confirm to open
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
     await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
-    // Start in agent view
+
+    // Agent view: the terminal is visible.
     layout.setView("agent");
     await tick();
-    expect(await screen.findByTestId("terminal")).toBeInTheDocument();
-    expect(screen.queryByTestId("editor")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("filetree")).not.toBeInTheDocument();
-    // Reactively switch to code view
+    const terminal = await screen.findByTestId("terminal");
+    expect(terminal).toBeVisible();
+
+    // Switch to code view: the editor and file tree become visible, and the SAME
+    // terminal element stays in the DOM (hidden, not unmounted) so its buffer is kept.
     layout.setView("code");
     await tick();
     await waitFor(() => {
-      expect(screen.queryByTestId("terminal")).not.toBeInTheDocument();
-      expect(screen.getByTestId("editor")).toBeInTheDocument();
-      expect(screen.getByTestId("filetree")).toBeInTheDocument();
+      expect(screen.getByTestId("editor")).toBeVisible();
+      expect(screen.getByTestId("filetree")).toBeVisible();
     });
+    expect(screen.getByTestId("terminal")).toBe(terminal);
+    expect(screen.getByTestId("terminal")).not.toBeVisible();
+
+    // Back to agent view: the same terminal element is visible again.
+    layout.setView("agent");
+    await tick();
+    await waitFor(() => expect(screen.getByTestId("terminal")).toBeVisible());
+    expect(screen.getByTestId("terminal")).toBe(terminal);
   });
 
   it("split mode: view='agent' + split=true + splitId set → two independent TerminalProbes with distinct paneIds", async () => {

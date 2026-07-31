@@ -247,3 +247,46 @@ test("send-to-agent button is draggable and sets perch text MIME on dragstart", 
     "hello world"
   );
 });
+
+// --- external change reload (reloadToken), preserving unsaved drafts ---
+
+test("external change reloads a clean editor when reloadToken bumps", async () => {
+  const { default: Editor } = await import("./Editor.svelte");
+  const w = await import("./wails");
+  vi.mocked(w.readFile).mockResolvedValue("v1");
+  vi.mocked(w.hunks).mockResolvedValue([]);
+  const { rerender } = render(Editor, {
+    props: { path: "/wt/a.ts", worktree: "/wt", reloadToken: 0 },
+  });
+  await waitFor(() => expect(w.readFile).toHaveBeenCalledWith("/wt/a.ts"));
+  const callsAfterMount = vi.mocked(w.readFile).mock.calls.length;
+  // A file changed on disk; the parent bumps reloadToken. A clean editor reloads.
+  await rerender({ path: "/wt/a.ts", worktree: "/wt", reloadToken: 1 });
+  await waitFor(() =>
+    expect(vi.mocked(w.readFile).mock.calls.length).toBeGreaterThan(callsAfterMount)
+  );
+});
+
+test("external change does NOT reload a dirty editor, so the draft survives", async () => {
+  const { default: Editor } = await import("./Editor.svelte");
+  const { EditorView } = await import("@codemirror/view");
+  const w = await import("./wails");
+  vi.mocked(w.readFile).mockResolvedValue("original\n");
+  vi.mocked(w.hunks).mockResolvedValue([]);
+  const { rerender } = render(Editor, {
+    props: { path: "/wt/a.ts", worktree: "/wt", reloadToken: 0 },
+  });
+  await waitFor(() => expect(document.querySelector(".cm-editor")).not.toBeNull());
+  const view = EditorView.findFromDOM(document.querySelector(".cm-editor") as HTMLElement)!;
+  // Type an unsaved edit: the editor is now dirty.
+  view.dispatch({ changes: { from: 0, to: 0, insert: "DRAFT " } });
+  await waitFor(() => expect(document.querySelector(".dirty-dot")).not.toBeNull());
+  const callsBefore = vi.mocked(w.readFile).mock.calls.length;
+  // An external change arrives while dirty. The editor must NOT reload (that would
+  // discard the draft): no new readFile, still dirty, draft text intact.
+  await rerender({ path: "/wt/a.ts", worktree: "/wt", reloadToken: 1 });
+  await new Promise((r) => setTimeout(r, 30));
+  expect(vi.mocked(w.readFile).mock.calls.length).toBe(callsBefore);
+  expect(document.querySelector(".dirty-dot")).not.toBeNull();
+  expect(view.state.doc.toString()).toContain("DRAFT ");
+});

@@ -1,6 +1,6 @@
 <!-- frontend/src/lib/Editor.svelte -->
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onMount, onDestroy, untrack } from "svelte";
   import { EditorView, keymap, gutter, GutterMarker } from "@codemirror/view";
   import { EditorState, StateField, StateEffect } from "@codemirror/state";
   import { defaultKeymap, indentWithTab } from "@codemirror/commands";
@@ -21,10 +21,18 @@
   let {
     path,
     worktree,
+    reloadToken = 0,
+    visible = true,
     onSendToAgent,
   }: {
     path: string | null;
     worktree: string;
+    // Bumped by the parent when files change on disk. A change reloads the file
+    // only when there are no unsaved edits (see the load effect below).
+    reloadToken?: number;
+    // False when the editor is mounted but off-screen (on the agent/diff views).
+    // Gates the Ctrl-S shortcut so a hidden editor never hijacks it.
+    visible?: boolean;
     onSendToAgent?: (text: string) => void;
   } = $props();
 
@@ -251,7 +259,13 @@
   }
 
   function handleKeyDown(e: KeyboardEvent) {
-    if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); save(); }
+    if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+      // The editor can stay mounted while hidden (on the agent/diff views). Ignore the
+      // shortcut then, so it does not hijack Ctrl-S from the terminal or save off-screen.
+      if (!visible) return;
+      e.preventDefault();
+      save();
+    }
   }
 
   // drag selected text as application/x-perch-text (matches DragDrop.svelte MIME)
@@ -262,7 +276,25 @@
     e.dataTransfer.setData("text/plain", selectionText);
   }
 
-  $effect(() => { if (path) load(path); });
+  // Tracks the file the editor currently holds, so we can tell a file switch apart
+  // from an in-place reload signal.
+  let loadedPath: string | null = null;
+
+  // Load on a file switch. On an external change to the same file (reloadToken bumps),
+  // reload only when there are no unsaved edits, so a background change never discards
+  // the user's draft. `dirty` and `loadedPath` are read untracked so this effect depends
+  // only on `path` and `reloadToken`.
+  $effect(() => {
+    const p = path;
+    reloadToken;
+    untrack(() => {
+      if (!p) { loadedPath = null; return; }
+      if (p !== loadedPath || !dirty) {
+        loadedPath = p;
+        load(p);
+      }
+    });
+  });
 
   onMount(() => document.addEventListener("keydown", handleKeyDown));
   onDestroy(() => {
