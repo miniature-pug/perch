@@ -15,15 +15,38 @@
     if (kind === "markdown" && content) {
       Promise.resolve(marked(content)).then((h) => {
         if (!cancelled) html = DOMPurify.sanitize(h as string, { USE_PROFILES: { html: true, svg: true, svgFilters: true }, FORBID_ATTR: ['id', 'name'] });
+      }).catch((e) => {
+        if (!cancelled) html = errorBanner(e);
       });
     } else if (kind === "mermaid" && content) {
       mermaid.initialize({ startOnLoad: false, securityLevel: "strict" });
       mermaid.render("preview-mermaid", content).then(({ svg }) => {
-        if (!cancelled) html = DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true, html: true }, FORBID_ATTR: ['id', 'name'] });
+        // Mermaid draws arrowheads as <marker> elements referenced via
+        // marker-end="url(#id)"; forbidding `id` here strips the marker ids and
+        // the arrowheads vanish. So `id` is NOT forbidden on the diagram SVG
+        // (verified against mermaid's .attr("id",…) + url(#…) markers). `name`
+        // stays forbidden and the render is still strict-mode + svg-profile
+        // sanitized, so this is functionality-only, not a security relaxation.
+        if (!cancelled) html = DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true, html: true }, FORBID_ATTR: ['name'] });
+      }).catch((e) => {
+        // A malformed diagram must not blank the pane with an unhandled rejection;
+        // show an inline error banner instead.
+        if (!cancelled) html = errorBanner(e);
       });
+    } else {
+      // Empty content: clear any stale rendered diagram/markdown.
+      html = "";
     }
     return () => { cancelled = true; };
   });
+
+  function errorBanner(e: unknown): string {
+    const msg = e instanceof Error ? e.message : String(e);
+    return DOMPurify.sanitize(
+      `<div class="preview-error" role="alert">Could not render preview: ${msg}</div>`,
+      { USE_PROFILES: { html: true } },
+    );
+  }
 </script>
 
 <section aria-label="preview" class="preview scrollable">
@@ -172,6 +195,17 @@
     display: block;
     max-width: 100%;
     margin: var(--perch-sp-2) auto;
+  }
+
+  /* ---------- Inline render-error banner ---------- */
+  :global(.preview-body .preview-error) {
+    padding: var(--perch-sp-2);
+    border: 1px solid var(--perch-err);
+    border-radius: var(--perch-radius-sm);
+    background: color-mix(in srgb, var(--perch-err) 10%, var(--perch-bg));
+    color: var(--perch-err);
+    font-family: var(--perch-font-mono);
+    font-size: var(--perch-fs-code);
   }
 
   /* ---------- Image ---------- */

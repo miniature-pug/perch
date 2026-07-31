@@ -24,6 +24,9 @@ const (
 	hookEventChanBuf = 64
 	// reqIDBytes is the number of random bytes used for per-request IDs.
 	reqIDBytes = 8
+	// maxHookBodyBytes caps the hook request body (1 MiB) so an over-large POST
+	// cannot exhaust memory. Real hook payloads are orders of magnitude smaller.
+	maxHookBodyBytes = 1 << 20
 )
 
 type Decision struct {
@@ -98,6 +101,11 @@ func (l *Listener) handleHook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	// Cap the request body so a malicious or malfunctioning hook cannot exhaust
+	// memory with an unbounded POST. 1 MiB is far larger than any real hook
+	// payload (tool name + tool input); an over-limit body makes Decode return an
+	// error and falls into the 400 path below rather than being buffered whole.
+	r.Body = http.MaxBytesReader(w, r.Body, maxHookBodyBytes)
 	var ev HookEvent
 	if err := json.NewDecoder(r.Body).Decode(&ev); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -163,7 +171,16 @@ func (l *Listener) Decide(reqID string, d Decision) {
 	l.mu.Lock()
 	p := l.reqs[reqID]
 	l.mu.Unlock()
-	if p != nil {
-		p.ch <- d
+	if p == nil {
+		return
+	}
+	// Non-blocking send into the size-1 buffered channel. The handler consumes
+	// exactly one verdict, so the first Decide for a reqID fills the buffer and
+	// wins; a second Decide (double-click / retry) finds the buffer full and
+	// falls through the default case instead of blocking the caller (a Wails IPC
+	// goroutine) forever. The first verdict is the one delivered.
+	select {
+	case p.ch <- d:
+	default:
 	}
 }

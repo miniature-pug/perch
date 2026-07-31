@@ -195,6 +195,24 @@ export function buildInitScriptContent(opts: MockOptions = {}): string {
           record('RemoveWorkspace', [id]);
           return Promise.resolve();
         },
+        SetWorkspaceTitle: function(id, title) {
+          record('SetWorkspaceTitle', [id, title]);
+          return Promise.resolve();
+        },
+        WorkspaceForBranch: function(repoPath, branch) {
+          record('WorkspaceForBranch', [repoPath, branch]);
+          // No pre-existing workspace for the branch by default. Shape matches the
+          // Go return: { id, found }.
+          return Promise.resolve({ id: '', found: false });
+        },
+        ListStaleSessions: function() {
+          record('ListStaleSessions', []);
+          return Promise.resolve([]);
+        },
+        CleanupSessions: function(ids, force) {
+          record('CleanupSessions', [ids, force]);
+          return Promise.resolve();
+        },
         WriteToPty: function(paneId, data) {
           record('WriteToPty', [paneId, data]);
           return Promise.resolve();

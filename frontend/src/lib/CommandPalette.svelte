@@ -10,6 +10,12 @@
   let query = $state("");
   let active = $state(0);
 
+  // A fresh open starts blank: clear the query and reset the active index so a
+  // stale query/selection from a previous open never carries over.
+  $effect(() => {
+    if (open) { query = ""; active = 0; }
+  });
+
   // Track command invocation recency: id → last-invoked timestamp.
   // Persisted to localStorage so recency survives palette re-opens within a session.
   function loadRecents(): Map<string, number> {
@@ -42,11 +48,22 @@
     return score;
   }
 
+  // Score a command against its label first, then fall back to its group and
+  // keybinding so queries like a group name ("view") or a key ("\\") still find
+  // commands. The label always outranks group/keybinding matches.
+  function commandScore(c: Command, q: string): number {
+    const labelScore = fuzzyScore(c.label, q);
+    if (labelScore > 0) return labelScore + 100;
+    const groupScore = fuzzyScore(c.group, q);
+    if (groupScore > 0) return groupScore + 10;
+    return fuzzyScore(c.keybinding ?? "", q);
+  }
+
   // When the query is empty, surface recently-used commands first in a "Recent" group,
   // then show remaining commands in their normal groups below.
   let filtered = $derived((() => {
     if (query) {
-      return commands.map((c) => ({ c, score: fuzzyScore(c.label, query) }))
+      return commands.map((c) => ({ c, score: commandScore(c, query) }))
         .filter((x) => x.score > 0).sort((a, b) => b.score - a.score).map((x) => x.c);
     }
     // No query: sort by recency (most-recent first) for the initial list

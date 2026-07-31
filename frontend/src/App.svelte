@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onMount, onDestroy, untrack } from "svelte";
   import ThemeProvider      from "./lib/ThemeProvider.svelte";
   import Sidebar            from "./lib/Sidebar.svelte";
   import Stage              from "./lib/Stage.svelte";
@@ -46,7 +46,12 @@
   let termEpoch       = $state<Record<string, number>>({});
   let codePath        = $state<string | null>(null);
   let previewContent  = $state<string>("");
-  let approvals       = $state<Record<string, ApprovalReq>>({});
+  // Per-workspace approval QUEUE. A session's agent can have more than one tool
+  // waiting at once (each is a distinct blocking hook); a single-valued map would
+  // drop all but the last and hang those hooks forever. The head of each queue
+  // (index 0) is the one currently shown for that session; resolving it pops it so
+  // the next queued request surfaces. reqId is unique per request → dedupe on push.
+  let approvals       = $state<Record<string, ApprovalReq[]>>({});
   let fsVersion  = $state<Record<string, number>>({});
   let wsDiffStats = $state<Record<string, { added: number; removed: number; files: number }>>({});
 
@@ -62,7 +67,14 @@
   // Pending removals — each entry is an optimistically-hidden workspace with a
   // scheduled real removeWorkspace call.  Using an array lets us handle multiple
   // concurrent removals without any special-case logic.
-  interface PendingRemoval { ws: WorkspaceVM; timer: ReturnType<typeof setTimeout>; }
+  interface PendingRemoval {
+    ws: WorkspaceVM;
+    timer: ReturnType<typeof setTimeout>;
+    // Selection at schedule time, so Undo can re-select the removed session if it
+    // was the active and/or split pane.
+    prevActiveId: string | null;
+    prevSplitId: string | null;
+  }
   let pendingRemovals = $state<PendingRemoval[]>([]);
 
   // Keymap state machine helpers
@@ -83,6 +95,15 @@
     return () => { cancelled = true; };
   });
 
+  // Reset the code-view file selection when the active session changes: codePath is
+  // a single top-level value, so a leftover path from the previous session would be
+  // loaded against the NEW worktree. untrack the reset so writing codePath does not
+  // re-trigger this effect (it keys only on active?.id).
+  $effect(() => {
+    active?.id; // track
+    untrack(() => { codePath = null; });
+  });
+
   // Dialog / overlay state
   let newSessionOpen        = $state(false);
   let newSessionInitialAgent = $state<string | null>(null);
@@ -98,7 +119,9 @@
 
   const active          = $derived(workspaces.find(w => w.id === activeId) ?? null);
   const unreadCount     = $derived(getItems().filter(n => !n.read).length);
-  const approvalQueue   = $derived(Object.values(approvals).filter(Boolean) as import("./lib/wails").ApprovalReq[]);
+  // Cross-workspace pending count: every queued request across ALL sessions.
+  // Drives the batch-button "N pending" indicator and the badge count.
+  const approvalQueue   = $derived(Object.values(approvals).flat() as import("./lib/wails").ApprovalReq[]);
 
   // Apply user-defined order: ids in layout.order come first (in that order),
   // remaining workspaces (not yet in order) follow in backend order.
@@ -205,7 +228,14 @@
       if (!ws) return;
       const prev = ws.state;
       if (ev.state) ws.state = ev.state;
-      if (ev.approval) approvals[ev.workspaceId] = ev.approval;
+      if (ev.approval) {
+        // PUSH onto the workspace's queue (dedupe by reqId so a re-delivered
+        // event never enqueues the same request twice).
+        const q = approvals[ev.workspaceId] ?? [];
+        if (!q.some(r => r.reqId === ev.approval!.reqId)) {
+          approvals[ev.workspaceId] = [...q, ev.approval];
+        }
+      }
       // Only the ACTIVE workspace, only the agent view, only on the edge.
       if (ev.state && shouldFocusAwaitingInput(prev, ev.state, ev.workspaceId, activeId, layout.view)) {
         focusAwaitingInput();
@@ -268,8 +298,14 @@
   let previewWs = $state<WorkspaceVM | null>(null);
 
   function onSelect(id: string) {
-    // Already showing this session → no-op (never reopen the live pane).
-    if (id === activeId) return;
+    // Already the active session: if its pty is live, this is a no-op (never reopen
+    // the live pane). But if the active session is DEAD (not in openIds), its
+    // dimmed sidebar row is the only affordance to bring it back on the code/diff
+    // view (the in-pane Reopen overlay only shows on the agent view) — so reopen it.
+    if (id === activeId) {
+      if (!openIds.has(id)) openSession(id);
+      return;
+    }
     const ws = workspaces.find(w => w.id === id) ?? null;
     if (!ws) return;
     // Open but not active → just FOCUS it. No preview, no reopen: the pty is
@@ -304,6 +340,23 @@
     if (ws) ws.state = "idle";
   }
 
+  // Assign a session to the secondary split pane. Rejects the same session already
+  // in the primary (activeId) or already in the secondary (splitId) — the same pty
+  // in two panes corrupts the shared buffer. If the chosen session has no live pty
+  // (not in openIds), spawn it via openSession so the secondary pane is not a dead
+  // xterm. openSession focuses+opens; we restore the active session afterwards so
+  // the split assignment doesn't hijack the primary pane.
+  async function chooseSplit(id: string) {
+    if (!id || id === activeId || id === layout.splitId) return;
+    layout.setSplit(true);
+    layout.setSplitId(id);
+    if (!openIds.has(id)) {
+      const prevActive = activeId;
+      await openSession(id);
+      if (prevActive) activeId = prevActive;
+    }
+  }
+
   async function confirmPreview() {
     if (!previewWs) return;
     const id = previewWs.id;
@@ -317,6 +370,9 @@
   // directly (no preview — the user's intent is unambiguous) if it is closed.
   function onNotificationSelect(wsId: string) {
     if (!wsId) return;
+    // Ignore a click that targets a session already scheduled for removal — its
+    // row is optimistically hidden, so focusing it would be a dead click.
+    if (pendingRemovalIds.has(wsId)) return;
     const ws = workspaces.find(w => w.id === wsId);
     if (!ws) return;
     notifOpen = false;
@@ -382,6 +438,15 @@
     confirmRemove = ws;
   }
 
+  // Drop ALL per-workspace frontend state for a gone session, so nothing dangles.
+  // Mirrors the approvals/fsVersion pruning and adds termEpoch + diffstats.
+  function pruneWorkspaceState(id: string) {
+    const { [id]: _a, ...restA } = approvals;   approvals   = restA;
+    const { [id]: _f, ...restF } = fsVersion;   fsVersion   = restF;
+    const { [id]: _e, ...restE } = termEpoch;   termEpoch   = restE;
+    const { [id]: _d, ...restD } = wsDiffStats; wsDiffStats = restD;
+  }
+
   function handleConfirmRemove() {
     if (!confirmRemove) return;
     const wsToRemove = confirmRemove;
@@ -389,6 +454,10 @@
 
     // Finalize any existing pending removal for the same id (edge-case guard).
     finalizePendingRemoval(wsToRemove.id);
+
+    // Capture the selection BEFORE we clear it, so Undo can restore it.
+    const prevActiveId = activeId;
+    const prevSplitId  = layout.splitId;
 
     // Optimistically hide the workspace immediately — visibleWorkspaces $derived
     // filters by pendingRemovalIds so no listWorkspaces() refresh is needed yet.
@@ -405,6 +474,7 @@
         await removeWorkspace(wsToRemove.id);
         openIds.delete(wsToRemove.id);
         dropForWorkspace(wsToRemove.id);
+        pruneWorkspaceState(wsToRemove.id);
         workspaces = await listWorkspaces();
         if (activeId === wsToRemove.id) activeId = workspaces[0]?.id ?? null;
       } catch (err) {
@@ -416,7 +486,7 @@
       }
     }, UNDO_REMOVE_DELAY_MS);
 
-    pendingRemovals = [...pendingRemovals, { ws: wsToRemove, timer }];
+    pendingRemovals = [...pendingRemovals, { ws: wsToRemove, timer, prevActiveId, prevSplitId }];
   }
 
   /** Cancel a pending deferred removal and return the workspace to the visible list. */
@@ -426,6 +496,10 @@
     clearTimeout(entry.timer);
     pendingRemovals = pendingRemovals.filter(p => p.ws.id !== id);
     // workspace is already in `workspaces`; visibleWorkspaces $derived will restore it.
+    // Restore the selection that was cleared when the removal was scheduled, so
+    // undoing a remove of the active/split session re-selects it.
+    if (entry.prevActiveId === id) activeId = id;
+    if (entry.prevSplitId === id) layout.setSplitId(id);
   }
 
   /** Force-commit a pending removal without waiting for the timer. */
@@ -437,6 +511,7 @@
     if (layout.splitId === id) layout.setSplitId(null);
     openIds.delete(id);
     dropForWorkspace(id);
+    pruneWorkspaceState(id);
     // Fire-and-forget — do not await so we don't block the caller.
     removeWorkspace(id).then(() => listWorkspaces()).then(ws => { workspaces = ws; }).catch(() => {});
   }
@@ -453,6 +528,7 @@
       await forceRemoveWorkspace(ws.id);
       openIds.delete(ws.id);
       dropForWorkspace(ws.id);
+      pruneWorkspaceState(ws.id);
       workspaces = await listWorkspaces();
       if (activeId === ws.id) activeId = workspaces[0]?.id ?? null;
     } catch {
@@ -463,34 +539,53 @@
   // ---------------------------------------------------------------------------
   // Command registry — keyed by the ids MenuBar actually emits.
   // ---------------------------------------------------------------------------
+  // reqIds with an in-flight decide() call — a double-click (or approve-all racing
+  // a single Allow) must not send the same reqId twice.
+  const decidingReqs = new Set<string>();
+
+  // Backstop: on a successful decision, locally clear a session's attention if it
+  // was awaiting-approval — in case the Go "state cleared" event is missed. Only
+  // demote awaiting-approval (never stomp awaiting-input or a fresh running state).
+  function clearAttentionBackstop(wsId: string) {
+    const ws = workspaces.find(w => w.id === wsId);
+    if (ws && ws.state === "awaiting-approval") ws.state = "idle";
+  }
+
+  // Resolve ONE queued request by reqId: call approve(), then pop it from its
+  // owning workspace's queue and run the attention backstop. Guarded against a
+  // concurrent in-flight decide of the same reqId.
+  async function decideOne(reqId: string, decision: "allow" | "deny" | "always"): Promise<void> {
+    if (decidingReqs.has(reqId)) return;
+    // Locate the owning workspace (the queue that holds this reqId).
+    const ownerEntry = Object.entries(approvals).find(([, q]) => q.some(r => r.reqId === reqId));
+    const ownerWsId = ownerEntry?.[0] ?? activeId;
+    if (!ownerWsId) return;
+    decidingReqs.add(reqId);
+    try {
+      await approve(reqId, decision);
+      // Pop this reqId from the owner's queue (leave any siblings so the next surfaces).
+      const q = (approvals[ownerWsId] ?? []).filter(r => r.reqId !== reqId);
+      if (q.length) approvals[ownerWsId] = q;
+      else { const { [ownerWsId]: _drop, ...rest } = approvals; approvals = rest; }
+      clearAttentionBackstop(ownerWsId);
+    } catch (e) {
+      addBlocking(ownerWsId, "Approval failed", String(e));
+    } finally {
+      decidingReqs.delete(reqId);
+    }
+  }
+
   // ---------------------------------------------------------------------------
-  // Bulk-approval helper — SAFETY-SCOPED to the ACTIVE workspace only.
-  //
-  // A batch ("Approve all" / "Deny all") action MUST only affect the approval the
-  // user is actually looking at — the active workspace's pending request. It must
-  // NEVER silently green-light a tool waiting in a DIFFERENT, unseen workspace.
-  // The cross-workspace queue still DRIVES the batch-button render condition (the
-  // "N pending" indicator), but the ACTION resolves active.id alone.
-  //
-  // The data model is one-approval-per-workspace (approvals[wsId] = req), so the
-  // active workspace has at most one pending request. Mid-flight safe: re-reads
-  // approvals after the await and only clears the active key if it still holds the
-  // SAME reqId we acted on (a newer event may have replaced it).
+  // Bulk-approval — "Approve all" / "Deny all" resolves EVERY pending request
+  // across ALL workspaces. The badge counts every queue, so a batch that only
+  // touched the active session would leave background agents blocked. Each item
+  // is resolved by its own reqId (owner lookup is reqId-keyed, so this is safe),
+  // with a per-item await/guard so a double-click can't double-send.
   // ---------------------------------------------------------------------------
   async function decideAll(decision: "allow" | "deny") {
-    const wsId = active?.id;
-    if (!wsId) return;
-    const req = approvals[wsId];                          // active's pending request (if any)
-    if (!req) return;
-    try {
-      await approve(req.reqId, decision);
-      if (approvals[wsId]?.reqId === req.reqId) {         // not replaced mid-flight → clear it
-        const { [wsId]: _, ...rest } = approvals;
-        approvals = rest;
-      }
-    } catch (e) {
-      addBlocking(wsId, "Approval failed", String(e));
-    }
+    // Snapshot every pending reqId up front (the queues mutate as we resolve).
+    const reqIds = Object.values(approvals).flat().map(r => r.reqId);
+    for (const reqId of reqIds) await decideOne(reqId, decision);
   }
 
   type Command = { id: string; group: string; label: string; keybinding?: string; run: () => void | Promise<void> };
@@ -502,9 +597,9 @@
         if (!active) return;
         const id = active.id;
         closeWorkspace(id).then(() => {
-          // Clean up per-workspace frontend state on close
-          const { [id]: _a, ...restA } = approvals; approvals = restA;
-          const { [id]: _f, ...restF } = fsVersion;  fsVersion = restF;
+          // Clean up per-workspace frontend state on close (approvals queue,
+          // fsVersion, termEpoch, diffstats).
+          pruneWorkspaceState(id);
           // The pty is gone: drop it from the open set so the row dims and a
           // later click routes through the resume-preview reopen path.
           openIds.delete(id);
@@ -550,9 +645,52 @@
   // ---------------------------------------------------------------------------
   // Keymap — full state machine
   // ---------------------------------------------------------------------------
+  // True when any App-rendered modal/overlay that should trap the keyboard is open.
+  // The command palette is handled separately (its own mode). notifOpen is a
+  // non-trapping dock (a dismissable panel, not a modal), so it is NOT included.
+  const modalOpen = $derived(
+    newSessionOpen || confirmRemove !== null || confirmDirty !== null ||
+    helpOpen || settingsOpen || cleanupOpen || previewWs !== null
+  );
+
   function onKeyDown(e: KeyboardEvent) {
     // COMMAND mode: let the CommandPalette handle everything.
     if (mode.current === "command") return;
+
+    // MODAL/OVERLAY open: the app behind it must be inert. Handle ONLY Escape
+    // (to dismiss the topmost overlay) and swallow everything else so NORMAL/
+    // TERMINAL nav never drives the app behind the dialog.
+    if (modalOpen) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        // Close the topmost overlay. previewWs is the only App-owned overlay that
+        // renders no close chrome of its own here; the dialog components trap and
+        // close themselves, but we back them up so Escape always dismisses.
+        if (previewWs !== null)            previewWs = null;
+        else if (cleanupOpen)              cleanupOpen = false;
+        else if (settingsOpen)             settingsOpen = false;
+        else if (helpOpen)                 helpOpen = false;
+        else if (confirmDirty !== null)    confirmDirty = null;
+        else if (confirmRemove !== null)   confirmRemove = null;
+        else if (newSessionOpen)         { newSessionOpen = false; newSessionInitialAgent = null; }
+      }
+      return;
+    }
+
+    // Editable target: a keystroke aimed at an <input>/<textarea>/<select> or a
+    // contentEditable element must reach the field — never run a single-letter
+    // shortcut or preventDefault over the user's typing.
+    // The xterm terminal uses a hidden <textarea> that holds focus whenever a
+    // session is open, so exclude anything inside a terminal zone: in NORMAL mode
+    // the terminal is passive and shortcuts must still run; TERMINAL mode is handled
+    // below. Only real app-chrome fields (dialog inputs, the filter, the rename box)
+    // are guarded.
+    const t = e.target as HTMLElement | null;
+    const tag = t?.tagName?.toUpperCase();
+    if ((tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t?.isContentEditable)
+        && !t?.closest("[data-terminal-zone]")) {
+      return;
+    }
 
     // TERMINAL mode: only intercept the Ctrl-\ Ctrl-n leave sequence.
     if (mode.current === "terminal") {
@@ -717,22 +855,14 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Approval decision handler — called by ApprovalCard docked chrome.
-  // Key deletion by the workspace that owns reqId, not necessarily activeId
-  // (the approval queue may hold entries from non-active workspaces).
+  // Approval decision handler — called by ApprovalCard docked chrome. Resolves the
+  // single request the card is showing (the head of the owning workspace's queue),
+  // pops it, and runs the attention backstop. Deletion is keyed by the workspace
+  // that owns reqId, not activeId (the queue may hold non-active entries), so an
+  // activeId change mid-await never clears the wrong session.
   // ---------------------------------------------------------------------------
   async function onDecision(reqId: string, decision: "allow" | "deny" | "always") {
-    // Find which workspace owns this reqId
-    const ownerEntry = Object.entries(approvals).find(([, req]) => req.reqId === reqId);
-    const ownerWsId = ownerEntry?.[0] ?? activeId;
-    if (!ownerWsId) return;
-    try {
-      await approve(reqId, decision);
-      const { [ownerWsId]: _, ...rest } = approvals;
-      approvals = rest;
-    } catch (e) {
-      addBlocking(ownerWsId, "Approval failed", String(e));
-    }
+    await decideOne(reqId, decision);
   }
 </script>
 
@@ -799,11 +929,12 @@
              }}
              ondrop={(e) => {
                if (typeof e.dataTransfer?.getData !== "function") return;
+               // Ignore drops while a modal/overlay is open — the app behind is inert.
+               if (modalOpen) return;
                const id = e.dataTransfer.getData(MIME_SESSION);
                if (!id) return;
                e.preventDefault();
-               layout.setSplit(true);
-               layout.setSplitId(id);
+               chooseSplit(id);
              }}
         >
           <Stage view={layout.view} split={layout.split}
@@ -929,7 +1060,8 @@
                        re-subscribes its pty; a Terminal subscribes to its paneId only at mount. -->
                   {#key splitWs.id}
                     <DragDrop paneId={splitWs.paneId} fileDrop={true}>
-                      <Terminal paneId={splitWs.paneId} cwd={splitWs.worktreePath} />
+                      <Terminal paneId={splitWs.paneId} cwd={splitWs.worktreePath}
+                                onExit={() => { openIds.delete(splitWs.id); }} />
                     </DragDrop>
                   {/key}
                 {:else}
@@ -941,7 +1073,7 @@
                       value=""
                       onchange={(e) => {
                         const v = (e.currentTarget as HTMLSelectElement).value;
-                        if (v) layout.setSplitId(v);
+                        if (v) chooseSplit(v);
                       }}
                     >
                       <option value="" disabled>— choose a session —</option>
@@ -1008,10 +1140,12 @@
       onClose={() => mode.leaveCommand()}
     />
 
-    {#if active && approvals[active.id]}
+    {#if active && approvals[active.id]?.[0]}
+      {@const headReq = approvals[active.id][0]}
       <div data-zone="approval-dock" class="approval-dock">
         <ApprovalCard
-          req={approvals[active.id]}
+          req={headReq}
+          sessionCount={approvals[active.id].length}
           queue={approvalQueue}
           caps={active.caps}
           {onDecision}
@@ -1064,7 +1198,8 @@
     />
 
     {#if previewWs}
-      <div class="modal-overlay" role="presentation">
+      <div class="modal-overlay" role="presentation"
+           onclick={(e) => { if (e.target === e.currentTarget) cancelPreview(); }}>
         <div class="resume-preview" data-testid="resume-preview" role="dialog" aria-modal="true" aria-label="Resume session">
           <h2 class="resume-preview-title">Resume: {previewWs.title}</h2>
           <dl class="resume-preview-meta">
@@ -1098,6 +1233,13 @@
               for (const id of [...openIds]) {
                 if (!freshIds.has(id)) { openIds.delete(id); dropForWorkspace(id); }
               }
+              // Prune per-workspace state for any session cleanup removed (may
+              // include sessions that were never open, so iterate the tracked keys).
+              const tracked = new Set([
+                ...Object.keys(approvals), ...Object.keys(fsVersion),
+                ...Object.keys(termEpoch), ...Object.keys(wsDiffStats),
+              ]);
+              for (const id of tracked) if (!freshIds.has(id)) pruneWorkspaceState(id);
               workspaces = fresh;
             } catch { /* non-fatal */ }
           }}

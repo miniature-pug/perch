@@ -35,6 +35,9 @@
   let branchSel   = $state("");
   let branches    = $state<string[]>([]);
   let submitting  = $state(false);
+  // True while an async loadBranches for the current repo is in flight. Blocks
+  // Create in new-branch mode so a fast repo switch can't submit a stale baseRef.
+  let branchesLoading = $state(false);
 
   // Reset dialog state when opened. Wrapped in untrack so the write to `agent`
   // (and subsequent reads of `agent` inside suggestBranch) do not register
@@ -61,39 +64,60 @@
   });
 
   // Load branches when repo changes; cancellation guard prevents stale resolves.
+  // The branch-derived fields (branches/baseRef/branchSel) are cleared
+  // SYNCHRONOUSLY here, before the async load, so a fast repo switch can never
+  // leave the previous repo's baseRef in place while the new list is pending.
   $effect(() => {
     const currentRepo = repo;
-    if (!currentRepo) { branches = []; baseRef = ""; branchSel = ""; return; }
+    // Clear immediately so no stale branch data survives the switch.
+    untrack(() => {
+      branches  = [];
+      baseRef   = "";
+      branchSel = "";
+    });
+    if (!currentRepo) { branchesLoading = false; return; }
+    branchesLoading = true;
     let cancelled = false;
     loadBranches(currentRepo).then((list) => {
       if (cancelled) return;
       branches = list ?? [];
       baseRef  = branches[0] ?? "";
       branchSel = branches[0] ?? "";
+      branchesLoading = false;
+    }).catch(() => {
+      if (cancelled) return;
+      branchesLoading = false;
     });
     return () => { cancelled = true; };
   });
 
   // Derived validity
   const nameValid  = $derived(!worktree || useExisting || slugValid(branchName));
+  // In new-branch mode a pending branch load means baseRef is not yet settled, so
+  // Create is blocked until the load resolves (prevents submitting a stale baseRef).
+  const newBranchReady = $derived(!branchesLoading);
   const canCreate  = $derived(
     !!repo &&
-    (!worktree || useExisting ? !!branchSel : (!!branchName && nameValid))
+    (!worktree || useExisting
+      ? !!branchSel
+      : (!!branchName && nameValid && newBranchReady))
   );
 
   async function handleCreate() {
     if (!canCreate || submitting) return;
+    // Trim the optional session name; a whitespace-only value is treated as empty.
+    const title = name.trim();
     submitting = true;
     try {
       if (!worktree) {
         // non-worktree: baseRef="" always
-        await Promise.resolve(onCreate(agent, repo, "", branchSel, name, false));
+        await Promise.resolve(onCreate(agent, repo, "", branchSel, title, false));
       } else if (useExisting) {
         // existing branch: baseRef="" signals no -b
-        await Promise.resolve(onCreate(agent, repo, "", branchSel, name, true));
+        await Promise.resolve(onCreate(agent, repo, "", branchSel, title, true));
       } else {
         // new branch from baseRef
-        await Promise.resolve(onCreate(agent, repo, baseRef, branchName, name, true));
+        await Promise.resolve(onCreate(agent, repo, baseRef, branchName, title, true));
       }
     } finally {
       submitting = false;

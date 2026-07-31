@@ -82,6 +82,21 @@ describe("ApprovalCard", () => {
     expect(onDecision).toHaveBeenCalledWith("req-2", "allow");
     expect(onDecision).toHaveBeenCalledTimes(2);
   });
+
+  it("shows a per-session 'N more queued' note when sessionCount > 1", async () => {
+    const { default: ApprovalCard } = await import("./ApprovalCard.svelte");
+    render(ApprovalCard, { props: { req, queue, caps, sessionCount: 3, onDecision: vi.fn() } });
+    await waitFor(() =>
+      expect(screen.getByTestId("session-queue-note")).toHaveTextContent(/2 more queued/i)
+    );
+  });
+
+  it("omits the per-session note when sessionCount is 1 (the default)", async () => {
+    const { default: ApprovalCard } = await import("./ApprovalCard.svelte");
+    render(ApprovalCard, { props: { req, queue, caps, onDecision: vi.fn() } });
+    await waitFor(() => screen.getByRole("button", { name: "Allow" }));
+    expect(screen.queryByTestId("session-queue-note")).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -1282,13 +1282,15 @@ describe("App.svelte DragDrop", () => {
     });
     await tick();
 
-    // writeToPty should have been called with the paneId and bytes encoding "@/tmp/alpha/foo.ts "
+    // writeToPty should have been called with the paneId and bytes encoding the
+    // shell-quoted @mention "@'/tmp/alpha/foo.ts' " (single-quoted so a path with
+    // spaces survives as one token).
     await waitFor(() => {
       expect(writeToPty).toHaveBeenCalled();
       const [calledPaneId, calledBytes] = (writeToPty as ReturnType<typeof vi.fn>).mock.calls[0];
       expect(calledPaneId).toBe("p1");
       const decoded = new TextDecoder().decode(new Uint8Array(calledBytes));
-      expect(decoded).toBe("@/tmp/alpha/foo.ts ");
+      expect(decoded).toBe("@'/tmp/alpha/foo.ts' ");
     });
   });
 });
@@ -1793,11 +1795,11 @@ describe("App.svelte agent:approve-all / deny-all", () => {
     },
   ];
 
-  // SAFETY: "Approve all pending" must scope to the ACTIVE workspace
-  // ONLY — it must NEVER silently green-light a tool waiting in a different,
-  // unseen workspace. With Alpha active, approve-all resolves Alpha's request and
-  // leaves Beta's untouched.
-  it("agent:approve-all resolves ONLY the active workspace's approval; other workspace stays pending", async () => {
+  // "Approve all pending" resolves EVERY pending request across ALL workspaces —
+  // the badge counts every queue, so a batch that only touched the active session
+  // would leave background agents blocked forever. With Alpha active, approve-all
+  // resolves BOTH Alpha's and Beta's requests.
+  it("agent:approve-all resolves EVERY pending approval across all workspaces", async () => {
     const { listWorkspaces, approve } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(twoApprovalWorkspaces);
     const { default: App } = await import("./App.svelte");
@@ -1826,31 +1828,30 @@ describe("App.svelte agent:approve-all / deny-all", () => {
     const approveAllItem = screen.getByRole("menuitem", { name: "Approve all pending" });
     await fireEvent.click(approveAllItem);
 
-    // Only Alpha's (active) request is approved.
+    // BOTH requests are approved — the active AND the background one.
     await waitFor(() => {
       expect(approve).toHaveBeenCalledWith("req-a1", "allow");
+      expect(approve).toHaveBeenCalledWith("req-b1", "allow");
     });
-    // Beta's request must NOT have been touched — the safety invariant.
-    expect(approve).not.toHaveBeenCalledWith("req-b1", "allow");
 
     // Alpha (active) approval cleared.
     await waitFor(() =>
       expect(screen.queryByText("Alpha approval")).not.toBeInTheDocument()
     );
 
-    // Beta still has its pending approval — switch to it and verify it survived.
+    // Beta's approval was also resolved — switch to it and verify it is gone.
     await fireEvent.click(screen.getByRole("button", { name: /^Beta\b/ }));
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
     await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
-    await waitFor(() =>
-      expect(screen.getByText("Beta approval")).toBeInTheDocument()
-    );
+    await tick();
+    expect(screen.queryByText("Beta approval")).not.toBeInTheDocument();
   });
 
-  it("agent:approve-all failure on the active approval: it stays; a blocking notification added", async () => {
+  it("agent:approve-all: a per-item failure keeps ONLY that item; the rest still resolve", async () => {
     const { listWorkspaces, approve } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(twoApprovalWorkspaces);
-    // The active workspace's approve call rejects.
+    // Only the FIRST approve call (req-fail, ws-1 — enqueued first) rejects; the
+    // second (req-ok, ws-2) succeeds. approve-all must not abort on the failure.
     vi.mocked(approve).mockRejectedValueOnce(new Error("network error"));
     const { default: App } = await import("./App.svelte");
     render(App);
@@ -1870,7 +1871,7 @@ describe("App.svelte agent:approve-all / deny-all", () => {
     cb({ workspaceId: "ws-1", kind: "approval", state: "awaiting-approval",
          approval: { reqId: "req-fail", tool: "bash", summary: "Will fail" } });
     cb({ workspaceId: "ws-2", kind: "approval", state: "awaiting-approval",
-         approval: { reqId: "req-ok", tool: "bash", summary: "Untouched" } });
+         approval: { reqId: "req-ok", tool: "bash", summary: "Should resolve" } });
     await tick();
 
     // Dispatch approve-all
@@ -1880,25 +1881,30 @@ describe("App.svelte agent:approve-all / deny-all", () => {
     const approveAllItem = screen.getByRole("menuitem", { name: "Approve all pending" });
     await fireEvent.click(approveAllItem);
 
-    // A blocking notification was added for the failure
+    // Both were attempted (the failure did not abort the batch).
+    await waitFor(() => {
+      expect(approve).toHaveBeenCalledWith("req-fail", "allow");
+      expect(approve).toHaveBeenCalledWith("req-ok", "allow");
+    });
+
+    // A blocking notification was added for the failed item.
     await waitFor(() => {
       const items = getItems();
       expect(items.some(n => n.title === "Approval failed")).toBe(true);
     });
     expect(getItems().length).toBeGreaterThan(notifBefore);
 
-    // ws-1 (req-fail, active) was NOT cleared — "Will fail" summary still present
+    // ws-1 (req-fail, active) was NOT cleared — "Will fail" summary still present.
     await waitFor(() =>
       expect(screen.getByText("Will fail")).toBeInTheDocument()
     );
 
-    // ws-2 (req-ok) was never acted on — switch to Beta and verify it is still pending
+    // ws-2 (req-ok) succeeded — switch to Beta and verify it is gone.
     await fireEvent.click(screen.getByRole("button", { name: /^Beta\b/ }));
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
     await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
-    await waitFor(() =>
-      expect(screen.getByText("Untouched")).toBeInTheDocument()
-    );
+    await tick();
+    expect(screen.queryByText("Should resolve")).not.toBeInTheDocument();
   });
 });
 
@@ -2045,7 +2051,7 @@ describe("App.svelte approval batch buttons", () => {
     },
   ];
 
-  it("with TWO pending approvals: batch buttons render (cross-workspace count), but Approve all resolves ONLY the active workspace", async () => {
+  it("with TWO pending approvals: batch buttons render (cross-workspace count); Approve all resolves EVERY pending request", async () => {
     const { listWorkspaces, approve } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(twoApprovalWs);
     const { default: App } = await import("./App.svelte");
@@ -2067,28 +2073,27 @@ describe("App.svelte approval batch buttons", () => {
     await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
     await tick();
 
-    // The cross-workspace queue (2 pending) still DRIVES the batch-button render —
-    // the "N pending" indicator is preserved.
+    // The cross-workspace queue (2 pending) DRIVES the batch-button render —
+    // the "N pending" indicator counts every queue.
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /approve all/i })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: /deny all/i })).toBeInTheDocument();
     });
 
-    // SAFETY: clicking Approve all resolves ONLY Alpha's (active) request. Beta's
-    // request — waiting in an unseen workspace — must NOT be silently approved.
+    // Clicking Approve all resolves BOTH the active AND the background request —
+    // otherwise the unseen agent stays blocked forever.
     await fireEvent.click(screen.getByRole("button", { name: /approve all/i }));
     await waitFor(() => {
       expect(approve).toHaveBeenCalledWith("req-a", "allow");
+      expect(approve).toHaveBeenCalledWith("req-b", "allow");
     });
-    expect(approve).not.toHaveBeenCalledWith("req-b", "allow");
 
-    // Beta's approval survives — switch to it and confirm it is still pending.
+    // Beta's approval was also resolved — switch to it and confirm it is gone.
     await fireEvent.click(screen.getByRole("button", { name: /^Beta\b/ }));
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
     await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
-    await waitFor(() =>
-      expect(screen.getByText("Beta task")).toBeInTheDocument()
-    );
+    await tick();
+    expect(screen.queryByText("Beta task")).not.toBeInTheDocument();
   });
 
   it("with ONE pending approval: batch buttons do NOT render", async () => {
@@ -3424,5 +3429,397 @@ describe("App.svelte staleSessions null-safety (nil-slice guard)", () => {
     await waitFor(() => expect(document.querySelector("[data-zone='sidebar']")).toBeInTheDocument());
     // staleSessions should be treated as [] → no stale-banner
     expect(document.querySelector('[data-testid="stale-banner"]')).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Approval QUEUE: a second approval on the same session must not overwrite the
+// first (the dropped one would hang its agent hook forever).
+// ---------------------------------------------------------------------------
+describe("App.svelte approval queue (per-session)", () => {
+  const queueWs = [
+    {
+      id: "ws-1", title: "Alpha", branch: "main", state: "awaiting-approval" as const,
+      worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
+      repoPath: "/repo/repo-alpha",
+      caps: { approvals: true, attention: false },
+    },
+  ];
+
+  it("two approvals on the SAME session queue up: resolving the head reveals the next (nothing dropped)", async () => {
+    const { listWorkspaces, approve } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(queueWs);
+    // A prior test may have installed a deferred approve() implementation;
+    // vi.clearAllMocks() clears call history but NOT implementations. Restore the
+    // resolving default so Allow actually completes and dequeues.
+    vi.mocked(approve).mockImplementation(async () => {});
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
+    await fireEvent.click(alphaBtn);
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    await tick();
+
+    // Two approvals arrive for ws-1 before the user acts on the first.
+    const cb = captured.agent.at(-1)!;
+    cb({ workspaceId: "ws-1", kind: "approval", state: "awaiting-approval",
+         approval: { reqId: "req-first", tool: "bash", summary: "First tool" } });
+    cb({ workspaceId: "ws-1", kind: "approval", state: "awaiting-approval",
+         approval: { reqId: "req-second", tool: "bash", summary: "Second tool" } });
+    await tick();
+
+    // The head (First tool) is shown, with a "1 more queued for this session" note.
+    await waitFor(() => expect(screen.getByText("First tool")).toBeInTheDocument());
+    expect(screen.getByTestId("session-queue-note")).toHaveTextContent(/1 more queued/i);
+    // Second tool is NOT shown yet (it is behind the head).
+    expect(screen.queryByText("Second tool")).not.toBeInTheDocument();
+
+    // Allow the head → approve(req-first) then the SECOND surfaces (never dropped).
+    await fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+    await waitFor(() => expect(approve).toHaveBeenCalledWith("req-first", "allow"));
+    await waitFor(() => expect(screen.getByText("Second tool")).toBeInTheDocument());
+    expect(screen.queryByText("First tool")).not.toBeInTheDocument();
+    // Only one left → the per-session queued note is gone.
+    expect(screen.queryByTestId("session-queue-note")).not.toBeInTheDocument();
+
+    // Allow the second → its own approve fires and the card clears.
+    await fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+    await waitFor(() => expect(approve).toHaveBeenCalledWith("req-second", "allow"));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Allow" })).not.toBeInTheDocument());
+  });
+
+  it("a resolved approval clears the session's awaiting-approval attention (backstop)", async () => {
+    const { listWorkspaces, approve } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(queueWs);
+    vi.mocked(approve).mockImplementation(async () => {});
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
+    await fireEvent.click(alphaBtn);
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    await tick();
+
+    const cb = captured.agent.at(-1)!;
+    cb({ workspaceId: "ws-1", kind: "approval", state: "awaiting-approval",
+         approval: { reqId: "req-x", tool: "bash", summary: "Attn tool" } });
+    await tick();
+
+    // Sidebar shows the attention label while awaiting-approval.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Alpha\b/ })).toHaveTextContent("needs you")
+    );
+
+    // Resolve it → the backstop demotes awaiting-approval to idle locally.
+    await fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Alpha\b/ })).toHaveTextContent("idle")
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Modal key-trap: while an overlay is open, NORMAL/TERMINAL nav must not run
+// behind it; only Escape acts (dismisses the overlay).
+// ---------------------------------------------------------------------------
+describe("App.svelte modal key-trap", () => {
+  it("with the resume-preview open, 'j' does NOT change selection and Enter does NOT open a session", async () => {
+    const { listWorkspaces, openWorkspace } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
+    // Open the resume-preview for Alpha (do NOT confirm).
+    await fireEvent.click(alphaBtn);
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+
+    // 'j' behind the modal must not move the selection.
+    await fireEvent.keyDown(document.body, { key: "j" });
+    await tick();
+    expect(screen.getByRole("button", { name: /^Beta\b/ })).not.toHaveAttribute("aria-current", "page");
+
+    // Enter behind the modal must not open the active session (would open the WRONG one).
+    await fireEvent.keyDown(document.body, { key: "Enter" });
+    await tick();
+    expect(openWorkspace).not.toHaveBeenCalled();
+
+    // Escape dismisses the preview.
+    await fireEvent.keyDown(document.body, { key: "Escape" });
+    await tick();
+    await waitFor(() => expect(screen.queryByTestId("resume-preview")).not.toBeInTheDocument());
+  });
+
+  it("with the Help dialog open, '1' does NOT switch the view", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await tick();
+    layout.setView("agent");
+
+    // Open Help via the Help menu.
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Help" }));
+    await tick();
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Keyboard shortcuts" }));
+    await waitFor(() => expect(screen.getByRole("dialog", { name: "help" })).toBeInTheDocument());
+
+    // '1' behind the modal must NOT change the view.
+    await fireEvent.keyDown(document.body, { key: "1" });
+    await tick();
+    expect(layout.view).toBe("agent");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Single-letter shortcuts must not hijack typing in editable elements.
+// ---------------------------------------------------------------------------
+describe("App.svelte editable-target guard", () => {
+  it("pressing 'j' inside the New Session dialog's branch-name input does NOT move selection or preventDefault", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    await screen.findByRole("button", { name: /^Alpha\b/ });
+    // Open the New Session dialog.
+    await fireEvent.click(screen.getByRole("button", { name: "New session" }));
+    await waitFor(() => expect(screen.getByRole("dialog", { name: "new session" })).toBeInTheDocument());
+    await waitFor(() => {
+      const sp = screen.getByLabelText(/starting point/i) as HTMLSelectElement;
+      expect(sp.options.length).toBeGreaterThan(0);
+    });
+
+    const branchInput = screen.getByLabelText(/^branch name$/i) as HTMLInputElement;
+    // A 'j' keydown targeting the input must be allowed through (not preventDefaulted).
+    const ev = await fireEvent.keyDown(branchInput, { key: "j" });
+    // fireEvent returns false if preventDefault was called; true otherwise.
+    expect(ev).toBe(true);
+    // Selection unchanged behind the dialog.
+    expect(screen.getByRole("button", { name: /^Beta\b/ })).not.toHaveAttribute("aria-current", "page");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Resume-preview backdrop click dismisses it.
+// ---------------------------------------------------------------------------
+describe("App.svelte resume-preview backdrop", () => {
+  it("clicking the overlay backdrop dismisses the resume-preview without opening the workspace", async () => {
+    const { listWorkspaces, openWorkspace } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
+    await fireEvent.click(alphaBtn);
+    const preview = await waitFor(() => screen.getByTestId("resume-preview"));
+
+    // Click the backdrop (the .modal-overlay ancestor), NOT the dialog itself.
+    const overlay = preview.closest(".modal-overlay") as HTMLElement;
+    await fireEvent.click(overlay);
+    await tick();
+
+    await waitFor(() => expect(screen.queryByTestId("resume-preview")).not.toBeInTheDocument());
+    expect(openWorkspace).not.toHaveBeenCalled();
+
+    // Clicking inside the dialog does NOT dismiss it (sanity re-open + inner click).
+    await fireEvent.click(alphaBtn);
+    const preview2 = await waitFor(() => screen.getByTestId("resume-preview"));
+    await fireEvent.click(preview2);
+    await tick();
+    expect(screen.getByTestId("resume-preview")).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Split picker: same session cannot be placed in both panes, and a not-open
+// split session gets its pty spawned so the secondary pane is not dead.
+// ---------------------------------------------------------------------------
+describe("App.svelte split pane guards", () => {
+  it("dropping the ACTIVE session onto the stage does NOT split into the same session", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const spy = vi.spyOn(layout, "setSplitId");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    // Open Alpha (ws-1) as active.
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
+    await fireEvent.click(alphaBtn);
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    layout.setView("agent");
+    await tick();
+
+    const stageZone = document.querySelector("[data-zone='stage']") as HTMLElement;
+    const store = new Map<string, string>([["application/x-perch-session", "ws-1"]]);
+    const dt = {
+      setData: vi.fn(),
+      getData: (type: string) => store.get(type) ?? "",
+      types: ["application/x-perch-session"],
+      files: [], effectAllowed: "move", dropEffect: "none",
+    };
+    await fireEvent.dragOver(stageZone, { dataTransfer: dt });
+    await fireEvent.drop(stageZone, { dataTransfer: dt });
+    await new Promise(r => setTimeout(r, 30));
+
+    // The same-session drop is rejected — no split assignment.
+    expect(spy).not.toHaveBeenCalledWith("ws-1");
+    expect(layout.splitId).toBeNull();
+  });
+
+  it("choosing a NOT-open session for the split spawns its pty (openWorkspace) and restores the active session", async () => {
+    const { listWorkspaces, openWorkspace } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    // Open Alpha (ws-1) as active.
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
+    await fireEvent.click(alphaBtn);
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    await waitFor(() => expect(openWorkspace).toHaveBeenCalledWith("ws-1"));
+    layout.setView("agent");
+    layout.toggleSplit(); // split on, splitId null → picker shows
+    await tick();
+
+    vi.mocked(openWorkspace).mockClear();
+
+    // Pick Beta (ws-2), which has NOT been opened → its pty must be spawned.
+    const select = screen.getByRole("combobox", { name: "secondary session" }) as HTMLSelectElement;
+    await fireEvent.change(select, { target: { value: "ws-2" } });
+    await tick();
+
+    await waitFor(() => expect(openWorkspace).toHaveBeenCalledWith("ws-2"));
+    expect(layout.splitId).toBe("ws-2");
+    // The active (primary) session stays ws-1 — the split assignment did not hijack it.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Alpha\b/ })).toHaveAttribute("aria-current", "page")
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// codePath resets on session switch.
+// ---------------------------------------------------------------------------
+describe("App.svelte codePath resets across session switch", () => {
+  it("a file open in one session's code view does NOT leak into the next session", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    // Open Alpha and go to code view.
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
+    await fireEvent.click(alphaBtn);
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    layout.setView("code");
+    await tick();
+
+    // Open a file → editor path is set.
+    await fireEvent.click(screen.getByRole("button", { name: "open file" }));
+    await waitFor(() => expect(screen.getByTestId("editor").dataset.path).toBe("/some/file.ts"));
+
+    // Switch to Beta (open it) — codePath must reset so the new session starts empty.
+    await fireEvent.click(screen.getByRole("button", { name: /^Beta\b/ }));
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    layout.setView("code");
+    await tick();
+
+    await waitFor(() => expect(screen.getByTestId("editor").dataset.path).toBe(""));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// onSelect reopens the active-but-dead session (code/diff view path).
+// ---------------------------------------------------------------------------
+describe("App.svelte reopen active dead session via sidebar", () => {
+  it("clicking the active session's dimmed row when its pty is dead reopens it (openWorkspace)", async () => {
+    const { listWorkspaces, closeWorkspace, openWorkspace } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
+        worktreePath: "/tmp/alpha", repoPath: "/repo/repo-alpha", agent: "claude", paneId: "p1", lastActive: "",
+        caps: { approvals: false, attention: false },
+      },
+    ]);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
+    await fireEvent.click(alphaBtn);
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    await tick();
+
+    // Close so the session is active-but-dead, then move to the CODE view (no in-pane Reopen there).
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Session" }));
+    await tick();
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Close session" }));
+    await waitFor(() => expect(closeWorkspace).toHaveBeenCalledWith("ws-1"));
+    layout.setView("code");
+    await tick();
+    vi.mocked(openWorkspace).mockClear();
+
+    // Clicking the dimmed active row must reopen it (not a no-op).
+    await fireEvent.click(screen.getByRole("button", { name: /^Alpha\b/ }));
+    await waitFor(() => expect(openWorkspace).toHaveBeenCalledWith("ws-1"));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Undo restores the removed session's selection.
+// ---------------------------------------------------------------------------
+describe("App.svelte undo restores selection", () => {
+  it("undoing a remove of the ACTIVE session re-selects it", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
+        worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
+        repoPath: "/repo/repo-alpha",
+        caps: { approvals: false, attention: false },
+      },
+    ]);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
+    await fireEvent.click(alphaBtn);
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    await tick();
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Alpha\b/ })).toHaveAttribute("aria-current", "page"));
+
+    // Remove via command palette → confirm.
+    await fireEvent.keyDown(document.body, { key: ":" });
+    await tick();
+    await waitFor(() => expect(screen.getByRole("dialog", { name: "command palette" })).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("option", { name: /remove session/i }));
+    await tick();
+    await waitFor(() => expect(screen.getByRole("dialog", { name: "confirm" })).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    await tick();
+
+    // Active cleared while hidden.
+    await waitFor(() => expect(screen.queryByRole("button", { name: /^Alpha\b/ })).not.toBeInTheDocument());
+
+    // Undo → row returns AND is re-selected (active restored).
+    const toast = await screen.findByTestId("undo-toast");
+    await fireEvent.click(within(toast).getByRole("button", { name: "Undo" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Alpha\b/ })).toHaveAttribute("aria-current", "page")
+    );
   });
 });

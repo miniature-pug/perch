@@ -17,6 +17,7 @@
   import { readFile, writeFile, hunks as fetchHunks, type Hunk } from "./wails";
   import { gutterChangesFromHunks } from "./gutter";
   import { MIME_TEXT } from "./constants";
+  import { addBlocking } from "./stores/notifications.svelte";
 
   let {
     path,
@@ -254,8 +255,15 @@
 
   async function save() {
     if (!path || !view) return;
-    await writeFile(path, view.state.doc.toString());
-    dirty = false;
+    try {
+      await writeFile(path, view.state.doc.toString());
+      dirty = false;
+    } catch (e) {
+      // A failed write must NOT look successful: keep the buffer dirty and raise
+      // a blocking notification so the unsaved edit is never silently lost.
+      const msg = e instanceof Error ? e.message : String(e);
+      addBlocking(path, "Save failed", `Could not write ${path}: ${msg}`);
+    }
   }
 
   function handleKeyDown(e: KeyboardEvent) {

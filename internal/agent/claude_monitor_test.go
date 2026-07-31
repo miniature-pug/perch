@@ -387,12 +387,12 @@ func TestClaudeMonitorPreToolUse_NonQuestionBlocksUntilDecide(t *testing.T) {
 
 // TestClaudeMonitorApprove_ClearsAttention is the regression guard for the stuck
 // sidebar attention signal: after a non-question PreToolUse raises an approval
-// (StateAwaitingApproval) and the user resolves it via Approve, the monitor MUST
-// emit a Kind=="state"/StateRunning event (the agent resumes after any decision)
-// so the frontend's last-event-wins per-workspace state clears the amber
-// awaiting-approval indicator, AND CurrentState() must report StateRunning. Before
-// the fix, Approve only unblocked the hook handler and emitted nothing, so the
-// indicator stayed stuck forever.
+// (StateAwaitingApproval) and the user ALLOWS it via Approve, the monitor MUST
+// emit a Kind=="state"/StateRunning event (the tool proceeds) so the frontend's
+// last-event-wins per-workspace state clears the amber awaiting-approval
+// indicator, AND CurrentState() must report StateRunning. Before the fix, Approve
+// only unblocked the hook handler and emitted nothing, so the indicator stayed
+// stuck forever. (Deny → StateIdle is covered by TestClaudeMonitorApprove_Deny_ClearsToIdle.)
 func TestClaudeMonitorApprove_ClearsAttention(t *testing.T) {
 	m, l, cleanup := newMonitorWithTestListener(t)
 	defer cleanup()
@@ -439,6 +439,123 @@ func TestClaudeMonitorApprove_ClearsAttention(t *testing.T) {
 	}
 
 	// Drain the hook POST so the goroutine does not leak.
+	select {
+	case <-respCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("hook POST never returned after Approve")
+	}
+}
+
+// TestClaudeMonitorApprove_Deny_ClearsToIdle asserts that a DENY decision clears
+// the awaiting-approval attention signal to StateIdle (the agent may stop) — not
+// StateRunning. Denying a tool does not resume work, so surfacing "running" would
+// be wrong.
+func TestClaudeMonitorApprove_Deny_ClearsToIdle(t *testing.T) {
+	m, l, cleanup := newMonitorWithTestListener(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.Start(ctx)
+
+	respCh := make(chan string, 1)
+	go func() {
+		respCh <- postHook(t, l,
+			`{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"path":"/x"},"session_id":"s","cwd":"/p"}`)
+	}()
+
+	var ev agent.Event
+	select {
+	case ev = <-m.Events():
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for approval event")
+	}
+	if ev.Kind != "approval" || ev.Approval == nil {
+		t.Fatalf("want approval event, got %+v", ev)
+	}
+
+	if err := m.Approve(ev.Approval.ReqID, agent.Decision{Allow: false}); err != nil {
+		t.Fatalf("Approve(deny): %v", err)
+	}
+
+	select {
+	case resolved := <-m.Events():
+		if resolved.Kind != "state" || resolved.State != agent.StateIdle {
+			t.Errorf("after deny, want Kind=state/StateIdle, got %+v", resolved)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("deny emitted no clearing event")
+	}
+	if m.CurrentState() != agent.StateIdle {
+		t.Errorf("CurrentState after deny = %q, want %q", m.CurrentState(), agent.StateIdle)
+	}
+
+	select {
+	case <-respCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("hook POST never returned after deny")
+	}
+}
+
+// TestClaudeMonitorApprove_DoesNotClobberNewerState guards the race where a newer
+// real state (StateDone: the agent's turn ended) arrives on the hook stream BEFORE
+// the user's decision lands. Approve must NOT clobber Done with running/idle and
+// must NOT emit a clearing event — the amber indicator is already gone (state
+// advanced past awaiting-approval), and forcing "running" would show a stale feel.
+func TestClaudeMonitorApprove_DoesNotClobberNewerState(t *testing.T) {
+	m, l, cleanup := newMonitorWithTestListener(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.Start(ctx)
+
+	// Raise an approval (blocks in a goroutine until we decide).
+	respCh := make(chan string, 1)
+	go func() {
+		respCh <- postHook(t, l,
+			`{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"path":"/x"},"session_id":"s","cwd":"/p"}`)
+	}()
+
+	var appr agent.Event
+	select {
+	case appr = <-m.Events():
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for approval event")
+	}
+	if appr.Kind != "approval" || appr.Approval == nil {
+		t.Fatalf("want approval event, got %+v", appr)
+	}
+
+	// A Stop arrives FIRST: the agent's turn ended while the approval card sat open.
+	// This advances m.state to StateDone (Stop is a non-blocking hook event).
+	postHook(t, l, `{"hook_event_name":"Stop","session_id":"s","transcript_path":"/t","cwd":"/p"}`)
+	select {
+	case doneEv := <-m.Events():
+		if doneEv.State != agent.StateDone {
+			t.Fatalf("expected StateDone from Stop, got %+v", doneEv)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for Stop→Done event")
+	}
+	if m.CurrentState() != agent.StateDone {
+		t.Fatalf("pre-condition: CurrentState = %q, want done", m.CurrentState())
+	}
+
+	// Now the user's decision lands. It must NOT emit and must NOT clobber Done.
+	if err := m.Approve(appr.Approval.ReqID, agent.Decision{Allow: true}); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	select {
+	case ev := <-m.Events():
+		t.Fatalf("Approve emitted an event after state advanced to Done — clobbered newer state: %+v", ev)
+	case <-time.After(300 * time.Millisecond):
+		// no event — correct
+	}
+	if m.CurrentState() != agent.StateDone {
+		t.Errorf("CurrentState after Approve = %q, want %q (Done must not be clobbered)", m.CurrentState(), agent.StateDone)
+	}
+
 	select {
 	case <-respCh:
 	case <-time.After(3 * time.Second):

@@ -13,9 +13,27 @@
     onOpen?: (id: string) => void;
   } = $props();
 
+  // Initial selection: the safe rows. Only the initial `sessions` value seeds
+  // this; the $effect below keeps it reconciled as `sessions` changes.
+  // svelte-ignore state_referenced_locally
   let checked = $state<Set<string>>(new Set(sessions.filter(s => s.safe).map(s => s.id)));
   let confirmOpen = $state(false);
+  let removing = $state(false);
   let error = $state<string | null>(null);
+
+  // Re-derive the checked set from the current `sessions` prop: default to the
+  // safe rows, but drop any checked id that no longer appears in `sessions` so a
+  // removed session never lingers in the selection (and never gets re-sent).
+  $effect(() => {
+    const ids = new Set(sessions.map(s => s.id));
+    let mutated = false;
+    const next = new Set<string>();
+    for (const id of checked) {
+      if (ids.has(id)) next.add(id);
+      else mutated = true;
+    }
+    if (mutated) checked = next;
+  });
 
   const allChecked = $derived(sessions.length > 0 && sessions.every(s => checked.has(s.id)));
 
@@ -40,17 +58,32 @@
   }
 
   async function handleRemove() {
+    if (removing) return;
     confirmOpen = false;
     error = null;
+    removing = true;
     try {
       await cleanupSessions([...checked], false);
       onClose?.();
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
+    } finally {
+      removing = false;
     }
+  }
+
+  function handleKey(e: KeyboardEvent) {
+    if (e.key === "Escape") onClose?.();
+  }
+
+  function handleBackdrop(e: MouseEvent) {
+    if (e.target === e.currentTarget) onClose?.();
   }
 </script>
 
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<!-- svelte-ignore a11y_click_events_have_key_events -->
+<div class="cleanup-scrim" tabindex="-1" onkeydown={handleKey} onclick={handleBackdrop}>
 <div class="cleanup-panel" role="dialog" aria-modal="true" aria-label="Stale session cleanup">
   <div class="cleanup-header">
     <h2 class="cleanup-title">Stale sessions</h2>
@@ -106,7 +139,7 @@
   </div>
 
   <div class="cleanup-footer">
-    <button class="cleanup-remove-btn" disabled={checked.size === 0} onclick={() => { confirmOpen = true; }}>
+    <button class="cleanup-remove-btn" disabled={checked.size === 0 || removing} onclick={() => { confirmOpen = true; }}>
       Remove selected ({checked.size})
     </button>
   </div>
@@ -120,8 +153,18 @@
     onCancel={() => { confirmOpen = false; }}
   />
 </div>
+</div>
 
 <style>
+  .cleanup-scrim {
+    position: fixed;
+    inset: 0;
+    background: var(--perch-scrim);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: var(--perch-z-modal);
+  }
   .cleanup-panel {
     display: flex; flex-direction: column;
     background: var(--perch-bg); color: var(--perch-text);

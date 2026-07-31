@@ -4,9 +4,12 @@
   import { focusOnMount } from "./actions";
 
   let {
-    req, queue, caps, onDecision, onApproveAll, onDenyAll,
+    req, sessionCount = 1, queue, caps, onDecision, onApproveAll, onDenyAll,
   }: {
     req: ApprovalReq;
+    // How many requests are queued for THIS session (including the shown head).
+    // >1 means the agent has more tools waiting behind this one on this session.
+    sessionCount?: number;
     queue: ApprovalReq[];
     caps: AgentCaps;
     onDecision: (reqId: string, decision: "allow" | "deny" | "always") => void;
@@ -43,6 +46,11 @@
       {#if queue.length > 1}<span class="batch-count">{queue.length} pending</span>{/if}
     </header>
     <p class="approval-summary">{req.summary}</p>
+    {#if sessionCount > 1}
+      <p class="session-queue-note" data-testid="session-queue-note">
+        +{sessionCount - 1} more queued for this session
+      </p>
+    {/if}
     <div class="approval-actions">
       <button class="btn btn-primary" onclick={() => handleDecision(req.reqId, "allow")} disabled={deciding}>Allow</button>
       <button class="btn" onclick={() => handleDecision(req.reqId, "deny")} disabled={deciding}>Deny</button>
@@ -104,6 +112,13 @@
     color: var(--perch-text);
     font-size: var(--perch-fs-body);
     line-height: 1.5;
+  }
+
+  /* "N more queued for this session" note */
+  .session-queue-note {
+    margin: calc(-1 * var(--perch-sp-1)) 0 var(--perch-sp-2) 0;
+    color: var(--perch-text-dim);
+    font-size: var(--perch-fs-caption);
   }
 
   /* Action row */

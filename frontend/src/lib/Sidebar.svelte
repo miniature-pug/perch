@@ -132,48 +132,55 @@
           title={closed ? "Click to open" : undefined}
           style:--row-color={worktreeColor(ws.id)}
         >
-          <span class="status-icon status-{ws.state}" aria-hidden="true" title={st.label}>{st.icon}</span>
-          {#if editingId === ws.id}
-            <input
-              class="workspace-title-edit"
-              type="text"
-              aria-label="rename session"
-              bind:value={editValue}
-              use:focusOnMount
-              onclick={(e) => e.stopPropagation()}
-              onpointerdown={(e) => e.stopPropagation()}
-              onkeydown={(e) => {
-                e.stopPropagation();
-                if (e.key === "Enter") { e.preventDefault(); commitEdit(ws); }
-                else if (e.key === "Escape") { e.preventDefault(); cancelEdit(); }
-              }}
-              onblur={() => commitEdit(ws)}
-            />
-          {:else}
-            <!-- Double-click / right-click on the title are mouse-gesture
-                 enhancements for inline rename; the row button remains the
-                 accessible primary control, so this span needs no ARIA role. -->
-            <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <span
-              class="workspace-title"
-              title={primaryLabel(ws)}
-              ondblclick={(e) => startEdit(e, ws)}
-              oncontextmenu={(e) => { e.preventDefault(); startEdit(e, ws); }}
-            >{primaryLabel(ws)}</span>
-          {/if}
-          <span class="workspace-repo dim" title={repoName(ws.repoPath)}>{repoName(ws.repoPath)}</span>
-          <span class="workspace-branch dim" title={ws.branch}>{ws.branch}</span>
-          <span class="workspace-agent dim" title={ws.agent}>{ws.agent}</span>
-          <span class="workspace-age dim">{formatAge(ws.lastActive)}</span>
-          {#if ds && (ds.added > 0 || ds.removed > 0)}
-            <span class="sidebar-diffstat" aria-label="+{ds.added} minus {ds.removed}">
-              <span class="diff-added">+<span use:countUp={ds.added}></span></span>
-              <span class="diff-removed">&minus;<span use:countUp={ds.removed}></span></span>
-            </span>
-            {#if ds.files != null && ds.files > 0}
-              <span class="review-pill" aria-label="{ds.files} files to review"><span use:countUp={ds.files}></span></span>
+          <!-- Line 1: status icon + bold primary name (room to read it before ellipsis) -->
+          <span class="workspace-row-primary">
+            <span class="status-icon status-{ws.state}" aria-hidden="true" title={st.label}>{st.icon}</span>
+            {#if editingId === ws.id}
+              <input
+                class="workspace-title-edit"
+                type="text"
+                aria-label="rename session"
+                bind:value={editValue}
+                use:focusOnMount
+                onclick={(e) => e.stopPropagation()}
+                onpointerdown={(e) => e.stopPropagation()}
+                onkeydown={(e) => {
+                  e.stopPropagation();
+                  if (e.key === "Enter") { e.preventDefault(); commitEdit(ws); }
+                  else if (e.key === "Escape") { e.preventDefault(); cancelEdit(); }
+                }}
+                onblur={() => commitEdit(ws)}
+              />
+            {:else}
+              <!-- Double-click / right-click on the title are mouse-gesture
+                   enhancements for inline rename; the row button remains the
+                   accessible primary control, so this span needs no ARIA role. -->
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <span
+                class="workspace-title"
+                title={primaryLabel(ws)}
+                ondblclick={(e) => startEdit(e, ws)}
+                oncontextmenu={(e) => { e.preventDefault(); startEdit(e, ws); }}
+              >{primaryLabel(ws)}</span>
             {/if}
-          {/if}
+          </span>
+
+          <!-- Line 2: dim meta — repo · branch · agent · age · diffstat -->
+          <span class="workspace-row-meta">
+            <span class="workspace-repo dim" title={repoName(ws.repoPath)}>{repoName(ws.repoPath)}</span>
+            <span class="workspace-branch dim" title={ws.branch}>{ws.branch}</span>
+            <span class="workspace-agent dim" title={ws.agent}>{ws.agent}</span>
+            <span class="workspace-age dim">{formatAge(ws.lastActive)}</span>
+            {#if ds && (ds.added > 0 || ds.removed > 0)}
+              <span class="sidebar-diffstat" aria-label="+{ds.added} minus {ds.removed}">
+                <span class="diff-added">+<span use:countUp={ds.added}></span></span>
+                <span class="diff-removed">&minus;<span use:countUp={ds.removed}></span></span>
+              </span>
+              {#if ds.files != null && ds.files > 0}
+                <span class="review-pill" aria-label="{ds.files} files to review"><span use:countUp={ds.files}></span></span>
+              {/if}
+            {/if}
+          </span>
           <span class="status-label">{st.label}</span>
         </button>
       </li>
@@ -245,10 +252,14 @@
   }
 
   /* ── Session row button ───────────────────────────────────────── */
+  /* Two lines: bold name on top, dim meta below. Column layout gives the name
+     the full row width so it is readable before ellipsis (single-flex-row
+     previously truncated it to uselessness). */
   .workspace-row {
     display: flex;
-    align-items: center;
-    gap: var(--perch-sp-1);
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
     width: 100%;
     padding: calc(var(--perch-sp-1) * var(--perch-density-scale))
              calc(var(--perch-sp-1) * var(--perch-density-scale) * 1.5)
@@ -289,6 +300,27 @@
   .workspace-row:focus-visible {
     outline: var(--perch-ring-w) solid var(--perch-accent);
     outline-offset: -2px;
+  }
+
+  /* ── Row line 1: status icon + bold name ─────────────────────── */
+  .workspace-row-primary {
+    display: flex;
+    align-items: center;
+    gap: var(--perch-sp-1);
+    min-width: 0;
+    width: 100%;
+  }
+
+  /* ── Row line 2: dim meta ─────────────────────────────────────── */
+  .workspace-row-meta {
+    display: flex;
+    align-items: center;
+    gap: var(--perch-sp-1);
+    min-width: 0;
+    width: 100%;
+    /* Indent under the status icon so meta aligns with the name text. */
+    padding-left: calc(16px + var(--perch-sp-1));
+    overflow: hidden;
   }
 
   /* ── Status icon — colored per state ─────────────────────────── */
@@ -369,8 +401,9 @@
   .workspace-repo {
     font-size: var(--perch-fs-caption);
     color: var(--perch-text-dim);
-    flex-shrink: 0;
-    max-width: 80px;
+    flex-shrink: 1;
+    min-width: 0;
+    max-width: 120px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -384,8 +417,9 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    flex-shrink: 0;
-    max-width: 60px;
+    flex-shrink: 1;
+    min-width: 0;
+    max-width: 120px;
   }
 
   /* ── Agent name ──────────────────────────────────────────────── */
@@ -393,7 +427,7 @@
     font-size: var(--perch-fs-caption);
     color: var(--perch-text-dim);
     flex-shrink: 0;
-    max-width: 60px;
+    max-width: 80px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

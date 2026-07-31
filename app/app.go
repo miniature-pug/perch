@@ -956,13 +956,29 @@ func (a *App) CloseWorkspace(id string) error {
 	// workspace does not accumulate phantom entries in the pending map.
 	// Pending keys have the form "<raw>:<workspaceID>" (see Approve / event pump);
 	// validateSessionID forbids ':' in ids so the suffix match is unambiguous.
+	// Collect the raw reqIDs of the still-pending approvals so we can deny them via
+	// the monitor after releasing a.mu — a blocked claude hook POST / opencode
+	// permission would otherwise hang until its own timeout when the workspace is
+	// closed out from under it.
 	suffix := ":" + id
+	var pendingRaw []string
 	for k := range a.pending {
 		if strings.HasSuffix(k, suffix) {
+			pendingRaw = append(pendingRaw, k[:len(k)-len(suffix)])
 			delete(a.pending, k)
 		}
 	}
 	a.mu.Unlock()
+
+	// Deny each in-flight approval through the monitor BEFORE teardown so the
+	// agent's blocked hook returns promptly instead of hanging. Do this before
+	// cancel()/Teardown() so the monitor is still live to deliver the verdict.
+	// (mon.Approve is safe to call outside a.mu; it does not take a.mu.)
+	if mon != nil {
+		for _, raw := range pendingRaw {
+			_ = mon.Approve(raw, agent.Decision{Allow: false})
+		}
+	}
 
 	if cancel != nil {
 		cancel()
@@ -996,6 +1012,15 @@ func (a *App) RemoveWorkspace(id string) error {
 	}
 	if w.Worktree {
 		ctx := context.Background()
+		// If the worktree dir was deleted outside perch, WorktreeDirty (git -C
+		// <missing> status) would error and the record could never be dropped —
+		// leaving a ghost session forever. Detect the missing path up front and
+		// treat the worktree as already gone: skip the git remove and drop the
+		// record cleanly. Only a present-but-dirty tree returns ErrWorktreeDirty.
+		if worktreePathGone(w.WorktreePath) {
+			_ = a.CloseWorkspace(id)
+			return a.store.Remove(id)
+		}
 		dirty, err := gitpkg.WorktreeDirty(ctx, a.runner(), w.WorktreePath)
 		if err != nil {
 			return fmt.Errorf("check worktree dirty: %w", err)
@@ -1009,6 +1034,20 @@ func (a *App) RemoveWorkspace(id string) error {
 	}
 	_ = a.CloseWorkspace(id)
 	return a.store.Remove(id)
+}
+
+// worktreePathGone reports whether a worktree path no longer exists on disk
+// (deleted outside perch). An empty path is treated as gone. A non-ENOENT stat
+// error (e.g. permission) is treated as NOT gone so the normal git path runs and
+// surfaces the real error rather than silently dropping the record.
+func worktreePathGone(path string) bool {
+	if path == "" {
+		return true
+	}
+	if _, err := os.Stat(path); err != nil {
+		return errors.Is(err, os.ErrNotExist)
+	}
+	return false
 }
 
 // ForceRemoveWorkspace force-removes the linked worktree tree (discarding any
@@ -1124,6 +1163,25 @@ func (a *App) CleanupSessions(ids []string, force bool) error {
 			_ = a.CloseWorkspace(id)
 			_ = a.store.Remove(id)
 			continue
+		}
+		// When force==false, check the tree is clean BEFORE tearing anything down.
+		// Previously CloseWorkspace ran unconditionally (killing the agent/pty) and
+		// only THEN did RemoveWorktree(force=false) fail on a dirty tree — leaving a
+		// kept record whose live session was already dead. Mirror RemoveWorkspace:
+		// on a dirty tree, skip this id entirely (record + session/monitor stay
+		// alive) and record the error. A missing worktree path is treated as clean
+		// (already gone) so the record can be dropped. force==true bypasses the
+		// check and force-removes below.
+		if !force && !worktreePathGone(w.WorktreePath) {
+			dirty, derr := gitpkg.WorktreeDirty(ctx, a.runner(), w.WorktreePath)
+			if derr != nil {
+				errs = append(errs, fmt.Errorf("check worktree dirty %s: %w", id, derr))
+				continue
+			}
+			if dirty {
+				errs = append(errs, fmt.Errorf("remove worktree %s: %w", id, ErrWorktreeDirty))
+				continue
+			}
 		}
 		_ = a.CloseWorkspace(id)
 		if err := gitpkg.RemoveWorktree(ctx, a.runner(), w.RepoPath, w.WorktreePath, force); err != nil {

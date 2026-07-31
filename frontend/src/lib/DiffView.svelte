@@ -1,7 +1,14 @@
 <!-- frontend/src/lib/DiffView.svelte -->
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import { diffStat, hunks as fetchHunks, stageHunk, discardHunk, type FileDiff, type Hunk } from "./wails";
   import { MIME_TEXT } from "./constants";
+  import { addBlocking } from "./stores/notifications.svelte";
+
+  // Torn-down guard: a stage/discard promise resolving after the component is
+  // destroyed must not write into freed reactive state.
+  let mounted = true;
+  onDestroy(() => { mounted = false; });
 
   function handleHunkDragStart(e: DragEvent, h: Hunk) {
     if (!e.dataTransfer) return;
@@ -56,25 +63,49 @@
 
   async function refreshFiles() {
     try {
-      files = await diffStat(worktree);
+      const r = await diffStat(worktree);
+      if (mounted) files = r;
     } catch {
       // Refresh failure must not break staging — leave stale counts.
     }
   }
 
+  // Re-fetch the hunk list for a file (used in finally to keep indices fresh).
+  async function refreshHunks(file: string) {
+    try {
+      const hs = await fetchHunks(worktree, file);
+      if (mounted) expanded = { ...expanded, [file]: hs };
+    } catch {
+      // Hunk refresh failure is non-fatal — the file list refresh still runs.
+    }
+  }
+
   async function stage(h: Hunk) {
-    await stageHunk(worktree, h.file, h.index);
-    expanded = { ...expanded, [h.file]: await fetchHunks(worktree, h.file) };
-    flashFile = h.file;
-    await refreshFiles();
-    onDiffChanged?.();
+    try {
+      await stageHunk(worktree, h.file, h.index);
+      if (mounted) flashFile = h.file;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      addBlocking(worktree, "Stage failed", `Could not stage hunk in ${h.file}: ${msg}`);
+    } finally {
+      // ALWAYS re-fetch so stale hunk indices never persist after a partial op.
+      await refreshHunks(h.file);
+      await refreshFiles();
+      if (mounted) onDiffChanged?.();
+    }
   }
 
   async function discard(h: Hunk) {
-    await discardHunk(worktree, h.file, h.index);
-    expanded = { ...expanded, [h.file]: await fetchHunks(worktree, h.file) };
-    await refreshFiles();
-    onDiffChanged?.();
+    try {
+      await discardHunk(worktree, h.file, h.index);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      addBlocking(worktree, "Discard failed", `Could not discard hunk in ${h.file}: ${msg}`);
+    } finally {
+      await refreshHunks(h.file);
+      await refreshFiles();
+      if (mounted) onDiffChanged?.();
+    }
   }
 
   function hunkText(h: Hunk): string {

@@ -1,7 +1,23 @@
 import { getLayout, saveLayout } from "../wails";
-import { DEFAULT_SIDEBAR_W, DEFAULT_SHELL_H, LAYOUT_SAVE_DEBOUNCE_MS } from "../constants";
+import {
+  DEFAULT_SIDEBAR_W, DEFAULT_SHELL_H, LAYOUT_SAVE_DEBOUNCE_MS,
+  SIDEBAR_MIN_W, SIDEBAR_MAX_W, SHELL_MIN_H, SHELL_MAX_H,
+} from "../constants";
 
 export type View = "agent" | "code" | "diff";
+
+// Clamp a live value into [min, max]; a non-finite value is coerced to min.
+function clamp(v: number, min: number, max: number): number {
+  if (!Number.isFinite(v)) return min;
+  return Math.min(Math.max(v, min), max);
+}
+
+// Validate a persisted value: only a finite number already in [min, max] is
+// trusted; anything else (NaN, ±Infinity, out-of-range, wrong type) falls back
+// to the default so a corrupt-but-valid layout.json can never wedge the UI.
+function validRange(v: unknown, min: number, max: number, fallback: number): number {
+  return typeof v === "number" && Number.isFinite(v) && v >= min && v <= max ? v : fallback;
+}
 
 class LayoutStore {
   sidebarW  = $state<number>(DEFAULT_SIDEBAR_W);
@@ -19,8 +35,8 @@ class LayoutStore {
       const raw = await getLayout();
       if (raw) {
         const s = JSON.parse(raw);
-        this.sidebarW  = s.sidebarW  ?? DEFAULT_SIDEBAR_W;
-        this.shellH    = s.shellH    ?? DEFAULT_SHELL_H;
+        this.sidebarW  = validRange(s.sidebarW, SIDEBAR_MIN_W, SIDEBAR_MAX_W, DEFAULT_SIDEBAR_W);
+        this.shellH    = validRange(s.shellH,   SHELL_MIN_H,   SHELL_MAX_H,   DEFAULT_SHELL_H);
         this.view      = s.view      ?? "agent";
         this.split     = s.split     ?? false;
         this.splitId   = s.splitId   ?? null;
@@ -39,8 +55,8 @@ class LayoutStore {
     })), LAYOUT_SAVE_DEBOUNCE_MS);
   }
 
-  setSidebarW(v: number):  void { this.sidebarW = v;          this.save(); }
-  setShellH(v: number):    void { this.shellH = v;            this.save(); }
+  setSidebarW(v: number):  void { this.sidebarW = clamp(v, SIDEBAR_MIN_W, SIDEBAR_MAX_W); this.save(); }
+  setShellH(v: number):    void { this.shellH = clamp(v, SHELL_MIN_H, SHELL_MAX_H);       this.save(); }
   setView(v: View):        void { this.view = v;              this.save(); }
   toggleSplit():           void { this.split = !this.split;   this.save(); }
   setSplit(v: boolean):    void { this.split = v;             this.save(); }

@@ -8,25 +8,43 @@
     onConfirm?: () => void; onCancel?: () => void;
   } = $props();
 
+  // In-flight guard: once Confirm is clicked, disable it and ignore further clicks
+  // so a destructive action can never be double-fired.
+  let confirming = $state(false);
+
+  // Reset the guard whenever the dialog reopens so a fresh confirmation is possible.
+  $effect(() => {
+    if (open) confirming = false;
+  });
+
+  function handleConfirm() {
+    if (confirming) return;
+    confirming = true;
+    onConfirm?.();
+  }
+
+  // Escape cancels. Enter is intentionally NOT mapped at the overlay level: the
+  // focused Cancel button (the safe default) handles Enter natively, so a stray
+  // keydown from the triggering gesture can never auto-confirm a destructive action.
   function handleKey(e: KeyboardEvent) {
     if (e.key === "Escape") onCancel?.();
-    else if (e.key === "Enter") onConfirm?.();
   }
 </script>
 
 {#if open}
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div role="dialog" aria-modal="true" aria-label="confirm" class="confirm-overlay"
-       tabindex="-1" onkeydown={handleKey} use:focusOnMount>
+       tabindex="-1" onkeydown={handleKey}>
     <div class="confirm-dialog">
       <p class="confirm-message">{message}</p>
       {#if note}<p class="confirm-note">{note}</p>{/if}
       <div class="confirm-actions">
         <button
           class="btn {destructive ? 'btn-danger' : 'btn-primary'}"
-          onclick={() => { onConfirm?.(); }}
+          disabled={confirming}
+          onclick={handleConfirm}
         >{confirmLabel}</button>
-        <button class="btn" onclick={() => { onCancel?.(); }}>Cancel</button>
+        <button class="btn" onclick={() => { onCancel?.(); }} use:focusOnMount>Cancel</button>
       </div>
     </div>
   </div>

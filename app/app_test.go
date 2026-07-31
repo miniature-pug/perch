@@ -3248,6 +3248,9 @@ func TestApp_CleanupSessions_RemovesTreeAndDeletesBranch(t *testing.T) {
 		BaseRef: "main", LastActive: time.Now().Add(-35 * 24 * time.Hour),
 	})
 	r := proc.NewFakeRunner()
+	// CleanupSessions(force=false) checks the tree is clean BEFORE removing it;
+	// an empty status --porcelain means clean.
+	r.Respond(proc.FakeResult{Stdout: []byte("")}, "git", "-C", tree, "status", "--porcelain")
 	r.Respond(proc.FakeResult{}, "git", "-C", repo, "worktree", "remove", tree)
 	r.Respond(proc.FakeResult{}, "git", "-C", repo, "branch", "-d", "feat/clean")
 	a := &App{
@@ -3291,7 +3294,10 @@ func TestApp_CleanupSessions_WorktreeRemoveFails_KeepsRecord(t *testing.T) {
 		BaseRef: "main", LastActive: time.Now().Add(-40 * 24 * time.Hour),
 	})
 	r := proc.NewFakeRunner()
-	// worktree remove FAILS
+	// The pre-check reports CLEAN (empty status) so the flow reaches the remove;
+	// the remove itself then FAILS (e.g. a race between the check and the remove).
+	// The record must still be kept and the branch delete skipped.
+	r.Respond(proc.FakeResult{Stdout: []byte("")}, "git", "-C", tree, "status", "--porcelain")
 	r.Respond(proc.FakeResult{Err: fmt.Errorf("fatal: contains modified or untracked files")}, "git", "-C", repo, "worktree", "remove", tree)
 	a := &App{
 		store: store, roots: []string{repo, tree}, run: r,
@@ -3312,6 +3318,150 @@ func TestApp_CleanupSessions_WorktreeRemoveFails_KeepsRecord(t *testing.T) {
 		if c.Name == "git" && len(c.Args) >= 4 && c.Args[2] == "branch" && c.Args[3] == "-d" {
 			t.Error("branch delete attempted after worktree-remove failure")
 		}
+	}
+}
+
+// TestApp_CleanupSessions_DirtyWorktree_KeepsRecordAndMonitor is the regression
+// guard for the "destroy a dirty agent before checking" bug: CleanupSessions used
+// to CloseWorkspace (killing the agent/pty/monitor) UNCONDITIONALLY, THEN call
+// RemoveWorktree(force=false), which only fails on a dirty tree AFTER the session
+// was already torn down. With force==false the dirty check must run FIRST: a dirty
+// tree is skipped entirely — the record is kept AND the monitor is left alive (not
+// torn down) so the session is retryable with its agent intact.
+func TestApp_CleanupSessions_DirtyWorktree_KeepsRecordAndMonitor(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	repo := t.TempDir()
+	tree := t.TempDir()
+	_ = store.Upsert(registry.Workspace{
+		ID: "ws-dirty", RepoPath: repo, WorktreePath: tree,
+		Worktree: true, Agent: "claude", Title: "t", Branch: "feat/dirty",
+		BaseRef: "main", LastActive: time.Now().Add(-40 * 24 * time.Hour),
+	})
+	r := proc.NewFakeRunner()
+	// Dirty tree: status --porcelain returns non-empty.
+	r.Respond(proc.FakeResult{Stdout: []byte(" M file.go\n")}, "git", "-C", tree, "status", "--porcelain")
+	fm := agent.NewFakeMonitor(nil)
+	a := &App{
+		store: store, roots: []string{repo, tree}, run: r,
+		emit: func(string, ...any) {}, bridges: map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{"ws-dirty": fm}, cancels: map[string]context.CancelFunc{},
+		settingsPath: filepath.Join(cfgDir, "settings.json"),
+	}
+
+	err := a.CleanupSessions([]string{"ws-dirty"}, false)
+	if err == nil {
+		t.Fatal("expected error for dirty worktree with force=false")
+	}
+	if !errors.Is(err, ErrWorktreeDirty) {
+		t.Errorf("expected ErrWorktreeDirty, got %v", err)
+	}
+	// Record MUST be kept.
+	if _, ok := store.Get("ws-dirty"); !ok {
+		t.Error("record removed for dirty worktree — should be kept/retryable")
+	}
+	// Monitor MUST NOT have been torn down (agent kept alive).
+	if fm.TornDown() {
+		t.Error("monitor torn down before the dirty check — agent killed on a dirty tree")
+	}
+	// The monitor must still be registered.
+	a.mu.Lock()
+	_, stillThere := a.monitors["ws-dirty"]
+	a.mu.Unlock()
+	if !stillThere {
+		t.Error("monitor removed from registry for a dirty (skipped) session")
+	}
+	// No worktree remove must have been attempted (checked before teardown).
+	for _, c := range r.Calls {
+		if c.Name == "git" && len(c.Args) >= 4 && c.Args[2] == "worktree" && c.Args[3] == "remove" {
+			t.Error("worktree remove attempted on dirty tree (non-force)")
+		}
+	}
+}
+
+// TestApp_RemoveWorkspace_MissingWorktreePath_DropsRecord is the regression guard
+// for the ghost-session bug: if the worktree dir was deleted OUTSIDE perch, the
+// WorktreeDirty check (git -C <missing> status) would error and the record could
+// never be dropped. A path that no longer exists must be treated as already gone —
+// the git remove is skipped and the record dropped cleanly.
+func TestApp_RemoveWorkspace_MissingWorktreePath_DropsRecord(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	repo := t.TempDir()
+	// A worktree path under a valid root that does NOT exist on disk.
+	missing := filepath.Join(repo, "gone-worktree")
+	_ = store.Upsert(registry.Workspace{
+		ID: "ws-gone", RepoPath: repo, WorktreePath: missing, Worktree: true,
+		Agent: "claude", Title: "feat", Branch: "feat/gone",
+	})
+	r := proc.NewFakeRunner() // no responses: any git call would error
+	a := &App{
+		store: store, roots: []string{repo}, run: r,
+		emit: func(string, ...any) {}, bridges: map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{}, cancels: map[string]context.CancelFunc{},
+	}
+	if err := a.RemoveWorkspace("ws-gone"); err != nil {
+		t.Fatalf("RemoveWorkspace on missing path: %v", err)
+	}
+	if _, ok := store.Get("ws-gone"); ok {
+		t.Error("ghost record survived RemoveWorkspace for a deleted worktree path")
+	}
+	// No git worktree remove nor status must have been attempted on the missing path.
+	for _, c := range r.Calls {
+		if c.Name == "git" {
+			t.Errorf("unexpected git call for missing worktree path: %v", c.Args)
+		}
+	}
+}
+
+// TestApp_CloseWorkspace_DeniesPendingApprovals is the regression guard for the
+// hung-agent bug: when a workspace with an in-flight approval is closed, the
+// blocked agent hook (claude POST / opencode permission) would hang until its own
+// timeout. CloseWorkspace must deny each still-pending approval via the monitor so
+// the agent unblocks promptly, using the raw reqID (the pending key is
+// "<raw>:<workspaceID>").
+func TestApp_CloseWorkspace_DeniesPendingApprovals(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	fm := agent.NewFakeMonitor(nil)
+	a := &App{
+		store: store, roots: []string{"/tmp"}, run: proc.NewFakeRunner(),
+		emit: func(string, ...any) {}, bridges: map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{"ws-1": fm}, cancels: map[string]context.CancelFunc{},
+		pending: map[string]agent.ApprovalReq{},
+	}
+	// Register a pending approval keyed "<raw>:<workspaceID>".
+	a.pending["rawreq7:ws-1"] = agent.ApprovalReq{ReqID: "rawreq7:ws-1", Tool: "Bash"}
+
+	if err := a.CloseWorkspace("ws-1"); err != nil {
+		t.Fatalf("CloseWorkspace: %v", err)
+	}
+
+	calls := fm.ApproveCalls()
+	found := false
+	for _, c := range calls {
+		if c.ReqID == "rawreq7" {
+			found = true
+			if c.D.Allow {
+				t.Errorf("pending approval must be DENIED on close, got allow: %+v", c.D)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("CloseWorkspace did not deny the pending approval via the monitor — agent hook would hang")
+	}
+	// Pending map must be purged.
+	a.mu.Lock()
+	_, stillPending := a.pending["rawreq7:ws-1"]
+	a.mu.Unlock()
+	if stillPending {
+		t.Error("pending entry not purged after CloseWorkspace")
+	}
+	if !fm.TornDown() {
+		t.Error("monitor should still be torn down after denying pending approvals")
 	}
 }
 

@@ -627,6 +627,101 @@ func TestOpencodeMonitorApprove_ClearsAttention(t *testing.T) {
 	}
 }
 
+// TestOpencodeMonitorApprove_Deny_ClearsToIdle asserts a REJECT decision clears
+// the awaiting-approval attention signal to StateIdle (the agent may stop), not
+// StateRunning. Denying a permission does not resume work.
+func TestOpencodeMonitorApprove_Deny_ClearsToIdle(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	const fixture = `data: {"type":"permission.asked","properties":{"id":"perm-1","sessionID":"s","permission":"bash","patterns":["ls -la"]}}` + "\n\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/event":
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte(fixture))
+		case strings.HasPrefix(r.URL.Path, "/permission/") && strings.HasSuffix(r.URL.Path, "/reply"):
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	om := agent.NewOpencodeMonitorWithServer(agent.NewOpencode(), srv.URL, "pw")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	om.Start(ctx)
+
+	asked := nextEvent(t, om)
+	if asked.State != agent.StateAwaitingApproval || asked.Approval == nil {
+		t.Fatalf("want awaiting-approval event, got %+v", asked)
+	}
+
+	if err := om.Approve(asked.Approval.ReqID, agent.Decision{Allow: false}); err != nil {
+		t.Fatalf("Approve(reject): %v", err)
+	}
+	resolved := nextEvent(t, om)
+	if resolved.Kind != "state" || resolved.State != agent.StateIdle {
+		t.Errorf("after reject, want Kind=state/StateIdle, got %+v", resolved)
+	}
+	if om.CurrentState() != agent.StateIdle {
+		t.Errorf("CurrentState after reject = %q, want %q", om.CurrentState(), agent.StateIdle)
+	}
+}
+
+// TestOpencodeMonitorApprove_DoesNotClobberNewerState guards the race where a
+// newer real state (StateErrored) arrives on the SSE stream BEFORE the user's
+// decision's HTTP round-trip completes. Approve must NOT clobber it and must NOT
+// emit a clearing event. The fixture emits permission.asked then session.error;
+// the test drains both, then decides, and asserts no further event + state kept.
+func TestOpencodeMonitorApprove_DoesNotClobberNewerState(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	const fixture = `data: {"type":"permission.asked","properties":{"id":"perm-1","sessionID":"s","permission":"bash","patterns":["ls -la"]}}` + "\n\n" +
+		`data: {"type":"session.error","properties":{"sessionID":"s","error":{"name":"X","message":"boom"}}}` + "\n\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/event":
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte(fixture))
+		case strings.HasPrefix(r.URL.Path, "/permission/") && strings.HasSuffix(r.URL.Path, "/reply"):
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	om := agent.NewOpencodeMonitorWithServer(agent.NewOpencode(), srv.URL, "pw")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	om.Start(ctx)
+
+	asked := nextEvent(t, om)
+	if asked.State != agent.StateAwaitingApproval || asked.Approval == nil {
+		t.Fatalf("want awaiting-approval event, got %+v", asked)
+	}
+	errored := nextEvent(t, om)
+	if errored.State != agent.StateErrored {
+		t.Fatalf("want StateErrored from session.error, got %+v", errored)
+	}
+	if om.CurrentState() != agent.StateErrored {
+		t.Fatalf("pre-condition: CurrentState = %q, want errored", om.CurrentState())
+	}
+
+	// Decision lands late: must NOT emit and must NOT clobber the errored state.
+	if err := om.Approve(asked.Approval.ReqID, agent.Decision{Allow: true}); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	select {
+	case ev := <-om.Events():
+		t.Fatalf("Approve emitted an event after state advanced to Errored — clobbered newer state: %+v", ev)
+	case <-time.After(300 * time.Millisecond):
+		// no event — correct
+	}
+	if om.CurrentState() != agent.StateErrored {
+		t.Errorf("CurrentState after Approve = %q, want %q (Errored must not be clobbered)", om.CurrentState(), agent.StateErrored)
+	}
+}
+
 // TestOpencodeMonitorSSE_SessionError verifies the default-emitted session.error
 // maps to StateErrored with the human message extracted from the {name,message}
 // error object.

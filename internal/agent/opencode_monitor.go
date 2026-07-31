@@ -510,11 +510,26 @@ func (m *OpencodeMonitor) Approve(reqID string, d Decision) error {
 	}
 	// The reply lands and the agent resumes (once/always/reject all end the blocked
 	// permission request). opencode emits no permission-resolved SSE frame, so mirror
-	// question.replied: emit a StateRunning event to clear the amber awaiting-approval
-	// indicator on the frontend, and advance the cached state under the same mutex the
-	// SSE path uses so CurrentState() agrees. Without this the sidebar attention signal
-	// stays stuck after the user resolves the approval.
-	m.emit(ctx, Event{Kind: "state", State: StateRunning})
+	// question.replied and clear the amber awaiting-approval indicator — but ONLY if
+	// we are still awaiting approval. A newer real state (StateDone/StateErrored) may
+	// arrive on the SSE stream before this reply's HTTP round-trip completes;
+	// clobbering it with StateRunning would show a stale feel. The cleared state
+	// depends on the decision: allow/always → StateRunning (the tool proceeds),
+	// reject → StateIdle (the agent may stop). Update m.state under the same mutex the
+	// SSE path uses so CurrentState() agrees, and update it regardless of whether the
+	// buffered channel accepts the frame.
+	cleared := StateRunning
+	if !d.Allow {
+		cleared = StateIdle
+	}
+	m.mu.Lock()
+	if m.state != StateAwaitingApproval {
+		m.mu.Unlock()
+		return nil
+	}
+	m.state = cleared
+	m.mu.Unlock()
+	m.send(ctx, Event{Kind: "state", State: cleared})
 	return nil
 }
 

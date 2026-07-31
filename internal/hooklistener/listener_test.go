@@ -247,6 +247,128 @@ func TestStopEventNotDroppedUnderBackpressure(t *testing.T) {
 	}
 }
 
+// TestDecideDoubleCallDoesNotBlock is the regression guard for the IPC deadlock:
+// a second Decide for the SAME reqID (double-click / retry) must NOT block the
+// caller (a Wails IPC goroutine) forever on the size-1 buffered channel. The
+// handler consumes exactly one verdict, so after the first Decide fills the
+// buffer, a second Decide finds it full and must fall through (non-blocking send).
+// The first verdict is the one delivered.
+func TestDecideDoubleCallDoesNotBlock(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	l, err := hooklistener.New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = l.Close() }()
+
+	payload := `{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Bash","tool_input":{"command":"ls"}}`
+	req, _ := http.NewRequest(http.MethodPost, "http://"+l.Addr()+"/hook", strings.NewReader(payload))
+	req.Header.Set("Authorization", "Bearer "+l.Token())
+	req.Header.Set("Content-Type", "application/json")
+
+	type result struct {
+		body string
+		code int
+	}
+	ch := make(chan result, 1)
+	go func() {
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			ch <- result{code: -1}
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		b, _ := io.ReadAll(resp.Body)
+		ch <- result{body: strings.TrimSpace(string(b)), code: resp.StatusCode}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	var reqID string
+	select {
+	case ev := <-l.Events():
+		if ev.Type != "PreToolUse" || ev.ReqID == "" {
+			t.Fatalf("bad event: %+v", ev)
+		}
+		reqID = ev.ReqID
+	case <-ctx.Done():
+		t.Fatal("timeout waiting for event")
+	}
+
+	// First verdict: allow. This fills the size-1 buffer (the handler may not have
+	// drained it yet).
+	l.Decide(reqID, hooklistener.Decision{Allow: true})
+
+	// Second verdict for the SAME reqID (double-click). This MUST return promptly;
+	// pre-fix it blocked on the now-full channel forever, wedging the IPC goroutine.
+	secondDone := make(chan struct{})
+	go func() {
+		l.Decide(reqID, hooklistener.Decision{Allow: false})
+		close(secondDone)
+	}()
+	select {
+	case <-secondDone:
+		// returned promptly — correct
+	case <-time.After(2 * time.Second):
+		t.Fatal("second Decide for the same reqID blocked — IPC deadlock not fixed")
+	}
+
+	// The FIRST verdict (allow) is the one delivered to the hook handler.
+	select {
+	case r := <-ch:
+		if r.code != http.StatusOK {
+			t.Errorf("want 200, got %d", r.code)
+		}
+		if !strings.Contains(r.body, `"permissionDecision":"allow"`) {
+			t.Errorf("first verdict must win: body %q, want allow", r.body)
+		}
+	case <-ctx.Done():
+		t.Fatal("timeout waiting for hook response")
+	}
+}
+
+// TestHookBodySizeLimit verifies an over-limit request body is rejected without
+// buffering it whole into memory. http.MaxBytesReader caps the body at 1 MiB, so
+// a larger POST makes json.Decode fail and the handler returns 400.
+func TestHookBodySizeLimit(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	l, err := hooklistener.New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = l.Close() }()
+
+	// A valid-JSON payload whose tool_input string field is padded well past the
+	// 1 MiB cap (2 MiB of filler). MaxBytesReader truncates the read mid-stream so
+	// Decode sees invalid/short JSON and errors → 400. Memory use stays bounded.
+	var b strings.Builder
+	b.WriteString(`{"hook_event_name":"PreToolUse","session_id":"s","tool_name":"Bash","tool_input":"`)
+	for b.Len() < 2<<20 {
+		b.WriteString("AAAAAAAAAAAAAAAA")
+	}
+	b.WriteString(`"}`)
+
+	req, _ := http.NewRequest(http.MethodPost, "http://"+l.Addr()+"/hook", strings.NewReader(b.String()))
+	req.Header.Set("Authorization", "Bearer "+l.Token())
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 400 || resp.StatusCode >= 500 {
+		t.Fatalf("over-limit body: want 4xx rejection, got %d", resp.StatusCode)
+	}
+
+	// The oversized request must NOT have produced a parked approval event.
+	select {
+	case ev := <-l.Events():
+		t.Fatalf("over-limit POST must not enqueue an event; got %+v", ev)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
 func TestPreToolUseAllowDeny(t *testing.T) {
 	for _, tc := range []struct {
 		name  string

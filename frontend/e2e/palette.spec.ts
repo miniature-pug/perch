@@ -29,8 +29,8 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("colon key opens command palette", async ({ page }) => {
-  // Focus the body/app to ensure keydown goes to the app's svelte:window handler
-  await page.click(".app-root");
+  // Dismiss any stray welcome-screen dialog so keys reach the app, not a modal.
+  await page.keyboard.press("Escape");
   await page.waitForTimeout(100);
 
   // The app uses ":" to enterCommand mode which shows the palette
@@ -46,7 +46,7 @@ test("colon key opens command palette", async ({ page }) => {
 });
 
 test("typing narrows the list", async ({ page }) => {
-  await page.click(".app-root");
+  await page.keyboard.press("Escape");
   await page.keyboard.press(":");
   await page.waitForTimeout(300);
 
@@ -72,7 +72,7 @@ test("typing narrows the list", async ({ page }) => {
 });
 
 test("ArrowDown moves selection (aria-selected toggles)", async ({ page }) => {
-  await page.click(".app-root");
+  await page.keyboard.press("Escape");
   await page.keyboard.press(":");
   await page.waitForTimeout(300);
 
@@ -92,7 +92,7 @@ test("ArrowDown moves selection (aria-selected toggles)", async ({ page }) => {
 });
 
 test("Enter on selected command fires it and closes palette", async ({ page }) => {
-  await page.click(".app-root");
+  await page.keyboard.press("Escape");
   await page.keyboard.press(":");
   await page.waitForTimeout(300);
 
@@ -115,7 +115,7 @@ test("Enter on selected command fires it and closes palette", async ({ page }) =
 });
 
 test("Escape closes palette without running command", async ({ page }) => {
-  await page.click(".app-root");
+  await page.keyboard.press("Escape");
   await page.keyboard.press(":");
   await page.waitForTimeout(300);
 
@@ -131,8 +131,11 @@ test("Escape closes palette without running command", async ({ page }) => {
 
 test("view:agent command sets agent view via palette", async ({ page }) => {
   // First switch to code view
-  // Navigate to code view first with the keyboard
-  await page.click(".app-root");
+  // Navigate to code view first with the keyboard.
+  // Dismiss any stray welcome dialog, then focus a neutral (non-interactive)
+  // element so the keybind reaches the app rather than a modal or a button.
+  await page.keyboard.press("Escape");
+  await page.locator(".status-mode").click();
   await page.keyboard.press("2"); // code view keybind
   await page.waitForTimeout(200);
 

@@ -67,8 +67,9 @@ test("CommandPalette (open): card has bg, border, and box-shadow", async ({ page
   await page.waitForSelector("#app", { timeout: 10000 });
   await page.waitForTimeout(1000);
 
-  // Open palette via ":"
-  await page.click(".app-root");
+  // Open palette via ":" — dismiss any stray welcome dialog first so the
+  // keystroke reaches the app rather than a modal opened by a welcome button.
+  await page.keyboard.press("Escape");
   await page.keyboard.press(":");
   await page.waitForTimeout(300);
 

@@ -30,8 +30,9 @@ const INITIAL_SETTINGS = {
 
 async function openSettings(page: import("@playwright/test").Page) {
   // Click Session in menubar then Settings... via the menu
-  // The easiest way: press ":" for palette then type "settings"
-  await page.click(".app-root");
+  // The easiest way: press ":" for palette then type "settings".
+  // Dismiss any stray welcome-screen dialog first so ":" reaches the app.
+  await page.keyboard.press("Escape");
   await page.keyboard.press(":");
   await page.waitForTimeout(300);
   await page.keyboard.type("settings");

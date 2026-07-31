@@ -11,16 +11,24 @@
 
   let dragActive = $state(false);
 
+  // Shell-quote a path so an @mention survives paths containing spaces (or other
+  // shell metacharacters). Wrap in single quotes and escape any embedded single
+  // quote via the '\'' idiom, e.g. it's → 'it'\''s'.
+  function shellQuote(p: string): string {
+    return `'${p.replace(/'/g, "'\\''")}'`;
+  }
+
   async function handleDrop(e: DragEvent) {
     e.preventDefault();
     dragActive = false;
     if (!fileDrop || !e.dataTransfer) return;
     const files = Array.from(e.dataTransfer.files) as (File & { path?: string })[];
     if (files.length > 0) {
-      // OS file drop — encode each file path as an @mention
+      // OS file drop — encode each file path as a shell-quoted @mention so a
+      // path with spaces is not split into multiple tokens.
       for (const f of files) {
         const p = (f as any).path ?? f.name;
-        const bytes = Array.from(new TextEncoder().encode(`@${p} `));
+        const bytes = Array.from(new TextEncoder().encode(`@${shellQuote(p)} `));
         await writeToPty(paneId, bytes);
       }
     } else {

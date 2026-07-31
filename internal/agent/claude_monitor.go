@@ -126,18 +126,31 @@ func (m *ClaudeMonitor) translateAndEmit(ctx context.Context, he hooklistener.Ho
 
 func (m *ClaudeMonitor) Approve(reqID string, d Decision) error {
 	m.listener.Decide(reqID, hooklistener.Decision{Allow: d.Allow, Always: d.Always})
-	// The decision unblocks the hook handler and the agent resumes (any allow/deny/
-	// always outcome ends the blocked PreToolUse). Emit a StateRunning event so the
-	// frontend's last-event-wins per-workspace state clears the amber
-	// awaiting-approval indicator; also advance the cached state under the same mutex
-	// translateAndEmit uses, so CurrentState() agrees with the stream. Without this
-	// the sidebar attention signal would stay stuck after the user resolves it.
-	ev := Event{Kind: "state", State: StateRunning}
+	// The decision unblocks the hook handler and the agent resumes. Clear the amber
+	// awaiting-approval indicator by advancing the cached state and emitting a
+	// clearing event — but ONLY if we are still awaiting approval. A newer real
+	// state (StateDone/StateErrored) can arrive on the SSE/hook stream before the
+	// user's decision lands (e.g. the agent's turn ended while the card sat open);
+	// clobbering it with StateRunning would show a stale "running" feel. The chosen
+	// cleared state depends on the decision: allow/always → StateRunning (the tool
+	// proceeds), deny → StateIdle (the agent may stop). The mutex is the same one
+	// translateAndEmit uses, so m.state stays consistent; we update it regardless of
+	// whether the buffered channel accepts the frame, so CurrentState() is always
+	// correct even if the send is dropped.
+	cleared := StateRunning
+	if !d.Allow {
+		cleared = StateIdle
+	}
 	m.mu.Lock()
-	m.state = ev.State
+	if m.state != StateAwaitingApproval {
+		// A newer real state already landed — do not clobber it or emit.
+		m.mu.Unlock()
+		return nil
+	}
+	m.state = cleared
 	m.mu.Unlock()
 	select {
-	case m.events <- ev:
+	case m.events <- Event{Kind: "state", State: cleared}:
 	default:
 	}
 	return nil
