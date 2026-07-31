@@ -57,6 +57,28 @@ describe("notification store", () => {
     expect(getItems().filter((n) => !n.read)).toHaveLength(0);
   });
 
+  it("caps retained notifications at MAX and leaks no timer for dropped ids", async () => {
+    const { addAmbient, getItems, MAX_NOTIFICATIONS, _pendingTimerIds } =
+      await import("./notifications.svelte");
+    // Push well past the cap. Ambient items each schedule an auto-dismiss timer,
+    // so this exercises the timer-cleanup path when the oldest are dropped.
+    const total = MAX_NOTIFICATIONS + 50;
+    for (let i = 0; i < total; i++) addAmbient("ws_a", `A${i}`, "b");
+
+    const items = getItems();
+    // Array is bounded to the cap (oldest dropped, newest kept).
+    expect(items).toHaveLength(MAX_NOTIFICATIONS);
+    // Newest-first: the most recent push sits at the front.
+    expect(items[0].title).toBe(`A${total - 1}`);
+
+    // No leaked timers: every pending timer id must still correspond to a
+    // retained notification (dropped ids had their timers cleared).
+    const held = new Set(items.map((n) => n.id));
+    for (const id of _pendingTimerIds()) expect(held.has(id)).toBe(true);
+    // And no more pending timers than retained items.
+    expect(_pendingTimerIds().length).toBeLessThanOrEqual(items.length);
+  });
+
   it("dropForWorkspace removes only items for that workspace", async () => {
     const { addBlocking, addAmbient, dropForWorkspace, getItems } =
       await import("./notifications.svelte");

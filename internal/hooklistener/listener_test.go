@@ -434,3 +434,64 @@ func TestPreToolUseAllowDeny(t *testing.T) {
 		})
 	}
 }
+
+// TestListenerRejectsNonPost asserts the /hook handler rejects any method other
+// than POST with 405 (after auth, before decoding the body). Hooks always POST;
+// a GET/PUT/DELETE is malformed and must not reach the event-enqueue path.
+func TestListenerRejectsNonPost(t *testing.T) {
+	t.Parallel()
+	l, err := hooklistener.New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = l.Close() }()
+
+	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete, http.MethodPatch} {
+		req, _ := http.NewRequest(method, "http://"+l.Addr()+"/hook", strings.NewReader(`{}`))
+		req.Header.Set("Authorization", "Bearer "+l.Token())
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s: %v", method, err)
+		}
+		if resp.StatusCode != http.StatusMethodNotAllowed {
+			t.Errorf("%s: want 405, got %d", method, resp.StatusCode)
+		}
+		_ = resp.Body.Close()
+	}
+
+	// A non-POST must not have enqueued any event.
+	select {
+	case ev := <-l.Events():
+		t.Fatalf("non-POST must not enqueue an event; got %+v", ev)
+	case <-time.After(200 * time.Millisecond):
+		// no event — correct.
+	}
+}
+
+// TestListenerServerTimeouts asserts the slowloris-hardening deadlines are set on
+// the http.Server: ReadHeaderTimeout, ReadTimeout, and IdleTimeout are non-zero.
+// WriteTimeout MUST stay 0 — Go's write deadline covers the whole ServeHTTP
+// lifetime, so any finite value would abort a PreToolUse approval while it blocks
+// waiting for the user's decision.
+func TestListenerServerTimeouts(t *testing.T) {
+	t.Parallel()
+	l, err := hooklistener.New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = l.Close() }()
+
+	readHeader, read, write, idle := l.ServerTimeouts()
+	if readHeader <= 0 {
+		t.Errorf("ReadHeaderTimeout must be set, got %v", readHeader)
+	}
+	if read <= 0 {
+		t.Errorf("ReadTimeout must be set, got %v", read)
+	}
+	if idle <= 0 {
+		t.Errorf("IdleTimeout must be set, got %v", idle)
+	}
+	if write != 0 {
+		t.Errorf("WriteTimeout must stay 0 (unbounded) so blocking approvals are not aborted, got %v", write)
+	}
+}

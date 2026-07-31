@@ -496,3 +496,24 @@ func TestSecFix_RevealInFiles_RejectsOutsideRoots(t *testing.T) {
 		t.Fatal("RevealInFiles with path outside roots must return an error")
 	}
 }
+
+// TestClampPtyDim pins the backend pty-dimension clamp. The frontend already
+// clamps, but ResizePty must not trust it: a 0 dimension is invalid and becomes
+// ptyMinDim, an over-cap value is capped at ptyMaxDim, and in-range values pass
+// through unchanged.
+func TestClampPtyDim(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   uint16
+		want uint16
+	}{
+		{"zero becomes min", 0, ptyMinDim},
+		{"min stays", ptyMinDim, ptyMinDim},
+		{"normal passthrough", 120, 120},
+		{"max stays", ptyMaxDim, ptyMaxDim},
+	} {
+		if got := clampPtyDim(tc.in); got != tc.want {
+			t.Errorf("%s: clampPtyDim(%d) = %d, want %d", tc.name, tc.in, got, tc.want)
+		}
+	}
+}

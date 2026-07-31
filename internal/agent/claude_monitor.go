@@ -27,6 +27,9 @@ type ClaudeMonitor struct {
 	mu       sync.Mutex
 	state    State
 	lastTool string
+	// ctx is the monitor's lifetime context, captured in Start. Approve selects
+	// on it so a reliable clearing-event send never blocks past teardown.
+	ctx context.Context
 }
 
 func newClaudeMonitor(a Adapter) *ClaudeMonitor {
@@ -43,6 +46,11 @@ func (m *ClaudeMonitor) Capabilities() Caps {
 }
 
 func (m *ClaudeMonitor) Start(ctx context.Context) {
+	// Capture the pump's context so Approve can select on the same cancellation
+	// signal when emitting its clearing event (see Approve).
+	m.mu.Lock()
+	m.ctx = ctx
+	m.mu.Unlock()
 	go func() {
 		defer safe.Recover("claude-monitor")
 		for {
@@ -138,7 +146,7 @@ func (m *ClaudeMonitor) Approve(reqID string, d Decision) error {
 	// proceeds), deny → StateIdle (the agent may stop). The mutex is the same one
 	// translateAndEmit uses, so m.state stays consistent; we update it regardless of
 	// whether the buffered channel accepts the frame, so CurrentState() is always
-	// correct even if the send is dropped.
+	// correct even if the send never lands.
 	cleared := StateRunning
 	if !d.Allow {
 		cleared = StateIdle
@@ -150,10 +158,25 @@ func (m *ClaudeMonitor) Approve(reqID string, d Decision) error {
 		return nil
 	}
 	m.state = cleared
+	ctx := m.ctx
 	m.mu.Unlock()
+	// Emit the clearing event with a reliable, cancellable send — the same shape
+	// the normal pump uses. A non-blocking drop here would leave the frontend
+	// stuck on awaiting-approval whenever the 64-slot events channel is momentarily
+	// full. Block until the event is delivered or the monitor's context is done, so
+	// a torn-down monitor never deadlocks the Wails binding thread calling Approve.
+	if ctx == nil {
+		// Approve called before Start captured a context; fall back to a
+		// best-effort non-blocking send rather than block forever.
+		select {
+		case m.events <- Event{Kind: "state", State: cleared}:
+		default:
+		}
+		return nil
+	}
 	select {
 	case m.events <- Event{Kind: "state", State: cleared}:
-	default:
+	case <-ctx.Done():
 	}
 	return nil
 }

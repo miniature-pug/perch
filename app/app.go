@@ -81,6 +81,12 @@ const (
 	// defaultStaleThresholdDays is the number of days of inactivity after which a
 	// worktree session is considered stale and shown in the cleanup panel banner.
 	defaultStaleThresholdDays = 30
+	// ptyMinDim / ptyMaxDim bound the pty dimensions the backend accepts. The
+	// frontend already clamps to the same range (PTY_MAX_DIM in constants.ts), but
+	// the backend must not trust that: a 0 dimension is invalid for a terminal and
+	// the cap matches the uint16 max the frontend enforces.
+	ptyMinDim = 1
+	ptyMaxDim = 65535
 )
 
 // spawnPtyFunc and newMonitorFunc are injectable seams (real funcs in NewApp,
@@ -939,7 +945,19 @@ func (a *App) ResizePty(paneID string, cols, rows uint16) error {
 	if !ok {
 		return fmt.Errorf("unknown pane %q", paneID)
 	}
-	return br.Resize(cols, rows)
+	return br.Resize(clampPtyDim(cols), clampPtyDim(rows))
+}
+
+// clampPtyDim bounds a pty dimension to [ptyMinDim, ptyMaxDim]. A 0 dimension is
+// invalid for a terminal and becomes ptyMinDim; anything over ptyMaxDim is capped.
+func clampPtyDim(v uint16) uint16 {
+	if v < ptyMinDim {
+		return ptyMinDim
+	}
+	if v > ptyMaxDim {
+		return ptyMaxDim
+	}
+	return v
 }
 
 // CloseWorkspace cancels the workspace pump, tears down the monitor, and closes

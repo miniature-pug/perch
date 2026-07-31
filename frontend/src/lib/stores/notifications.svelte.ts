@@ -6,6 +6,13 @@ export interface Notification {
   title: string; body: string; read: boolean; ts: number;
 }
 
+// Hard cap on retained notifications. The hub is prepended to on every agent
+// event, so without a ceiling a long-running cockpit session grows the array
+// (and the docked list it feeds) without bound. When we exceed the cap we drop
+// the OLDEST entries (the array is newest-first), always clearing each dropped
+// id's pending auto-dismiss timer so trimming can never leak a timer.
+export const MAX_NOTIFICATIONS = 500;
+
 let items = $state<Notification[]>([]);
 let dnd   = $state(false);
 let _seq  = 0;
@@ -28,6 +35,7 @@ function add(tier: Tier, workspaceId: string, title: string, body: string) {
   // DND mutes tiers 2-3: mute = silence the interruption, keep the record.
   const silenced = dnd && tier !== "blocking";
   items = [{ id, workspaceId, tier, title, body, read: silenced, ts: Date.now() }, ...items];
+  trimToCap();
 
   // Auto-dismiss for non-blocking tiers that were actually surfaced.
   // Silenced items are already read, so no timer is needed.
@@ -39,6 +47,39 @@ function add(tier: Tier, workspaceId: string, title: string, body: string) {
     }, delay);
     _timers.set(id, t);
   }
+}
+
+// Enforce the MAX_NOTIFICATIONS ceiling after a prepend. The array is
+// newest-first, so a straight cap keeps the first N (newest) and drops the
+// tail (oldest). We keep it minimal but avoid silently discarding an
+// unresolved (unread) blocking notification just because it aged past the cap:
+// those are partitioned to the front so they survive; everything else obeys
+// the newest-N rule. For every entry we drop we clear its pending
+// auto-dismiss timer (mirrors markRead / dropForWorkspace) so no timer leaks.
+function trimToCap() {
+  if (items.length <= MAX_NOTIFICATIONS) return;
+
+  const keepBlocking = items.filter((n) => n.tier === "blocking" && !n.read);
+  const rest         = items.filter((n) => !(n.tier === "blocking" && !n.read));
+
+  // Blocking-unread always survive; the rest fill the remaining budget,
+  // newest-first. If unresolved blocking alone exceed the cap they are all
+  // still kept (never drop an unresolved approval/question), and no `rest`
+  // entries are retained.
+  const budget = Math.max(0, MAX_NOTIFICATIONS - keepBlocking.length);
+  const keepRest = rest.slice(0, budget);
+  const keep = new Set([...keepBlocking, ...keepRest].map((n) => n.id));
+
+  // Clear timers for everything being dropped so trimming cannot leak a timer.
+  for (const n of items) {
+    if (!keep.has(n.id)) {
+      const t = _timers.get(n.id);
+      if (t !== undefined) { clearTimeout(t); _timers.delete(n.id); }
+    }
+  }
+
+  // Rebuild preserving newest-first order (filter keeps original order).
+  items = items.filter((n) => keep.has(n.id));
 }
 
 export function addBlocking(w: string, t: string, b: string) { add("blocking", w, t, b); }
@@ -74,3 +115,7 @@ export function dropForWorkspace(wsId: string) {
 }
 
 export function clearRead() { items = items.filter((n) => !n.read); }
+
+// Test-only: snapshot of the pending auto-dismiss timer ids. Used to assert
+// that trimming/dropping never leaks a timer for a notification no longer held.
+export function _pendingTimerIds(): string[] { return [..._timers.keys()]; }

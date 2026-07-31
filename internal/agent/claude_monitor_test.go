@@ -563,6 +563,98 @@ func TestClaudeMonitorApprove_DoesNotClobberNewerState(t *testing.T) {
 	}
 }
 
+// TestClaudeMonitorApprove_NotDroppedUnderBackpressure is the regression guard for
+// the stuck awaiting-approval signal: when the monitor's events channel is
+// momentarily full, Approve must NOT silently drop the state-clearing event. The
+// old code emitted the clearing frame with `select { case ...: default: }`, so a
+// full channel meant the frontend stayed stuck on awaiting-approval forever. The
+// fix blocks (cancellable) until a slot frees, so the clearing event is always
+// delivered. This test fills the channel to capacity, calls Approve on an
+// awaiting-approval monitor, then drains the channel and asserts the StateRunning
+// clearing event eventually arrives. It goes RED against the `default:` version
+// (the clearing frame is lost) and GREEN after.
+func TestClaudeMonitorApprove_NotDroppedUnderBackpressure(t *testing.T) {
+	m, l, cleanup := newMonitorWithTestListener(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.Start(ctx)
+
+	// Raise an approval so m.state == StateAwaitingApproval.
+	respCh := make(chan string, 1)
+	go func() {
+		respCh <- postHook(t, l,
+			`{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"path":"/x"},"session_id":"s","cwd":"/p"}`)
+	}()
+
+	var appr agent.Event
+	select {
+	case appr = <-m.Events():
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for approval event")
+	}
+	if appr.Kind != "approval" || appr.Approval == nil {
+		t.Fatalf("want approval event, got %+v", appr)
+	}
+	if m.CurrentState() != agent.StateAwaitingApproval {
+		t.Fatalf("pre-condition: CurrentState = %q, want awaiting-approval", m.CurrentState())
+	}
+
+	// Saturate the events channel so any non-blocking send would be dropped.
+	m.FillEvents(m.EventsCap())
+
+	// Approve blocks on the full channel until a slot frees — run it in a goroutine
+	// and record when it returns.
+	approveDone := make(chan error, 1)
+	go func() {
+		approveDone <- m.Approve(appr.Approval.ReqID, agent.Decision{Allow: true})
+	}()
+
+	// While the channel is full, Approve must not have returned (it is blocked on
+	// the reliable send, not dropping the frame).
+	select {
+	case <-approveDone:
+		t.Fatal("Approve returned while channel was full — it dropped the clearing event instead of blocking")
+	case <-time.After(150 * time.Millisecond):
+		// expected: still blocked on the send.
+	}
+
+	// Drain the channel. The clearing StateRunning frame must appear among the
+	// drained events — it was not silently lost.
+	deadline := time.After(3 * time.Second)
+	sawClearing := false
+	for !sawClearing {
+		select {
+		case ev := <-m.Events():
+			if ev.Kind == "state" && ev.State == agent.StateRunning {
+				sawClearing = true
+			}
+		case <-deadline:
+			t.Fatal("clearing StateRunning event never delivered — Approve dropped it under backpressure")
+		}
+	}
+
+	select {
+	case err := <-approveDone:
+		if err != nil {
+			t.Fatalf("Approve returned error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Approve never returned after the clearing event was delivered")
+	}
+	if m.CurrentState() != agent.StateRunning {
+		t.Errorf("CurrentState after Approve = %q, want %q", m.CurrentState(), agent.StateRunning)
+	}
+
+	// Drain the hook POST so the goroutine does not leak.
+	select {
+	case <-respCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("hook POST never returned after Approve")
+	}
+}
+
 // TestClaudeMonitorPrepare_LaunchCommandSubmitsToShell is the falsifying guard
 // for the core agent-launch loop. The string Prepare() returns is written
 // VERBATIM into the pane's pty (app.OpenWorkspace → pty.Bridge.Write, a raw

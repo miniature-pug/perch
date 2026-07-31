@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Miniature-Pug/perch/internal/safe"
 )
@@ -24,11 +25,27 @@ const (
 	listenerTokenBytes = 32
 	// hookEventChanBuf is the buffer size of the hook event channel.
 	hookEventChanBuf = 64
-	// reqIDBytes is the number of random bytes used for per-request IDs.
-	reqIDBytes = 8
+	// reqIDBytes is the number of random bytes used for per-request IDs. 16 bytes
+	// (128-bit) removes any practical birthday-collision risk across request IDs.
+	reqIDBytes = 16
 	// maxHookBodyBytes caps the hook request body (1 MiB) so an over-large POST
 	// cannot exhaust memory. Real hook payloads are orders of magnitude smaller.
 	maxHookBodyBytes = 1 << 20
+	// HTTP server timeouts bound how long a single connection may occupy the
+	// listener, closing the slowloris exposure of an unbounded server. The values
+	// are generous relative to real hook traffic (tiny local POSTs) yet finite.
+	//
+	// WriteTimeout is intentionally NOT set. Go's write deadline is armed at the
+	// end of the request-header read and covers the entire ServeHTTP lifetime, so
+	// any finite WriteTimeout would abort a PreToolUse approval while it blocks
+	// waiting for the user's decision — a human "think time" that legitimately
+	// exceeds any fixed bound. ReadHeaderTimeout/ReadTimeout still close the
+	// slowloris exposure (slow header/body reads), which is what an unbounded
+	// server risks; the blocking-response phase is bounded per-request by the
+	// handler's own r.Context() cancellation instead.
+	serverReadHeaderTimeout = 5 * time.Second
+	serverReadTimeout       = 10 * time.Second
+	serverIdleTimeout       = 60 * time.Second
 )
 
 type Decision struct {
@@ -76,7 +93,12 @@ func New() (*Listener, error) {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/hook", l.handleHook)
-	l.srv = &http.Server{Handler: mux}
+	l.srv = &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: serverReadHeaderTimeout,
+		ReadTimeout:       serverReadTimeout,
+		IdleTimeout:       serverIdleTimeout,
+	}
 	go func() {
 		defer safe.Recover("hook-listener")
 		_ = l.srv.Serve(ln)
@@ -104,6 +126,11 @@ func (l *Listener) auth(r *http.Request) bool {
 func (l *Listener) handleHook(w http.ResponseWriter, r *http.Request) {
 	if !l.auth(r) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	// Hooks POST their payload; reject any other method before touching the body.
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	// Cap the request body so a malicious or malfunctioning hook cannot exhaust
