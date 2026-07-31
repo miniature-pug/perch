@@ -82,7 +82,7 @@ To install into your `GOBIN`:
 make install
 ```
 
-Building from source needs the Go toolchain (`go1.26.4`) and Node.js
+Building from source needs the Go toolchain (`go1.26.5`) and Node.js
 (`22.22.3`). The exact pins live in `.tool-versions`. Module path:
 `github.com/Miniature-Pug/perch`.
 

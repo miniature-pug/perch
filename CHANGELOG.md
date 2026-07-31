@@ -95,3 +95,5 @@ tagged a release yet, so everything to date sits under Unreleased.
 - Every IPC argument is validated: identifiers against a charset allowlist and
   worktree paths against the configured roots. All git work runs as argv, never
   through a shell.
+- Pinned the Go toolchain to `go1.26.5`, which carries the fix for the
+  `crypto/tls` advisory GO-2026-5856.
