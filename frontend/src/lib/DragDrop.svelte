@@ -1,5 +1,6 @@
 <!-- frontend/src/lib/DragDrop.svelte -->
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import { writeToPty } from "./wails";
   import { MIME_TEXT } from "./constants";
 
@@ -11,6 +12,31 @@
 
   let dragActive = $state(false);
 
+  // Backstop: a drag can end without our own handleDrop ever running — a
+  // cancelled drag (Escape), a drag that leaves the window, a non-file drag, or
+  // a drop swallowed by a parent handler (e.g. Stage's `if (modalOpen) return`).
+  // In those paths the overlay would otherwise stay stuck visible forever. While
+  // a drag is active we listen at the window for `dragend`/`drop` and force the
+  // overlay off, then detach. Listeners are self-cleaning and removed on destroy.
+  function resetDragActive() {
+    dragActive = false;
+    detachBackstop();
+  }
+
+  function attachBackstop() {
+    if (typeof window === "undefined") return;
+    window.addEventListener("dragend", resetDragActive);
+    window.addEventListener("drop", resetDragActive);
+  }
+
+  function detachBackstop() {
+    if (typeof window === "undefined") return;
+    window.removeEventListener("dragend", resetDragActive);
+    window.removeEventListener("drop", resetDragActive);
+  }
+
+  onDestroy(detachBackstop);
+
   // Shell-quote a path so an @mention survives paths containing spaces (or other
   // shell metacharacters). Wrap in single quotes and escape any embedded single
   // quote via the '\'' idiom, e.g. it's → 'it'\''s'.
@@ -20,7 +46,7 @@
 
   async function handleDrop(e: DragEvent) {
     e.preventDefault();
-    dragActive = false;
+    resetDragActive();
     if (!fileDrop || !e.dataTransfer) return;
     const files = Array.from(e.dataTransfer.files) as (File & { path?: string })[];
     if (files.length > 0) {
@@ -44,12 +70,18 @@
 
   function prevent(e: DragEvent) { e.preventDefault(); e.stopPropagation(); }
 
-  function handleDragEnter(e: DragEvent) { prevent(e); if (fileDrop) dragActive = true; }
+  function handleDragEnter(e: DragEvent) {
+    prevent(e);
+    if (!fileDrop) return;
+    dragActive = true;
+    attachBackstop();
+  }
   function handleDragLeave(e: DragEvent) {
     prevent(e);
-    // Only deactivate when leaving the wrapper entirely
+    // Only deactivate when leaving the wrapper entirely — entering a child fires
+    // a dragleave on the parent whose relatedTarget is still inside the node.
     const rt = e.relatedTarget as Node | null;
-    if (!rt || !(e.currentTarget as HTMLElement).contains(rt)) dragActive = false;
+    if (!rt || !(e.currentTarget as HTMLElement).contains(rt)) resetDragActive();
   }
 </script>
 
