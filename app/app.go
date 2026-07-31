@@ -357,6 +357,7 @@ func newWorkspaceID() (string, error) {
 type WorkspaceVM struct {
 	ID           string      `json:"id"`
 	WorktreePath string      `json:"worktreePath"`
+	RepoPath     string      `json:"repoPath"`
 	Agent        string      `json:"agent"`
 	Title        string      `json:"title"`
 	Branch       string      `json:"branch"`
@@ -381,6 +382,7 @@ func (a *App) ListWorkspaces() []WorkspaceVM {
 		vm := WorkspaceVM{
 			ID:           w.ID,
 			WorktreePath: w.WorktreePath,
+			RepoPath:     w.RepoPath,
 			Agent:        w.Agent,
 			Title:        w.Title,
 			Branch:       w.Branch,
@@ -542,6 +544,7 @@ func (a *App) CreateWorkspace(agentName, repoPath, baseRef, branch string, workt
 	return WorkspaceVM{
 		ID:           id,
 		WorktreePath: worktreePath,
+		RepoPath:     repoPath,
 		Agent:        agentName,
 		Title:        handle,
 		Branch:       branch,

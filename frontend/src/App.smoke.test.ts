@@ -50,7 +50,7 @@ vi.mock("./lib/wails", () => ({
   approve:         vi.fn(async () => {}),
   createWorkspace: vi.fn(async (_agent: string, _repoPath: string, _baseRef: string, _branch: string, _worktree: boolean) => ({
     id: "ws-new", title: "New", branch: "main", state: "idle",
-    worktreePath: "/tmp/new", agent: "claude", paneId: "p-new", lastActive: "",
+    worktreePath: "/tmp/new", repoPath: "/repo/New", agent: "claude", paneId: "p-new", lastActive: "",
     caps: { approvals: false, attention: false },
   })),
   removeWorkspace: vi.fn(async () => {}),
@@ -83,12 +83,12 @@ vi.mock("./lib/stores/settings.svelte", () => ({
 const smokeWorkspaces = [
   {
     id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
-    worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
+    worktreePath: "/tmp/alpha", repoPath: "/repo/Alpha", agent: "claude", paneId: "p1", lastActive: "",
     caps: { approvals: true, attention: false },
   },
   {
     id: "ws-2", title: "Beta", branch: "feat/beta", state: "running" as const,
-    worktreePath: "/tmp/beta", agent: "claude", paneId: "p2", lastActive: "",
+    worktreePath: "/tmp/beta", repoPath: "/repo/Beta", agent: "claude", paneId: "p2", lastActive: "",
     caps: { approvals: true, attention: false },
   },
 ];
@@ -137,9 +137,9 @@ it("full-composition smoke: assembly → select → view-switch → approval →
   expect(document.querySelector('[role="menubar"]')).toBeInTheDocument();
 
   // Sidebar: wait for workspaces to load, then check both buttons
-  const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+  const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
   expect(alphaBtn).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Beta" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /^Beta\b/ })).toBeInTheDocument();
 
   // Stage view-switcher nav (aria-label="View")
   expect(document.querySelector('nav[aria-label="View"]')).toBeInTheDocument();

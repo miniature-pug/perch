@@ -19,6 +19,7 @@
   import HelpDialog         from "./lib/HelpDialog.svelte";
   import SettingsPanel      from "./lib/SettingsPanel.svelte";
   import DragDrop           from "./lib/DragDrop.svelte";
+  import { SvelteSet }      from "svelte/reactivity";
   import { layout }         from "./lib/stores/layout.svelte";
   import { mode }           from "./lib/stores/mode.svelte";
   import { settings }       from "./lib/stores/settings.svelte";
@@ -35,7 +36,14 @@
   // Sessions with a live pty this app-run. A session is "open" once openWorkspace
   // has succeeded and until it is closed/removed. Drives: focus-vs-reopen routing
   // in onSelect, the sidebar "closed" dim cue, and close/remove cleanup.
-  let openIds         = $state<Set<string>>(new Set());
+  // SvelteSet so .add()/.delete()/.has() are genuinely reactive — the in-pane
+  // reopen overlay and the Sidebar "closed" cue both read openIds.has() directly.
+  let openIds         = new SvelteSet<string>();
+  // Per-session terminal epoch. Bumped on every genuine (re)open so the agent
+  // terminal-zone {#key} remounts a fresh xterm (a respawned pty must not
+  // interleave over a stale buffer). A view switch or focus does NOT bump it,
+  // so the scroll buffer survives those.
+  let termEpoch       = $state<Record<string, number>>({});
   let codePath        = $state<string | null>(null);
   let previewContent  = $state<string>("");
   let approvals       = $state<Record<string, ApprovalReq>>({});
@@ -272,13 +280,35 @@
     previewWs = ws;
   }
 
+  // The single open path: bump the terminal epoch (fresh xterm for the respawned
+  // pty), mark active + open, then spawn the pty. On failure, roll the open flag
+  // back so the row does not falsely read as live.
+  async function openSession(id: string) {
+    termEpoch[id] = (termEpoch[id] ?? 0) + 1;
+    activeId = id;
+    openIds.add(id);
+    try {
+      await openWorkspace(id);
+    } catch {
+      openIds.delete(id);
+    }
+  }
+
+  // The primary agent pty exited: leave keyboard mode, drop the session from the
+  // open set (so the reopen overlay shows and the row dims), and reset its state
+  // so no stale attention lingers. activeId is KEPT so the overlay is reachable.
+  function handleAgentExit(id: string) {
+    mode.leaveTerminal();
+    openIds.delete(id);
+    const ws = workspaces.find(w => w.id === id);
+    if (ws) ws.state = "idle";
+  }
+
   async function confirmPreview() {
     if (!previewWs) return;
     const id = previewWs.id;
     previewWs = null;
-    activeId = id;
-    await openWorkspace(id);
-    openIds.add(id);
+    await openSession(id);
   }
 
   function cancelPreview() { previewWs = null; }
@@ -293,8 +323,7 @@
     if (openIds.has(wsId)) {
       activeId = wsId;
     } else {
-      activeId = wsId;
-      openWorkspace(wsId).then(() => openIds.add(wsId));
+      openSession(wsId);
     }
   }
 
@@ -482,13 +511,13 @@
           // Clear any stuck attention on the now-dead session.
           const ws = workspaces.find(w => w.id === id);
           if (ws) ws.state = "idle";
-          // Return to the home view — the closed pane would otherwise be dead.
-          if (activeId === id) activeId = null;
+          // Keep activeId so the in-pane "This session has ended / Reopen"
+          // overlay stays reachable (the session left openIds above).
         }).catch(() => {});
       } },
     { id: "session:remove", group: "Session", label: "Remove session",     run: () => { if (active) requestRemove(active); } },
     // Worktree
-    { id: "worktree:open",   group: "Worktree", label: "Open worktree",    keybinding: "Enter",       run: () => { if (active) { const id = active.id; openWorkspace(id).then(() => openIds.add(id)); } } },
+    { id: "worktree:open",   group: "Worktree", label: "Open worktree",    keybinding: "Enter",       run: () => { if (active) openSession(active.id); } },
     { id: "worktree:reveal", group: "Worktree", label: "Reveal in Files",  run: () => { if (active) revealInFiles(active.worktreePath); } },
     // View
     { id: "view:agent", group: "View", label: "Agent view",  keybinding: "1",  run: () => layout.setView("agent") },
@@ -637,7 +666,7 @@
       }
       case "Enter": {
         e.preventDefault();
-        if (activeId) { const id = activeId; openWorkspace(id).then(() => openIds.add(id)); }
+        if (activeId) openSession(activeId);
         break;
       }
       case "i": e.preventDefault(); mode.enterTerminal(); break;
@@ -786,13 +815,19 @@
                      Keyed by session id: switching sessions gives a fresh pane, switching views never
                      remounts it. Clicking the zone in NORMAL enters TERMINAL mode; onpointerdown fires
                      before xterm sees the event. We do NOT preventDefault, so text selection still works. -->
-                {#key active.id}
+                {#key active.id + ":" + (termEpoch[active.id] ?? 0)}
                   <div class="terminal-zone" class:input-emphasis={emphasizeInput} data-terminal-zone role="group" aria-label="agent terminal"
                        style:display={layout.view === "agent" ? "" : "none"}
                        onanimationend={(e) => { if (e.animationName === "perch-emphasis") emphasizeInput = false; }}
                        onpointerdown={() => { if (mode.current === "normal") mode.enterTerminal(); }}>
+                    {#if active && !openIds.has(active.id)}
+                      <div class="pane-ended" data-testid="pane-ended">
+                        <p>This session has ended.</p>
+                        <button class="btn btn-primary" onclick={() => openSession(active.id)}>Reopen</button>
+                      </div>
+                    {/if}
                     <DragDrop paneId={active.paneId} fileDrop={true}>
-                      <Terminal bind:this={primaryTerm} paneId={active.paneId} cwd={active.worktreePath} onExit={() => mode.leaveTerminal()} />
+                      <Terminal bind:this={primaryTerm} paneId={active.paneId} cwd={active.worktreePath} onExit={() => handleAgentExit(active.id)} />
                     </DragDrop>
                   </div>
                 {/key}
@@ -872,7 +907,9 @@
                    Hidden via inline display style when a session is active; the inline style
                    is required because jsdom only reflects inline styles in visibility assertions. -->
               {#if homeShellCwdValue}
-                <div class="home-shell-zone" style:display={active ? 'none' : ''}>
+                <div class="home-shell-zone" data-terminal-zone role="group" aria-label="home shell"
+                     onpointerdown={() => { if (mode.current === "normal") mode.enterTerminal(); }}
+                     style:display={active ? 'none' : ''}>
                   <ShellDrawer
                     paneId="shell-home"
                     cwd={homeShellCwdValue}
@@ -923,7 +960,8 @@
              onmousedown={startResizeShell}
              onkeydown={keyResizeShell}></div>
 
-        <div data-zone="shell-drawer" class="shell-drawer-zone"
+        <div data-zone="shell-drawer" class="shell-drawer-zone" data-terminal-zone role="group" aria-label="shell drawer"
+             onpointerdown={() => { if (mode.current === "normal") mode.enterTerminal(); }}
              style:height="{layout.shellH}px"
              style:display={layout.collapsed["shell"] ? "none" : undefined}>
           {#if active}
@@ -1101,7 +1139,21 @@
   .stage-zone       { flex: 1; min-height: 0; display: flex; flex-direction: column;
                       transition: outline-color var(--perch-dur) var(--perch-ease); }
   .code-layout      { display: flex; flex-direction: row; flex: 1; min-height: 0; min-width: 0; }
-  .terminal-zone    { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+  .terminal-zone    { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+  /* In-pane "session ended" overlay — covers the dead xterm on the agent view
+     only (it lives inside the terminal-zone, which is hidden on code/diff).
+     Semi-transparent backdrop keeps the pane legible in every theme. */
+  .pane-ended {
+    position: absolute; inset: 0;
+    z-index: var(--perch-z-drop-overlay);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: var(--perch-sp-2);
+    background: color-mix(in srgb, var(--perch-bg) 82%, transparent);
+    color: var(--perch-text);
+    font-family: var(--perch-font-sans); font-size: var(--perch-fs-body);
+    text-align: center;
+  }
+  .pane-ended p { margin: 0; color: var(--perch-text-dim); }
   /* Transient ring pulse drawing the eye when the active agent wants input. */
   .terminal-zone.input-emphasis { animation: perch-emphasis var(--perch-dur-pop) var(--perch-ease); }
   @media (prefers-reduced-motion: reduce) {

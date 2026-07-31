@@ -54,6 +54,12 @@
     onReorder?.(draggedId, targetId);
   }
 
+  // Basename of a repo path; falls back to the raw path if it has no segments.
+  function repoName(p: string): string {
+    const s = (p ?? "").split("/").filter(Boolean);
+    return s.length ? s[s.length - 1] : (p || "");
+  }
+
   function formatAge(isoOrEmpty: string): string {
     if (!isoOrEmpty) return "";
     const d = new Date(isoOrEmpty);
@@ -84,12 +90,16 @@
           class:closed={closed}
           aria-current={ws.id === activeId ? "page" : undefined}
           onclick={() => onSelect(ws.id)}
-          aria-label={ws.title}
+          aria-label={`${repoName(ws.repoPath)} ${ws.branch}`}
           title={closed ? "Click to open" : undefined}
           style:--row-color={worktreeColor(ws.id)}
         >
           <span class="status-icon status-{ws.state}" aria-hidden="true" title={st.label}>{st.icon}</span>
-          <span class="workspace-title" title={ws.title}>{ws.title}</span>
+          {#if ws.repoPath}
+            <span class="workspace-title" title={repoName(ws.repoPath)}>{repoName(ws.repoPath)}</span>
+          {:else}
+            <span class="workspace-title" title={ws.title}>{ws.title}</span>
+          {/if}
           <span class="workspace-branch dim" title={ws.branch}>{ws.branch}</span>
           <span class="workspace-agent dim" title={ws.agent}>{ws.agent}</span>
           <span class="workspace-age dim">{formatAge(ws.lastActive)}</span>

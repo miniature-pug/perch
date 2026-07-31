@@ -54,7 +54,8 @@ perch opens a session, it passes the last session id back to the agent so the
 conversation continues rather than starting fresh.
 
 To bring back a session you closed, click its row again. A closed row is dimmed
-until you reopen it.
+until you reopen it. When a session's agent finishes and its terminal ends, the
+pane shows a **Reopen** button that starts it again.
 
 ### Removing a session
 

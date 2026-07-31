@@ -327,8 +327,10 @@ func TestApp_ListWorkspaces_FromRegistry(t *testing.T) {
 	store, _ := registry.Load(cfgDir)
 
 	wt := t.TempDir()
+	repo := t.TempDir()
 	_ = store.Upsert(registry.Workspace{
 		ID:           "ws-abc",
+		RepoPath:     repo,
 		WorktreePath: wt,
 		Agent:        "claude",
 		Title:        "my-feature",
@@ -348,6 +350,9 @@ func TestApp_ListWorkspaces_FromRegistry(t *testing.T) {
 	}
 	if vms[0].ID != "ws-abc" {
 		t.Errorf("ID = %q, want ws-abc", vms[0].ID)
+	}
+	if vms[0].RepoPath != repo {
+		t.Errorf("RepoPath = %q, want %q", vms[0].RepoPath, repo)
 	}
 	if vms[0].Agent != "claude" {
 		t.Errorf("Agent = %q, want claude", vms[0].Agent)
@@ -516,6 +521,9 @@ func TestApp_CreateWorkspace_WorktreeNewBranch(t *testing.T) {
 	}
 	if vm.ID == "" {
 		t.Fatal("ID must be non-empty")
+	}
+	if vm.RepoPath != repo {
+		t.Errorf("VM RepoPath = %q, want %q", vm.RepoPath, repo)
 	}
 	w, ok := store.Get(vm.ID)
 	if !ok {

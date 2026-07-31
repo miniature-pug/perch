@@ -4,18 +4,21 @@ import { fireEvent } from "@testing-library/svelte";
 import { vi } from "vitest";
 import type { WorkspaceVM } from "./wails";
 
+// Each fake sets repoPath so its basename equals the (legacy) title — the row's
+// primary label is now the repo name (basename of repoPath), so selectors by that
+// name still resolve while the row is correlatable by repo.
 const workspaces: WorkspaceVM[] = [
-  { id: "ws_a", worktreePath: "/wt/a", agent: "claude", title: "feat-auth",
+  { id: "ws_a", worktreePath: "/wt/a", repoPath: "/repo/feat-auth", agent: "claude", title: "feat-auth",
     branch: "feat/auth", state: "running", caps: { approvals: false, attention: false }, paneId: "p1", lastActive: "" },
-  { id: "ws_b", worktreePath: "/wt/b", agent: "claude", title: "feat-core",
+  { id: "ws_b", worktreePath: "/wt/b", repoPath: "/repo/feat-core", agent: "claude", title: "feat-core",
     branch: "feat/core", state: "idle", caps: { approvals: false, attention: false }, paneId: "p2", lastActive: "" },
-  { id: "ws_c", worktreePath: "/wt/c", agent: "claude", title: "bug-fix",
+  { id: "ws_c", worktreePath: "/wt/c", repoPath: "/repo/bug-fix", agent: "claude", title: "bug-fix",
     branch: "fix/crash", state: "awaiting-approval", caps: { approvals: true, attention: false }, paneId: "p3", lastActive: "" },
-  { id: "ws_d", worktreePath: "/wt/d", agent: "claude", title: "done-work",
+  { id: "ws_d", worktreePath: "/wt/d", repoPath: "/repo/done-work", agent: "claude", title: "done-work",
     branch: "feat/done", state: "done", caps: { approvals: false, attention: false }, paneId: "p4", lastActive: "" },
-  { id: "ws_e", worktreePath: "/wt/e", agent: "claude", title: "errored-work",
+  { id: "ws_e", worktreePath: "/wt/e", repoPath: "/repo/errored-work", agent: "claude", title: "errored-work",
     branch: "feat/err", state: "errored", caps: { approvals: false, attention: false }, paneId: "p5", lastActive: "" },
-  { id: "ws_q", worktreePath: "/wt/q", agent: "claude", title: "asking-work",
+  { id: "ws_q", worktreePath: "/wt/q", repoPath: "/repo/asking-work", agent: "claude", title: "asking-work",
     branch: "feat/ask", state: "awaiting-input", caps: { approvals: false, attention: true }, paneId: "p6", lastActive: "" },
 ];
 
@@ -272,18 +275,48 @@ test("workspace-row --row-color is stable and deterministic per id", async () =>
 // Feature: agent name + relative last-active age in session rows; empty hint
 // ---------------------------------------------------------------------------
 
-test("row renders branch · agent · relative last-active", async () => {
+test("row renders repo · branch · agent · relative last-active", async () => {
   const { default: Sidebar } = await import("./Sidebar.svelte");
   const recentIso = new Date(Date.now() - 2 * 86400000).toISOString();
   const ws: WorkspaceVM[] = [{
-    id: "ws-r", worktreePath: "/wt/r", agent: "opencode", title: "feat-r",
+    id: "ws-r", worktreePath: "/wt/r", repoPath: "/home/me/my-repo", agent: "opencode", title: "feat-r",
     branch: "feat/resume", state: "idle", caps: { approvals: false, attention: false },
     paneId: "pr", lastActive: recentIso,
   }];
   render(Sidebar, { props: { workspaces: ws, activeId: null, onSelect: () => {}, onNew: () => {} } });
+  // Primary label is the repo name (basename of repoPath).
+  expect(screen.getByText("my-repo")).toBeInTheDocument();
   expect(screen.getByText(/feat\/resume/)).toBeInTheDocument();
   expect(screen.getByText(/opencode/i)).toBeInTheDocument();
   expect(screen.getByText(/2d ago/i)).toBeInTheDocument();
+});
+
+test("row primary label is the repo name and aria-label is 'repo branch'", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  const ws: WorkspaceVM[] = [{
+    id: "ws-x", worktreePath: "/wt/x", repoPath: "/home/me/perch", agent: "claude", title: "claude-work",
+    branch: "claude/work", state: "idle", caps: { approvals: false, attention: false },
+    paneId: "px", lastActive: "",
+  }];
+  render(Sidebar, { props: { workspaces: ws, activeId: null, onSelect: () => {}, onNew: () => {} } });
+  // The bold primary label shows the repo basename, not the branch slug.
+  const titleSpan = document.querySelector(".workspace-title")!;
+  expect(titleSpan.textContent).toBe("perch");
+  // aria-label correlates repo + branch.
+  const btn = screen.getByRole("button", { name: "perch claude/work" });
+  expect(btn).toBeInTheDocument();
+});
+
+test("row falls back to ws.title as primary label when repoPath is empty", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  const ws: WorkspaceVM[] = [{
+    id: "ws-z", worktreePath: "/wt/z", repoPath: "", agent: "claude", title: "legacy-title",
+    branch: "feat/legacy", state: "idle", caps: { approvals: false, attention: false },
+    paneId: "pz", lastActive: "",
+  }];
+  render(Sidebar, { props: { workspaces: ws, activeId: null, onSelect: () => {}, onNew: () => {} } });
+  const titleSpan = document.querySelector(".workspace-title")!;
+  expect(titleSpan.textContent).toBe("legacy-title");
 });
 
 test("empty hint renders when workspaces is empty", async () => {

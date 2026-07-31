@@ -79,6 +79,7 @@ vi.mock("./lib/wails", () => ({
   createWorkspace: vi.fn(async (_agent: string, _repo: string, _baseRef: string, _branch: string, _worktree: boolean) => ({
     id: "ws-new", title: "New", branch: "main", state: "idle",
     worktreePath: "/tmp/new", agent: "claude", paneId: "p-new", lastActive: "",
+    repoPath: "/repo/New",
     caps: { approvals: false, attention: false },
   })),
   workspaceForBranch: vi.fn(async (_repoPath: string, _branch: string) => ({ id: "", found: false })),
@@ -129,11 +130,13 @@ const fakeWorkspaces = [
   {
     id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
     worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
+    repoPath: "/repo/Alpha",
     caps: { approvals: false, attention: false },
   },
   {
     id: "ws-2", title: "Beta", branch: "feat/beta", state: "running" as const,
     worktreePath: "/tmp/beta", agent: "claude", paneId: "p2", lastActive: "",
+    repoPath: "/repo/Beta",
     caps: { approvals: false, attention: false },
   },
 ];
@@ -212,8 +215,8 @@ describe("App.svelte workspace wiring", () => {
     const { default: App } = await import("./App.svelte");
     render(App);
     // Sidebar renders each ws as a button with aria-label={ws.title}
-    expect(await screen.findByRole("button", { name: "Alpha" })).toBeInTheDocument();
-    expect(await screen.findByRole("button", { name: "Beta" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /^Alpha\b/ })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /^Beta\b/ })).toBeInTheDocument();
   });
 
   it("selecting a workspace shows resume preview then calls openWorkspace(id) after confirm", async () => {
@@ -221,7 +224,7 @@ describe("App.svelte workspace wiring", () => {
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
     const { default: App } = await import("./App.svelte");
     render(App);
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Preview modal appears; openWorkspace not yet called
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
@@ -233,7 +236,7 @@ describe("App.svelte workspace wiring", () => {
     await waitFor(() =>
       expect(alphaBtn).toHaveAttribute("aria-current", "page")
     );
-    expect(screen.getByRole("button", { name: "Beta" })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("button", { name: /^Beta\b/ })).not.toHaveAttribute("aria-current");
   });
 
   it("clicking a sidebar row shows a resume preview before opening workspace", async () => {
@@ -268,7 +271,7 @@ describe("App.svelte workspace wiring", () => {
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
     const { default: App } = await import("./App.svelte");
     render(App);
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     // Open Alpha via the resume-preview flow.
     await fireEvent.click(alphaBtn);
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
@@ -289,8 +292,8 @@ describe("App.svelte workspace wiring", () => {
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
     const { default: App } = await import("./App.svelte");
     render(App);
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
-    const betaBtn  = screen.getByRole("button", { name: "Beta" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
+    const betaBtn  = screen.getByRole("button", { name: /^Beta\b/ });
 
     // Open Alpha (resume-preview → open).
     await fireEvent.click(alphaBtn);
@@ -324,7 +327,7 @@ describe("App.svelte Stage content routing", () => {
     const { default: App } = await import("./App.svelte");
     render(App);
     // Wait for workspaces to load (post-mount, so restore() has already run)
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     // Ensure we're in agent view (real store; restore() defaults view to "agent")
     layout.setView("agent");
     await tick();
@@ -345,7 +348,7 @@ describe("App.svelte Stage content routing", () => {
     const { default: App } = await import("./App.svelte");
     render(App);
     // Wait for workspaces to load (post-mount), then switch view reactively
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears — confirm to open
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
@@ -374,7 +377,7 @@ describe("App.svelte Stage content routing", () => {
     const { layout } = await import("./lib/stores/layout.svelte");
     const { default: App } = await import("./App.svelte");
     render(App);
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears — confirm to open
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
@@ -407,7 +410,7 @@ describe("App.svelte Stage content routing", () => {
     const { default: App } = await import("./App.svelte");
     render(App);
     // Wait for workspaces to load (post-mount), then switch view reactively
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears — confirm to open
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
@@ -426,7 +429,7 @@ describe("App.svelte Stage content routing", () => {
     const { layout } = await import("./lib/stores/layout.svelte");
     const { default: App } = await import("./App.svelte");
     render(App);
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears — confirm to open
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
@@ -453,7 +456,7 @@ describe("App.svelte Stage content routing", () => {
     const { default: App } = await import("./App.svelte");
     render(App);
     // Don't select any workspace — activeId stays null
-    await screen.findByRole("button", { name: "Alpha" }); // workspaces loaded
+    await screen.findByRole("button", { name: /^Alpha\b/ }); // workspaces loaded
     expect(document.querySelector(".empty-state")).toBeInTheDocument();
     expect(screen.queryByTestId("terminal")).not.toBeInTheDocument();
     expect(screen.queryByTestId("editor")).not.toBeInTheDocument();
@@ -466,7 +469,7 @@ describe("App.svelte Stage content routing", () => {
     const { layout } = await import("./lib/stores/layout.svelte");
     const { default: App } = await import("./App.svelte");
     render(App);
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears; confirm to open
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
@@ -503,7 +506,7 @@ describe("App.svelte Stage content routing", () => {
     const { default: App } = await import("./App.svelte");
     render(App);
     // Wait for workspaces to load (restore() has run by now)
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears — confirm to open
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
@@ -536,7 +539,7 @@ describe("App.svelte Stage content routing", () => {
     const { default: App } = await import("./App.svelte");
     render(App);
     // ShellDrawer renders under {#if active}, so select a workspace first.
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears — confirm to open
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
@@ -618,10 +621,10 @@ describe("App.svelte live event wiring", () => {
     const { default: App } = await import("./App.svelte");
     render(App);
     // Wait for workspaces to load
-    await screen.findByRole("button", { name: "Alpha" });
+    await screen.findByRole("button", { name: /^Alpha\b/ });
 
     // Alpha starts as "idle" → Sidebar shows "idle"
-    expect(screen.getByRole("button", { name: "Alpha" })).toHaveTextContent("idle");
+    expect(screen.getByRole("button", { name: /^Alpha\b/ })).toHaveTextContent("idle");
 
     // Fire an agent event that flips Alpha to "awaiting-approval" and carries an approval payload
     const cb = captured.agent.at(-1)!;
@@ -635,7 +638,7 @@ describe("App.svelte live event wiring", () => {
 
     // Sidebar maps "awaiting-approval" → "needs you"
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Alpha" })).toHaveTextContent("needs you")
+      expect(screen.getByRole("button", { name: /^Alpha\b/ })).toHaveTextContent("needs you")
     );
   });
 
@@ -646,7 +649,7 @@ describe("App.svelte live event wiring", () => {
     render(App);
 
     // Select Alpha so it is the active workspace (otherwise "no dock" is vacuous).
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears — confirm to open
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
@@ -660,7 +663,7 @@ describe("App.svelte live event wiring", () => {
 
     // Sidebar maps "awaiting-input" → "asking you".
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Alpha" })).toHaveTextContent("asking you")
+      expect(screen.getByRole("button", { name: /^Alpha\b/ })).toHaveTextContent("asking you")
     );
 
     // A question is signal-only: NO approval dock, NO Allow button.
@@ -673,7 +676,7 @@ describe("App.svelte live event wiring", () => {
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
     const { default: App } = await import("./App.svelte");
     render(App);
-    await screen.findByRole("button", { name: "Alpha" });
+    await screen.findByRole("button", { name: /^Alpha\b/ });
 
     const { getItems } = await import("./lib/stores/notifications.svelte");
     const before = getItems().length;
@@ -694,7 +697,7 @@ describe("App.svelte live event wiring", () => {
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
     const { default: App } = await import("./App.svelte");
     render(App);
-    await screen.findByRole("button", { name: "Alpha" });
+    await screen.findByRole("button", { name: /^Alpha\b/ });
 
     const { getItems, getDnd, setDnd } = await import("./lib/stores/notifications.svelte");
     // Ensure DND is off so ambient is not filtered
@@ -719,7 +722,7 @@ describe("App.svelte live event wiring", () => {
     render(App);
 
     // Select Alpha and switch to diff view
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears — confirm to open
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
@@ -773,6 +776,7 @@ describe("App.svelte approval card + notification hub", () => {
     {
       id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
       worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
+      repoPath: "/repo/Alpha",
       caps: { approvals: true, attention: false },
     },
   ];
@@ -784,7 +788,7 @@ describe("App.svelte approval card + notification hub", () => {
     render(App);
 
     // Select the workspace to make it active
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears — confirm to open
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
@@ -815,7 +819,7 @@ describe("App.svelte approval card + notification hub", () => {
     render(App);
 
     // Select the workspace to make it active
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears — confirm to open
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
@@ -856,7 +860,7 @@ describe("App.svelte approval card + notification hub", () => {
     const { default: App } = await import("./App.svelte");
     render(App);
 
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears — confirm to open
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
@@ -891,7 +895,7 @@ describe("App.svelte approval card + notification hub", () => {
     render(App);
 
     // Select workspace
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears — confirm to open
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
@@ -934,7 +938,7 @@ describe("App.svelte approval card + notification hub", () => {
     const { default: App } = await import("./App.svelte");
     render(App);
 
-    await screen.findByRole("button", { name: "Alpha" });
+    await screen.findByRole("button", { name: /^Alpha\b/ });
 
     // Inject a notification via the notify callback
     const cb = captured.notify.at(-1)!;
@@ -960,7 +964,7 @@ describe("App.svelte approval card + notification hub", () => {
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(approvalWorkspaces);
     const { default: App } = await import("./App.svelte");
     render(App);
-    await screen.findByRole("button", { name: "Alpha" });
+    await screen.findByRole("button", { name: /^Alpha\b/ });
 
     const { getItems } = await import("./lib/stores/notifications.svelte");
 
@@ -993,6 +997,7 @@ describe("App.svelte NewSessionDialog", () => {
         {
           id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
           worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
+          repoPath: "/repo/Alpha",
           caps: { approvals: false, attention: false },
         },
       ])
@@ -1002,7 +1007,7 @@ describe("App.svelte NewSessionDialog", () => {
     render(App);
 
     // Workspaces loaded
-    await screen.findByRole("button", { name: "Alpha" });
+    await screen.findByRole("button", { name: /^Alpha\b/ });
 
     // Dialog must not be visible yet
     expect(screen.queryByRole("dialog", { name: "new session" })).not.toBeInTheDocument();
@@ -1055,6 +1060,7 @@ describe("App.svelte NewSessionDialog", () => {
       {
         id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
         worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
+        repoPath: "/repo/Alpha",
         caps: { approvals: false, attention: false },
       },
     ]);
@@ -1068,7 +1074,7 @@ describe("App.svelte NewSessionDialog", () => {
     const { default: App } = await import("./App.svelte");
     render(App);
 
-    await screen.findByRole("button", { name: "Alpha" });
+    await screen.findByRole("button", { name: /^Alpha\b/ });
     const notifBefore = getItems().length;
 
     // Open dialog
@@ -1132,6 +1138,7 @@ describe("App.svelte NewSessionDialog", () => {
       {
         id: "ws-existing", title: "Existing", branch: "feat/taken", state: "idle" as const,
         worktreePath: "/tmp/existing", agent: "claude", paneId: "p-existing", lastActive: "",
+        repoPath: "/repo/Existing",
         caps: { approvals: false, attention: false },
       },
     ]);
@@ -1139,7 +1146,7 @@ describe("App.svelte NewSessionDialog", () => {
 
     const { default: App } = await import("./App.svelte");
     render(App);
-    await screen.findByRole("button", { name: "Existing" });
+    await screen.findByRole("button", { name: /^Existing\b/ });
 
     // Open dialog
     await fireEvent.click(screen.getByRole("button", { name: "New session" }));
@@ -1179,6 +1186,7 @@ describe("App.svelte ConfirmDialog (workspace remove)", () => {
       {
         id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
         worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
+        repoPath: "/repo/Alpha",
         caps: { approvals: false, attention: false },
       },
     ]);
@@ -1186,7 +1194,7 @@ describe("App.svelte ConfirmDialog (workspace remove)", () => {
     render(App);
 
     // Select ws-1 to make it active (required for session:remove to find active)
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears — confirm to open
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
@@ -1223,7 +1231,7 @@ describe("App.svelte ConfirmDialog (workspace remove)", () => {
 
     // Workspace disappears from sidebar immediately (optimistic hide)
     await waitFor(() =>
-      expect(screen.queryByRole("button", { name: "Alpha" })).not.toBeInTheDocument()
+      expect(screen.queryByRole("button", { name: /^Alpha\b/ })).not.toBeInTheDocument()
     );
 
     // Undo toast appears
@@ -1243,6 +1251,7 @@ describe("App.svelte DragDrop", () => {
       {
         id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
         worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
+        repoPath: "/repo/Alpha",
         caps: { approvals: false, attention: false },
       },
     ]);
@@ -1251,7 +1260,7 @@ describe("App.svelte DragDrop", () => {
     render(App);
 
     // Select ws-1 and go to agent view
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears — confirm to open
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
@@ -1293,42 +1302,42 @@ describe("App.svelte keymap: j/k navigation", () => {
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
     const { default: App } = await import("./App.svelte");
     render(App);
-    await screen.findByRole("button", { name: "Alpha" });
+    await screen.findByRole("button", { name: /^Alpha\b/ });
     await tick();
 
     // Initially no active — j selects first
     await fireEvent.keyDown(document.body, { key: "j" });
     await tick();
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Alpha" })).toHaveAttribute("aria-current", "page")
+      expect(screen.getByRole("button", { name: /^Alpha\b/ })).toHaveAttribute("aria-current", "page")
     );
 
     // j again → Beta
     await fireEvent.keyDown(document.body, { key: "j" });
     await tick();
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Beta" })).toHaveAttribute("aria-current", "page")
+      expect(screen.getByRole("button", { name: /^Beta\b/ })).toHaveAttribute("aria-current", "page")
     );
 
     // j again at end → stays Beta (clamp)
     await fireEvent.keyDown(document.body, { key: "j" });
     await tick();
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Beta" })).toHaveAttribute("aria-current", "page")
+      expect(screen.getByRole("button", { name: /^Beta\b/ })).toHaveAttribute("aria-current", "page")
     );
 
     // k → Alpha
     await fireEvent.keyDown(document.body, { key: "k" });
     await tick();
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Alpha" })).toHaveAttribute("aria-current", "page")
+      expect(screen.getByRole("button", { name: /^Alpha\b/ })).toHaveAttribute("aria-current", "page")
     );
 
     // k at start → stays Alpha (clamp)
     await fireEvent.keyDown(document.body, { key: "k" });
     await tick();
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Alpha" })).toHaveAttribute("aria-current", "page")
+      expect(screen.getByRole("button", { name: /^Alpha\b/ })).toHaveAttribute("aria-current", "page")
     );
 
     // j/k must NEVER call openWorkspace
@@ -1342,7 +1351,7 @@ describe("App.svelte keymap: Enter opens focused session", () => {
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
     const { default: App } = await import("./App.svelte");
     render(App);
-    await screen.findByRole("button", { name: "Alpha" });
+    await screen.findByRole("button", { name: /^Alpha\b/ });
     await tick();
 
     // Select Alpha via j
@@ -1435,7 +1444,7 @@ describe("App.svelte keymap: filter UI", () => {
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
     const { default: App } = await import("./App.svelte");
     render(App);
-    await screen.findByRole("button", { name: "Alpha" });
+    await screen.findByRole("button", { name: /^Alpha\b/ });
     await tick();
 
     // Filter input not visible initially
@@ -1451,15 +1460,15 @@ describe("App.svelte keymap: filter UI", () => {
     expect(document.activeElement).toBe(filterInput);
 
     // Both workspaces visible initially
-    expect(screen.getByRole("button", { name: "Alpha" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Beta" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Alpha\b/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Beta\b/ })).toBeInTheDocument();
 
     // Type "alph" — only Alpha should remain
     await fireEvent.input(filterInput, { target: { value: "alph" } });
     await tick();
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Alpha" })).toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: "Beta" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /^Alpha\b/ })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /^Beta\b/ })).not.toBeInTheDocument();
     });
 
     // Esc hides filter and restores full list
@@ -1467,8 +1476,8 @@ describe("App.svelte keymap: filter UI", () => {
     await tick();
     await waitFor(() => {
       expect(screen.queryByRole("textbox", { name: "filter sessions" })).not.toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Alpha" })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Beta" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /^Alpha\b/ })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /^Beta\b/ })).toBeInTheDocument();
     });
   });
 });
@@ -1586,7 +1595,7 @@ describe("App.svelte keymap: TERMINAL leave sequence", () => {
     const { layout } = await import("./lib/stores/layout.svelte");
     const { default: App } = await import("./App.svelte");
     render(App);
-    await screen.findByRole("button", { name: "Alpha" });
+    await screen.findByRole("button", { name: /^Alpha\b/ });
     await tick();
 
     layout.setView("agent");
@@ -1600,7 +1609,7 @@ describe("App.svelte keymap: TERMINAL leave sequence", () => {
     // View must be unchanged
     expect(layout.view).toBe("agent");
     // No workspace became active
-    expect(screen.queryByRole("button", { name: "Alpha" })?.getAttribute("aria-current")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Alpha\b/ })?.getAttribute("aria-current")).toBeNull();
   });
 });
 
@@ -1615,13 +1624,14 @@ describe("App.svelte session:close command", () => {
       {
         id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
         worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
+        repoPath: "/repo/Alpha",
         caps: { approvals: false, attention: false },
       },
     ]);
     const { default: App } = await import("./App.svelte");
     render(App);
 
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears — confirm to open
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
@@ -1638,7 +1648,97 @@ describe("App.svelte session:close command", () => {
 
     expect(closeWorkspace).toHaveBeenCalledWith("ws-1");
     // Workspace must still be in the sidebar list
-    expect(screen.getByRole("button", { name: "Alpha" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Alpha\b/ })).toBeInTheDocument();
+    // activeId is KEPT after close (no return-to-home), so the session left the
+    // open set and the in-pane "session ended / Reopen" overlay is reachable.
+    await waitFor(() => expect(screen.getByTestId("pane-ended")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Reopen" })).toBeInTheDocument();
+  });
+
+  it("clicking Reopen on the ended pane routes through openSession → openWorkspace and hides the overlay", async () => {
+    const { listWorkspaces, closeWorkspace, openWorkspace } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
+        worktreePath: "/tmp/alpha", repoPath: "/repo/Alpha", agent: "claude", paneId: "p1", lastActive: "",
+        caps: { approvals: false, attention: false },
+      },
+    ]);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
+    await fireEvent.click(alphaBtn);
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    await tick();
+    vi.mocked(openWorkspace).mockClear();
+
+    // Close so the ended-pane overlay appears.
+    const sessionMenu = screen.getByRole("menuitem", { name: "Session" });
+    await fireEvent.click(sessionMenu);
+    await tick();
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Close session" }));
+    await tick();
+    await waitFor(() => expect(closeWorkspace).toHaveBeenCalledWith("ws-1"));
+    await waitFor(() => expect(screen.getByTestId("pane-ended")).toBeInTheDocument());
+
+    // Reopen respawns the pty via openSession.
+    await fireEvent.click(screen.getByRole("button", { name: "Reopen" }));
+    await waitFor(() => expect(openWorkspace).toHaveBeenCalledWith("ws-1"));
+    // Overlay gone once the session is back in the open set.
+    await waitFor(() => expect(screen.queryByTestId("pane-ended")).not.toBeInTheDocument());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG B: bottom + home shell drawers are terminal zones (click keeps TERMINAL)
+// ---------------------------------------------------------------------------
+describe("App.svelte shell-drawer wrappers are terminal zones", () => {
+  it("session shell-drawer wrapper has data-terminal-zone and enters terminal mode on pointerdown", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
+        worktreePath: "/tmp/alpha", repoPath: "/repo/Alpha", agent: "claude", paneId: "p1", lastActive: "",
+        caps: { approvals: false, attention: false },
+      },
+    ]);
+    const { mode } = await import("./lib/stores/mode.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
+    await fireEvent.click(alphaBtn);
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    await tick();
+
+    const shellZone = document.querySelector("[data-zone='shell-drawer']") as HTMLElement;
+    // Wrapper must be inside a terminal zone (the app-root pointerdown guard leaves it alone).
+    expect(shellZone.closest("[data-terminal-zone]")).not.toBeNull();
+
+    // From NORMAL, a pointerdown on the drawer must switch to TERMINAL mode.
+    (mode as any).current = "normal";
+    await fireEvent.pointerDown(shellZone);
+    expect(mode.current).toBe("terminal");
+  });
+
+  it("home shell-drawer wrapper has data-terminal-zone and enters terminal mode on pointerdown", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]); // no session → home view
+    const { mode } = await import("./lib/stores/mode.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    // home-shell-zone renders under {#if homeShellCwdValue}, set by the async onMount.
+    await waitFor(() => expect(document.querySelector(".home-shell-zone")).not.toBeNull());
+
+    const homeZone = document.querySelector(".home-shell-zone") as HTMLElement;
+    expect(homeZone.closest("[data-terminal-zone]")).not.toBeNull();
+
+    (mode as any).current = "normal";
+    await fireEvent.pointerDown(homeZone);
+    expect(mode.current).toBe("terminal");
   });
 });
 
@@ -1649,13 +1749,14 @@ describe("App.svelte worktree:open command", () => {
       {
         id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
         worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
+        repoPath: "/repo/Alpha",
         caps: { approvals: false, attention: false },
       },
     ]);
     const { default: App } = await import("./App.svelte");
     render(App);
 
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears — confirm to open
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
@@ -1680,11 +1781,13 @@ describe("App.svelte agent:approve-all / deny-all", () => {
     {
       id: "ws-1", title: "Alpha", branch: "main", state: "awaiting-approval" as const,
       worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
+      repoPath: "/repo/Alpha",
       caps: { approvals: true, attention: false },
     },
     {
       id: "ws-2", title: "Beta", branch: "feat/beta", state: "awaiting-approval" as const,
       worktreePath: "/tmp/beta", agent: "claude", paneId: "p2", lastActive: "",
+      repoPath: "/repo/Beta",
       caps: { approvals: true, attention: false },
     },
   ];
@@ -1700,7 +1803,7 @@ describe("App.svelte agent:approve-all / deny-all", () => {
     render(App);
 
     // Select Alpha (ws-1) so it is the ACTIVE workspace.
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears — confirm to open
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
@@ -1735,7 +1838,7 @@ describe("App.svelte agent:approve-all / deny-all", () => {
     );
 
     // Beta still has its pending approval — switch to it and verify it survived.
-    await fireEvent.click(screen.getByRole("button", { name: "Beta" }));
+    await fireEvent.click(screen.getByRole("button", { name: /^Beta\b/ }));
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
     await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
     await waitFor(() =>
@@ -1752,7 +1855,7 @@ describe("App.svelte agent:approve-all / deny-all", () => {
     render(App);
 
     // Select Alpha (ws-1) so it is the ACTIVE workspace.
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears — confirm to open
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
@@ -1789,7 +1892,7 @@ describe("App.svelte agent:approve-all / deny-all", () => {
     );
 
     // ws-2 (req-ok) was never acted on — switch to Beta and verify it is still pending
-    await fireEvent.click(screen.getByRole("button", { name: "Beta" }));
+    await fireEvent.click(screen.getByRole("button", { name: /^Beta\b/ }));
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
     await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
     await waitFor(() =>
@@ -1930,11 +2033,13 @@ describe("App.svelte approval batch buttons", () => {
     {
       id: "ws-1", title: "Alpha", branch: "main", state: "awaiting-approval" as const,
       worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
+      repoPath: "/repo/Alpha",
       caps: { approvals: true, attention: false },
     },
     {
       id: "ws-2", title: "Beta", branch: "feat/beta", state: "awaiting-approval" as const,
       worktreePath: "/tmp/beta", agent: "claude", paneId: "p2", lastActive: "",
+      repoPath: "/repo/Beta",
       caps: { approvals: true, attention: false },
     },
   ];
@@ -1946,7 +2051,7 @@ describe("App.svelte approval batch buttons", () => {
     render(App);
 
     // Inject approval events for both workspaces
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     const cb = captured.agent.at(-1)!;
     cb({ workspaceId: "ws-1", kind: "approval", state: "awaiting-approval",
          approval: { reqId: "req-a", tool: "bash", summary: "Alpha task" } });
@@ -1977,7 +2082,7 @@ describe("App.svelte approval batch buttons", () => {
     expect(approve).not.toHaveBeenCalledWith("req-b", "allow");
 
     // Beta's approval survives — switch to it and confirm it is still pending.
-    await fireEvent.click(screen.getByRole("button", { name: "Beta" }));
+    await fireEvent.click(screen.getByRole("button", { name: /^Beta\b/ }));
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
     await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
     await waitFor(() =>
@@ -1991,7 +2096,7 @@ describe("App.svelte approval batch buttons", () => {
     const { default: App } = await import("./App.svelte");
     render(App);
 
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     const cb = captured.agent.at(-1)!;
     cb({ workspaceId: "ws-1", kind: "approval", state: "awaiting-approval",
          approval: { reqId: "req-solo", tool: "bash", summary: "Solo task" } });
@@ -2022,6 +2127,7 @@ describe("App.svelte sendToAgent wires Editor→writeToPty", () => {
     {
       id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
       worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
+      repoPath: "/repo/Alpha",
       caps: { approvals: false, attention: false },
     },
   ];
@@ -2034,7 +2140,7 @@ describe("App.svelte sendToAgent wires Editor→writeToPty", () => {
     render(App);
 
     // Select Alpha and switch to code view so EditorProbe mounts
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears — confirm to open
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
@@ -2071,7 +2177,7 @@ describe("App.svelte sendToAgent wires Editor→writeToPty", () => {
     render(App);
 
     // DON'T select any workspace — no active session
-    await screen.findByRole("button", { name: "Alpha" });
+    await screen.findByRole("button", { name: /^Alpha\b/ });
     layout.setView("code");
     await tick();
 
@@ -2136,7 +2242,7 @@ describe("App.svelte discoverRepos called on dialog open; discovered repos appea
 
     // Wait for initial load
     await waitFor(() =>
-      expect(screen.queryByRole("button", { name: "Alpha" })).not.toBeInTheDocument()
+      expect(screen.queryByRole("button", { name: /^Alpha\b/ })).not.toBeInTheDocument()
     );
 
     // The empty state must be present
@@ -2201,6 +2307,7 @@ describe("App.svelte deferred remove hides workspace + shows undo toast without 
     {
       id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
       worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
+      repoPath: "/repo/Alpha",
       caps: { approvals: false, attention: false },
     },
   ];
@@ -2211,7 +2318,7 @@ describe("App.svelte deferred remove hides workspace + shows undo toast without 
     const { default: App } = await import("./App.svelte");
     render(App);
 
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears — confirm to open
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
@@ -2235,7 +2342,7 @@ describe("App.svelte deferred remove hides workspace + shows undo toast without 
 
     // Workspace hidden immediately
     await waitFor(() =>
-      expect(screen.queryByRole("button", { name: "Alpha" })).not.toBeInTheDocument()
+      expect(screen.queryByRole("button", { name: /^Alpha\b/ })).not.toBeInTheDocument()
     );
 
     // Undo toast visible
@@ -2253,7 +2360,7 @@ describe("App.svelte deferred remove hides workspace + shows undo toast without 
     const { default: App } = await import("./App.svelte");
     render(App);
 
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears — confirm to open
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
@@ -2285,7 +2392,7 @@ describe("App.svelte deferred remove hides workspace + shows undo toast without 
 
     // Workspace restored in sidebar
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Alpha" })).toBeInTheDocument()
+      expect(screen.getByRole("button", { name: /^Alpha\b/ })).toBeInTheDocument()
     );
 
     // Toast gone
@@ -2303,7 +2410,7 @@ describe("App.svelte deferred remove hides workspace + shows undo toast without 
     const { default: App } = await import("./App.svelte");
     render(App);
 
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears — confirm to open
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
@@ -2348,7 +2455,7 @@ describe("App.svelte split secondary pane", () => {
     render(App);
 
     // Select Alpha as active
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears — confirm to open
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
@@ -2374,7 +2481,7 @@ describe("App.svelte split secondary pane", () => {
     render(App);
 
     // Select Alpha as active
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears — confirm to open
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
@@ -2401,7 +2508,7 @@ describe("App.svelte split secondary pane", () => {
     render(App);
 
     // Select Alpha as active
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears — confirm to open
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
@@ -2429,7 +2536,7 @@ describe("App.svelte drag-to-split (behavior 5)", () => {
     const { default: App } = await import("./App.svelte");
     render(App);
     // Select a workspace so the stage is active
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears — confirm to open
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
@@ -2467,7 +2574,7 @@ describe("App.svelte drag-to-split (behavior 5)", () => {
     const spy = vi.spyOn(layout, "setSplitId");
     const { default: App } = await import("./App.svelte");
     render(App);
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears — confirm to open (even though no workspace content is needed here,
     // the click goes through the preview flow to be consistent)
@@ -2501,13 +2608,13 @@ describe("App.svelte session reorder (behavior 4b)", () => {
     const spy = vi.spyOn(layout, "setOrder");
     const { default: App } = await import("./App.svelte");
     render(App);
-    await screen.findByRole("button", { name: "Alpha" });
+    await screen.findByRole("button", { name: /^Alpha\b/ });
 
     // Simulate dragging ws-2 onto ws-1 in the Sidebar
     // The workspace list rows are <li draggable> elements
-    const betaBtn  = screen.getByRole("button", { name: "Beta" });
+    const betaBtn  = screen.getByRole("button", { name: /^Beta\b/ });
     const betaLi   = betaBtn.closest("li") as HTMLElement;
-    const alphaBtn = screen.getByRole("button", { name: "Alpha" });
+    const alphaBtn = screen.getByRole("button", { name: /^Alpha\b/ });
     const alphaLi  = alphaBtn.closest("li") as HTMLElement;
 
     const store = new Map<string, string>([["application/x-perch-session", "ws-2"]]);
@@ -2537,6 +2644,7 @@ describe("App.svelte: FileTree @mention prefix routes to sendToAgent", () => {
     {
       id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
       worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
+      repoPath: "/repo/Alpha",
       caps: { approvals: false, attention: false },
     },
   ];
@@ -2548,7 +2656,7 @@ describe("App.svelte: FileTree @mention prefix routes to sendToAgent", () => {
     const { default: App } = await import("./App.svelte");
     render(App);
 
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears — confirm to open
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
@@ -2583,7 +2691,7 @@ describe("App.svelte: FileTree @mention prefix routes to sendToAgent", () => {
     const { default: App } = await import("./App.svelte");
     render(App);
 
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears — confirm to open
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
@@ -2628,11 +2736,13 @@ describe("App.svelte: onDecision keys deletion by reqId owner, not activeId", ()
     const ws1 = {
       id: "ws-1", title: "Alpha", branch: "main", state: "awaiting-approval" as const,
       worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
+      repoPath: "/repo/Alpha",
       caps: { approvals: true, attention: false },
     };
     const ws2 = {
       id: "ws-2", title: "Beta", branch: "feat", state: "awaiting-approval" as const,
       worktreePath: "/tmp/beta", agent: "claude", paneId: "p2", lastActive: "",
+      repoPath: "/repo/Beta",
       caps: { approvals: true, attention: false },
     };
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([ws1, ws2]);
@@ -2640,7 +2750,7 @@ describe("App.svelte: onDecision keys deletion by reqId owner, not activeId", ()
     render(App);
 
     // Inject approvals for both workspaces
-    await screen.findByRole("button", { name: "Alpha" });
+    await screen.findByRole("button", { name: /^Alpha\b/ });
     const cb = captured.agent.at(-1)!;
     cb({ workspaceId: "ws-1", kind: "approval", state: "awaiting-approval",
          approval: { reqId: "req-ws1", tool: "bash", summary: "Alpha task" } });
@@ -2649,7 +2759,7 @@ describe("App.svelte: onDecision keys deletion by reqId owner, not activeId", ()
     await tick();
 
     // Step 1: activate Beta via preview confirm, confirm its card is visible
-    const betaBtn = screen.getByRole("button", { name: "Beta" });
+    const betaBtn = screen.getByRole("button", { name: /^Beta\b/ });
     await fireEvent.click(betaBtn);
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
     await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
@@ -2663,7 +2773,7 @@ describe("App.svelte: onDecision keys deletion by reqId owner, not activeId", ()
     expect(approve).toHaveBeenCalledWith("req-ws2", "allow");
 
     // Step 3: switch active workspace to Alpha via preview confirm BEFORE approve resolves
-    await fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
+    await fireEvent.click(screen.getByRole("button", { name: /^Alpha\b/ }));
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
     await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
     await tick();
@@ -2694,13 +2804,14 @@ describe("App.svelte: session:close cleans up per-workspace frontend state", () 
       {
         id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
         worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
+        repoPath: "/repo/Alpha",
         caps: { approvals: true, attention: false },
       },
     ]);
     const { default: App } = await import("./App.svelte");
     render(App);
 
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears — confirm to open
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
@@ -2892,11 +3003,11 @@ describe("App.svelte diffstat counts in Sidebar and status line", () => {
     render(App);
 
     // Wait for workspaces to load and diffStats to be computed
-    await screen.findByRole("button", { name: "Alpha" });
+    await screen.findByRole("button", { name: /^Alpha\b/ });
 
     // diffStat for /tmp/alpha returns 2 files → +5 −2 total
     await waitFor(() => {
-      const alphaBtn = screen.getByRole("button", { name: "Alpha" });
+      const alphaBtn = screen.getByRole("button", { name: /^Alpha\b/ });
       expect(alphaBtn.textContent).toContain("+5");
       expect(alphaBtn.textContent).toContain("2");
     });
@@ -2908,12 +3019,12 @@ describe("App.svelte diffstat counts in Sidebar and status line", () => {
     const { default: App } = await import("./App.svelte");
     render(App);
 
-    await screen.findByRole("button", { name: "Beta" });
+    await screen.findByRole("button", { name: /^Beta\b/ });
     // Allow time for diffstat to settle; Beta gets [] so no span should appear
     await tick();
     await tick();
 
-    const betaBtn = screen.getByRole("button", { name: "Beta" });
+    const betaBtn = screen.getByRole("button", { name: /^Beta\b/ });
     expect(betaBtn.querySelector(".sidebar-diffstat")).toBeNull();
   });
 
@@ -2923,7 +3034,7 @@ describe("App.svelte diffstat counts in Sidebar and status line", () => {
     const { default: App } = await import("./App.svelte");
     render(App);
 
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears — confirm to open
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
@@ -2944,7 +3055,7 @@ describe("App.svelte diffstat counts in Sidebar and status line", () => {
     const { default: App } = await import("./App.svelte");
     render(App);
 
-    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears — confirm to open
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
@@ -2966,7 +3077,7 @@ describe("App.svelte diffstat counts in Sidebar and status line", () => {
     render(App);
 
     // Wait for workspaces to load (initial diffStat calls happen here)
-    await screen.findByRole("button", { name: "Alpha" });
+    await screen.findByRole("button", { name: /^Alpha\b/ });
     await tick();
 
     // Clear call count after initial load
@@ -3042,7 +3153,7 @@ describe("App.svelte onWorkspaceAttach routes to matching workspace", () => {
     render(App);
 
     // Wait for workspaces to load (onWorkspaceAttach is subscribed in onMount)
-    await screen.findByRole("button", { name: "Alpha" });
+    await screen.findByRole("button", { name: /^Alpha\b/ });
     await tick();
 
     vi.mocked(openWorkspace).mockClear();
@@ -3066,7 +3177,7 @@ describe("App.svelte onWorkspaceAttach routes to matching workspace", () => {
     const { default: App } = await import("./App.svelte");
     render(App);
 
-    await screen.findByRole("button", { name: "Beta" });
+    await screen.findByRole("button", { name: /^Beta\b/ });
     await tick();
 
     vi.mocked(openWorkspace).mockClear();
@@ -3090,7 +3201,7 @@ describe("App.svelte onWorkspaceAttach routes to matching workspace", () => {
     const { default: App } = await import("./App.svelte");
     render(App);
 
-    await screen.findByRole("button", { name: "Alpha" });
+    await screen.findByRole("button", { name: /^Alpha\b/ });
     await tick();
 
     vi.mocked(openWorkspace).mockClear();
@@ -3148,7 +3259,7 @@ describe("App.svelte dirty worktree force-remove", () => {
     await waitFor(() => screen.getByText("Alpha"));
 
     // 1. Select Alpha and trigger requestRemove via command palette → session:remove
-    const alphaBtn = screen.getByRole("button", { name: "Alpha" });
+    const alphaBtn = screen.getByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears — confirm to open
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());

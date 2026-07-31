@@ -14,7 +14,7 @@ export interface StaleSessionVM {
   safe: boolean;
 }
 export interface WorkspaceVM {
-  id: string; worktreePath: string; agent: string; title: string; branch: string;
+  id: string; worktreePath: string; repoPath: string; agent: string; title: string; branch: string;
   state: AgentState; caps: AgentCaps; paneId: string; lastActive: string;
 }
 export type AgentState = "running"|"idle"|"awaiting-approval"|"awaiting-input"|"done"|"errored";

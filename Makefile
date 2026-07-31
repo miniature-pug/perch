@@ -33,7 +33,7 @@ ifeq (, $(shell command -v go))
 $(error 'go' not found on PATH)
 endif
 
-.PHONY: build install run gui-build gui-run image shell test test-integration test-front test-e2e test-all coverage lint fmt vet tidy vendor verify vulncheck verify-all doctor clean cross
+.PHONY: build install run gui-build gui-run desktop image shell test test-integration test-front test-e2e test-all coverage lint fmt vet tidy vendor verify vulncheck verify-all doctor clean cross
 
 # build: backend binary only — embeds the committed frontend/dist/index.html stub
 # (no frontend rebuild). For a full production artifact, use `make gui-build`.
@@ -53,8 +53,16 @@ gui-build:            ## build the production GUI binary (frontend build + go bu
 	@mkdir -p $(BIN_DIR)
 	@go build -tags '$(TAGS)' -trimpath -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/$(BIN) ./cmd/perch
 
-gui-run: gui-build    ## build then launch the GUI (needs an X/Wayland display)
+gui-run: gui-build desktop  ## build, install the desktop entry, then launch the GUI
 	@$(BIN_DIR)/$(BIN)
+
+desktop:              ## install a user .desktop entry + icon (GNOME/Wayland shows the app icon via this)
+	@mkdir -p $(HOME)/.local/share/icons/hicolor/512x512/apps $(HOME)/.local/share/applications
+	@cp app/appicon.png $(HOME)/.local/share/icons/hicolor/512x512/apps/perch.png
+	@printf '[Desktop Entry]\nType=Application\nName=perch\nComment=Cockpit for AI coding agents\nExec=%s\nIcon=perch\nTerminal=false\nCategories=Development;\nStartupWMClass=perch\n' "$(abspath $(BIN_DIR)/$(BIN))" > $(HOME)/.local/share/applications/perch.desktop
+	@command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -f -t $(HOME)/.local/share/icons/hicolor >/dev/null 2>&1 || true
+	@command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database $(HOME)/.local/share/applications >/dev/null 2>&1 || true
+	@echo "==> installed perch.desktop (StartupWMClass=perch). Log out/in if the icon does not refresh."
 
 image:                ## build the pinned perch-dev image (versions from .tool-versions / Makefile)
 	@podman build \
