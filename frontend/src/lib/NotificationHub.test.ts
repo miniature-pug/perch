@@ -33,6 +33,39 @@ test("DND toggle button calls onToggleDnd", async () => {
   expect(onToggleDnd).toHaveBeenCalled();
 });
 
+test("clicking a notification's title/body invokes onSelect with its workspaceId", async () => {
+  const { default: NotificationHub } = await import("./NotificationHub.svelte");
+  const onSelect = vi.fn();
+  render(NotificationHub, { props: { items, dnd: false, onDismiss: () => {}, onToggleDnd: () => {}, onClearRead: () => {}, onSelect } });
+  await waitFor(() => screen.getByText("Approve bash"));
+  // The navigable area is a button labelled "open session for <title>".
+  await fireEvent.click(screen.getByRole("button", { name: /open session for Approve bash/i }));
+  expect(onSelect).toHaveBeenCalledWith("ws_a");
+});
+
+test("dismiss ✕ does NOT navigate (stops propagation) — only onDismiss fires", async () => {
+  const { default: NotificationHub } = await import("./NotificationHub.svelte");
+  const onSelect = vi.fn();
+  const onDismiss = vi.fn();
+  render(NotificationHub, { props: { items, dnd: false, onDismiss, onToggleDnd: () => {}, onClearRead: () => {}, onSelect } });
+  await waitFor(() => screen.getAllByRole("button", { name: /dismiss/i }));
+  await fireEvent.click(screen.getAllByRole("button", { name: /dismiss/i })[0]);
+  expect(onDismiss).toHaveBeenCalledWith("n1");
+  expect(onSelect).not.toHaveBeenCalled();
+});
+
+test("app-level notice with empty workspaceId is NOT a navigation button", async () => {
+  const { default: NotificationHub } = await import("./NotificationHub.svelte");
+  const onSelect = vi.fn();
+  const appNotice = [
+    { id: "app1", workspaceId: "", tier: "blocking" as const, title: "Failed to create session", body: "boom", read: false, ts: 1 },
+  ];
+  render(NotificationHub, { props: { items: appNotice, dnd: false, onDismiss: () => {}, onToggleDnd: () => {}, onClearRead: () => {}, onSelect } });
+  await waitFor(() => screen.getByText("Failed to create session"));
+  // No navigation button rendered for an empty-workspaceId notice.
+  expect(screen.queryByRole("button", { name: /open session for/i })).toBeNull();
+});
+
 test("notif-item carries --item-color style matching worktreeColor for its workspaceId", async () => {
   const { default: NotificationHub } = await import("./NotificationHub.svelte");
   const { worktreeColor } = await import("./constants");

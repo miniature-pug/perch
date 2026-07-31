@@ -576,6 +576,57 @@ func TestOpencodeMonitorSSE_QuestionRejected(t *testing.T) {
 	}
 }
 
+// TestOpencodeMonitorApprove_ClearsAttention is the regression guard for the stuck
+// sidebar attention signal: after a permission.asked raises an approval
+// (StateAwaitingApproval) and the user resolves it via Approve, the monitor MUST
+// emit a Kind=="state"/StateRunning event so the frontend's last-event-wins
+// per-workspace state clears the amber awaiting-approval indicator, AND
+// CurrentState() must report StateRunning. opencode emits no permission-resolved
+// SSE frame, so the monitor synthesizes this (mirroring question.replied). Before
+// the fix, Approve only POSTed the reply and emitted nothing, so the indicator
+// stayed stuck forever.
+func TestOpencodeMonitorApprove_ClearsAttention(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	const fixture = `data: {"type":"permission.asked","properties":{"id":"perm-1","sessionID":"s","permission":"bash","patterns":["ls -la"]}}` + "\n\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/event":
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte(fixture))
+		case strings.HasPrefix(r.URL.Path, "/permission/") && strings.HasSuffix(r.URL.Path, "/reply"):
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	om := agent.NewOpencodeMonitorWithServer(agent.NewOpencode(), srv.URL, "pw")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	om.Start(ctx)
+
+	asked := nextEvent(t, om)
+	if asked.State != agent.StateAwaitingApproval || asked.Approval == nil {
+		t.Fatalf("want awaiting-approval event, got %+v", asked)
+	}
+	if om.CurrentState() != agent.StateAwaitingApproval {
+		t.Fatalf("pre-condition: CurrentState = %q, want awaiting-approval", om.CurrentState())
+	}
+
+	if err := om.Approve(asked.Approval.ReqID, agent.Decision{Allow: true}); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+
+	resolved := nextEvent(t, om)
+	if resolved.Kind != "state" || resolved.State != agent.StateRunning {
+		t.Errorf("after Approve, want Kind=state/StateRunning, got %+v", resolved)
+	}
+	if om.CurrentState() != agent.StateRunning {
+		t.Errorf("CurrentState after Approve = %q, want %q", om.CurrentState(), agent.StateRunning)
+	}
+}
+
 // TestOpencodeMonitorSSE_SessionError verifies the default-emitted session.error
 // maps to StateErrored with the human message extracted from the {name,message}
 // error object.

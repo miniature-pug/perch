@@ -359,3 +359,28 @@ else
     -o "${INSTALL_PREFIX}/perch" ./cmd/perch
   printf '[ok]    perch built at %s/perch\n' "$INSTALL_PREFIX"
 fi
+
+# ---------------------------------------------------------------------------
+# Step 7: desktop integration (Linux) — icon + .desktop entry
+# The binary already carries the window icon (embedded via options.Linux.Icon);
+# this adds the app-menu / app-switcher entry, whose StartupWMClass matches the
+# ProgramName so the switcher picks up the same icon.
+# ---------------------------------------------------------------------------
+if [ "$GOOS" = "linux" ]; then
+  icon_dir="${HOME}/.local/share/icons/hicolor/512x512/apps"
+  apps_dir="${HOME}/.local/share/applications"
+  mkdir -p "$icon_dir" "$apps_dir"
+  cp "${REPO_ROOT}/app/appicon.png" "${icon_dir}/perch.png"
+  cat > "${apps_dir}/perch.desktop" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=perch
+Comment=Cockpit for AI coding agents
+Exec=${INSTALL_PREFIX}/perch
+Icon=perch
+Terminal=false
+Categories=Development;
+StartupWMClass=perch
+DESKTOP
+  printf '[ok]    desktop entry installed at %s/perch.desktop\n' "$apps_dir"
+fi

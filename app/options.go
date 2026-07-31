@@ -7,7 +7,14 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/linux"
 )
+
+// appIcon is the window and taskbar icon, embedded into the binary and handed to
+// GTK through options.Linux.Icon. Replace app/appicon.png to change it.
+//
+//go:embed appicon.png
+var appIcon []byte
 
 // disableWebViewDropForSpike4 mitigates WebKitGTK hijacking OS file-drop events
 // before OnFileDrop fires (Wails issue #3686). This flag, combined with frontend
@@ -58,6 +65,13 @@ func Run(assets embed.FS, roots []string) error {
 		BackgroundColour: &defaultWindowBg,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
+		},
+		// Linux.Icon sets the GTK window/taskbar icon. ProgramName sets the WM
+		// class (g_set_prgname), which the installed perch.desktop matches via
+		// StartupWMClass so the app-switcher entry picks up the same icon.
+		Linux: &linux.Options{
+			Icon:        appIcon,
+			ProgramName: appTitle,
 		},
 		OnStartup:  app.startup,
 		OnShutdown: app.shutdown,

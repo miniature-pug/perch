@@ -51,4 +51,26 @@ export function markRead(id: string) {
   if (t !== undefined) { clearTimeout(t); _timers.delete(id); }
   items = items.map((n) => n.id === id ? { ...n, read: true } : n);
 }
+
+// Mark every item read and cancel all pending auto-dismiss timers.
+// Called when the hub is OPENED — seeing the hub is the catch-up, so the
+// unread badge clears. Items stay in the list (read), they are not dropped.
+export function markAllRead() {
+  for (const t of _timers.values()) clearTimeout(t);
+  _timers.clear();
+  items = items.map((n) => n.read ? n : { ...n, read: true });
+}
+
+// Drop every notification belonging to a removed workspace, cancelling any
+// pending auto-dismiss timer for the dropped items so they never fire late.
+export function dropForWorkspace(wsId: string) {
+  for (const n of items) {
+    if (n.workspaceId === wsId) {
+      const t = _timers.get(n.id);
+      if (t !== undefined) { clearTimeout(t); _timers.delete(n.id); }
+    }
+  }
+  items = items.filter((n) => n.workspaceId !== wsId);
+}
+
 export function clearRead() { items = items.filter((n) => !n.read); }

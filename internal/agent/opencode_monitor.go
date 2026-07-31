@@ -508,6 +508,13 @@ func (m *OpencodeMonitor) Approve(reqID string, d Decision) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("opencode permission reply: status %d", resp.StatusCode)
 	}
+	// The reply lands and the agent resumes (once/always/reject all end the blocked
+	// permission request). opencode emits no permission-resolved SSE frame, so mirror
+	// question.replied: emit a StateRunning event to clear the amber awaiting-approval
+	// indicator on the frontend, and advance the cached state under the same mutex the
+	// SSE path uses so CurrentState() agrees. Without this the sidebar attention signal
+	// stays stuck after the user resolves the approval.
+	m.emit(ctx, Event{Kind: "state", State: StateRunning})
 	return nil
 }
 

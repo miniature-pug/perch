@@ -385,6 +385,67 @@ func TestClaudeMonitorPreToolUse_NonQuestionBlocksUntilDecide(t *testing.T) {
 	}
 }
 
+// TestClaudeMonitorApprove_ClearsAttention is the regression guard for the stuck
+// sidebar attention signal: after a non-question PreToolUse raises an approval
+// (StateAwaitingApproval) and the user resolves it via Approve, the monitor MUST
+// emit a Kind=="state"/StateRunning event (the agent resumes after any decision)
+// so the frontend's last-event-wins per-workspace state clears the amber
+// awaiting-approval indicator, AND CurrentState() must report StateRunning. Before
+// the fix, Approve only unblocked the hook handler and emitted nothing, so the
+// indicator stayed stuck forever.
+func TestClaudeMonitorApprove_ClearsAttention(t *testing.T) {
+	m, l, cleanup := newMonitorWithTestListener(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.Start(ctx)
+
+	respCh := make(chan string, 1)
+	go func() {
+		respCh <- postHook(t, l,
+			`{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"path":"/x"},"session_id":"s","cwd":"/p"}`)
+	}()
+
+	var ev agent.Event
+	select {
+	case ev = <-m.Events():
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for approval event")
+	}
+	if ev.Kind != "approval" || ev.State != agent.StateAwaitingApproval || ev.Approval == nil {
+		t.Fatalf("want awaiting-approval event, got %+v", ev)
+	}
+	if m.CurrentState() != agent.StateAwaitingApproval {
+		t.Fatalf("pre-condition: CurrentState = %q, want awaiting-approval", m.CurrentState())
+	}
+
+	if err := m.Approve(ev.Approval.ReqID, agent.Decision{Allow: true}); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+
+	// Approve must emit a StateRunning event to clear the attention indicator.
+	select {
+	case resolved := <-m.Events():
+		if resolved.Kind != "state" || resolved.State != agent.StateRunning {
+			t.Errorf("after Approve, want Kind=state/StateRunning, got %+v", resolved)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Approve emitted no event: the sidebar attention indicator would stay stuck")
+	}
+
+	if m.CurrentState() != agent.StateRunning {
+		t.Errorf("CurrentState after Approve = %q, want %q", m.CurrentState(), agent.StateRunning)
+	}
+
+	// Drain the hook POST so the goroutine does not leak.
+	select {
+	case <-respCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("hook POST never returned after Approve")
+	}
+}
+
 // TestClaudeMonitorPrepare_LaunchCommandSubmitsToShell is the falsifying guard
 // for the core agent-launch loop. The string Prepare() returns is written
 // VERBATIM into the pane's pty (app.OpenWorkspace → pty.Bridge.Write, a raw

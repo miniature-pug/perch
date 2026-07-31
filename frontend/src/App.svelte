@@ -24,7 +24,7 @@
   import { settings }       from "./lib/stores/settings.svelte";
   import ApprovalCard       from "./lib/ApprovalCard.svelte";
   import NotificationHub    from "./lib/NotificationHub.svelte";
-  import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead } from "./lib/stores/notifications.svelte";
+  import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead, markAllRead, dropForWorkspace } from "./lib/stores/notifications.svelte";
   import CleanupPanel from "./lib/CleanupPanel.svelte";
   import { listWorkspaces, createWorkspace, workspaceForBranch, removeWorkspace, openWorkspace, closeWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, onWorkspaceAttach, approve, branches, readFile, setWindowFocus, writeToPty, discoverRepos, diffStat, listStaleSessions, forceRemoveWorkspace, homeShellCwd as fetchHomeShellCwd } from "./lib/wails";
   import type { WorkspaceVM, ApprovalReq, StaleSessionVM } from "./lib/wails";
@@ -32,6 +32,10 @@
 
   let workspaces      = $state<WorkspaceVM[]>([]);
   let activeId        = $state<string | null>(null);
+  // Sessions with a live pty this app-run. A session is "open" once openWorkspace
+  // has succeeded and until it is closed/removed. Drives: focus-vs-reopen routing
+  // in onSelect, the sidebar "closed" dim cue, and close/remove cleanup.
+  let openIds         = $state<Set<string>>(new Set());
   let codePath        = $state<string | null>(null);
   let previewContent  = $state<string>("");
   let approvals       = $state<Record<string, ApprovalReq>>({});
@@ -256,8 +260,15 @@
   let previewWs = $state<WorkspaceVM | null>(null);
 
   function onSelect(id: string) {
+    // Already showing this session → no-op (never reopen the live pane).
+    if (id === activeId) return;
     const ws = workspaces.find(w => w.id === id) ?? null;
     if (!ws) return;
+    // Open but not active → just FOCUS it. No preview, no reopen: the pty is
+    // live and re-running openWorkspace would respawn it and re-type the launch
+    // command over the running xterm.
+    if (openIds.has(id)) { activeId = id; return; }
+    // Not open → show the resume-preview before spawning the pty.
     previewWs = ws;
   }
 
@@ -267,9 +278,32 @@
     previewWs = null;
     activeId = id;
     await openWorkspace(id);
+    openIds.add(id);
   }
 
   function cancelPreview() { previewWs = null; }
+
+  // Clicking a notification focuses its session. Focus if already open; open
+  // directly (no preview — the user's intent is unambiguous) if it is closed.
+  function onNotificationSelect(wsId: string) {
+    if (!wsId) return;
+    const ws = workspaces.find(w => w.id === wsId);
+    if (!ws) return;
+    notifOpen = false;
+    if (openIds.has(wsId)) {
+      activeId = wsId;
+    } else {
+      activeId = wsId;
+      openWorkspace(wsId).then(() => openIds.add(wsId));
+    }
+  }
+
+  // Route all hub open/close through here so opening always marks the backlog
+  // read (seeing the hub is the catch-up → the unread badge clears).
+  function openNotif(open: boolean) {
+    notifOpen = open;
+    if (open) markAllRead();
+  }
 
   function openNewSession(initialAgent?: string) {
     newSessionOpen = true;
@@ -340,6 +374,8 @@
       pendingRemovals = pendingRemovals.filter(p => p.ws.id !== wsToRemove.id);
       try {
         await removeWorkspace(wsToRemove.id);
+        openIds.delete(wsToRemove.id);
+        dropForWorkspace(wsToRemove.id);
         workspaces = await listWorkspaces();
         if (activeId === wsToRemove.id) activeId = workspaces[0]?.id ?? null;
       } catch (err) {
@@ -370,6 +406,8 @@
     clearTimeout(entry.timer);
     pendingRemovals = pendingRemovals.filter(p => p.ws.id !== id);
     if (layout.splitId === id) layout.setSplitId(null);
+    openIds.delete(id);
+    dropForWorkspace(id);
     // Fire-and-forget — do not await so we don't block the caller.
     removeWorkspace(id).then(() => listWorkspaces()).then(ws => { workspaces = ws; }).catch(() => {});
   }
@@ -384,6 +422,8 @@
     confirmDirty = null;
     try {
       await forceRemoveWorkspace(ws.id);
+      openIds.delete(ws.id);
+      dropForWorkspace(ws.id);
       workspaces = await listWorkspaces();
       if (activeId === ws.id) activeId = workspaces[0]?.id ?? null;
     } catch {
@@ -436,11 +476,19 @@
           // Clean up per-workspace frontend state on close
           const { [id]: _a, ...restA } = approvals; approvals = restA;
           const { [id]: _f, ...restF } = fsVersion;  fsVersion = restF;
+          // The pty is gone: drop it from the open set so the row dims and a
+          // later click routes through the resume-preview reopen path.
+          openIds.delete(id);
+          // Clear any stuck attention on the now-dead session.
+          const ws = workspaces.find(w => w.id === id);
+          if (ws) ws.state = "idle";
+          // Return to the home view — the closed pane would otherwise be dead.
+          if (activeId === id) activeId = null;
         }).catch(() => {});
       } },
     { id: "session:remove", group: "Session", label: "Remove session",     run: () => { if (active) requestRemove(active); } },
     // Worktree
-    { id: "worktree:open",   group: "Worktree", label: "Open worktree",    keybinding: "Enter",       run: () => { if (active) openWorkspace(active.id); } },
+    { id: "worktree:open",   group: "Worktree", label: "Open worktree",    keybinding: "Enter",       run: () => { if (active) { const id = active.id; openWorkspace(id).then(() => openIds.add(id)); } } },
     { id: "worktree:reveal", group: "Worktree", label: "Reveal in Files",  run: () => { if (active) revealInFiles(active.worktreePath); } },
     // View
     { id: "view:agent", group: "View", label: "Agent view",  keybinding: "1",  run: () => layout.setView("agent") },
@@ -456,7 +504,7 @@
     { id: "agent:approve-all", group: "Agent", label: "Approve all pending", run: () => decideAll("allow") },
     { id: "agent:deny-all",    group: "Agent", label: "Deny all pending",    run: () => decideAll("deny")  },
     // Notifications
-    { id: "notifications:open", group: "Notifications", label: "Open notifications",    run: () => { notifOpen = !notifOpen; } },
+    { id: "notifications:open", group: "Notifications", label: "Open notifications",    run: () => { openNotif(!notifOpen); } },
     { id: "notifications:dnd",  group: "Notifications", label: "Toggle Do Not Disturb", run: () => setDnd(!getDnd()) },
     // Help
     { id: "help:shortcuts", group: "Help", label: "Keyboard shortcuts", run: () => { helpOpen = true; } },
@@ -589,7 +637,7 @@
       }
       case "Enter": {
         e.preventDefault();
-        if (activeId) openWorkspace(activeId);
+        if (activeId) { const id = activeId; openWorkspace(id).then(() => openIds.add(id)); }
         break;
       }
       case "i": e.preventDefault(); mode.enterTerminal(); break;
@@ -700,7 +748,7 @@
             }}
           />
         {/if}
-        <Sidebar workspaces={shownWorkspaces} {activeId} onSelect={onSelect} onNew={openNewSession} onReorder={handleReorder} diffStats={wsDiffStats} />
+        <Sidebar workspaces={shownWorkspaces} {activeId} onSelect={onSelect} onNew={openNewSession} onReorder={handleReorder} diffStats={wsDiffStats} openIds={openIds} />
       </aside>
 
       <div class="divider divider-v" role="slider" aria-label="Resize sidebar"
@@ -941,6 +989,7 @@
           onDismiss={(id) => markRead(id)}
           onToggleDnd={() => setDnd(!getDnd())}
           onClearRead={clearRead}
+          onSelect={onNotificationSelect}
         />
       </div>
     {/if}
@@ -1002,7 +1051,14 @@
             cleanupOpen = false;
             try {
               staleSessions = (await listStaleSessions()) ?? [];
-              workspaces = await listWorkspaces();
+              const fresh = await listWorkspaces();
+              // Cleanup may have removed sessions — prune their open-set entries
+              // and notifications so nothing dangles for a gone workspace.
+              const freshIds = new Set(fresh.map(w => w.id));
+              for (const id of [...openIds]) {
+                if (!freshIds.has(id)) { openIds.delete(id); dropForWorkspace(id); }
+              }
+              workspaces = fresh;
             } catch { /* non-fatal */ }
           }}
           onOpen={(id) => { cleanupOpen = false; onSelect(id); }}

@@ -4,13 +4,14 @@
   import { worktreeColor } from "./constants";
 
   let {
-    items, dnd, onDismiss, onToggleDnd, onClearRead,
+    items, dnd, onDismiss, onToggleDnd, onClearRead, onSelect,
   }: {
     items: Notification[];
     dnd: boolean;
     onDismiss: (id: string) => void;
     onToggleDnd: () => void;
     onClearRead: () => void;
+    onSelect?: (workspaceId: string) => void;
   } = $props();
 
   type Filter = "all" | "approvals" | "errors" | "done";
@@ -36,9 +37,20 @@
   <ul class="notif-list scrollable">
     {#each visible as n (n.id)}
       <li class="notif-item tier-{n.tier}" class:read={n.read} style:--item-color={worktreeColor(n.workspaceId)}>
-        <span class="notif-title" title={n.title}>{n.title}</span>
-        <span class="notif-body" title={n.body}>{n.body}</span>
-        <button class="dismiss-btn" onclick={() => onDismiss(n.id)} aria-label="dismiss notification">✕</button>
+        {#if n.workspaceId}
+          <button
+            class="notif-nav"
+            onclick={() => onSelect?.(n.workspaceId)}
+            aria-label="open session for {n.title}"
+          >
+            <span class="notif-title" title={n.title}>{n.title}</span>
+            <span class="notif-body" title={n.body}>{n.body}</span>
+          </button>
+        {:else}
+          <span class="notif-title" title={n.title}>{n.title}</span>
+          <span class="notif-body" title={n.body}>{n.body}</span>
+        {/if}
+        <button class="dismiss-btn" onclick={(e) => { e.stopPropagation(); onDismiss(n.id); }} aria-label="dismiss notification">✕</button>
       </li>
     {/each}
     {#if visible.length === 0}<li class="notif-empty">No notifications</li>{/if}
@@ -196,7 +208,31 @@
   .tier-ambient::before  { content: "ℹ"; color: var(--perch-info); }
   .tier-routine::before  { content: "·"; color: var(--perch-text-dim); font-size: var(--perch-fs-body); }
 
-  /* Title — col 2 row 1 */
+  /* Navigable title/body area — col 2, spans both rows. A bare button reset so
+     it reads as plain text but is keyboard/click focusable to focus its session. */
+  .notif-nav {
+    grid-column: 2;
+    grid-row: 1 / 3;
+    display: grid;
+    grid-template-rows: auto auto;
+    align-content: center;
+    row-gap: 2px;
+    min-width: 0;
+    padding: 0;
+    background: transparent;
+    border: none;
+    text-align: left;
+    font-family: inherit;
+    cursor: pointer;
+  }
+
+  .notif-nav:focus-visible {
+    outline: var(--perch-ring-w) solid var(--perch-accent);
+    outline-offset: 2px;
+    border-radius: var(--perch-radius-sm);
+  }
+
+  /* Title — col 2 row 1 (or row 1 inside .notif-nav) */
   .notif-title {
     grid-column: 2;
     grid-row: 1;
@@ -208,7 +244,7 @@
     text-overflow: ellipsis;
   }
 
-  /* Body — col 2 row 2 */
+  /* Body — col 2 row 2 (or row 2 inside .notif-nav) */
   .notif-body {
     grid-column: 2;
     grid-row: 2;
@@ -218,6 +254,11 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+
+  /* When title/body live inside the .notif-nav button, they use its own two-row
+     grid rather than the outer item grid — reset the outer column/row placement. */
+  .notif-nav .notif-title { grid-column: 1; grid-row: 1; }
+  .notif-nav .notif-body  { grid-column: 1; grid-row: 2; }
 
   /* Dismiss icon button — col 3, spans both rows */
   .dismiss-btn {

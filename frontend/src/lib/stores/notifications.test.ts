@@ -42,4 +42,31 @@ describe("notification store", () => {
     clearRead();
     expect(getItems().every((n) => !n.read)).toBe(true);
   });
+
+  it("markAllRead marks every item read (unread count → 0), keeping the items", async () => {
+    const { addBlocking, addAmbient, markAllRead, getItems } =
+      await import("./notifications.svelte");
+    addBlocking("ws_a", "Approve", "urgent");
+    addAmbient("ws_b",  "Done",    "quiet");
+    // Both unread before.
+    expect(getItems().filter((n) => !n.read)).toHaveLength(2);
+    markAllRead();
+    // All read now, none dropped.
+    expect(getItems()).toHaveLength(2);
+    expect(getItems().every((n) => n.read)).toBe(true);
+    expect(getItems().filter((n) => !n.read)).toHaveLength(0);
+  });
+
+  it("dropForWorkspace removes only items for that workspace", async () => {
+    const { addBlocking, addAmbient, dropForWorkspace, getItems } =
+      await import("./notifications.svelte");
+    addBlocking("ws_a", "A1", "b");
+    addAmbient("ws_b",  "B1", "b");
+    addBlocking("ws_a", "A2", "b");
+    expect(getItems()).toHaveLength(3);
+    dropForWorkspace("ws_a");
+    const left = getItems();
+    expect(left).toHaveLength(1);
+    expect(left[0].workspaceId).toBe("ws_b");
+  });
 });

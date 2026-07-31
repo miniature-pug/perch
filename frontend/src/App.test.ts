@@ -262,6 +262,58 @@ describe("App.svelte workspace wiring", () => {
     await waitFor(() => expect(screen.queryByTestId("resume-preview")).not.toBeInTheDocument());
     expect(openWorkspace).not.toHaveBeenCalled();
   });
+
+  it("clicking the ALREADY-ACTIVE session is a no-op: no second openWorkspace, no resume-preview", async () => {
+    const { listWorkspaces, openWorkspace } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    // Open Alpha via the resume-preview flow.
+    await fireEvent.click(alphaBtn);
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    await waitFor(() => expect(openWorkspace).toHaveBeenCalledWith("ws-1"));
+    await waitFor(() => expect(alphaBtn).toHaveAttribute("aria-current", "page"));
+    expect((openWorkspace as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+
+    // Click the same (active) row again — must NOT reopen and must NOT show a preview.
+    await fireEvent.click(alphaBtn);
+    await tick();
+    expect(screen.queryByTestId("resume-preview")).not.toBeInTheDocument();
+    expect((openWorkspace as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+  });
+
+  it("clicking an OPEN-but-not-active session just FOCUSES it (no reopen, no preview)", async () => {
+    const { listWorkspaces, openWorkspace } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    const alphaBtn = await screen.findByRole("button", { name: "Alpha" });
+    const betaBtn  = screen.getByRole("button", { name: "Beta" });
+
+    // Open Alpha (resume-preview → open).
+    await fireEvent.click(alphaBtn);
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    await waitFor(() => expect(openWorkspace).toHaveBeenCalledWith("ws-1"));
+
+    // Open Beta (resume-preview → open).
+    await fireEvent.click(betaBtn);
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    await waitFor(() => expect(openWorkspace).toHaveBeenCalledWith("ws-2"));
+    await waitFor(() => expect(betaBtn).toHaveAttribute("aria-current", "page"));
+
+    const callsBefore = (openWorkspace as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    // Click Alpha (open, not active) — should just refocus, no preview, no reopen.
+    await fireEvent.click(alphaBtn);
+    await tick();
+    expect(screen.queryByTestId("resume-preview")).not.toBeInTheDocument();
+    expect((openWorkspace as ReturnType<typeof vi.fn>).mock.calls.length).toBe(callsBefore);
+    await waitFor(() => expect(alphaBtn).toHaveAttribute("aria-current", "page"));
+  });
 });
 
 describe("App.svelte Stage content routing", () => {
@@ -901,6 +953,31 @@ describe("App.svelte approval card + notification hub", () => {
     await waitFor(() =>
       expect(screen.getByText("Hub test notification")).toBeInTheDocument()
     );
+  });
+
+  it("opening the hub marks all items read → unread count drops to 0 (badge clears)", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(approvalWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await screen.findByRole("button", { name: "Alpha" });
+
+    const { getItems } = await import("./lib/stores/notifications.svelte");
+
+    // Inject a blocking (never auto-dismissing) notification → unread.
+    const cb = captured.notify.at(-1)!;
+    cb({ tier: "blocking", title: "Unread thing", body: "b", workspaceId: "ws-1" });
+    await tick();
+    expect(getItems().filter((n) => !n.read).length).toBeGreaterThan(0);
+
+    // Open the hub via the bell — opening is the catch-up, so all items go read.
+    const bellBtn = screen.getByRole("button", { name: "notifications" });
+    await fireEvent.click(bellBtn);
+    await tick();
+
+    // Unread count is now 0; items remain in the hub (still shown, just read).
+    await waitFor(() => expect(getItems().filter((n) => !n.read).length).toBe(0));
+    expect(getItems().some((n) => n.title === "Unread thing")).toBe(true);
   });
 });
 

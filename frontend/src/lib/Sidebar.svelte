@@ -6,7 +6,7 @@
 
   let {
     workspaces, activeId, onSelect, onNew, onReorder,
-    diffStats = {},
+    diffStats = {}, openIds,
   }: {
     workspaces: WorkspaceVM[];
     activeId: string | null;
@@ -14,6 +14,9 @@
     onNew: () => void;
     onReorder?: (draggedId: string, targetId: string) => void;
     diffStats?: Record<string, { added: number; removed: number; files?: number }>;
+    // Ids of sessions that currently have a live pty this app-run. Rows NOT in
+    // this set are "closed" (record kept, pty gone) and get a subtle dim cue.
+    openIds?: Set<string>;
   } = $props();
 
   const STATUS = {
@@ -67,6 +70,7 @@
     {#each workspaces as ws (ws.id)}
       {@const st = STATUS[ws.state as keyof typeof STATUS] ?? { icon: "·", label: ws.state }}
       {@const ds = diffStats[ws.id]}
+      {@const closed = openIds ? !openIds.has(ws.id) : false}
       <li
         class:active={ws.id === activeId}
         class:drag-over={dragOverId === ws.id}
@@ -77,9 +81,11 @@
         ondrop={(e) => handleSessionDrop(e, ws.id)}
       >
         <button class="workspace-row"
+          class:closed={closed}
           aria-current={ws.id === activeId ? "page" : undefined}
           onclick={() => onSelect(ws.id)}
           aria-label={ws.title}
+          title={closed ? "Click to open" : undefined}
           style:--row-color={worktreeColor(ws.id)}
         >
           <span class="status-icon status-{ws.state}" aria-hidden="true" title={st.label}>{st.icon}</span>
@@ -198,6 +204,14 @@
 
   .workspace-row[aria-current="page"] {
     background: color-mix(in srgb, var(--perch-accent) 16%, transparent);
+  }
+
+  /* Closed session: no live pty. Dim the row to signal it's dormant; clicking
+     reopens it (routes through the resume-preview flow). The active row is never
+     dimmed even if momentarily flagged closed. */
+  .workspace-row.closed:not([aria-current="page"]) {
+    color: var(--perch-text-dim);
+    opacity: 0.7;
   }
 
   .workspace-row:focus-visible {

@@ -52,6 +52,8 @@ tagged a release yet, so everything to date sits under Unreleased.
   longer leaves a blank window.
 - A container-first test framework: one `perch-dev` image that every check runs
   in, toggled by `CONTAINERIZE`, leaving the working tree untouched.
+- A window and taskbar icon embedded in the binary, and a `.desktop` entry
+  installed on Linux so the app switcher shows it too.
 
 ### Changed
 
@@ -81,6 +83,17 @@ tagged a release yet, so everything to date sits under Unreleased.
 - Staging or discarding a hunk that left the file list and change counts stale.
 - `install.sh` building without the WebKit2GTK 4.1 build tag, which failed to
   link on a host set up by the script itself.
+- Terminal and editor panes lost their content on a view switch; they now stay
+  mounted and hidden, and the editor keeps unsaved edits across an external file
+  change.
+- Clicking a session that was already open reopened it and garbled the terminal.
+  Clicking an open session now just focuses it; only a new or closed session
+  opens. A closed session reopens when you click its dimmed row.
+- The sidebar attention indicator stayed lit after an approval was resolved. The
+  agent monitors now emit a state event on a decision, so it clears on its own.
+- Clicking a notification did nothing. It now navigates to the session it belongs
+  to, and opening the hub marks its notifications read so the badge clears.
+- Notifications for a removed session are now pruned.
 
 ### Security
 

@@ -126,6 +126,20 @@ func (m *ClaudeMonitor) translateAndEmit(ctx context.Context, he hooklistener.Ho
 
 func (m *ClaudeMonitor) Approve(reqID string, d Decision) error {
 	m.listener.Decide(reqID, hooklistener.Decision{Allow: d.Allow, Always: d.Always})
+	// The decision unblocks the hook handler and the agent resumes (any allow/deny/
+	// always outcome ends the blocked PreToolUse). Emit a StateRunning event so the
+	// frontend's last-event-wins per-workspace state clears the amber
+	// awaiting-approval indicator; also advance the cached state under the same mutex
+	// translateAndEmit uses, so CurrentState() agrees with the stream. Without this
+	// the sidebar attention signal would stay stuck after the user resolves it.
+	ev := Event{Kind: "state", State: StateRunning}
+	m.mu.Lock()
+	m.state = ev.State
+	m.mu.Unlock()
+	select {
+	case m.events <- ev:
+	default:
+	}
 	return nil
 }
 

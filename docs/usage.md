@@ -45,11 +45,16 @@ Creating a session registers it and spawns its terminal.
 
 ### Resuming a session
 
-Click a session in the sidebar to see a preview: its branch, agent, last active
-time, and change count. Choose **Open** to resume it, or **Cancel** to leave it
-closed. Pressing **Enter** opens the selected session directly. When perch
-resumes a session, it passes the last session id back to the agent so the
+Clicking a session in the sidebar focuses it. If it is not open yet, whether new
+or closed earlier, perch first shows a preview of its branch, agent, last active
+time, and change count; choose **Open** to start it or **Cancel** to leave it
+closed. A session that is already open switches to it without reopening, so its
+terminal keeps running. Pressing **Enter** opens the selected session. When
+perch opens a session, it passes the last session id back to the agent so the
 conversation continues rather than starting fresh.
+
+To bring back a session you closed, click its row again. A closed row is dimmed
+until you reopen it.
 
 ### Removing a session
 
@@ -164,7 +169,9 @@ restarts.
 ## Notifications
 
 The notification hub collects events and can be filtered by approvals, errors,
-and completions. A desktop notification fires only for a blocking event, an
+and completions. Clicking a notification takes you to the session it belongs to.
+Opening the hub marks its notifications read, so the unread count clears once you
+have seen them. A desktop notification fires only for a blocking event, an
 approval you need to make or an agent error, and only while the perch window is
 in the background. Completions are ambient and stay in the hub without
 interrupting you.
