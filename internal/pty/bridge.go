@@ -11,6 +11,8 @@ import (
 	"syscall"
 
 	creackpty "github.com/creack/pty"
+
+	"github.com/Miniature-Pug/perch/internal/safe"
 )
 
 type EmitFunc func(event string, data ...any)
@@ -118,9 +120,15 @@ func Spawn(ctx context.Context, cwd string, argv []string, dataEvent, exitEvent 
 		},
 	}
 	go func() {
+		defer safe.Recover("pty-reaper")
 		// pumpReader blocks until the pty fd returns EOF (which happens when
 		// f.Close() is called by closer, or when the process closes its side).
-		pumpReader(f, dataEvent, emit, maxChunk)
+		// Recover a pumpReader panic in a nested func so the child is still
+		// reaped below — a panicking reader must never leak the process.
+		func() {
+			defer safe.Recover("pty-pump")
+			pumpReader(f, dataEvent, emit, maxChunk)
+		}()
 		// Pump returned ⇒ pty EOF ⇒ process is ending. Single Wait site (no race).
 		_ = cmd.Wait()
 		code := -1 // signal death (forced Close / ctx kill) reports -1

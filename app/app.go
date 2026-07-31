@@ -26,6 +26,7 @@ import (
 	"github.com/Miniature-Pug/perch/internal/proc"
 	internalpty "github.com/Miniature-Pug/perch/internal/pty"
 	"github.com/Miniature-Pug/perch/internal/registry"
+	"github.com/Miniature-Pug/perch/internal/safe"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -54,6 +55,11 @@ const (
 
 	// File-permission modes.
 	settingsFileMode = 0o600
+
+	// uiGitTimeout bounds a UI-initiated git subprocess call so a wedged or
+	// pathologically large git operation cannot hang a frontend binding forever.
+	// Kept generous so legitimate large repositories still complete.
+	uiGitTimeout = 120 * time.Second
 
 	// UUIDv4 byte masks applied in newWorkspaceID.
 	// RFC 4122 §4.4: version nibble = 0100 (0x40), cleared with 0x0f;
@@ -652,6 +658,7 @@ func (a *App) OpenWorkspace(id string) error {
 		// Debounce goroutine: coalesces raw onChange signals into a single
 		// fs:changed emit per debounce window, bound to wctx lifetime.
 		go func() {
+			defer safe.Recover("fs-debounce")
 			var timer *time.Timer
 			var timerC <-chan time.Time
 			for {
@@ -739,6 +746,7 @@ func (a *App) OpenWorkspace(id string) error {
 	// on, never blocking on a user decision. Exits on wctx cancellation, since
 	// mon.Events() is never closed.
 	go func() {
+		defer safe.Recover("workspace-event-pump")
 		for {
 			select {
 			case <-wctx.Done():
@@ -1472,7 +1480,9 @@ func (a *App) Branches(repo string) ([]string, error) {
 	if err := validateWorktreeUnderRoots(repo, a.roots); err != nil {
 		return nil, err
 	}
-	return gitpkg.Branches(context.Background(), a.runner(), repo)
+	ctx, cancel := context.WithTimeout(context.Background(), uiGitTimeout)
+	defer cancel()
+	return gitpkg.Branches(ctx, a.runner(), repo)
 }
 
 // Approve routes a tool-approval decision to the owning Monitor.
@@ -1563,7 +1573,9 @@ func (a *App) DiffStat(worktree string) ([]gitpkg.FileDiff, error) {
 	if err := validateWorktreeUnderRoots(worktree, a.roots); err != nil {
 		return nil, err
 	}
-	return gitpkg.DiffStat(context.Background(), a.runner(), worktree)
+	ctx, cancel := context.WithTimeout(context.Background(), uiGitTimeout)
+	defer cancel()
+	return gitpkg.DiffStat(ctx, a.runner(), worktree)
 }
 
 // Hunks returns the unified hunks for a single file in worktree.
@@ -1574,7 +1586,9 @@ func (a *App) Hunks(worktree, file string) ([]gitpkg.Hunk, error) {
 	if err := validateRelFile(file); err != nil {
 		return nil, err
 	}
-	return gitpkg.Hunks(context.Background(), a.runner(), worktree, file)
+	ctx, cancel := context.WithTimeout(context.Background(), uiGitTimeout)
+	defer cancel()
+	return gitpkg.Hunks(ctx, a.runner(), worktree, file)
 }
 
 // StageHunk applies hunk `index` of file to the index (git apply --cached).
@@ -1587,7 +1601,9 @@ func (a *App) StageHunk(worktree, file string, index int) error {
 	if err := validateRelFile(file); err != nil {
 		return err
 	}
-	return gitpkg.StageHunk(context.Background(), a.runner(), worktree, file, index)
+	ctx, cancel := context.WithTimeout(context.Background(), uiGitTimeout)
+	defer cancel()
+	return gitpkg.StageHunk(ctx, a.runner(), worktree, file, index)
 }
 
 // DiscardHunk reverses hunk `index` of file in the working tree (git apply --reverse).
@@ -1598,7 +1614,9 @@ func (a *App) DiscardHunk(worktree, file string, index int) error {
 	if err := validateRelFile(file); err != nil {
 		return err
 	}
-	return gitpkg.DiscardHunk(context.Background(), a.runner(), worktree, file, index)
+	ctx, cancel := context.WithTimeout(context.Background(), uiGitTimeout)
+	defer cancel()
+	return gitpkg.DiscardHunk(ctx, a.runner(), worktree, file, index)
 }
 
 // RepoInfo is a frontend-friendly summary of a discovered git repository.
@@ -1634,14 +1652,16 @@ func (a *App) DiscoverRepos() ([]RepoInfo, error) {
 	okCount := 0
 
 	for _, root := range a.roots {
+		ctx, cancel := context.WithTimeout(context.Background(), uiGitTimeout)
 		pts, err := discover.Projects(
-			context.Background(),
+			ctx,
 			a.runner(),
 			root,
 			discover.Options{},
 			map[string]discover.ProjectStat{},
 			time.Now().Unix(),
 		)
+		cancel()
 		if err != nil {
 			lastErr = err
 			continue

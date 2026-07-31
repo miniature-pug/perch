@@ -1,7 +1,7 @@
 // frontend/src/lib/actions.test.ts
 // Unit tests for Svelte actions in actions.ts.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { countUp } from "./actions";
+import { countUp, trapFocus } from "./actions";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -169,5 +169,180 @@ describe("countUp", () => {
     expect(rafAfterDestroySpy).not.toHaveBeenCalled();
 
     cleanup(node);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// trapFocus
+// ---------------------------------------------------------------------------
+
+describe("trapFocus", () => {
+  it("moves focus into the container on mount (first focusable)", () => {
+    const bg = document.createElement("button");
+    bg.textContent = "background";
+    document.body.appendChild(bg);
+    bg.focus();
+
+    const container = document.createElement("div");
+    const a = document.createElement("button");
+    const b = document.createElement("button");
+    container.append(a, b);
+    document.body.appendChild(container);
+
+    const action = trapFocus(container);
+    expect(document.activeElement).toBe(a);
+
+    action.destroy();
+    container.remove();
+    bg.remove();
+  });
+
+  it("focuses the element matching initialSelector when provided", () => {
+    const container = document.createElement("div");
+    const a = document.createElement("button");
+    const b = document.createElement("input");
+    b.setAttribute("data-init", "");
+    container.append(a, b);
+    document.body.appendChild(container);
+
+    const action = trapFocus(container, "[data-init]");
+    expect(document.activeElement).toBe(b);
+
+    action.destroy();
+    container.remove();
+  });
+
+  it("wraps focus from last to first on Tab", () => {
+    const container = document.createElement("div");
+    const a = document.createElement("button");
+    const b = document.createElement("button");
+    container.append(a, b);
+    document.body.appendChild(container);
+
+    const action = trapFocus(container);
+    b.focus();
+
+    const e = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+    container.dispatchEvent(e);
+
+    expect(e.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(a);
+
+    action.destroy();
+    container.remove();
+  });
+
+  it("wraps focus from first to last on Shift+Tab", () => {
+    const container = document.createElement("div");
+    const a = document.createElement("button");
+    const b = document.createElement("button");
+    container.append(a, b);
+    document.body.appendChild(container);
+
+    const action = trapFocus(container);
+    a.focus();
+
+    const e = new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, cancelable: true });
+    container.dispatchEvent(e);
+
+    expect(e.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(b);
+
+    action.destroy();
+    container.remove();
+  });
+
+  it("restores focus to the trigger on destroy", () => {
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+    trigger.focus();
+
+    const container = document.createElement("div");
+    const a = document.createElement("button");
+    container.append(a);
+    document.body.appendChild(container);
+
+    const action = trapFocus(container);
+    expect(document.activeElement).toBe(a);
+
+    action.destroy();
+    expect(document.activeElement).toBe(trigger);
+
+    container.remove();
+    trigger.remove();
+  });
+
+  it("nested traps: inner trap owns Tab even when an outer focusable follows it in DOM order", () => {
+    // Outer trap scrim: a focusable, then the inner trap container placed BEFORE
+    // a trailing outer focusable — the fragile DOM order the fix must handle.
+    const outer = document.createElement("div");
+
+    const outerFirst = document.createElement("button");
+    outerFirst.textContent = "outer-first";
+
+    const inner = document.createElement("div");
+    const innerA = document.createElement("button");
+    innerA.textContent = "inner-a";
+    const innerB = document.createElement("button");
+    innerB.textContent = "inner-b";
+    inner.append(innerA, innerB);
+
+    // Trailing outer focusable AFTER the inner container. Without the nesting
+    // guard the outer trap's `last` would be this element and Tab from innerB
+    // would leak here instead of wrapping to innerA.
+    const outerLast = document.createElement("button");
+    outerLast.textContent = "outer-last";
+
+    outer.append(outerFirst, inner, outerLast);
+    document.body.appendChild(outer);
+
+    const outerAction = trapFocus(outer);
+    const innerAction = trapFocus(inner);
+
+    // Inner trap mounted last, so focus is inside it.
+    expect(document.activeElement).toBe(innerA);
+
+    // Tab from the inner tail must wrap to the inner head, NOT leak to outerLast,
+    // even though the event bubbles to the outer trap's handler.
+    innerB.focus();
+    const eTab = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+    innerB.dispatchEvent(eTab);
+    expect(eTab.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(innerA);
+
+    // Shift+Tab from the inner head wraps to the inner tail (still owned by inner).
+    innerA.focus();
+    const eShift = new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, cancelable: true });
+    innerA.dispatchEvent(eShift);
+    expect(eShift.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(innerB);
+
+    // Once the inner trap is gone, the outer trap resumes normal ownership: Tab
+    // from the outer tail wraps to the outer head across the whole scrim.
+    innerAction.destroy();
+    outerLast.focus();
+    const eOuter = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+    outerLast.dispatchEvent(eOuter);
+    expect(eOuter.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(outerFirst);
+
+    outerAction.destroy();
+    outer.remove();
+  });
+
+  it("does not throw restoring focus when the trigger left the document", () => {
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+    trigger.focus();
+
+    const container = document.createElement("div");
+    container.append(document.createElement("button"));
+    document.body.appendChild(container);
+
+    const action = trapFocus(container);
+    trigger.remove(); // trigger no longer in document
+
+    expect(() => action.destroy()).not.toThrow();
+    container.remove();
   });
 });

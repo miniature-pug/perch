@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { focusOnMount } from "./actions";
+  import { trapFocus } from "./actions";
   let {
     open, message, confirmLabel = "Confirm", destructive = false, note,
     onConfirm, onCancel,
@@ -26,15 +26,23 @@
   // Escape cancels. Enter is intentionally NOT mapped at the overlay level: the
   // focused Cancel button (the safe default) handles Enter natively, so a stray
   // keydown from the triggering gesture can never auto-confirm a destructive action.
+  //
+  // stopPropagation is essential: when this dialog is nested inside another modal
+  // (e.g. CleanupPanel), the parent scrim also listens for Escape. Without it, a
+  // single Escape would close both this confirm and the parent panel.
   function handleKey(e: KeyboardEvent) {
-    if (e.key === "Escape") onCancel?.();
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      onCancel?.();
+    }
   }
 </script>
 
 {#if open}
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div role="dialog" aria-modal="true" aria-label="confirm" class="confirm-overlay"
-       tabindex="-1" onkeydown={handleKey}>
+       tabindex="-1" onkeydown={handleKey} use:trapFocus={".confirm-cancel"}>
     <div class="confirm-dialog">
       <p class="confirm-message">{message}</p>
       {#if note}<p class="confirm-note">{note}</p>{/if}
@@ -44,7 +52,7 @@
           disabled={confirming}
           onclick={handleConfirm}
         >{confirmLabel}</button>
-        <button class="btn" onclick={() => { onCancel?.(); }} use:focusOnMount>Cancel</button>
+        <button class="btn confirm-cancel" onclick={() => { onCancel?.(); }}>Cancel</button>
       </div>
     </div>
   </div>

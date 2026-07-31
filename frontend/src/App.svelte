@@ -11,7 +11,7 @@
   import { isPreviewable, previewKind } from "./lib/preview";
   import { focusOnMount, countUp } from "./lib/actions";
   import DiffView           from "./lib/DiffView.svelte";
-  import { shouldFocusAwaitingInput } from "./lib/engagement";
+  import { shouldFocusAwaitingInput, isViewingAgentPane } from "./lib/engagement";
   import MenuBar            from "./lib/MenuBar.svelte";
   import CommandPalette     from "./lib/CommandPalette.svelte";
   import NewSessionDialog   from "./lib/NewSessionDialog.svelte";
@@ -54,6 +54,16 @@
   let approvals       = $state<Record<string, ApprovalReq[]>>({});
   let fsVersion  = $state<Record<string, number>>({});
   let wsDiffStats = $state<Record<string, { added: number; removed: number; files: number }>>({});
+
+  // Acknowledged "awaiting-input" signals. The left-pane "asking you a question"
+  // badge is a BACKGROUND cue meant to pull the eye to a session the user is NOT
+  // looking at. Once a session is active AND its agent pane is the visible view,
+  // the user has seen the question, so its id is added here and the Sidebar
+  // suppresses the badge for it. A fresh awaiting-input event deletes the id so a
+  // NEW question re-badges. This ack-set is deliberately independent of the polled
+  // ws.state (a ListWorkspaces re-fetch would clobber a locally-mutated state, but
+  // never touches this set). SvelteSet so .add()/.delete()/.has() are reactive.
+  let attnAck = new SvelteSet<string>();
 
   // Awaiting-input auto-focus: a ref to the primary agent terminal so we can
   // route the keyboard to it without a click, plus a transient emphasis flag
@@ -102,6 +112,22 @@
   $effect(() => {
     active?.id; // track
     untrack(() => { codePath = null; });
+  });
+
+  // Acknowledge the active session's awaiting-input signal once the user is
+  // actually looking at its agent pane. Tracks activeId + layout.view AND the
+  // active session's state: a fresh awaiting-input event first DELETES the id
+  // from attnAck (in the agent:event handler) so the eye-pull can re-raise for a
+  // BACKGROUND session, but if that session is the one the user is actively
+  // viewing, this effect re-runs on the state change and immediately re-acks it —
+  // the left-pane badge is redundant while the pane is on screen (the in-pane
+  // auto-focus pulse already draws the eye). untrack the mutation so writing
+  // attnAck does not feed back into this effect.
+  $effect(() => {
+    const id = activeId;
+    active?.state; // track: re-ack a fresh awaiting-input on the viewed session
+    const viewing = id != null && isViewingAgentPane(id, activeId, layout.view);
+    if (viewing) untrack(() => attnAck.add(id!));
   });
 
   // Dialog / overlay state
@@ -228,6 +254,19 @@
       if (!ws) return;
       const prev = ws.state;
       if (ev.state) ws.state = ev.state;
+      // A FRESH question un-acknowledges the session so its left-pane "asking
+      // you" badge re-raises even on a backgrounded, already-acked session. We
+      // key on the QUESTION EVENT itself (kind === "question"), NOT on the
+      // state-value edge: claude can emit a SECOND AskUserQuestion in the same
+      // turn with no intervening Stop/running state, so prev would still be
+      // "awaiting-input" and an edge check would skip the delete — leaving the
+      // badge suppressed for the new question. Every question event carries a
+      // distinct ask, so delete unconditionally. If the session is active +
+      // viewed the ack $effect immediately re-acks it (the in-pane pulse already
+      // draws the eye); a backgrounded session re-raises the badge.
+      if (ev.kind === "question") {
+        attnAck.delete(ev.workspaceId);
+      }
       if (ev.approval) {
         // PUSH onto the workspace's queue (dedupe by reqId so a re-delivered
         // event never enqueues the same request twice).
@@ -336,6 +375,7 @@
   function handleAgentExit(id: string) {
     mode.leaveTerminal();
     openIds.delete(id);
+    attnAck.delete(id);
     const ws = workspaces.find(w => w.id === id);
     if (ws) ws.state = "idle";
   }
@@ -445,6 +485,7 @@
     const { [id]: _f, ...restF } = fsVersion;   fsVersion   = restF;
     const { [id]: _e, ...restE } = termEpoch;   termEpoch   = restE;
     const { [id]: _d, ...restD } = wsDiffStats; wsDiffStats = restD;
+    attnAck.delete(id);
   }
 
   function handleConfirmRemove() {
@@ -907,7 +948,7 @@
             }}
           />
         {/if}
-        <Sidebar workspaces={shownWorkspaces} {activeId} onSelect={onSelect} onNew={openNewSession} onReorder={handleReorder} diffStats={wsDiffStats} openIds={openIds}
+        <Sidebar workspaces={shownWorkspaces} {activeId} onSelect={onSelect} onNew={openNewSession} onReorder={handleReorder} diffStats={wsDiffStats} openIds={openIds} ackedInputIds={attnAck}
           onRename={(id, title) => { const ws = workspaces.find(w => w.id === id); if (ws) ws.title = title; setWorkspaceTitle(id, title); }}
           onEditStart={() => { previewWs = null; }} />
       </aside>
@@ -965,16 +1006,25 @@
                   </div>
                 {/key}
                 <!-- The code layout stays mounted while a session is active and is hidden on the agent
-                     and diff views, so an in-progress Editor draft survives a view switch. FileTree and
-                     Preview are keyed on the fs version (only while this view shows, so a hidden pane does
-                     no background work) to refresh when files change. The Editor is NOT keyed on it, so a
-                     background file change never discards unsaved edits; it reloads on an external change
-                     only when it has none, via its reloadToken prop. Keyed by session id so a session
-                     switch starts a fresh layout. -->
+                     and diff views, so an in-progress Editor draft survives a view switch. Preview is
+                     keyed on the fs version (only while this view shows, so a hidden pane does no
+                     background work) to refresh when files change. FileTree refreshes in place via its
+                     refresh prop (never remounted on an fs change — that would collapse open folders).
+                     The Editor is NOT keyed on it, so a background file change never discards unsaved
+                     edits; it reloads on an external change only when it has none, via its reloadToken
+                     prop. Keyed by session id so a session switch starts a fresh layout. -->
                 {#key active.id}
                   <div class="code-layout" style:display={layout.view === "code" ? "" : "none"}>
-                    {#key layout.view === "code" ? (fsVersion[active.id] ?? 0) : -1}
-                      <FileTree root={active.worktreePath} onOpen={(p) => {
+                    <!-- FileTree is NOT remounted on an fs change (that would collapse every
+                         open folder). It is keyed only by session id (via the outer {#key}),
+                         so switching sessions resets the tree, while a file write refreshes
+                         its listing IN PLACE via the refresh prop, preserving expansion. The
+                         refresh signal is frozen (-1) while this view is hidden so a hidden
+                         pane does no background re-listing. -->
+                    <FileTree root={active.worktreePath}
+                      refresh={layout.view === "code" ? (fsVersion[active.id] ?? 0) : -1}
+                      selectedPath={codePath}
+                      onOpen={(p) => {
                         // FileTree may send '@mention:'+path for "Send to agent".
                         // Route to sendToAgent; otherwise treat as a regular file open.
                         if (p.startsWith(MENTION_PREFIX)) {
@@ -985,7 +1035,6 @@
                           codePath = p;
                         }
                       }} />
-                    {/key}
                     {#if isPreviewable(codePath)}
                       {#key layout.view === "code" ? `${fsVersion[active.id] ?? 0}:${codePath}` : codePath}
                         <Preview path={codePath ?? ""} kind={previewKind(codePath ?? "")} content={previewContent} />

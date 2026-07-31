@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -2301,6 +2302,52 @@ func TestApp_ReadFile_RejectsOutsideRoot(t *testing.T) {
 	}
 }
 
+func TestApp_ReadFile_RejectsOversized(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	path := filepath.Join(dir, "big.bin")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(fspkg.MaxReadFileBytes + 1); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	_ = f.Close()
+
+	a := &App{roots: []string{dir}, emit: func(string, ...any) {},
+		bridges: map[string]*internalpty.Bridge{}, monitors: map[string]agent.Monitor{}}
+	if _, err := a.ReadFile(path); err == nil {
+		t.Fatal("ReadFile must reject an oversized file")
+	}
+}
+
+func TestApp_ReadFile_RejectsFIFOWithoutHanging(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "pipe")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Skipf("mkfifo unsupported: %v", err)
+	}
+	a := &App{roots: []string{dir}, emit: func(string, ...any) {},
+		bridges: map[string]*internalpty.Bridge{}, monitors: map[string]agent.Monitor{}}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := a.ReadFile(fifo)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("ReadFile must reject a FIFO")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("ReadFile hung on a FIFO")
+	}
+}
+
 func TestApp_WriteFile_RejectsOutsideRoot(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	a := &App{roots: []string{t.TempDir()}, emit: func(string, ...any) {},
@@ -2346,10 +2393,12 @@ type fakeAdapter struct {
 	detect bool
 }
 
-func (f *fakeAdapter) Name() string                    { return f.name }
-func (f *fakeAdapter) Detect() bool                    { return f.detect }
-func (f *fakeAdapter) ResumeArgs(sessionID string) []string { return []string{f.name, "--resume", sessionID} }
-func (f *fakeAdapter) NewArgs() []string               { return nil }
+func (f *fakeAdapter) Name() string { return f.name }
+func (f *fakeAdapter) Detect() bool { return f.detect }
+func (f *fakeAdapter) ResumeArgs(sessionID string) []string {
+	return []string{f.name, "--resume", sessionID}
+}
+func (f *fakeAdapter) NewArgs() []string { return nil }
 
 // fakeAdapterSeam returns an agentAdapterFunc that always injects the supplied
 // fakeAdapter, ignoring the tool name. Use this wherever OpenWorkspace is called
@@ -2410,8 +2459,8 @@ func newWatcherTestApp(t *testing.T, wt string, capturedOnChange *func(string)) 
 		newMonitor: func(_ string, _ agent.Adapter) (agent.Monitor, error) {
 			return agent.NewFakeMonitor(nil), nil
 		},
-		newWatcher:  makeWatcherSeam(t, capturedOnChange),
-		newAdapter:  fakeAdapterSeam(&fakeAdapter{name: "claude", detect: true}),
+		newWatcher: makeWatcherSeam(t, capturedOnChange),
+		newAdapter: fakeAdapterSeam(&fakeAdapter{name: "claude", detect: true}),
 	}
 
 	snapshot := func() []struct {

@@ -286,3 +286,43 @@ func TestSpawn_CloseKillsProcessGroup(t *testing.T) {
 		_ = syscall.Kill(childPID, syscall.SIGKILL) // cleanup
 	}
 }
+
+// TestSpawn_ReaderPanicDoesNotCrashAndStillReapsChild proves that a panic
+// inside pumpReader (via a panicking emit on data output) does not crash the
+// process AND that cmd.Wait still runs — the exit event must still fire, which
+// only happens after Wait. Without the reaper's recover this test would abort
+// the whole test binary.
+func TestSpawn_ReaderPanicDoesNotCrashAndStillReapsChild(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	exitFired := make(chan int, 1)
+	emit := func(name string, data ...any) {
+		if name == "panic-exit" {
+			if m, ok := data[0].(map[string]any); ok {
+				if code, ok := m["code"].(int); ok {
+					exitFired <- code
+					return
+				}
+			}
+			exitFired <- -999
+			return
+		}
+		// Any data output panics, unwinding pumpReader.
+		panic("emit exploded")
+	}
+	// `printf hi` writes output (triggering the panicking data emit) then exits 0.
+	b, err := Spawn(context.Background(), t.TempDir(),
+		[]string{"/bin/sh", "-c", "printf hi"}, "panic-data", "panic-exit", emit, 80, 24)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	t.Cleanup(func() { _ = b.Close() })
+
+	select {
+	case code := <-exitFired:
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0", code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("exit event never fired — reaper did not survive the reader panic")
+	}
+}

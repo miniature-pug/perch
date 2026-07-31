@@ -4,6 +4,8 @@ package fs
 import (
 	"bufio"
 	"context"
+	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -15,6 +17,8 @@ import (
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/fsnotify/fsnotify"
+
+	"github.com/Miniature-Pug/perch/internal/safe"
 )
 
 const (
@@ -24,6 +28,10 @@ const (
 	gitPorcelainMinLen = 4
 	// defaultFileMode is the permission bits applied to new files written by WriteFile.
 	defaultFileMode = 0o644
+	// MaxReadFileBytes caps how much ReadFile will load into memory. It guards
+	// against unbounded reads: a special file like /dev/zero would otherwise
+	// exhaust memory, and a huge regular file would balloon the editor.
+	MaxReadFileBytes = 10 << 20 // 10 MiB
 )
 
 // Node is one entry in a directory listing.
@@ -228,6 +236,7 @@ func Watch(absRoot string, onChange func(absPath string)) (*Watcher, error) {
 }
 
 func (w *Watcher) loop() {
+	defer safe.Recover("fs-watcher")
 	for {
 		select {
 		case event, ok := <-w.fw.Events:
@@ -263,9 +272,56 @@ func (w *Watcher) Close() error {
 	return err
 }
 
-// ReadFile reads and returns the contents of absPath.
+// ReadFile reads and returns the contents of absPath. It rejects anything that
+// is not a regular file (device, FIFO, socket, char device — a FIFO or socket
+// would otherwise block forever, a device like /dev/zero would read without
+// end) and enforces MaxReadFileBytes. The Lstat guard on the final component
+// rejects a symlink whose target is a special file; io.LimitReader is a belt to
+// the size cap's suspenders in case the file grows between stat and read.
 func ReadFile(absPath string) ([]byte, error) {
-	return os.ReadFile(absPath)
+	// Lstat so a symlink to a special file is caught by the mode check rather
+	// than followed. A symlink to a regular file falls through to os.Open below,
+	// which resolves it normally.
+	li, err := os.Lstat(absPath)
+	if err != nil {
+		return nil, err
+	}
+	info := li
+	if li.Mode()&os.ModeSymlink != 0 {
+		// Resolve the symlink target to size-check and type-check the real file.
+		if info, err = os.Stat(absPath); err != nil {
+			return nil, err
+		}
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("ReadFile: %q is not a regular file", absPath)
+	}
+	if info.Size() > MaxReadFileBytes {
+		return nil, fmt.Errorf("ReadFile: %q is too large to open (max %d MiB)", absPath, MaxReadFileBytes>>20)
+	}
+
+	f, err := os.Open(absPath)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+
+	// Re-check the opened file's type: guards against a race where the path was
+	// swapped for a special file between Stat and Open.
+	if fi, statErr := f.Stat(); statErr == nil && !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("ReadFile: %q is not a regular file", absPath)
+	}
+
+	// Read at most MaxReadFileBytes+1 so a file that grew past the cap after the
+	// size check is still rejected rather than silently truncated.
+	data, err := io.ReadAll(io.LimitReader(f, MaxReadFileBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > MaxReadFileBytes {
+		return nil, fmt.Errorf("ReadFile: %q is too large to open (max %d MiB)", absPath, MaxReadFileBytes>>20)
+	}
+	return data, nil
 }
 
 // RevealRunner is the seam for RevealInFiles so tests can inject a fake

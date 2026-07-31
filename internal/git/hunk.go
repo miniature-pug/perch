@@ -6,9 +6,31 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Miniature-Pug/perch/internal/proc"
 )
+
+const (
+	// lockRetryMax is the number of attempts made when a mutating git command
+	// fails because another git process holds the repository index lock.
+	lockRetryMax = 8
+	// lockRetryInitialBackoff is the wait before the first retry; it doubles each
+	// attempt up to lockRetryMaxBackoff. The total worst-case wait stays well
+	// under uiGitTimeout so a genuinely wedged lock still surfaces an error.
+	lockRetryInitialBackoff = 50 * time.Millisecond
+	lockRetryMaxBackoff     = 800 * time.Millisecond
+)
+
+// isIndexLockContention reports whether stderr indicates the git index lock was
+// held by a concurrent process — the one condition worth retrying. It matches
+// the stable fragments git prints for lock contention ("Unable to create
+// '<repo>/.git/index.lock': File exists.") rather than an exit code, which git
+// shares across many unrelated failures.
+func isIndexLockContention(stderr string) bool {
+	return strings.Contains(stderr, "index.lock") &&
+		(strings.Contains(stderr, "Unable to create") || strings.Contains(stderr, "File exists"))
+}
 
 // FileDiff carries the per-file summary from DiffStat.
 // Status: "M" modified, "A" added, "D" deleted, "R" renamed, "?" untracked.
@@ -320,10 +342,39 @@ func singleHunkPatch(raw string, index int) (string, error) {
 // gitApplyPatch pipes patch into `git apply <flag> -` via the runner so that
 // the call is visible to FakeRunner in tests and obeys the runner's context
 // and timeout controls.
+//
+// The apply takes the repository index lock. When the agent and the UI touch
+// the same worktree concurrently, git can fail with "Unable to create
+// '.git/index.lock': File exists." — a transient condition the holder clears in
+// milliseconds. Rather than surfacing that as a hard error, retry with capped
+// exponential backoff (only for lock contention; every other failure returns
+// immediately). The retry budget is bounded well under uiGitTimeout and honors
+// ctx cancellation.
 func gitApplyPatch(ctx context.Context, r proc.Runner, worktree, patch, flag string) error {
-	_, errOut, err := r.RunStdin(ctx, worktree, []byte(patch), "git", "apply", flag, "-")
-	if err != nil {
-		return fmt.Errorf("git apply %s: %w: %s", flag, err, strings.TrimSpace(string(errOut)))
+	backoff := lockRetryInitialBackoff
+	var lastErr error
+	var lastStderr string
+	for attempt := 0; attempt < lockRetryMax; attempt++ {
+		_, errOut, err := r.RunStdin(ctx, worktree, []byte(patch), "git", "apply", flag, "-")
+		if err == nil {
+			return nil
+		}
+		stderr := strings.TrimSpace(string(errOut))
+		if !isIndexLockContention(stderr) {
+			return fmt.Errorf("git apply %s: %w: %s", flag, err, stderr)
+		}
+		lastErr, lastStderr = err, stderr
+		if attempt == lockRetryMax-1 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("git apply %s: %w: %s", flag, ctx.Err(), stderr)
+		case <-time.After(backoff):
+		}
+		if backoff *= 2; backoff > lockRetryMaxBackoff {
+			backoff = lockRetryMaxBackoff
+		}
 	}
-	return nil
+	return fmt.Errorf("git apply %s: %w: %s", flag, lastErr, lastStderr)
 }

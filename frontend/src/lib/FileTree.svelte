@@ -2,6 +2,8 @@
 <script lang="ts">
   import { listDir, revealInFiles, copyPath, type FsNode } from "./wails";
   import { MIME_TEXT } from "./constants";
+  import { SvelteSet } from "svelte/reactivity";
+  import { untrack } from "svelte";
 
   function handleDragStart(e: DragEvent, node: TreeNode) {
     if (!e.dataTransfer) return;
@@ -9,19 +11,117 @@
     e.dataTransfer.effectAllowed = "copy";
   }
 
-  let { root, onOpen }: { root: string; onOpen: (path: string) => void } = $props();
+  let {
+    root,
+    onOpen,
+    // A bumped signal (fs version) that asks the tree to re-list its directories
+    // in place. Changing it re-fetches the currently-visible dirs while KEEPING
+    // every open folder open — a file write must not collapse the tree. It never
+    // remounts the component, so scroll and expansion state are preserved.
+    refresh = 0,
+    // The currently-open file path, so the matching row can render a selected cue
+    // that persists across refreshes.
+    selectedPath = null,
+  }: {
+    root: string;
+    onOpen: (path: string) => void;
+    refresh?: number;
+    selectedPath?: string | null;
+  } = $props();
 
   type TreeNode = FsNode & { children?: TreeNode[]; expanded?: boolean };
 
   let nodes = $state<TreeNode[]>([]);
   let menu  = $state<{ node: TreeNode; x: number; y: number } | null>(null);
 
-  $effect(() => { listDir(root).then((ns) => { nodes = ns.map((n) => ({ ...n })); }); });
+  // Absolute paths of every currently-expanded directory. This set is the durable
+  // source of truth for expansion — it survives an in-place refresh (the node
+  // objects are rebuilt on each re-list, but this set is not), so open folders
+  // stay open when files change. SvelteSet so membership reads are reactive.
+  const expanded = new SvelteSet<string>();
+
+  // Re-list `dir` and rebuild its child nodes, recursively re-expanding any child
+  // dir still in the expanded set. Dirs that no longer exist drop out naturally
+  // (they are absent from the fresh listing) and are pruned from the set.
+  //
+  // `token` is the rebuild generation that owns this call. The prune below mutates
+  // the SHARED `expanded` set, so a stale in-flight rebuild (a slower, losing
+  // overlapping rebuild whose token no longer matches rebuildToken) must NOT prune
+  // — it could drop an entry the winning rebuild still needs. Only the current
+  // rebuild is allowed to mutate `expanded`.
+  async function buildLevel(dir: string, token: number): Promise<TreeNode[]> {
+    const listing = await listDir(dir);
+    const present = new Set(listing.map((n) => n.path));
+    // Drop expanded paths under this dir that vanished from the listing — but only
+    // when this call still owns the latest rebuild.
+    if (token === rebuildToken) {
+      for (const p of expanded) {
+        if (isChildOf(dir, p) && !present.has(p)) expanded.delete(p);
+      }
+    }
+    const out: TreeNode[] = [];
+    for (const n of listing) {
+      const node: TreeNode = { ...n };
+      if (n.isDir && expanded.has(n.path)) {
+        node.expanded = true;
+        node.children = await buildLevel(n.path, token);
+      } else if (n.isDir) {
+        node.expanded = false;
+      }
+      out.push(node);
+    }
+    return out;
+  }
+
+  // True when `p` is a direct child path of `dir` (one segment deeper).
+  function isChildOf(dir: string, p: string): boolean {
+    const prefix = dir.endsWith("/") ? dir : dir + "/";
+    if (!p.startsWith(prefix)) return false;
+    return !p.slice(prefix.length).includes("/");
+  }
+
+  // Rebuild the whole visible tree from the root, honoring the expanded set. Runs
+  // on mount, on a root change, and on every refresh bump. Guarded so a stale
+  // async rebuild (root/refresh changed mid-flight) cannot clobber newer content.
+  let rebuildToken = 0;
+  async function rebuild() {
+    const mine = ++rebuildToken;
+    const next = await buildLevel(root, mine);
+    if (mine === rebuildToken) nodes = next;
+  }
+
+  // The root prop identifies the worktree the tree is showing. `expanded` (and the
+  // rendered `nodes`) are keyed to that root, so when `root` changes we must clear
+  // them before rebuilding — otherwise a new session inherits the previous
+  // session's open folders (stale paths that don't exist under the new root).
+  // Today App wraps FileTree in {#key active.id}, which remounts and hides this,
+  // but resetting here makes the component correct on its own so removing that key
+  // can never leak expansion across sessions.
+  let prevRoot: string | undefined;
+  $effect(() => {
+    root;      // track: a new session's worktree resets the tree
+    refresh;   // track: a file write re-lists in place, keeping folders open
+    untrack(() => {
+      if (root !== prevRoot) {
+        prevRoot = root;
+        expanded.clear();
+        nodes = [];
+      }
+      rebuild();
+    });
+  });
 
   async function toggle(node: TreeNode) {
     if (!node.isDir) return;
-    if (node.expanded) { node.expanded = false; node.children = undefined; }
-    else { node.children = (await listDir(node.path)).map((c) => ({ ...c })); node.expanded = true; }
+    if (node.expanded) {
+      node.expanded = false;
+      node.children = undefined;
+      expanded.delete(node.path);
+    } else {
+      node.children = (await listDir(node.path)).map((c) => ({ ...c }));
+      node.expanded = true;
+      expanded.add(node.path);
+    }
     nodes = [...nodes];
   }
 
@@ -78,6 +178,8 @@
         <li class="tree-item">
           <button
             class="tree-node {node.isDir ? 'is-dir' : 'is-file'} {node.modified ? 'is-modified' : ''} {node.untracked ? 'is-untracked' : ''}"
+            class:is-selected={!node.isDir && node.path === selectedPath}
+            aria-current={!node.isDir && node.path === selectedPath ? "true" : undefined}
             style="padding-left: calc(var(--perch-sp-2) + {depth} * var(--perch-sp-2))"
             aria-expanded={node.isDir ? node.expanded ?? false : undefined}
             draggable="true"
@@ -189,6 +291,12 @@
   .tree-node:focus-visible {
     outline: var(--perch-ring-w) solid var(--perch-accent);
     outline-offset: -2px;
+  }
+
+  /* Selected file: the currently-open file keeps a persistent highlight so it
+     stays visible across in-place refreshes. */
+  .tree-node.is-selected {
+    background: color-mix(in srgb, var(--perch-accent) 16%, transparent);
   }
 
   /* Status coloring */

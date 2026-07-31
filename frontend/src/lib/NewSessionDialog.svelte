@@ -2,7 +2,7 @@
 <script lang="ts">
   import { untrack } from "svelte";
   import { DEFAULT_AGENT, AGENT_CLAUDE, AGENT_OPENCODE } from "./constants";
-  import { focusOnMount } from "./actions";
+  import { trapFocus } from "./actions";
 
   const SLUG_RE = /^[A-Za-z0-9._\/-]+$/;
 
@@ -131,7 +131,7 @@
 
 {#if open}
   <div role="dialog" aria-modal="true" aria-label="new session" class="dialog-overlay"
-       tabindex="-1" onkeydown={handleKey}>
+       tabindex="-1" onkeydown={handleKey} use:trapFocus={"[aria-label='repo']"}>
     <div class="dialog">
       <h2>New Session</h2>
 
@@ -152,7 +152,7 @@
       <!-- Repo -->
       <label class="setting-row">
         <span class="setting-label">Repo</span>
-        <select class="field-select" aria-label="repo" bind:value={repo} use:focusOnMount>
+        <select class="field-select" aria-label="repo" bind:value={repo}>
           {#each repos as r}<option value={r}>{r}</option>{/each}
         </select>
       </label>

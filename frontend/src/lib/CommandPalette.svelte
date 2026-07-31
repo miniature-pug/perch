@@ -1,7 +1,7 @@
 <!-- frontend/src/lib/CommandPalette.svelte -->
 <script lang="ts">
   import { CMD_RECENCY_MAX, STORAGE_CMD_RECENTS } from "./constants";
-  import { focusOnMount } from "./actions";
+  import { focusOnMount, trapFocus } from "./actions";
   type Command = { id: string; group: string; label: string; keybinding?: string };
   let {
     open, commands, onRun, onClose,
@@ -148,7 +148,7 @@
 </script>
 
 {#if open}
-  <div role="dialog" aria-modal="true" aria-label="command palette" class="palette-overlay" tabindex="-1" onkeydown={handleOverlayKey}>
+  <div role="dialog" aria-modal="true" aria-label="command palette" class="palette-overlay" tabindex="-1" onkeydown={handleOverlayKey} use:trapFocus={"input[role='combobox']"}>
     <div class="palette">
       <input type="text" role="combobox" aria-autocomplete="list" aria-controls="palette-list"
         aria-expanded={open}

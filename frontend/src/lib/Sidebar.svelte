@@ -6,7 +6,7 @@
 
   let {
     workspaces, activeId, onSelect, onNew, onReorder,
-    diffStats = {}, openIds, onRename, onEditStart,
+    diffStats = {}, openIds, ackedInputIds, onRename, onEditStart,
   }: {
     workspaces: WorkspaceVM[];
     activeId: string | null;
@@ -17,11 +17,26 @@
     // Ids of sessions that currently have a live pty this app-run. Rows NOT in
     // this set are "closed" (record kept, pty gone) and get a subtle dim cue.
     openIds?: Set<string>;
+    // Ids whose current awaiting-input question the user has already seen (was
+    // active + agent pane visible). Their "asking you a question" badge is
+    // suppressed so a seen question does not nag forever; a fresh question in App
+    // removes the id, re-raising the badge.
+    ackedInputIds?: Set<string>;
     // Inline rename: onRename commits a new title; onEditStart lets the parent
     // dismiss any transient overlay (e.g. resume preview) when editing begins.
     onRename?: (id: string, title: string) => void;
     onEditStart?: () => void;
   } = $props();
+
+  // The state to RENDER for a row. When a session is awaiting-input but the user
+  // has already acknowledged that question (id in ackedInputIds), the attention
+  // signal has done its job, so present it as neutral "idle" — no question badge,
+  // no pulse, no "asking you" label. Every other state renders as-is. awaiting-
+  // approval is deliberately NOT suppressible here (it must persist until decided).
+  function displayState(ws: WorkspaceVM): WorkspaceVM["state"] {
+    if (ws.state === "awaiting-input" && ackedInputIds?.has(ws.id)) return "idle";
+    return ws.state;
+  }
 
   // Inline-rename edit state. editingId is the row currently in edit mode (or
   // null); editValue seeds/holds the in-progress text.
@@ -112,7 +127,8 @@
 <nav aria-label="sessions" class="sidebar">
   <ul class="workspace-list">
     {#each workspaces as ws (ws.id)}
-      {@const st = STATUS[ws.state as keyof typeof STATUS] ?? { icon: "·", label: ws.state }}
+      {@const rowState = displayState(ws)}
+      {@const st = STATUS[rowState as keyof typeof STATUS] ?? { icon: "·", label: rowState }}
       {@const ds = diffStats[ws.id]}
       {@const closed = openIds ? !openIds.has(ws.id) : false}
       <li
@@ -134,7 +150,7 @@
         >
           <!-- Line 1: status icon + bold primary name (room to read it before ellipsis) -->
           <span class="workspace-row-primary">
-            <span class="status-icon status-{ws.state}" aria-hidden="true" title={st.label}>{st.icon}</span>
+            <span class="status-icon status-{rowState}" aria-hidden="true" title={st.label}>{st.icon}</span>
             {#if editingId === ws.id}
               <input
                 class="workspace-title-edit"

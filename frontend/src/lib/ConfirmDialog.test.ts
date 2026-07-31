@@ -75,3 +75,37 @@ test("no hardcoded undo text when destructive=true but no note", async () => {
   expect(screen.queryByText(/can be undone/i)).not.toBeInTheDocument();
   expect(screen.queryByText(/undo/i)).not.toBeInTheDocument();
 });
+
+test("Escape calls onCancel and stops propagation so a parent scrim is not closed", async () => {
+  const { default: ConfirmDialog } = await import("./ConfirmDialog.svelte");
+  const onCancel = vi.fn();
+  render(ConfirmDialog, {
+    props: { open: true, message: "Remove?", onCancel },
+  });
+  const dialog = await waitFor(() => screen.getByRole("dialog", { name: /confirm/i }));
+
+  // A parent listener registered above the dialog: it must NOT see the Escape,
+  // proving the dialog stopped propagation (the nested-modal leak fix).
+  const parentSaw = vi.fn();
+  document.body.addEventListener("keydown", parentSaw);
+
+  const e = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+  const stopSpy = vi.spyOn(e, "stopPropagation");
+  dialog.dispatchEvent(e);
+
+  expect(onCancel).toHaveBeenCalledTimes(1);
+  expect(stopSpy).toHaveBeenCalled();
+  expect(e.defaultPrevented).toBe(true);
+  expect(parentSaw).not.toHaveBeenCalled();
+
+  document.body.removeEventListener("keydown", parentSaw);
+});
+
+test("Escape default-focuses the Cancel button so a stray Enter cannot confirm", async () => {
+  const { default: ConfirmDialog } = await import("./ConfirmDialog.svelte");
+  render(ConfirmDialog, {
+    props: { open: true, message: "Remove?", destructive: true, onConfirm: () => {}, onCancel: () => {} },
+  });
+  const cancel = await waitFor(() => screen.getByRole("button", { name: "Cancel" }));
+  expect(document.activeElement).toBe(cancel);
+});

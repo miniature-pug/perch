@@ -19,6 +19,19 @@ function validRange(v: unknown, min: number, max: number, fallback: number): num
   return typeof v === "number" && Number.isFinite(v) && v >= min && v <= max ? v : fallback;
 }
 
+// Accept only a plain object of boolean values. A corrupt persisted `collapsed`
+// (string, array, null) would otherwise be spread by setCollapsed into a
+// malformed object; reject anything that is not a plain object and coerce each
+// entry to boolean, dropping non-boolean values.
+function validCollapsed(v: unknown): Record<string, boolean> {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  const out: Record<string, boolean> = {};
+  for (const [key, val] of Object.entries(v as Record<string, unknown>)) {
+    if (typeof val === "boolean") out[key] = val;
+  }
+  return out;
+}
+
 class LayoutStore {
   sidebarW  = $state<number>(DEFAULT_SIDEBAR_W);
   shellH    = $state<number>(DEFAULT_SHELL_H);
@@ -40,7 +53,7 @@ class LayoutStore {
         this.view      = s.view      ?? "agent";
         this.split     = s.split     ?? false;
         this.splitId   = s.splitId   ?? null;
-        this.collapsed = s.collapsed ?? {};
+        this.collapsed = validCollapsed(s.collapsed);
         this.order     = Array.isArray(s.order) ? s.order : [];
       }
     } catch { /* corrupt — keep defaults */ }

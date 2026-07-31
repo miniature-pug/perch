@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/Miniature-Pug/perch/internal/hooklistener"
+	"github.com/Miniature-Pug/perch/internal/safe"
 )
 
 // OpencodeMonitor drives the opencode agent. opencode has no hook system; instead
@@ -219,6 +220,7 @@ func (m *OpencodeMonitor) authHeader() string {
 // workspace (which cancels ctx) reaps it with no leak.
 func (m *OpencodeMonitor) Start(ctx context.Context) {
 	go func() {
+		defer safe.Recover("opencode-monitor")
 		deadline := time.Now().Add(firstConnectDeadline)
 		connectedOnce := false
 

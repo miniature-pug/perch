@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"github.com/Miniature-Pug/perch/internal/hooklistener"
+	"github.com/Miniature-Pug/perch/internal/safe"
 )
 
 type ClaudeMonitor struct {
@@ -43,6 +44,7 @@ func (m *ClaudeMonitor) Capabilities() Caps {
 
 func (m *ClaudeMonitor) Start(ctx context.Context) {
 	go func() {
+		defer safe.Recover("claude-monitor")
 		for {
 			select {
 			case <-ctx.Done():

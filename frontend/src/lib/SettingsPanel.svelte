@@ -2,7 +2,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { getSettings, type AppSettings } from "./wails";
-  import { focusOnMount } from "./actions";
+  import { trapFocus } from "./actions";
   import { settings as settingsStore } from "./stores/settings.svelte";
   import { setDnd, addBlocking } from "./stores/notifications.svelte";
   import { THEMES, DENSITIES, FONTS, DEFAULT_THEME, DEFAULT_DENSITY, DEFAULT_FONT, type Density } from "./constants";
@@ -72,7 +72,7 @@
 {#if open}
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div role="dialog" aria-modal="true" aria-label="Settings" class="dialog-overlay"
-       tabindex="-1" onkeydown={handleKey} use:focusOnMount>
+       tabindex="-1" onkeydown={handleKey} use:trapFocus>
     <div class="dialog settings-dialog">
 
       <section class="settings-section">

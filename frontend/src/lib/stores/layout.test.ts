@@ -96,4 +96,33 @@ describe("layout store", () => {
     await layout.restore();
     expect(layout.order).toEqual([]);
   });
+
+  // --- collapsed corruption guard ---
+  it.each([
+    ["a string", "oops"],
+    ["an array", ["x"]],
+    ["null", null],
+    ["a number", 42],
+  ])("restore() coerces a corrupt collapsed (%s) to a usable empty object", async (_label, bad) => {
+    const w = await import("../wails");
+    vi.mocked(w.getLayout).mockResolvedValueOnce(
+      JSON.stringify({ sidebarW: 240, shellH: 200, view: "agent", split: false, collapsed: bad })
+    );
+    const { layout } = await import("./layout.svelte");
+    await layout.restore();
+    expect(layout.collapsed).toEqual({});
+    // setCollapsed afterward must not throw and must produce a well-formed object.
+    expect(() => layout.setCollapsed("ws-1", true)).not.toThrow();
+    expect(layout.collapsed).toEqual({ "ws-1": true });
+  });
+
+  it("restore() keeps only boolean entries from a plain collapsed object", async () => {
+    const w = await import("../wails");
+    vi.mocked(w.getLayout).mockResolvedValueOnce(
+      JSON.stringify({ sidebarW: 240, shellH: 200, view: "agent", split: false, collapsed: { a: true, b: false, c: "nope", d: 1 } })
+    );
+    const { layout } = await import("./layout.svelte");
+    await layout.restore();
+    expect(layout.collapsed).toEqual({ a: true, b: false });
+  });
 });

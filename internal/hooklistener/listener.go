@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+
+	"github.com/Miniature-Pug/perch/internal/safe"
 )
 
 const (
@@ -75,7 +77,10 @@ func New() (*Listener, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/hook", l.handleHook)
 	l.srv = &http.Server{Handler: mux}
-	go func() { _ = l.srv.Serve(ln) }()
+	go func() {
+		defer safe.Recover("hook-listener")
+		_ = l.srv.Serve(ln)
+	}()
 	return l, nil
 }
 

@@ -2,6 +2,7 @@
   import type { StaleSessionVM } from "./wails";
   import { cleanupSessions } from "./wails";
   import ConfirmDialog from "./ConfirmDialog.svelte";
+  import { trapFocus } from "./actions";
 
   let {
     sessions,
@@ -83,7 +84,7 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <!-- svelte-ignore a11y_click_events_have_key_events -->
-<div class="cleanup-scrim" tabindex="-1" onkeydown={handleKey} onclick={handleBackdrop}>
+<div class="cleanup-scrim" tabindex="-1" onkeydown={handleKey} onclick={handleBackdrop} use:trapFocus>
 <div class="cleanup-panel" role="dialog" aria-modal="true" aria-label="Stale session cleanup">
   <div class="cleanup-header">
     <h2 class="cleanup-title">Stale sessions</h2>

@@ -649,7 +649,7 @@ describe("App.svelte live event wiring", () => {
     const { default: App } = await import("./App.svelte");
     render(App);
 
-    // Select Alpha so it is the active workspace (otherwise "no dock" is vacuous).
+    // Open Alpha so an approval dock (if any) would be scoped to the active session.
     const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     await fireEvent.click(alphaBtn);
     // Resume preview appears — confirm to open
@@ -657,19 +657,160 @@ describe("App.svelte live event wiring", () => {
     await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
     await tick();
 
-    // Fire a question event: kind "question", no approval payload.
+    // Fire a question event on ws-2 (a BACKGROUND session, so its left-pane badge
+    // is meaningful — the active+viewed session's badge is acknowledged away).
     const cb = captured.agent.at(-1)!;
-    cb({ workspaceId: "ws-1", kind: "question", state: "awaiting-input" });
+    cb({ workspaceId: "ws-2", kind: "question", state: "awaiting-input" });
     await tick();
 
-    // Sidebar maps "awaiting-input" → "asking you".
+    // Sidebar maps "awaiting-input" → "asking you" for the background session.
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: /^Alpha\b/ })).toHaveTextContent("asking you")
+      expect(screen.getByRole("button", { name: /^Beta\b/ })).toHaveTextContent("asking you")
     );
 
     // A question is signal-only: NO approval dock, NO Allow button.
     expect(document.querySelector("[data-zone='approval-dock']")).toBeNull();
     expect(screen.queryByRole("button", { name: "Allow" })).not.toBeInTheDocument();
+  });
+
+  // -------------------------------------------------------------------------
+  // FIX C3: the left-pane "asking you a question" (awaiting-input) badge is a
+  // BACKGROUND signal. It must clear once the user is actively viewing that
+  // session, must NOT re-appear for the same question, and a NEW question must
+  // re-raise it. awaiting-approval must never be suppressed this way.
+  // -------------------------------------------------------------------------
+
+  it("awaiting-input on a BACKGROUND session shows the 'asking you' signal", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    // No session is selected → ws-2 is a background session.
+    await screen.findByRole("button", { name: /^Beta\b/ });
+
+    const cb = captured.agent.at(-1)!;
+    cb({ workspaceId: "ws-2", kind: "question", state: "awaiting-input" });
+    await tick();
+
+    // The background session's badge is shown.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Beta\b/ })).toHaveTextContent("asking you")
+    );
+  });
+
+  it("awaiting-input signal CLEARS once the session becomes active + agent pane is viewed", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    // Raise the question on ws-2 while it is a BACKGROUND session (agent view).
+    layout.setView("agent");
+    await screen.findByRole("button", { name: /^Beta\b/ });
+    const cb = captured.agent.at(-1)!;
+    cb({ workspaceId: "ws-2", kind: "question", state: "awaiting-input" });
+    await tick();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Beta\b/ })).toHaveTextContent("asking you")
+    );
+
+    // Now the user opens/focuses ws-2 (active + agent pane visible): the signal
+    // has done its job and must clear. Underlying ws.state stays awaiting-input,
+    // but the Sidebar suppresses the badge → the row reads as neutral "idle".
+    const betaBtn = screen.getByRole("button", { name: /^Beta\b/ });
+    await fireEvent.click(betaBtn);
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    await tick();
+
+    await waitFor(() => {
+      const row = screen.getByRole("button", { name: /^Beta\b/ });
+      expect(row).not.toHaveTextContent("asking you");
+      expect(row).toHaveTextContent("idle");
+    });
+  });
+
+  it("two consecutive question events in the SAME turn (no state change) both re-raise on a background session", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    // ws-2 is a BACKGROUND session (no session selected). Use the code view so it
+    // is never "viewed" — the badge is meaningful throughout.
+    layout.setView("code");
+    await screen.findByRole("button", { name: /^Beta\b/ });
+    const cb = captured.agent.at(-1)!;
+
+    // First question raises the badge on the backgrounded session.
+    cb({ workspaceId: "ws-2", kind: "question", state: "awaiting-input" });
+    await tick();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Beta\b/ })).toHaveTextContent("asking you")
+    );
+
+    // Simulate the user acknowledging it (as if it had been viewed): drop the
+    // pending signal by opening + viewing it briefly, then background it again.
+    // Simpler here: acknowledge by viewing the agent pane, then return to code.
+    layout.setView("agent");
+    const betaBtn = screen.getByRole("button", { name: /^Beta\b/ });
+    await fireEvent.click(betaBtn);
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    await tick();
+    // Acknowledged (active + agent view): badge suppressed.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Beta\b/ })).not.toHaveTextContent("asking you")
+    );
+    // Background it again (code view) — still acknowledged, so no badge.
+    layout.setView("code");
+    await tick();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Beta\b/ })).not.toHaveTextContent("asking you")
+    );
+
+    // The agent asks a SECOND question in the SAME turn: NO intervening
+    // Stop/running state, so ws.state is ALREADY "awaiting-input". The un-ack now
+    // keys on the question EVENT (kind === "question"), not the state-value edge,
+    // so it fires and the badge RE-RAISES on the backgrounded session even though
+    // prev === "awaiting-input".
+    cb({ workspaceId: "ws-2", kind: "question", state: "awaiting-input" });
+    await tick();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Beta\b/ })).toHaveTextContent("asking you")
+    );
+  });
+
+  it("awaiting-APPROVAL is never suppressed by the ack path (stays 'needs you' when active+viewed)", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    layout.setView("agent");
+    const betaBtn = await screen.findByRole("button", { name: /^Beta\b/ });
+    // Active + viewed (this would ack an awaiting-input, but must NOT touch approval).
+    await fireEvent.click(betaBtn);
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    await tick();
+
+    const cb = captured.agent.at(-1)!;
+    cb({
+      workspaceId: "ws-2",
+      kind: "approval",
+      state: "awaiting-approval",
+      approval: { reqId: "req-appr", tool: "bash", summary: "Run script" },
+    });
+    await tick();
+
+    // The approval attention persists on the active, viewed session.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Beta\b/ })).toHaveTextContent("needs you")
+    );
   });
 
   it("onNotify: blocking tier calls addBlocking and appears in notifications store", async () => {
