@@ -28,6 +28,9 @@ main checkout.
 Open the New Session dialog from the menu, the command palette, or the
 quick-start buttons on the empty screen. You choose:
 
+- **Name.** An optional label for the session. The repo, branch, and agent show
+  next to it, so a short name for the task is enough. Left blank, the session
+  takes the branch name.
 - **Repository.** One of the repositories perch discovered under your roots.
 - **Agent.** `claude` or `opencode`.
 - **Worktree or in-repo.** A worktree (the default) isolates the work on its own
@@ -41,7 +44,8 @@ perch session already owns, perch opens that session instead of creating a
 duplicate. If the worktree cannot be created because the tree has uncommitted
 changes, perch tells you and keeps the dialog open.
 
-Creating a session registers it and spawns its terminal.
+Creating a session registers it and spawns its terminal. To rename a session
+later, double-click or right-click its name in the sidebar and type a new one.
 
 ### Resuming a session
 

@@ -2,11 +2,11 @@
 <script lang="ts">
   import type { WorkspaceVM } from "./wails";
   import { MIME_SESSION, worktreeColor } from "./constants";
-  import { countUp } from "./actions";
+  import { countUp, focusOnMount } from "./actions";
 
   let {
     workspaces, activeId, onSelect, onNew, onReorder,
-    diffStats = {}, openIds,
+    diffStats = {}, openIds, onRename, onEditStart,
   }: {
     workspaces: WorkspaceVM[];
     activeId: string | null;
@@ -17,7 +17,45 @@
     // Ids of sessions that currently have a live pty this app-run. Rows NOT in
     // this set are "closed" (record kept, pty gone) and get a subtle dim cue.
     openIds?: Set<string>;
+    // Inline rename: onRename commits a new title; onEditStart lets the parent
+    // dismiss any transient overlay (e.g. resume preview) when editing begins.
+    onRename?: (id: string, title: string) => void;
+    onEditStart?: () => void;
   } = $props();
+
+  // Inline-rename edit state. editingId is the row currently in edit mode (or
+  // null); editValue seeds/holds the in-progress text.
+  let editingId = $state<string | null>(null);
+  let editValue = $state("");
+
+  // The bold primary label: the user-chosen title, falling back to the repo name
+  // when the title is empty.
+  function primaryLabel(ws: WorkspaceVM): string {
+    return ws.title || repoName(ws.repoPath);
+  }
+
+  // Enter inline-rename mode for ws (from dblclick or contextmenu).
+  function startEdit(e: Event, ws: WorkspaceVM) {
+    e.stopPropagation();
+    onEditStart?.();
+    editingId = ws.id;
+    editValue = primaryLabel(ws);
+  }
+
+  // Commit the in-progress rename (Enter or blur): only when the trimmed value is
+  // non-empty and actually changed. Always leaves edit mode.
+  function commitEdit(ws: WorkspaceVM) {
+    if (editingId !== ws.id) return;
+    const trimmed = editValue.trim();
+    if (trimmed && trimmed !== primaryLabel(ws)) {
+      onRename?.(ws.id, trimmed);
+    }
+    editingId = null;
+  }
+
+  function cancelEdit() {
+    editingId = null;
+  }
 
   const STATUS = {
     running:             { icon: "◐", label: "running" },
@@ -90,16 +128,40 @@
           class:closed={closed}
           aria-current={ws.id === activeId ? "page" : undefined}
           onclick={() => onSelect(ws.id)}
-          aria-label={`${repoName(ws.repoPath)} ${ws.branch}`}
+          aria-label={`${primaryLabel(ws)} ${repoName(ws.repoPath)} ${ws.branch}`}
           title={closed ? "Click to open" : undefined}
           style:--row-color={worktreeColor(ws.id)}
         >
           <span class="status-icon status-{ws.state}" aria-hidden="true" title={st.label}>{st.icon}</span>
-          {#if ws.repoPath}
-            <span class="workspace-title" title={repoName(ws.repoPath)}>{repoName(ws.repoPath)}</span>
+          {#if editingId === ws.id}
+            <input
+              class="workspace-title-edit"
+              type="text"
+              aria-label="rename session"
+              bind:value={editValue}
+              use:focusOnMount
+              onclick={(e) => e.stopPropagation()}
+              onpointerdown={(e) => e.stopPropagation()}
+              onkeydown={(e) => {
+                e.stopPropagation();
+                if (e.key === "Enter") { e.preventDefault(); commitEdit(ws); }
+                else if (e.key === "Escape") { e.preventDefault(); cancelEdit(); }
+              }}
+              onblur={() => commitEdit(ws)}
+            />
           {:else}
-            <span class="workspace-title" title={ws.title}>{ws.title}</span>
+            <!-- Double-click / right-click on the title are mouse-gesture
+                 enhancements for inline rename; the row button remains the
+                 accessible primary control, so this span needs no ARIA role. -->
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <span
+              class="workspace-title"
+              title={primaryLabel(ws)}
+              ondblclick={(e) => startEdit(e, ws)}
+              oncontextmenu={(e) => { e.preventDefault(); startEdit(e, ws); }}
+            >{primaryLabel(ws)}</span>
           {/if}
+          <span class="workspace-repo dim" title={repoName(ws.repoPath)}>{repoName(ws.repoPath)}</span>
           <span class="workspace-branch dim" title={ws.branch}>{ws.branch}</span>
           <span class="workspace-agent dim" title={ws.agent}>{ws.agent}</span>
           <span class="workspace-age dim">{formatAge(ws.lastActive)}</span>
@@ -281,6 +343,37 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     min-width: 0;
+  }
+
+  /* ── Inline rename input — replaces the title span in edit mode ─── */
+  .workspace-title-edit {
+    flex: 1;
+    min-width: 0;
+    font-family: var(--perch-font-sans);
+    font-size: var(--perch-fs-body);
+    font-weight: 500;
+    background: var(--perch-bg);
+    color: var(--perch-text);
+    border: 1px solid var(--perch-accent);
+    border-radius: var(--perch-radius-sm);
+    padding: 0 4px;
+    box-sizing: border-box;
+  }
+
+  .workspace-title-edit:focus {
+    outline: var(--perch-ring-w) solid var(--perch-accent);
+    outline-offset: 0;
+  }
+
+  /* ── Repo name — dim secondary context ────────────────────────── */
+  .workspace-repo {
+    font-size: var(--perch-fs-caption);
+    color: var(--perch-text-dim);
+    flex-shrink: 0;
+    max-width: 80px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   /* ── Branch — mono dim caption ────────────────────────────────── */

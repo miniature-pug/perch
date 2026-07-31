@@ -20,11 +20,12 @@
     open: boolean;
     repos: string[];
     loadBranches: (repo: string) => Promise<string[]>;
-    onCreate: (agent: string, repo: string, baseRef: string, branch: string, worktree: boolean) => void;
+    onCreate: (agent: string, repo: string, baseRef: string, branch: string, title: string, worktree: boolean) => void;
     onClose: () => void;
     initialAgent?: string | null;
   } = $props();
 
+  let name        = $state("");
   let agent       = $state(DEFAULT_AGENT);
   let repo        = $state("");
   let worktree    = $state(true);
@@ -41,6 +42,7 @@
   // agent dropdown would re-fire this effect and snap agent back to DEFAULT_AGENT.
   $effect(() => {
     if (open) untrack(() => {
+      name        = "";
       agent       = initialAgent ?? DEFAULT_AGENT;
       repo        = repos[0] ?? "";
       worktree    = true;
@@ -85,13 +87,13 @@
     try {
       if (!worktree) {
         // non-worktree: baseRef="" always
-        await Promise.resolve(onCreate(agent, repo, "", branchSel, false));
+        await Promise.resolve(onCreate(agent, repo, "", branchSel, name, false));
       } else if (useExisting) {
         // existing branch: baseRef="" signals no -b
-        await Promise.resolve(onCreate(agent, repo, "", branchSel, true));
+        await Promise.resolve(onCreate(agent, repo, "", branchSel, name, true));
       } else {
         // new branch from baseRef
-        await Promise.resolve(onCreate(agent, repo, baseRef, branchName, true));
+        await Promise.resolve(onCreate(agent, repo, baseRef, branchName, name, true));
       }
     } finally {
       submitting = false;
@@ -108,6 +110,20 @@
        tabindex="-1" onkeydown={handleKey}>
     <div class="dialog">
       <h2>New Session</h2>
+
+      <!-- Name (optional user-chosen session label) -->
+      <div class="setting-row">
+        <span class="setting-label">Name</span>
+        <div class="branch-new-col">
+          <input
+            class="field-input"
+            type="text"
+            aria-label="name"
+            bind:value={name}
+          />
+          <span class="field-hint">Optional. The repo, branch, and agent are shown next to the name.</span>
+        </div>
+      </div>
 
       <!-- Repo -->
       <label class="setting-row">
@@ -303,6 +319,11 @@
   .field-error {
     font-size: var(--perch-fs-body);
     color: var(--perch-err);
+  }
+
+  .field-hint {
+    font-size: var(--perch-fs-caption);
+    color: var(--perch-text-dim);
   }
 
   .sub-toggle {

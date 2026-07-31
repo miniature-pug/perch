@@ -88,7 +88,8 @@ callable over the bridge. The load-bearing methods:
 | Method | Purpose |
 |--------|---------|
 | `ListWorkspaces() []WorkspaceVM` | All registered sessions, with live state and caps for any that are open |
-| `CreateWorkspace(agentName, repoPath, baseRef, branch string, worktree bool) (WorkspaceVM, error)` | Validate, resolve or create the worktree, and register the session |
+| `CreateWorkspace(agentName, repoPath, baseRef, branch, title string, worktree bool) (WorkspaceVM, error)` | Validate, resolve or create the worktree, and register the session; a blank title falls back to the branch slug |
+| `SetWorkspaceTitle(id, title string) error` | Rename a session; rejects a blank title |
 | `OpenWorkspace(id string) error` | Spawn the pty, prepare and start the Monitor, begin streaming |
 | `CloseWorkspace(id string) error` | Tear down the pty bridge and Monitor; keep the record |
 | `RemoveWorkspace(id string) error` | Remove the record; for worktree sessions run `git worktree remove`, returning `ErrWorktreeDirty` on uncommitted changes; the branch is kept |

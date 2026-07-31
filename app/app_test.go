@@ -419,7 +419,7 @@ func TestApp_CreateWorkspace_HappyPath(t *testing.T) {
 		monitors: map[string]agent.Monitor{},
 	}
 
-	vm, err := a.CreateWorkspace("claude", repo, "main", "feat/hello", true)
+	vm, err := a.CreateWorkspace("claude", repo, "main", "feat/hello", "", true)
 	if err != nil {
 		t.Fatalf("CreateWorkspace: %v", err)
 	}
@@ -447,7 +447,7 @@ func TestApp_CreateWorkspace_RejectsOutsideRoot(t *testing.T) {
 		monitors: map[string]agent.Monitor{},
 	}
 
-	if _, err := a.CreateWorkspace("claude", "/etc", "main", "feat/x", true); err == nil {
+	if _, err := a.CreateWorkspace("claude", "/etc", "main", "feat/x", "", true); err == nil {
 		t.Fatal("must reject path outside roots")
 	}
 }
@@ -467,8 +467,110 @@ func TestApp_CreateWorkspace_RejectsInvalidAgent(t *testing.T) {
 		bridges:  map[string]*internalpty.Bridge{},
 		monitors: map[string]agent.Monitor{},
 	}
-	if _, err := a.CreateWorkspace("ghost", sub, "main", "feat/x", true); err == nil {
+	if _, err := a.CreateWorkspace("ghost", sub, "main", "feat/x", "", true); err == nil {
 		t.Fatal("must reject unknown agent")
+	}
+}
+
+// TestApp_CreateWorkspace_Title_UserAndFallback verifies that a non-empty title
+// is stored verbatim, while a blank title falls back to the branch slug.
+func TestApp_CreateWorkspace_Title_UserAndFallback(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	repo := makeTestRepo(t, root)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+
+	a := &App{
+		store:    store,
+		roots:    []string{root},
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+	}
+
+	// Non-empty title is stored as given (in both the VM and the record).
+	vm, err := a.CreateWorkspace("claude", repo, "main", "feat/named", "My Session", true)
+	if err != nil {
+		t.Fatalf("CreateWorkspace (named): %v", err)
+	}
+	if vm.Title != "My Session" {
+		t.Errorf("VM Title = %q, want %q", vm.Title, "My Session")
+	}
+	if w, ok := store.Get(vm.ID); !ok || w.Title != "My Session" {
+		t.Errorf("stored Title = %q (ok=%v), want %q", w.Title, ok, "My Session")
+	}
+
+	// Blank title (whitespace-only) falls back to the branch slug.
+	vm2, err := a.CreateWorkspace("claude", repo, "main", "feat/blank", "   ", true)
+	if err != nil {
+		t.Fatalf("CreateWorkspace (blank): %v", err)
+	}
+	wantSlug := git.SlugifyBranch("feat/blank")
+	if vm2.Title != wantSlug {
+		t.Errorf("VM Title = %q, want fallback %q", vm2.Title, wantSlug)
+	}
+	if w, ok := store.Get(vm2.ID); !ok || w.Title != wantSlug {
+		t.Errorf("stored Title = %q (ok=%v), want fallback %q", w.Title, ok, wantSlug)
+	}
+}
+
+// TestApp_SetWorkspaceTitle verifies renaming updates the stored title, and that
+// an unknown id or a blank title errors (leaving the store untouched).
+func TestApp_SetWorkspaceTitle(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	repo := makeTestRepo(t, root)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+
+	a := &App{
+		store:    store,
+		roots:    []string{root},
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+	}
+
+	vm, err := a.CreateWorkspace("claude", repo, "main", "feat/rename", "Original", true)
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+
+	// Happy path: rename succeeds and persists.
+	if err := a.SetWorkspaceTitle(vm.ID, "Renamed"); err != nil {
+		t.Fatalf("SetWorkspaceTitle: %v", err)
+	}
+	if w, ok := store.Get(vm.ID); !ok || w.Title != "Renamed" {
+		t.Errorf("stored Title = %q (ok=%v), want %q", w.Title, ok, "Renamed")
+	}
+	// Also reflected via ListWorkspaces.
+	found := false
+	for _, w := range a.ListWorkspaces() {
+		if w.ID == vm.ID {
+			found = true
+			if w.Title != "Renamed" {
+				t.Errorf("ListWorkspaces Title = %q, want %q", w.Title, "Renamed")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("renamed workspace not found in ListWorkspaces")
+	}
+
+	// Unknown id errors.
+	if err := a.SetWorkspaceTitle("does-not-exist", "X"); err == nil {
+		t.Error("SetWorkspaceTitle on unknown id: want error, got nil")
+	}
+
+	// Blank title errors and does not overwrite the existing name.
+	if err := a.SetWorkspaceTitle(vm.ID, "   "); err == nil {
+		t.Error("SetWorkspaceTitle with blank title: want error, got nil")
+	}
+	if w, ok := store.Get(vm.ID); !ok || w.Title != "Renamed" {
+		t.Errorf("blank rename mutated Title = %q, want unchanged %q", w.Title, "Renamed")
 	}
 }
 
@@ -515,7 +617,7 @@ func TestApp_CreateWorkspace_WorktreeNewBranch(t *testing.T) {
 		monitors: map[string]agent.Monitor{},
 	}
 
-	vm, err := a.CreateWorkspace("claude", repo, "main", "feat/hello", true)
+	vm, err := a.CreateWorkspace("claude", repo, "main", "feat/hello", "", true)
 	if err != nil {
 		t.Fatalf("CreateWorkspace: %v", err)
 	}
@@ -560,7 +662,7 @@ func TestApp_CreateWorkspace_PersistsBaseRef(t *testing.T) {
 		monitors: map[string]agent.Monitor{},
 	}
 
-	vm, err := a.CreateWorkspace("claude", repo, "main", "feat/br-test", true)
+	vm, err := a.CreateWorkspace("claude", repo, "main", "feat/br-test", "", true)
 	if err != nil {
 		t.Fatalf("CreateWorkspace: %v", err)
 	}
@@ -600,7 +702,7 @@ func TestApp_CreateWorkspace_WorktreeExistingBranch(t *testing.T) {
 	}
 
 	// baseRef == "" → existing-branch mode.
-	vm, err := a.CreateWorkspace("opencode", repo, "", "feat-existing", true)
+	vm, err := a.CreateWorkspace("opencode", repo, "", "feat-existing", "", true)
 	if err != nil {
 		t.Fatalf("CreateWorkspace existing branch: %v", err)
 	}
@@ -636,7 +738,7 @@ func TestApp_CreateWorkspace_NonWorktree(t *testing.T) {
 		monitors: map[string]agent.Monitor{},
 	}
 
-	vm, err := a.CreateWorkspace("claude", repo, "", "main", false)
+	vm, err := a.CreateWorkspace("claude", repo, "", "main", "", false)
 	if err != nil {
 		t.Fatalf("CreateWorkspace non-worktree: %v", err)
 	}
@@ -688,7 +790,7 @@ func TestApp_CreateWorkspace_NonWorktree_DirtyBranchSwitch_Fails(t *testing.T) {
 	}
 
 	before := len(a.ListWorkspaces())
-	_, err := a.CreateWorkspace("claude", repo, "", "feat/x", false)
+	_, err := a.CreateWorkspace("claude", repo, "", "feat/x", "", false)
 	if !errors.Is(err, git.ErrWorktreeDirty) {
 		t.Fatalf("want errors.Is(err, ErrWorktreeDirty); got %v", err)
 	}
@@ -729,7 +831,7 @@ func TestApp_CreateWorkspace_NonWorktree_SameBranchDirty_OK(t *testing.T) {
 		monitors: map[string]agent.Monitor{},
 	}
 
-	vm, err := a.CreateWorkspace("claude", repo, "", "main", false)
+	vm, err := a.CreateWorkspace("claude", repo, "", "main", "", false)
 	if err != nil {
 		t.Fatalf("CreateWorkspace same-branch dirty: %v", err)
 	}
@@ -761,7 +863,7 @@ func TestApp_CreateWorkspace_NonWorktree_CleanSwitch_OK(t *testing.T) {
 		monitors: map[string]agent.Monitor{},
 	}
 
-	vm, err := a.CreateWorkspace("claude", repo, "", "feat/clean", false)
+	vm, err := a.CreateWorkspace("claude", repo, "", "feat/clean", "", false)
 	if err != nil {
 		t.Fatalf("CreateWorkspace clean switch: %v", err)
 	}
@@ -811,7 +913,7 @@ func TestApp_CreateWorkspace_ErrBranchInUse(t *testing.T) {
 		monitors: map[string]agent.Monitor{},
 	}
 
-	_, err := a.CreateWorkspace("claude", repo, "main", "feat-taken", true)
+	_, err := a.CreateWorkspace("claude", repo, "main", "feat-taken", "", true)
 	if !errors.Is(err, git.ErrBranchInUse) {
 		t.Errorf("want ErrBranchInUse, got %v", err)
 	}
@@ -844,7 +946,7 @@ func TestApp_CreateWorkspace_NewBranch_BranchAlreadyExists_Fails(t *testing.T) {
 
 	countBefore := len(store.List())
 
-	_, err := a.CreateWorkspace("claude", repo, "main", "feat/dupe", true)
+	_, err := a.CreateWorkspace("claude", repo, "main", "feat/dupe", "", true)
 	if err == nil {
 		t.Fatal("CreateWorkspace returned nil error, want ErrBranchExists")
 	}
@@ -888,7 +990,7 @@ func TestApp_CreateWorkspace_NonWorktreeBranchSharing(t *testing.T) {
 	}
 
 	// A second non-worktree session on "main" must NOT return ErrBranchInUse.
-	_, err := a.CreateWorkspace("opencode", repo, "", "main", false)
+	_, err := a.CreateWorkspace("opencode", repo, "", "main", "", false)
 	if err != nil {
 		t.Fatalf("non-worktree branch sharing: unexpected error %v", err)
 	}
@@ -930,7 +1032,7 @@ func TestApp_CreateWorkspace_UnbornHead_ReturnsNoCommits(t *testing.T) {
 
 	countBefore := len(store.List())
 
-	_, err := a.CreateWorkspace("claude", repo, "HEAD", "feat/new", true)
+	_, err := a.CreateWorkspace("claude", repo, "HEAD", "feat/new", "", true)
 	if err == nil {
 		t.Fatal("CreateWorkspace returned nil error, want ErrNoCommits")
 	}

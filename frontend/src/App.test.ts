@@ -76,12 +76,13 @@ vi.mock("./lib/wails", () => ({
   revealInFiles:   vi.fn(async () => {}),
   readFile:        vi.fn(async () => "# mock content"),
   approve:         vi.fn(async () => {}),
-  createWorkspace: vi.fn(async (_agent: string, _repo: string, _baseRef: string, _branch: string, _worktree: boolean) => ({
+  createWorkspace: vi.fn(async (_agent: string, _repo: string, _baseRef: string, _branch: string, _title: string, _worktree: boolean) => ({
     id: "ws-new", title: "New", branch: "main", state: "idle",
     worktreePath: "/tmp/new", agent: "claude", paneId: "p-new", lastActive: "",
     repoPath: "/repo/New",
     caps: { approvals: false, attention: false },
   })),
+  setWorkspaceTitle: vi.fn(async (_id: string, _title: string) => {}),
   workspaceForBranch: vi.fn(async (_repoPath: string, _branch: string) => ({ id: "", found: false })),
   removeWorkspace: vi.fn(async () => {}),
   writeToPty:      vi.fn(async () => {}),
@@ -130,13 +131,13 @@ const fakeWorkspaces = [
   {
     id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
     worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
-    repoPath: "/repo/Alpha",
+    repoPath: "/repo/repo-alpha",
     caps: { approvals: false, attention: false },
   },
   {
     id: "ws-2", title: "Beta", branch: "feat/beta", state: "running" as const,
     worktreePath: "/tmp/beta", agent: "claude", paneId: "p2", lastActive: "",
-    repoPath: "/repo/Beta",
+    repoPath: "/repo/repo-beta",
     caps: { approvals: false, attention: false },
   },
 ];
@@ -776,7 +777,7 @@ describe("App.svelte approval card + notification hub", () => {
     {
       id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
       worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
-      repoPath: "/repo/Alpha",
+      repoPath: "/repo/repo-alpha",
       caps: { approvals: true, attention: false },
     },
   ];
@@ -997,7 +998,7 @@ describe("App.svelte NewSessionDialog", () => {
         {
           id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
           worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
-          repoPath: "/repo/Alpha",
+          repoPath: "/repo/repo-alpha",
           caps: { approvals: false, attention: false },
         },
       ])
@@ -1044,9 +1045,9 @@ describe("App.svelte NewSessionDialog", () => {
     await fireEvent.click(createBtn);
     await tick();
 
-    // createWorkspace must have been called with the 5-arg signature:
-    // agent="claude", repo="/tmp/alpha", baseRef="main" (first branch from mock), branch="feat/x", worktree=true
-    expect(createWorkspace).toHaveBeenCalledWith("claude", "/tmp/alpha", "main", expect.stringMatching(/^[A-Za-z0-9._\/-]+$/), true);
+    // createWorkspace must have been called with the 6-arg signature:
+    // agent="claude", repo="/tmp/alpha", baseRef="main" (first branch from mock), branch="feat/x", title="" (no name entered), worktree=true
+    expect(createWorkspace).toHaveBeenCalledWith("claude", "/tmp/alpha", "main", expect.stringMatching(/^[A-Za-z0-9._\/-]+$/), "", true);
 
     // Dialog must close
     await waitFor(() =>
@@ -1060,7 +1061,7 @@ describe("App.svelte NewSessionDialog", () => {
       {
         id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
         worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
-        repoPath: "/repo/Alpha",
+        repoPath: "/repo/repo-alpha",
         caps: { approvals: false, attention: false },
       },
     ]);
@@ -1186,7 +1187,7 @@ describe("App.svelte ConfirmDialog (workspace remove)", () => {
       {
         id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
         worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
-        repoPath: "/repo/Alpha",
+        repoPath: "/repo/repo-alpha",
         caps: { approvals: false, attention: false },
       },
     ]);
@@ -1251,7 +1252,7 @@ describe("App.svelte DragDrop", () => {
       {
         id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
         worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
-        repoPath: "/repo/Alpha",
+        repoPath: "/repo/repo-alpha",
         caps: { approvals: false, attention: false },
       },
     ]);
@@ -1624,7 +1625,7 @@ describe("App.svelte session:close command", () => {
       {
         id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
         worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
-        repoPath: "/repo/Alpha",
+        repoPath: "/repo/repo-alpha",
         caps: { approvals: false, attention: false },
       },
     ]);
@@ -1660,7 +1661,7 @@ describe("App.svelte session:close command", () => {
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([
       {
         id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
-        worktreePath: "/tmp/alpha", repoPath: "/repo/Alpha", agent: "claude", paneId: "p1", lastActive: "",
+        worktreePath: "/tmp/alpha", repoPath: "/repo/repo-alpha", agent: "claude", paneId: "p1", lastActive: "",
         caps: { approvals: false, attention: false },
       },
     ]);
@@ -1700,7 +1701,7 @@ describe("App.svelte shell-drawer wrappers are terminal zones", () => {
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([
       {
         id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
-        worktreePath: "/tmp/alpha", repoPath: "/repo/Alpha", agent: "claude", paneId: "p1", lastActive: "",
+        worktreePath: "/tmp/alpha", repoPath: "/repo/repo-alpha", agent: "claude", paneId: "p1", lastActive: "",
         caps: { approvals: false, attention: false },
       },
     ]);
@@ -1749,7 +1750,7 @@ describe("App.svelte worktree:open command", () => {
       {
         id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
         worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
-        repoPath: "/repo/Alpha",
+        repoPath: "/repo/repo-alpha",
         caps: { approvals: false, attention: false },
       },
     ]);
@@ -1781,13 +1782,13 @@ describe("App.svelte agent:approve-all / deny-all", () => {
     {
       id: "ws-1", title: "Alpha", branch: "main", state: "awaiting-approval" as const,
       worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
-      repoPath: "/repo/Alpha",
+      repoPath: "/repo/repo-alpha",
       caps: { approvals: true, attention: false },
     },
     {
       id: "ws-2", title: "Beta", branch: "feat/beta", state: "awaiting-approval" as const,
       worktreePath: "/tmp/beta", agent: "claude", paneId: "p2", lastActive: "",
-      repoPath: "/repo/Beta",
+      repoPath: "/repo/repo-beta",
       caps: { approvals: true, attention: false },
     },
   ];
@@ -2033,13 +2034,13 @@ describe("App.svelte approval batch buttons", () => {
     {
       id: "ws-1", title: "Alpha", branch: "main", state: "awaiting-approval" as const,
       worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
-      repoPath: "/repo/Alpha",
+      repoPath: "/repo/repo-alpha",
       caps: { approvals: true, attention: false },
     },
     {
       id: "ws-2", title: "Beta", branch: "feat/beta", state: "awaiting-approval" as const,
       worktreePath: "/tmp/beta", agent: "claude", paneId: "p2", lastActive: "",
-      repoPath: "/repo/Beta",
+      repoPath: "/repo/repo-beta",
       caps: { approvals: true, attention: false },
     },
   ];
@@ -2127,7 +2128,7 @@ describe("App.svelte sendToAgent wires Editor→writeToPty", () => {
     {
       id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
       worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
-      repoPath: "/repo/Alpha",
+      repoPath: "/repo/repo-alpha",
       caps: { approvals: false, attention: false },
     },
   ];
@@ -2307,7 +2308,7 @@ describe("App.svelte deferred remove hides workspace + shows undo toast without 
     {
       id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
       worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
-      repoPath: "/repo/Alpha",
+      repoPath: "/repo/repo-alpha",
       caps: { approvals: false, attention: false },
     },
   ];
@@ -2644,7 +2645,7 @@ describe("App.svelte: FileTree @mention prefix routes to sendToAgent", () => {
     {
       id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
       worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
-      repoPath: "/repo/Alpha",
+      repoPath: "/repo/repo-alpha",
       caps: { approvals: false, attention: false },
     },
   ];
@@ -2736,13 +2737,13 @@ describe("App.svelte: onDecision keys deletion by reqId owner, not activeId", ()
     const ws1 = {
       id: "ws-1", title: "Alpha", branch: "main", state: "awaiting-approval" as const,
       worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
-      repoPath: "/repo/Alpha",
+      repoPath: "/repo/repo-alpha",
       caps: { approvals: true, attention: false },
     };
     const ws2 = {
       id: "ws-2", title: "Beta", branch: "feat", state: "awaiting-approval" as const,
       worktreePath: "/tmp/beta", agent: "claude", paneId: "p2", lastActive: "",
-      repoPath: "/repo/Beta",
+      repoPath: "/repo/repo-beta",
       caps: { approvals: true, attention: false },
     };
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([ws1, ws2]);
@@ -2804,7 +2805,7 @@ describe("App.svelte: session:close cleans up per-workspace frontend state", () 
       {
         id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
         worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
-        repoPath: "/repo/Alpha",
+        repoPath: "/repo/repo-alpha",
         caps: { approvals: true, attention: false },
       },
     ]);

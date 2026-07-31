@@ -161,7 +161,7 @@ test("worktree=true new-branch: onCreate emits (agent, repo, baseRef, branch, tr
   // Set branch name
   await fireEvent.input(screen.getByLabelText(/^branch name$/i), { target: { value: "feat/my-feature" } });
   await fireEvent.click(screen.getByRole("button", { name: /create/i }));
-  expect(onCreate).toHaveBeenCalledWith("claude", "/home/user/proj", "main", "feat/my-feature", true);
+  expect(onCreate).toHaveBeenCalledWith("claude", "/home/user/proj", "main", "feat/my-feature", "", true);
 });
 
 test("worktree=true existing-branch: onCreate emits baseRef='' and worktree=true", async () => {
@@ -173,7 +173,7 @@ test("worktree=true existing-branch: onCreate emits baseRef='' and worktree=true
   await waitFor(() => screen.getByLabelText(/^branch$/i));
   await fireEvent.change(screen.getByLabelText(/^branch$/i), { target: { value: "feat/x" } });
   await fireEvent.click(screen.getByRole("button", { name: /create/i }));
-  expect(onCreate).toHaveBeenCalledWith("claude", "/home/user/proj", "", "feat/x", true);
+  expect(onCreate).toHaveBeenCalledWith("claude", "/home/user/proj", "", "feat/x", "", true);
 });
 
 test("worktree=false: onCreate emits baseRef='' and worktree=false", async () => {
@@ -185,7 +185,7 @@ test("worktree=false: onCreate emits baseRef='' and worktree=false", async () =>
   await waitFor(() => screen.getByLabelText(/^branch$/i));
   await fireEvent.change(screen.getByLabelText(/^branch$/i), { target: { value: "feat/x" } });
   await fireEvent.click(screen.getByRole("button", { name: /create/i }));
-  expect(onCreate).toHaveBeenCalledWith("claude", "/home/user/proj", "", "feat/x", false);
+  expect(onCreate).toHaveBeenCalledWith("claude", "/home/user/proj", "", "feat/x", "", false);
 });
 
 test("Agent field change flows through to onCreate", async () => {
@@ -201,7 +201,42 @@ test("Agent field change flows through to onCreate", async () => {
   });
   await fireEvent.click(screen.getByRole("button", { name: /create/i }));
   expect(onCreate.mock.calls[0][0]).toBe("opencode");
-  expect(onCreate.mock.calls[0][4]).toBe(true);
+  // Index 4 is the (empty) title; index 5 is the worktree boolean.
+  expect(onCreate.mock.calls[0][4]).toBe("");
+  expect(onCreate.mock.calls[0][5]).toBe(true);
+});
+
+// ── 6b. Name field (optional user-chosen session title) ──────────────────────
+
+test("Name field renders as the first field with a hint", async () => {
+  const { default: D } = await import("./NewSessionDialog.svelte");
+  render(D, { props: defaultProps() });
+  await waitFor(() => screen.getByRole("dialog", { name: /new session/i }));
+  expect(screen.getByLabelText(/^name$/i)).toBeInTheDocument();
+  expect(screen.getByText(/optional\. the repo, branch, and agent are shown next to the name\./i)).toBeInTheDocument();
+});
+
+test("entered name is passed to onCreate as the title argument", async () => {
+  const { default: D } = await import("./NewSessionDialog.svelte");
+  const onCreate = vi.fn();
+  render(D, { props: defaultProps({ onCreate }) });
+  await waitFor(() => screen.getByLabelText(/starting point/i));
+  await fireEvent.input(screen.getByLabelText(/^name$/i), { target: { value: "My Session" } });
+  await fireEvent.change(screen.getByLabelText(/starting point/i), { target: { value: "main" } });
+  await fireEvent.input(screen.getByLabelText(/^branch name$/i), { target: { value: "feat/x" } });
+  await fireEvent.click(screen.getByRole("button", { name: /create/i }));
+  expect(onCreate).toHaveBeenCalledWith("claude", "/home/user/proj", "main", "feat/x", "My Session", true);
+});
+
+test("empty name still creates (title passed as empty string)", async () => {
+  const { default: D } = await import("./NewSessionDialog.svelte");
+  const onCreate = vi.fn();
+  render(D, { props: defaultProps({ onCreate }) });
+  await waitFor(() => screen.getByLabelText(/starting point/i));
+  await fireEvent.change(screen.getByLabelText(/starting point/i), { target: { value: "main" } });
+  await fireEvent.input(screen.getByLabelText(/^branch name$/i), { target: { value: "feat/x" } });
+  await fireEvent.click(screen.getByRole("button", { name: /create/i }));
+  expect(onCreate.mock.calls[0][4]).toBe("");
 });
 
 // ── 7. Repo change reloads branches ──────────────────────────────────────────

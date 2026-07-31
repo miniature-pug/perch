@@ -7,10 +7,15 @@ import { forceRemoveWorkspace, listStaleSessions, cleanupSessions, homeShellCwd 
 import type { StaleSessionVM } from "./wails";
 
 describe("wails.ts contract", () => {
-  it("createWorkspace export accepts (agent, repoPath, baseRef, branch, worktree)", async () => {
+  it("createWorkspace export accepts (agent, repoPath, baseRef, branch, title, worktree)", async () => {
     const mod = await import("./wails");
-    // Signature: 5 params. Verify function arity.
-    expect(mod.createWorkspace.length).toBe(5);
+    // Signature: 6 params (title inserted after branch). Verify function arity.
+    expect(mod.createWorkspace.length).toBe(6);
+  });
+
+  it("setWorkspaceTitle export is a function", async () => {
+    const mod = await import("./wails");
+    expect(typeof mod.setWorkspaceTitle).toBe("function");
   });
 
   it("workspaceForBranch export is a function", async () => {

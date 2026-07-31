@@ -4,21 +4,24 @@ import { fireEvent } from "@testing-library/svelte";
 import { vi } from "vitest";
 import type { WorkspaceVM } from "./wails";
 
-// Each fake sets repoPath so its basename equals the (legacy) title — the row's
-// primary label is now the repo name (basename of repoPath), so selectors by that
-// name still resolve while the row is correlatable by repo.
+// Each fake sets title equal to the basename of repoPath — the row's primary
+// label is now the user-chosen ws.title, so selectors by that name still resolve
+// while the repo name is shown as a dim secondary span.
+// Titles are the row's bold primary label; repo basenames are kept distinct from
+// the titles so getByText(title) resolves to exactly one element (the title span),
+// while the repo name still renders as a dim secondary span.
 const workspaces: WorkspaceVM[] = [
-  { id: "ws_a", worktreePath: "/wt/a", repoPath: "/repo/feat-auth", agent: "claude", title: "feat-auth",
+  { id: "ws_a", worktreePath: "/wt/a", repoPath: "/repo/repo-auth", agent: "claude", title: "feat-auth",
     branch: "feat/auth", state: "running", caps: { approvals: false, attention: false }, paneId: "p1", lastActive: "" },
-  { id: "ws_b", worktreePath: "/wt/b", repoPath: "/repo/feat-core", agent: "claude", title: "feat-core",
+  { id: "ws_b", worktreePath: "/wt/b", repoPath: "/repo/repo-core", agent: "claude", title: "feat-core",
     branch: "feat/core", state: "idle", caps: { approvals: false, attention: false }, paneId: "p2", lastActive: "" },
-  { id: "ws_c", worktreePath: "/wt/c", repoPath: "/repo/bug-fix", agent: "claude", title: "bug-fix",
+  { id: "ws_c", worktreePath: "/wt/c", repoPath: "/repo/repo-bug", agent: "claude", title: "bug-fix",
     branch: "fix/crash", state: "awaiting-approval", caps: { approvals: true, attention: false }, paneId: "p3", lastActive: "" },
-  { id: "ws_d", worktreePath: "/wt/d", repoPath: "/repo/done-work", agent: "claude", title: "done-work",
+  { id: "ws_d", worktreePath: "/wt/d", repoPath: "/repo/repo-done", agent: "claude", title: "done-work",
     branch: "feat/done", state: "done", caps: { approvals: false, attention: false }, paneId: "p4", lastActive: "" },
-  { id: "ws_e", worktreePath: "/wt/e", repoPath: "/repo/errored-work", agent: "claude", title: "errored-work",
+  { id: "ws_e", worktreePath: "/wt/e", repoPath: "/repo/repo-errored", agent: "claude", title: "errored-work",
     branch: "feat/err", state: "errored", caps: { approvals: false, attention: false }, paneId: "p5", lastActive: "" },
-  { id: "ws_q", worktreePath: "/wt/q", repoPath: "/repo/asking-work", agent: "claude", title: "asking-work",
+  { id: "ws_q", worktreePath: "/wt/q", repoPath: "/repo/repo-asking", agent: "claude", title: "asking-work",
     branch: "feat/ask", state: "awaiting-input", caps: { approvals: false, attention: true }, paneId: "p6", lastActive: "" },
 ];
 
@@ -284,26 +287,29 @@ test("row renders repo · branch · agent · relative last-active", async () => 
     paneId: "pr", lastActive: recentIso,
   }];
   render(Sidebar, { props: { workspaces: ws, activeId: null, onSelect: () => {}, onNew: () => {} } });
-  // Primary label is the repo name (basename of repoPath).
+  // Repo name (basename of repoPath) is shown as a dim secondary span.
   expect(screen.getByText("my-repo")).toBeInTheDocument();
   expect(screen.getByText(/feat\/resume/)).toBeInTheDocument();
   expect(screen.getByText(/opencode/i)).toBeInTheDocument();
   expect(screen.getByText(/2d ago/i)).toBeInTheDocument();
 });
 
-test("row primary label is the repo name and aria-label is 'repo branch'", async () => {
+test("row primary label is the user title; repo name shown as secondary context", async () => {
   const { default: Sidebar } = await import("./Sidebar.svelte");
   const ws: WorkspaceVM[] = [{
-    id: "ws-x", worktreePath: "/wt/x", repoPath: "/home/me/perch", agent: "claude", title: "claude-work",
+    id: "ws-x", worktreePath: "/wt/x", repoPath: "/home/me/perch", agent: "claude", title: "My Session",
     branch: "claude/work", state: "idle", caps: { approvals: false, attention: false },
     paneId: "px", lastActive: "",
   }];
   render(Sidebar, { props: { workspaces: ws, activeId: null, onSelect: () => {}, onNew: () => {} } });
-  // The bold primary label shows the repo basename, not the branch slug.
+  // The bold primary label shows the user-chosen title.
   const titleSpan = document.querySelector(".workspace-title")!;
-  expect(titleSpan.textContent).toBe("perch");
-  // aria-label correlates repo + branch.
-  const btn = screen.getByRole("button", { name: "perch claude/work" });
+  expect(titleSpan.textContent).toBe("My Session");
+  // The repo basename is still visible as a dim secondary span.
+  const repoSpan = document.querySelector(".workspace-repo")!;
+  expect(repoSpan.textContent).toBe("perch");
+  // aria-label correlates title + repo + branch.
+  const btn = screen.getByRole("button", { name: "My Session perch claude/work" });
   expect(btn).toBeInTheDocument();
 });
 
@@ -324,4 +330,76 @@ test("empty hint renders when workspaces is empty", async () => {
   render(Sidebar, { props: { workspaces: [], activeId: null, onSelect: () => {}, onNew: () => {} } });
   expect(screen.getByTestId("sidebar-empty-hint")).toBeInTheDocument();
   expect(screen.getByTestId("sidebar-empty-hint")).toHaveTextContent(/no sessions/i);
+});
+
+// ---------------------------------------------------------------------------
+// Feature: inline rename (double-click / right-click → input; commit / cancel)
+// ---------------------------------------------------------------------------
+
+test("double-click on the title enters an input seeded with the current title", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  const onEditStart = vi.fn();
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {}, onEditStart } });
+  await waitFor(() => screen.getByText("feat-auth"));
+
+  const titleSpan = document.querySelector(".workspace-title")!;
+  await fireEvent.dblClick(titleSpan);
+  const input = screen.getByLabelText(/rename session/i) as HTMLInputElement;
+  expect(input).toBeInTheDocument();
+  expect(input.value).toBe("feat-auth");
+  expect(onEditStart).toHaveBeenCalled();
+});
+
+test("right-click on the title enters an input (contextmenu prevented)", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {} } });
+  await waitFor(() => screen.getByText("feat-auth"));
+
+  const titleSpan = document.querySelector(".workspace-title")!;
+  await fireEvent.contextMenu(titleSpan);
+  expect(screen.getByLabelText(/rename session/i)).toBeInTheDocument();
+});
+
+test("committing on Enter calls onRename with the new trimmed title", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  const onRename = vi.fn();
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {}, onRename } });
+  await waitFor(() => screen.getByText("feat-auth"));
+
+  const titleSpan = document.querySelector(".workspace-title")!;
+  await fireEvent.dblClick(titleSpan);
+  const input = screen.getByLabelText(/rename session/i);
+  await fireEvent.input(input, { target: { value: "  Renamed Auth  " } });
+  await fireEvent.keyDown(input, { key: "Enter" });
+  expect(onRename).toHaveBeenCalledWith("ws_a", "Renamed Auth");
+  // Edit mode exits: the input is gone, the title span is back.
+  await waitFor(() => expect(screen.queryByLabelText(/rename session/i)).not.toBeInTheDocument());
+});
+
+test("Escape cancels the rename without calling onRename", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  const onRename = vi.fn();
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {}, onRename } });
+  await waitFor(() => screen.getByText("feat-auth"));
+
+  const titleSpan = document.querySelector(".workspace-title")!;
+  await fireEvent.dblClick(titleSpan);
+  const input = screen.getByLabelText(/rename session/i);
+  await fireEvent.input(input, { target: { value: "Should Not Commit" } });
+  await fireEvent.keyDown(input, { key: "Escape" });
+  expect(onRename).not.toHaveBeenCalled();
+  await waitFor(() => expect(screen.queryByLabelText(/rename session/i)).not.toBeInTheDocument());
+});
+
+test("committing an unchanged title does NOT call onRename", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  const onRename = vi.fn();
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {}, onRename } });
+  await waitFor(() => screen.getByText("feat-auth"));
+
+  const titleSpan = document.querySelector(".workspace-title")!;
+  await fireEvent.dblClick(titleSpan);
+  const input = screen.getByLabelText(/rename session/i);
+  await fireEvent.keyDown(input, { key: "Enter" });
+  expect(onRename).not.toHaveBeenCalled();
 });

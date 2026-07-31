@@ -27,7 +27,7 @@
   import NotificationHub    from "./lib/NotificationHub.svelte";
   import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead, markAllRead, dropForWorkspace } from "./lib/stores/notifications.svelte";
   import CleanupPanel from "./lib/CleanupPanel.svelte";
-  import { listWorkspaces, createWorkspace, workspaceForBranch, removeWorkspace, openWorkspace, closeWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, onWorkspaceAttach, approve, branches, readFile, setWindowFocus, writeToPty, discoverRepos, diffStat, listStaleSessions, forceRemoveWorkspace, homeShellCwd as fetchHomeShellCwd } from "./lib/wails";
+  import { listWorkspaces, createWorkspace, setWorkspaceTitle, workspaceForBranch, removeWorkspace, openWorkspace, closeWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, onWorkspaceAttach, approve, branches, readFile, setWindowFocus, writeToPty, discoverRepos, diffStat, listStaleSessions, forceRemoveWorkspace, homeShellCwd as fetchHomeShellCwd } from "./lib/wails";
   import type { WorkspaceVM, ApprovalReq, StaleSessionVM } from "./lib/wails";
   import { UNDO_REMOVE_DELAY_MS, SIDEBAR_MIN_W, SIDEBAR_MAX_W, SHELL_MIN_H, SHELL_MAX_H, RESIZE_STEP_PX, THEMES, MIME_SESSION, MENTION_PREFIX, AGENT_CLAUDE, AGENT_OPENCODE } from "./lib/constants";
 
@@ -346,7 +346,7 @@
     newSessionInitialAgent = typeof initialAgent === "string" ? initialAgent : null;
   }
 
-  async function handleCreate(agent: string, repo: string, baseRef: string, branch: string, worktree: boolean) {
+  async function handleCreate(agent: string, repo: string, baseRef: string, branch: string, title: string, worktree: boolean) {
     // Guard: if the branch is already owned by a perch session, offer resume instead.
     const existing = await workspaceForBranch(repo, branch);
     if (existing.found) {
@@ -357,7 +357,7 @@
       return;
     }
     try {
-      const vm = await createWorkspace(agent, repo, baseRef, branch, worktree);
+      const vm = await createWorkspace(agent, repo, baseRef, branch, title, worktree);
       workspaces = await listWorkspaces();
       newSessionOpen = false;
       // Creating a session spawns its pty immediately. onSelect sets activeId
@@ -777,7 +777,9 @@
             }}
           />
         {/if}
-        <Sidebar workspaces={shownWorkspaces} {activeId} onSelect={onSelect} onNew={openNewSession} onReorder={handleReorder} diffStats={wsDiffStats} openIds={openIds} />
+        <Sidebar workspaces={shownWorkspaces} {activeId} onSelect={onSelect} onNew={openNewSession} onReorder={handleReorder} diffStats={wsDiffStats} openIds={openIds}
+          onRename={(id, title) => { const ws = workspaces.find(w => w.id === id); if (ws) ws.title = title; setWorkspaceTitle(id, title); }}
+          onEditStart={() => { previewWs = null; }} />
       </aside>
 
       <div class="divider divider-v" role="slider" aria-label="Resize sidebar"

@@ -436,7 +436,10 @@ type AlwaysRule struct {
 //	                             WorktreePath == RepoPath, Worktree=false
 //
 // Returns ErrBranchInUse if a worktree session already tracks branch in this repo.
-func (a *App) CreateWorkspace(agentName, repoPath, baseRef, branch string, worktree bool) (WorkspaceVM, error) {
+//
+// title is the optional user-chosen session name. When blank (after trimming) it
+// falls back to the branch slug, so behavior is unchanged when no name is given.
+func (a *App) CreateWorkspace(agentName, repoPath, baseRef, branch, title string, worktree bool) (WorkspaceVM, error) {
 	// Gate 1: repoPath must exist under a configured root.
 	if err := validateWorktreeUnderRoots(repoPath, a.roots); err != nil {
 		return WorkspaceVM{}, err
@@ -525,14 +528,19 @@ func (a *App) CreateWorkspace(agentName, repoPath, baseRef, branch string, workt
 	}
 
 	now := time.Now()
-	handle := gitpkg.SlugifyBranch(branch)
+	// Resolve the session title: the user-chosen name when given, otherwise the
+	// branch slug (the historical default), so behavior is unchanged when blank.
+	title = strings.TrimSpace(title)
+	if title == "" {
+		title = gitpkg.SlugifyBranch(branch)
+	}
 	w := registry.Workspace{
 		ID:           id,
 		RepoPath:     repoPath,
 		WorktreePath: worktreePath,
 		Worktree:     worktree,
 		Agent:        agentName,
-		Title:        handle,
+		Title:        title,
 		Branch:       branch,
 		BaseRef:      baseRef,
 		LastActive:   now,
@@ -546,12 +554,32 @@ func (a *App) CreateWorkspace(agentName, repoPath, baseRef, branch string, workt
 		WorktreePath: worktreePath,
 		RepoPath:     repoPath,
 		Agent:        agentName,
-		Title:        handle,
+		Title:        title,
 		Branch:       branch,
 		PaneID:       paneIDFor(id),
 		LastActive:   now,
 		State:        agent.StateIdle,
 	}, nil
+}
+
+// SetWorkspaceTitle renames a workspace. It validates id against the same charset
+// allowlist used by the other id-taking bound methods, loads the record from the
+// store (erroring on an unknown id), rejects a blank title (so the UI keeps the
+// old name), and persists the new title. Auto-bound (whole App is bound).
+func (a *App) SetWorkspaceTitle(id, title string) error {
+	if err := validateSessionID(id); err != nil {
+		return fmt.Errorf("invalid workspace id: %w", err)
+	}
+	w, ok := a.store.Get(id)
+	if !ok {
+		return fmt.Errorf("unknown workspace %q", id)
+	}
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return fmt.Errorf("title must not be blank")
+	}
+	w.Title = title
+	return a.store.Upsert(w)
 }
 
 // WorkspaceForBranch returns the ID of the worktree session that is tracking

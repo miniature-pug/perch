@@ -147,7 +147,7 @@ func TestE2E_HeadlessFullLoop(t *testing.T) {
 
 	// ── CreateWorkspace ───────────────────────────────────────────────────────
 	// Use "feat/e2e" to avoid collision with the repo's default "main" branch.
-	vm, err := a.CreateWorkspace("claude", repo, "main", "feat/e2e", true)
+	vm, err := a.CreateWorkspace("claude", repo, "main", "feat/e2e", "", true)
 	if err != nil {
 		t.Fatalf("CreateWorkspace: %v", err)
 	}
