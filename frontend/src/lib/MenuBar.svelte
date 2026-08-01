@@ -185,12 +185,13 @@
     list-style: none;
     margin: 0;
     padding: var(--perch-sp-1) 0;
-    background: var(--perch-glass-bg);
-    -webkit-backdrop-filter: var(--perch-glass-filter);
-    backdrop-filter: var(--perch-glass-filter);
+    /* Solid, never glass: this dropdown can overlap the agent terminal, where
+       WebKitGTK paints backdrop-filter surfaces transparent over the composited
+       terminal subtree (mirrors the ApprovalCard fix). */
+    background: var(--perch-glass-bg-solid);
     border: 1px solid var(--perch-glass-border);
     border-radius: var(--perch-radius-md);
-    box-shadow: var(--perch-glass-shadow);
+    box-shadow: var(--perch-shadow-float);
     z-index: var(--perch-z-menu-dropdown);
   }
 

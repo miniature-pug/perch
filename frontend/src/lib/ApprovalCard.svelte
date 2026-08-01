@@ -69,13 +69,14 @@
 <style>
   /* Floating card — App positions bottom-center; we own the card chrome */
   .approval-card {
-    background: var(--perch-glass-bg);
-    -webkit-backdrop-filter: var(--perch-glass-filter);
-    backdrop-filter: var(--perch-glass-filter);
+    /* The blocking prompt must stay legible over the terminal, where WebKitGTK
+       paints backdrop-filter surfaces transparent over the composited terminal
+       subtree. Always solid, never glass. */
+    background: var(--perch-glass-bg-solid);
     color: var(--perch-text);
     border: 1px solid var(--perch-glass-border);
     border-radius: var(--perch-radius-lg);
-    box-shadow: var(--perch-glass-shadow);
+    box-shadow: var(--perch-shadow-float);
     padding: var(--perch-sp-2) var(--perch-sp-3);
     min-width: 360px;
     max-width: 520px;

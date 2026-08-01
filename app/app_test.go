@@ -1342,6 +1342,58 @@ func TestApp_OpenWorkspace_UnknownID(t *testing.T) {
 	}
 }
 
+// OpenWorkspace must bump LastActive so an actively-opened session does not keep
+// reading as stale (LastActive was previously only ever set at creation, which
+// ListStaleSessions and sidebar ordering key on).
+func TestApp_OpenWorkspace_AdvancesLastActive(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+
+	wt := t.TempDir()
+	old := time.Now().Add(-48 * time.Hour)
+	_ = store.Upsert(registry.Workspace{
+		ID:           "ws-la",
+		WorktreePath: wt,
+		Agent:        "claude",
+		Title:        "t",
+		LastActive:   old,
+	})
+
+	fm := agent.NewFakeMonitor(nil)
+	fm.SetLaunchCmd("claude\n")
+
+	a := &App{
+		store:    store,
+		roots:    []string{wt},
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+		cancels:  map[string]context.CancelFunc{},
+		spawnPty: func(ctx context.Context, cwd string, argv []string, dataEvent, exitEvent string,
+			ef internalpty.EmitFunc, cols, rows uint16) (*internalpty.Bridge, error) {
+			return internalpty.NewBridgeForTest(func() error { return nil }), nil
+		},
+		newMonitor: func(toolName string, _ agent.Adapter) (agent.Monitor, error) { return fm, nil },
+		newAdapter: fakeAdapterSeam(&fakeAdapter{name: "claude", detect: true}),
+	}
+
+	before := time.Now()
+	if err := a.OpenWorkspace("ws-la"); err != nil {
+		t.Fatalf("OpenWorkspace: %v", err)
+	}
+	w, ok := store.Get("ws-la")
+	if !ok {
+		t.Fatal("workspace missing after open")
+	}
+	if !w.LastActive.After(old) {
+		t.Errorf("LastActive not advanced: got %v, was %v", w.LastActive, old)
+	}
+	if w.LastActive.Before(before) {
+		t.Errorf("LastActive %v is before the open call at %v", w.LastActive, before)
+	}
+}
+
 func TestApp_WriteToPty_RoutesToBridge(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	var written []byte

@@ -30,11 +30,12 @@
       <button onclick={() => onToggleCollapse?.()} aria-label="collapse shell">▼ Collapse</button>
     {/if}
   </div>
-  {#if !collapsed}
-    <section aria-label="shell" class="shell-body">
-      <Terminal {paneId} {cwd} />
-    </section>
-  {/if}
+  <!-- Keep the Terminal mounted across collapse/expand (hide, do not unmount) so the
+       xterm buffer and its pty subscription survive; unmounting rebuilt a blank xterm
+       that stayed empty until the next pty output. -->
+  <section aria-label="shell" class="shell-body" style:display={collapsed ? "none" : undefined}>
+    <Terminal {paneId} {cwd} />
+  </section>
 </div>
 
 <style>

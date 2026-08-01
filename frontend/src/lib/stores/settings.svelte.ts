@@ -29,11 +29,23 @@ class SettingsStore {
              staleThresholdDays: this.staleThresholdDays };
   }
 
-  async setTheme(v: string): Promise<void>                              { this.theme = v;       await saveSettings(this.snap()); }
-  async setDensity(v: "dense"|"comfortable"|"ultra"): Promise<void>     { this.density = v;     await saveSettings(this.snap()); }
-  async setFont(v: string): Promise<void>                               { this.font = v;        await saveSettings(this.snap()); }
-  async setDnd(v: boolean): Promise<void>                               { this.dnd = v;         await saveSettings(this.snap()); }
-  async setGlass(v: boolean): Promise<void>                             { this.glass = v;       await saveSettings(this.snap()); }
+  // Persist a UI-pref change without clobbering backend-owned state. alwaysRules
+  // is backend-owned: Approve(...,"always") appends to the settings blob with no
+  // event, so pull the latest before a UI-pref save or we clobber a rule added
+  // since load().
+  private async persistPref(): Promise<void> {
+    try { const fresh = await getSettings(); this.alwaysRules = fresh.alwaysRules ?? []; } catch { /* keep current on read failure */ }
+    await saveSettings(this.snap());
+  }
+
+  async setTheme(v: string): Promise<void>                              { this.theme = v;       await this.persistPref(); }
+  async setDensity(v: "dense"|"comfortable"|"ultra"): Promise<void>     { this.density = v;     await this.persistPref(); }
+  async setFont(v: string): Promise<void>                               { this.font = v;        await this.persistPref(); }
+  async setDnd(v: boolean): Promise<void>                               { this.dnd = v;         await this.persistPref(); }
+  async setGlass(v: boolean): Promise<void>                             { this.glass = v;       await this.persistPref(); }
+  // setAlwaysRules is the authoritative writer of rules: it must NOT reload (that
+  // would race its own write). The frontend never appends rules — only overwrites
+  // via the settings UI — so its in-memory alwaysRules is authoritative here.
   async setAlwaysRules(v: AppSettings["alwaysRules"]): Promise<void>    { this.alwaysRules = v; await saveSettings(this.snap()); }
 }
 

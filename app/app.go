@@ -623,6 +623,13 @@ func (a *App) OpenWorkspace(id string) error {
 		return fmt.Errorf("unknown workspace %q", id)
 	}
 
+	// Bump LastActive on open: ListStaleSessions and sidebar ordering key on it,
+	// so a session that is actively opened must not keep reading as stale (it was
+	// only ever set at creation). Persist before spawning so the freshened
+	// ordering is durable even if a later step fails.
+	w.LastActive = time.Now()
+	_ = a.store.Upsert(w)
+
 	paneID := paneIDFor(id)
 	event := ptyDataEventPrefix + paneID
 	exitEvent := ptyExitEventPrefix + paneID
@@ -1506,6 +1513,39 @@ func (a *App) Branches(repo string) ([]string, error) {
 // Approve routes a tool-approval decision to the owning Monitor.
 // reqID format: "<raw>:<workspaceID>". decision: "allow"|"deny"|"always".
 // On "always", an AlwaysRule is persisted to Settings.
+// PendingApprovalVM is one still-undecided approval request, tagged with the
+// workspace it belongs to so the frontend can rebuild its per-workspace queue.
+type PendingApprovalVM struct {
+	WorkspaceID string            `json:"workspaceId"`
+	Req         agent.ApprovalReq `json:"req"`
+}
+
+// PendingApprovals returns every approval request still awaiting a decision, so
+// the frontend can rebuild its approval queue after a reload or a late open (the
+// agent:event carrying an approval is a one-shot — if it arrives before the
+// workspace is listed or after a webview reload it is otherwise lost and the
+// agent's blocked hook wedges forever). The pending map key is the composed
+// ReqID "<raw>:<workspaceID>"; derive WorkspaceID the same way Approve routes it
+// (strings.LastIndex ":"). The stored ApprovalReq.ReqID is already the composed
+// id the frontend keys its queue on, so it is used verbatim as Req.
+func (a *App) PendingApprovals() []PendingApprovalVM {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	// Return an empty (never nil) slice so it marshals to [] not null.
+	out := make([]PendingApprovalVM, 0, len(a.pending))
+	for key, req := range a.pending {
+		sep := strings.LastIndex(key, ":")
+		if sep < 0 {
+			continue // malformed key — skip rather than mis-route
+		}
+		out = append(out, PendingApprovalVM{
+			WorkspaceID: key[sep+1:],
+			Req:         req,
+		})
+	}
+	return out
+}
+
 func (a *App) Approve(reqID, decision string) error {
 	sep := strings.LastIndex(reqID, ":")
 	if sep < 0 {

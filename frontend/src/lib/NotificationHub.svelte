@@ -62,11 +62,12 @@
   .notif-hub {
     display: flex;
     flex-direction: column;
-    background: var(--perch-glass-bg);
-    -webkit-backdrop-filter: var(--perch-glass-filter);
-    backdrop-filter: var(--perch-glass-filter);
+    /* Solid, never glass: this panel can overlap the agent terminal, where
+       WebKitGTK paints backdrop-filter surfaces transparent over the composited
+       terminal subtree (mirrors the ApprovalCard fix). */
+    background: var(--perch-glass-bg-solid);
     border-left: 1px solid var(--perch-glass-border);
-    box-shadow: var(--perch-glass-shadow);
+    box-shadow: var(--perch-shadow-float);
     width: 320px;
     max-height: 60vh;
     font-family: var(--perch-font-sans);

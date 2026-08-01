@@ -55,6 +55,7 @@ interface App {
   ResizePty(paneId: string, cols: number, rows: number): Promise<void>;
   OpenShell(paneId: string, cwd: string): Promise<void>;
   Approve(reqId: string, decision: string): Promise<void>;
+  PendingApprovals(): Promise<{ workspaceId: string; req: ApprovalReq }[]>;
   DiffStat(worktree: string): Promise<FileDiff[]>;
   Hunks(worktree: string, file: string): Promise<Hunk[]>;
   StageHunk(worktree: string, file: string, index: number): Promise<void>;
@@ -100,6 +101,9 @@ export const resizePty  = (paneId: string, cols: number, rows: number)          
 export const openShell  = (paneId: string, cwd: string)                           => app().OpenShell(paneId, cwd);
 // Approvals
 export const approve = (reqId: string, decision: "allow"|"deny"|"always")         => app().Approve(reqId, decision);
+// Every approval still awaiting a decision — seeded on mount/open to rebuild the
+// queue after a reload or a late open (the agent:event carrying it is one-shot).
+export function pendingApprovals(): Promise<{ workspaceId: string; req: ApprovalReq }[]> { return app().PendingApprovals(); }
 // Git
 export const diffStat    = (worktree: string)                                     => app().DiffStat(worktree);
 export const hunks       = (worktree: string, file: string)                       => app().Hunks(worktree, file);

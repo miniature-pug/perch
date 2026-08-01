@@ -136,6 +136,7 @@
         class:drag-over={dragOverId === ws.id}
         draggable="true"
         ondragstart={(e) => handleSessionDragStart(e, ws.id)}
+        ondragenter={(e) => handleSessionDragOver(e, ws.id)}
         ondragover={(e) => handleSessionDragOver(e, ws.id)}
         ondragleave={handleSessionDragLeave}
         ondrop={(e) => handleSessionDrop(e, ws.id)}

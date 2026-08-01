@@ -68,6 +68,46 @@ describe("settings store", () => {
     );
   });
 
+  // A UI-pref save must preserve an Always rule the backend appended AFTER load.
+  // Approve(...,"always") writes to the settings blob with no event, so the store's
+  // in-memory alwaysRules is stale; persistPref re-reads it before saving.
+  it("setTheme preserves an alwaysRule added to the backend after load", async () => {
+    const w = await import("../wails");
+    // load() sees no rules...
+    vi.mocked(w.getSettings).mockResolvedValueOnce({
+      theme: "gruvbox", density: "dense", font: "geist", dnd: false, glassDisabled: false, alwaysRules: [],
+    });
+    const { settings } = await import("./settings.svelte");
+    await settings.load();
+    expect(settings.alwaysRules).toEqual([]);
+    // ...then the backend appends a rule (e.g. user clicked "always" in a card).
+    const rule = { agent: "claude", tool: "Bash", pattern: "ls", hash: "abc" };
+    vi.mocked(w.getSettings).mockResolvedValueOnce({
+      theme: "gruvbox", density: "dense", font: "geist", dnd: false, glassDisabled: false, alwaysRules: [rule],
+    });
+    await settings.setTheme("tokyo-night");
+    // The save payload must carry the backend-added rule, not the stale empty list.
+    expect(vi.mocked(w.saveSettings)).toHaveBeenCalledWith(
+      expect.objectContaining({ theme: "tokyo-night", alwaysRules: [rule] }),
+    );
+    expect(settings.alwaysRules).toEqual([rule]);
+  });
+
+  // setAlwaysRules is the authoritative writer — it must NOT re-read (that would
+  // race its own write) and must persist exactly what it was given.
+  it("setAlwaysRules writes the given rules without re-reading the backend", async () => {
+    const { settings } = await import("./settings.svelte");
+    const w = await import("../wails");
+    await settings.load();
+    vi.mocked(w.getSettings).mockClear();
+    const rules = [{ agent: "claude", tool: "Edit", pattern: "x", hash: "h" }];
+    await settings.setAlwaysRules(rules);
+    expect(vi.mocked(w.getSettings)).not.toHaveBeenCalled();
+    expect(vi.mocked(w.saveSettings)).toHaveBeenCalledWith(
+      expect.objectContaining({ alwaysRules: rules }),
+    );
+  });
+
   // Issue B: staleThresholdDays must round-trip through load → setTheme → saveSettings
   it("staleThresholdDays is preserved in SaveSettings payload after unrelated UI change", async () => {
     const w = await import("../wails");

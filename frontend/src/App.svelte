@@ -27,7 +27,7 @@
   import NotificationHub    from "./lib/NotificationHub.svelte";
   import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead, markAllRead, dropForWorkspace } from "./lib/stores/notifications.svelte";
   import CleanupPanel from "./lib/CleanupPanel.svelte";
-  import { listWorkspaces, createWorkspace, setWorkspaceTitle, workspaceForBranch, removeWorkspace, openWorkspace, closeWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, onWorkspaceAttach, approve, branches, readFile, setWindowFocus, writeToPty, discoverRepos, diffStat, listStaleSessions, forceRemoveWorkspace, homeShellCwd as fetchHomeShellCwd } from "./lib/wails";
+  import { listWorkspaces, createWorkspace, setWorkspaceTitle, workspaceForBranch, removeWorkspace, openWorkspace, closeWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, onWorkspaceAttach, approve, pendingApprovals, branches, readFile, setWindowFocus, writeToPty, discoverRepos, diffStat, listStaleSessions, forceRemoveWorkspace, homeShellCwd as fetchHomeShellCwd } from "./lib/wails";
   import type { WorkspaceVM, ApprovalReq, StaleSessionVM } from "./lib/wails";
   import { UNDO_REMOVE_DELAY_MS, SIDEBAR_MIN_W, SIDEBAR_MAX_W, SHELL_MIN_H, SHELL_MAX_H, RESIZE_STEP_PX, THEMES, MIME_SESSION, MENTION_PREFIX, AGENT_CLAUDE, AGENT_OPENCODE } from "./lib/constants";
 
@@ -65,10 +65,11 @@
   // never touches this set). SvelteSet so .add()/.delete()/.has() are reactive.
   let attnAck = new SvelteSet<string>();
 
-  // Awaiting-input auto-focus: a ref to the primary agent terminal so we can
-  // route the keyboard to it without a click, plus a transient emphasis flag
-  // pulsed when the ACTIVE agent asks for input.
-  let primaryTerm    = $state<{ focus: () => void } | undefined>(undefined);
+  // Awaiting-input auto-focus: a per-session ref map to each open agent terminal
+  // so we can route the keyboard to the ACTIVE one without a click, plus a
+  // transient emphasis flag pulsed when the ACTIVE agent asks for input. Keyed
+  // by session id because every open session now keeps its own Terminal mounted.
+  let termRefs       = $state<Record<string, { focus: () => void }>>({});
   let emphasizeInput = $state(false);
 
   // Repo discovery — populated lazily when the New Session dialog opens.
@@ -130,6 +131,16 @@
     if (viewing) untrack(() => attnAck.add(id!));
   });
 
+  // Invariant: the active session is never ALSO the split session. Each open
+  // session keeps exactly one Terminal bound to its paneId; the split session's
+  // Terminal lives ONLY in the secondary pane (the primary keep-alive loop filters
+  // it out). If navigation makes the split session active it would be filtered out
+  // of the primary AND shown in the secondary — a single pane, no primary. Clear
+  // the split id in that case so the secondary pane shows its picker instead.
+  $effect(() => {
+    if (layout.split && layout.splitId !== null && layout.splitId === activeId) layout.setSplitId(null);
+  });
+
   // Dialog / overlay state
   let newSessionOpen        = $state(false);
   let newSessionInitialAgent = $state<string | null>(null);
@@ -145,9 +156,22 @@
 
   const active          = $derived(workspaces.find(w => w.id === activeId) ?? null);
   const unreadCount     = $derived(getItems().filter(n => !n.read).length);
-  // Cross-workspace pending count: every queued request across ALL sessions.
-  // Drives the batch-button "N pending" indicator and the badge count.
-  const approvalQueue   = $derived(Object.values(approvals).flat() as import("./lib/wails").ApprovalReq[]);
+  // Every session with a live pty this app-run. The agent terminals and shell
+  // drawers loop over this so each open session keeps its own kept-alive xterm
+  // (hidden via display, never keyed away) — switching sessions toggles
+  // visibility instead of rebuilding a blank pane. openIds is a SvelteSet and
+  // workspaces is $state, so this stays reactive to both.
+  const openWorkspaces  = $derived(workspaces.filter(w => openIds.has(w.id)));
+  // Sessions whose agent Terminal is kept MOUNTED: every open session, plus the
+  // active session if its pty has just exited (not in openIds). Keeping the
+  // exited-but-active pane mounted preserves its final xterm buffer (the
+  // "[process exited]" line) under the Reopen overlay instead of unmounting the
+  // xterm the instant the pty dies.
+  const mountedWorkspaces = $derived(
+    active && !openIds.has(active.id)
+      ? [...openWorkspaces, active]
+      : openWorkspaces
+  );
 
   // Apply user-defined order: ids in layout.order come first (in that order),
   // remaining workspaces (not yet in order) follow in backend order.
@@ -224,7 +248,7 @@
     emphasizeInput = false; // reset so the pulse restarts even on a rapid re-ask
     requestAnimationFrame(() => {
       emphasizeInput = true;
-      primaryTerm?.focus();
+      termRefs[activeId ?? ""]?.focus();
     });
   }
 
@@ -250,10 +274,33 @@
 
     // Subscribe synchronously BEFORE any await so off-fns are always captured.
     offAgentEvent = onAgentEvent((ev) => {
+      // Enqueue an approval BEFORE the workspace-listed guard below: the queue is
+      // keyed only by ev.workspaceId and needs no `ws` object. A one-shot approval
+      // frame that arrives before the workspace is listed (fresh open) or after a
+      // webview reload must still be captured — dropping it here would wedge the
+      // agent forever (its hook blocks waiting for a decision that can never come).
+      if (ev.approval) {
+        // PUSH onto the workspace's queue (dedupe by reqId so a re-delivered
+        // event never enqueues the same request twice).
+        const q = approvals[ev.workspaceId] ?? [];
+        if (!q.some(r => r.reqId === ev.approval!.reqId)) {
+          approvals[ev.workspaceId] = [...q, ev.approval];
+        }
+      }
       const ws = workspaces.find(w => w.id === ev.workspaceId);
       if (!ws) return;
       const prev = ws.state;
       if (ev.state) ws.state = ev.state;
+      // A state transition that RESOLVES a blocking condition (question answered
+      // in the agent's own TUI → perch auto-allows with no decideOne; or an error
+      // that cleared) leaves its blocking notification lit forever. Drop this
+      // session's blocking notifs on the edge into a resolved state. NOT on
+      // "errored" (an unresolved error must keep its notif). Harmless backstop for
+      // approval notifs — the decideOne queue-empty clear already covers those.
+      if (ev.state && prev !== ev.state &&
+          (ev.state === "running" || ev.state === "idle" || ev.state === "done")) {
+        dropForWorkspace(ev.workspaceId);
+      }
       // A FRESH question un-acknowledges the session so its left-pane "asking
       // you" badge re-raises even on a backgrounded, already-acked session. We
       // key on the QUESTION EVENT itself (kind === "question"), NOT on the
@@ -266,14 +313,6 @@
       // draws the eye); a backgrounded session re-raises the badge.
       if (ev.kind === "question") {
         attnAck.delete(ev.workspaceId);
-      }
-      if (ev.approval) {
-        // PUSH onto the workspace's queue (dedupe by reqId so a re-delivered
-        // event never enqueues the same request twice).
-        const q = approvals[ev.workspaceId] ?? [];
-        if (!q.some(r => r.reqId === ev.approval!.reqId)) {
-          approvals[ev.workspaceId] = [...q, ev.approval];
-        }
       }
       // Only the ACTIVE workspace, only the agent view, only on the edge.
       if (ev.state && shouldFocusAwaitingInput(prev, ev.state, ev.workspaceId, activeId, layout.view)) {
@@ -308,6 +347,11 @@
 
     await Promise.all([settings.load(), layout.restore()]);
     workspaces = await listWorkspaces();
+    // Seed the approval queue from the backend's authoritative pending set: an
+    // approval frame delivered before this mount (or before a webview reload) is a
+    // lost one-shot otherwise, wedging the agent's blocked hook forever. Fire and
+    // forget (like refreshDiffStat) so it never delays the rest of startup.
+    seedPendingApprovals();
     // Refresh diffstats for all loaded workspaces (fire-and-forget, event-driven updates thereafter).
     for (const ws of workspaces) refreshDiffStat(ws);
     try {
@@ -364,8 +408,37 @@
     openIds.add(id);
     try {
       await openWorkspace(id);
+      // Refresh caps/state now that the monitor is live. openWorkspace registers
+      // the backend Monitor, so a fresh ListWorkspaces returns real Capabilities
+      // (approvals/attention). Without this refetch the session keeps its pre-open
+      // all-false caps snapshot, and the approval card's caps.approvals gate hides
+      // a real, queued approval request.
+      workspaces = await listWorkspaces();
+      // A one-shot approval frame may have been emitted while this session was
+      // still spawning (before its monitor was live / before it was listed);
+      // reconcile the backend's authoritative pending set so a card surfaces.
+      await seedPendingApprovals();
     } catch {
       openIds.delete(id);
+    }
+  }
+
+  // Rebuild the approval queue from the backend's authoritative pending set. The
+  // agent:event carrying an approval is a one-shot, so a frame that arrived before
+  // the workspace was listed or before a webview reload would otherwise be lost
+  // (wedging the agent's blocked hook forever). MERGES — never replaces — deduping
+  // by reqId so an already-queued request is not duplicated.
+  async function seedPendingApprovals() {
+    try {
+      const pending = await pendingApprovals();
+      for (const { workspaceId, req } of pending) {
+        const q = approvals[workspaceId] ?? [];
+        if (!q.some(r => r.reqId === req.reqId)) {
+          approvals[workspaceId] = [...q, req];
+        }
+      }
+    } catch {
+      // non-fatal — the queue simply stays as-is
     }
   }
 
@@ -386,15 +459,20 @@
   // (not in openIds), spawn it via openSession so the secondary pane is not a dead
   // xterm. openSession focuses+opens; we restore the active session afterwards so
   // the split assignment doesn't hijack the primary pane.
+  //
+  // Order matters: spawn+restore the pty FIRST, then set splitId LAST. openSession
+  // makes `id` transiently the active session, and the active≠split invariant
+  // $effect would clear splitId the instant it equalled activeId. Assigning splitId
+  // only after activeId is restored to the primary keeps that transient invisible.
   async function chooseSplit(id: string) {
     if (!id || id === activeId || id === layout.splitId) return;
     layout.setSplit(true);
-    layout.setSplitId(id);
     if (!openIds.has(id)) {
       const prevActive = activeId;
       await openSession(id);
       if (prevActive) activeId = prevActive;
     }
+    layout.setSplitId(id);
   }
 
   async function confirmPreview() {
@@ -484,6 +562,7 @@
     const { [id]: _a, ...restA } = approvals;   approvals   = restA;
     const { [id]: _f, ...restF } = fsVersion;   fsVersion   = restF;
     const { [id]: _e, ...restE } = termEpoch;   termEpoch   = restE;
+    const { [id]: _t, ...restT } = termRefs;    termRefs    = restT;
     const { [id]: _d, ...restD } = wsDiffStats; wsDiffStats = restD;
     attnAck.delete(id);
   }
@@ -607,7 +686,13 @@
       // Pop this reqId from the owner's queue (leave any siblings so the next surfaces).
       const q = (approvals[ownerWsId] ?? []).filter(r => r.reqId !== reqId);
       if (q.length) approvals[ownerWsId] = q;
-      else { const { [ownerWsId]: _drop, ...rest } = approvals; approvals = rest; }
+      else {
+        const { [ownerWsId]: _drop, ...rest } = approvals; approvals = rest;
+        // This session's last pending approval is resolved: clear its blocking
+        // notification so the stale "approve this" banner doesn't linger after the
+        // request it referred to is gone. Only fires when the queue is now empty.
+        dropForWorkspace(ownerWsId);
+      }
       clearAttentionBackstop(ownerWsId);
     } catch (e) {
       addBlocking(ownerWsId, "Approval failed", String(e));
@@ -617,15 +702,17 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Bulk-approval — "Approve all" / "Deny all" resolves EVERY pending request
-  // across ALL workspaces. The badge counts every queue, so a batch that only
-  // touched the active session would leave background agents blocked. Each item
-  // is resolved by its own reqId (owner lookup is reqId-keyed, so this is safe),
-  // with a per-item await/guard so a double-click can't double-send.
+  // Bulk-approval — "Approve all" / "Deny all" resolves every pending request for
+  // the ACTIVE session only. The card the user is looking at belongs to the active
+  // session, so a batch there must never reach into backgrounded sessions B/C and
+  // silently approve their tools. Each item is resolved by its own reqId (owner
+  // lookup is reqId-keyed, so this is safe), with a per-item await/guard so a
+  // double-click can't double-send.
   // ---------------------------------------------------------------------------
   async function decideAll(decision: "allow" | "deny") {
-    // Snapshot every pending reqId up front (the queues mutate as we resolve).
-    const reqIds = Object.values(approvals).flat().map(r => r.reqId);
+    // Snapshot the active session's pending reqIds up front (the queue mutates as
+    // we resolve).
+    const reqIds = (approvals[activeId ?? ""] ?? []).map(r => r.reqId);
     for (const reqId of reqIds) await decideOne(reqId, decision);
   }
 
@@ -909,7 +996,7 @@
 
 <svelte:window onkeydown={onKeyDown} />
 
-<ThemeProvider theme={settings.theme} density={settings.density} font={settings.font} glass={settings.glass}>
+<ThemeProvider theme={settings.theme} density={settings.density} font={settings.font} glass={!(settings.glassDisabled ?? false)}>
   <div class="app-root" onpointerdowncapture={onAppPointerDown}>
     <MenuBar onCommand={(id) => runCommand(id)} {unreadCount} />
 
@@ -962,6 +1049,12 @@
 
       <div class="center-column">
         <div data-zone="stage" class="stage-zone" role="region" aria-label="stage"
+             ondragenter={(e) => {
+               if (typeof e.dataTransfer?.types?.includes === "function" &&
+                   e.dataTransfer.types.includes(MIME_SESSION)) {
+                 e.preventDefault();
+               }
+             }}
              ondragover={(e) => {
                if (typeof e.dataTransfer?.types?.includes === "function" &&
                    e.dataTransfer.types.includes(MIME_SESSION)) {
@@ -982,29 +1075,35 @@
                  onView={(v) => layout.setView(v)}
                  onSplit={() => layout.toggleSplit()}>
             {#snippet primary()}
+              <!-- One agent Terminal per MOUNTED session, kept mounted (hidden via
+                   display) so switching sessions never rebuilds a blank xterm or
+                   loses scrollback — the same keep-alive pattern as the home shell.
+                   The mounted set is every open session PLUS a just-exited active one:
+                   an exited pty's Terminal must NOT unmount on the exit event, or its
+                   final buffer (the "[process exited]" line) is destroyed — instead its
+                   "session ended / Reopen" overlay is laid on top of the still-mounted,
+                   dimmed pane. Keyed by session id + epoch so only a genuine reopen
+                   (epoch bump) respawns a pane; a session or view switch just toggles
+                   visibility. -->
+              {#each mountedWorkspaces.filter(ws => !(layout.split && layout.splitId === ws.id)) as ws (ws.id + ":" + (termEpoch[ws.id] ?? 0))}
+                {@const ended = !openIds.has(ws.id)}
+                <div class="terminal-zone" class:input-emphasis={ws.id === activeId && emphasizeInput}
+                     data-terminal-zone role="group" aria-label="agent terminal"
+                     style:display={ws.id === activeId && layout.view === "agent" ? "" : "none"}
+                     onanimationend={(e) => { if (e.animationName === "perch-emphasis") emphasizeInput = false; }}
+                     onpointerdown={() => { if (mode.current === "normal") mode.enterTerminal(); }}>
+                  {#if ended}
+                    <div class="pane-ended" data-testid="pane-ended">
+                      <p>This session has ended.</p>
+                      <button class="btn btn-primary" onclick={() => openSession(ws.id)}>Reopen</button>
+                    </div>
+                  {/if}
+                  <DragDrop paneId={ws.paneId} fileDrop={true}>
+                    <Terminal bind:this={termRefs[ws.id]} paneId={ws.paneId} cwd={ws.worktreePath} onExit={() => handleAgentExit(ws.id)} />
+                  </DragDrop>
+                </div>
+              {/each}
               {#if active}
-                <!-- The agent terminal stays mounted whenever a session is active and is hidden
-                     (not unmounted) on the code and diff views, so its xterm scroll buffer survives
-                     a view switch. This is the same keep-alive pattern as the home shell below.
-                     Keyed by session id: switching sessions gives a fresh pane, switching views never
-                     remounts it. Clicking the zone in NORMAL enters TERMINAL mode; onpointerdown fires
-                     before xterm sees the event. We do NOT preventDefault, so text selection still works. -->
-                {#key active.id + ":" + (termEpoch[active.id] ?? 0)}
-                  <div class="terminal-zone" class:input-emphasis={emphasizeInput} data-terminal-zone role="group" aria-label="agent terminal"
-                       style:display={layout.view === "agent" ? "" : "none"}
-                       onanimationend={(e) => { if (e.animationName === "perch-emphasis") emphasizeInput = false; }}
-                       onpointerdown={() => { if (mode.current === "normal") mode.enterTerminal(); }}>
-                    {#if active && !openIds.has(active.id)}
-                      <div class="pane-ended" data-testid="pane-ended">
-                        <p>This session has ended.</p>
-                        <button class="btn btn-primary" onclick={() => openSession(active.id)}>Reopen</button>
-                      </div>
-                    {/if}
-                    <DragDrop paneId={active.paneId} fileDrop={true}>
-                      <Terminal bind:this={primaryTerm} paneId={active.paneId} cwd={active.worktreePath} onExit={() => handleAgentExit(active.id)} />
-                    </DragDrop>
-                  </div>
-                {/key}
                 <!-- The code layout stays mounted while a session is active and is hidden on the agent
                      and diff views, so an in-progress Editor draft survives a view switch. Preview is
                      keyed on the fs version (only while this view shows, so a hidden pane does no
@@ -1141,19 +1240,23 @@
              aria-orientation="horizontal" aria-valuenow={layout.shellH} aria-valuemin={SHELL_MIN_H} aria-valuemax={SHELL_MAX_H}
              tabindex="0"
              onmousedown={startResizeShell}
-             onkeydown={keyResizeShell}></div>
+             onkeydown={keyResizeShell}
+             style:display={layout.collapsed["shell"] ? "none" : undefined}></div>
 
         <div data-zone="shell-drawer" class="shell-drawer-zone" data-terminal-zone role="group" aria-label="shell drawer"
              onpointerdown={() => { if (mode.current === "normal") mode.enterTerminal(); }}
-             style:height="{layout.shellH}px"
-             style:display={layout.collapsed["shell"] ? "none" : undefined}>
-          {#if active}
-            {#key active.id}
-              <ShellDrawer paneId="shell-{active.id}" cwd={active.worktreePath}
+             style:height={layout.collapsed["shell"] ? undefined : `${layout.shellH}px`}>
+          <!-- One ShellDrawer per OPEN session, kept mounted (hidden via display)
+               so openShell runs once per session and switching never displaces or
+               SIGKILLs the previous session's shell pty. display:contents keeps
+               each ShellDrawer a direct child of the zone (its layout is unchanged). -->
+          {#each openWorkspaces as ws (ws.id)}
+            <div style:display={ws.id === activeId ? "contents" : "none"}>
+              <ShellDrawer paneId="shell-{ws.id}" cwd={ws.worktreePath}
                 collapsed={layout.collapsed["shell"] ?? false}
                 onToggleCollapse={() => layout.setCollapsed("shell", !layout.collapsed["shell"])} />
-            {/key}
-          {/if}
+            </div>
+          {/each}
         </div>
         <div data-zone="status-line" class="status-line">
           <span class="status-mode">{mode.current.toUpperCase()}</span>
@@ -1195,7 +1298,7 @@
         <ApprovalCard
           req={headReq}
           sessionCount={approvals[active.id].length}
-          queue={approvalQueue}
+          queue={approvals[active.id] ?? []}
           caps={active.caps}
           {onDecision}
           onApproveAll={() => decideAll("allow")}
@@ -1328,7 +1431,7 @@
                       transition: outline-color var(--perch-dur) var(--perch-ease); }
   .divider-v        { width: 4px; cursor: col-resize; background: var(--perch-border); flex-shrink: 0; }
   .divider-h        { height: 4px; cursor: row-resize; background: var(--perch-border); }
-  .center-column    { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+  .center-column    { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
   .stage-zone       { flex: 1; min-height: 0; display: flex; flex-direction: column;
                       transition: outline-color var(--perch-dur) var(--perch-ease); }
   .code-layout      { display: flex; flex-direction: row; flex: 1; min-height: 0; min-width: 0; }
@@ -1374,8 +1477,8 @@
   .notification-hub-dock { position: absolute; top: 2.5rem; right: 0; z-index: var(--perch-z-notify);
                             width: 320px; max-height: 60vh; overflow-y: auto;
                             border-left: 1px solid var(--perch-border); }
-  /* No background here: the hub owns its own (glass) surface. An opaque dock bg
-     would sit behind the hub's backdrop-filter and defeat the frost. */
+  /* No background here: the hub owns its own solid surface, so the dock is a
+     bare positioning wrapper. */
   /* Status line — spans the full bottom of the center column; always in DOM */
   .status-line       { display: flex; align-items: center; flex-shrink: 0;
                        height: 24px; padding: 0 var(--perch-sp-1);

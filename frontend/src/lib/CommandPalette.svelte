@@ -194,13 +194,14 @@
 
   /* Floating card — no padding (input/items touch the edges) */
   .palette {
-    background: var(--perch-glass-bg);
-    -webkit-backdrop-filter: var(--perch-glass-filter);
-    backdrop-filter: var(--perch-glass-filter);
+    /* Solid, never glass: this card can overlap the agent terminal, where
+       WebKitGTK paints backdrop-filter surfaces transparent over the composited
+       terminal subtree (mirrors the ApprovalCard fix). */
+    background: var(--perch-glass-bg-solid);
     color: var(--perch-text);
     border: 1px solid var(--perch-glass-border);
     border-radius: var(--perch-radius-lg);
-    box-shadow: var(--perch-glass-shadow);
+    box-shadow: var(--perch-shadow-float);
     min-width: 520px;
     max-width: 680px;
     width: 100%;

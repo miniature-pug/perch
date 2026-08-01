@@ -309,6 +309,47 @@ func TestOpenWorkspace_ApprovalReqIDComposition(t *testing.T) {
 	}
 }
 
+// PendingApprovals must expose every still-undecided approval, tagged with the
+// workspace it belongs to (derived from the composed pending-map key), so the
+// frontend can rebuild its queue after a reload or a late open (the agent:event
+// carrying an approval is a one-shot). An always-empty result must be [] not nil.
+func TestApp_PendingApprovals(t *testing.T) {
+	a := &App{pending: map[string]agent.ApprovalReq{}}
+
+	// Empty: a fresh app has no pending approvals; must be non-nil.
+	got := a.PendingApprovals()
+	if got == nil {
+		t.Fatal("PendingApprovals returned nil, want empty slice")
+	}
+	if len(got) != 0 {
+		t.Fatalf("PendingApprovals on empty = %d entries, want 0", len(got))
+	}
+
+	// Seed the pending map exactly as the event pump does: key + stored ApprovalReq
+	// both carry the composed "<raw>:<workspaceID>" ReqID.
+	a.pending["raw1:ws-a"] = agent.ApprovalReq{ReqID: "raw1:ws-a", Tool: "Bash", Summary: "ls"}
+	a.pending["raw2:ws-b"] = agent.ApprovalReq{ReqID: "raw2:ws-b", Tool: "Edit", Summary: "x"}
+
+	got = a.PendingApprovals()
+	if len(got) != 2 {
+		t.Fatalf("PendingApprovals = %d entries, want 2", len(got))
+	}
+	byWs := map[string]PendingApprovalVM{}
+	for _, p := range got {
+		byWs[p.WorkspaceID] = p
+	}
+	if p, ok := byWs["ws-a"]; !ok {
+		t.Error("missing ws-a entry")
+	} else if p.Req.ReqID != "raw1:ws-a" || p.Req.Tool != "Bash" {
+		t.Errorf("ws-a Req = %+v, want composed ReqID raw1:ws-a tool Bash", p.Req)
+	}
+	if p, ok := byWs["ws-b"]; !ok {
+		t.Error("missing ws-b entry")
+	} else if p.Req.ReqID != "raw2:ws-b" || p.Req.Tool != "Edit" {
+		t.Errorf("ws-b Req = %+v, want composed ReqID raw2:ws-b tool Edit", p.Req)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Registry: Branch field must round-trip through save/load.
 // ---------------------------------------------------------------------------

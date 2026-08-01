@@ -111,6 +111,7 @@ vi.mock("./lib/wails", () => ({
   listStaleSessions:     vi.fn(async () => []),
   cleanupSessions:       vi.fn(async () => {}),
   homeShellCwd:          vi.fn(async () => "/home/user"),
+  pendingApprovals:      vi.fn(async () => []),
 }));
 
 // NOTE: layout and mode stores are NOT mocked — we use the real $state runes stores.
@@ -715,6 +716,17 @@ describe("App.svelte live event wiring", () => {
       expect(screen.getByRole("button", { name: /^Beta\b/ })).toHaveTextContent("asking you")
     );
 
+    // Model the real backend: once the agent is blocked on a question, the
+    // monitor's CurrentState() reports "awaiting-input", so the ListWorkspaces()
+    // refetch that openSession runs after openWorkspace() returns ws-2 in that
+    // state (opening a session does NOT answer its question — that happens in the
+    // agent's own TUI). Without this the shared fakeWorkspaces stub would report
+    // the stale "running" and clobber the awaiting-input signal the refetch is
+    // meant to preserve.
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(
+      fakeWorkspaces.map(w => (w.id === "ws-2" ? { ...w, state: "awaiting-input" as const } : w)),
+    );
+
     // Now the user opens/focuses ws-2 (active + agent pane visible): the signal
     // has done its job and must clear. Underlying ws.state stays awaiting-input,
     // but the Sidebar suppresses the badge → the row reads as neutral "idle".
@@ -832,6 +844,62 @@ describe("App.svelte live event wiring", () => {
     expect(items[0].title).toBe("Needs approval");
     expect(items[0].tier).toBe("blocking");
     expect(items[0].workspaceId).toBe("ws-1");
+  });
+
+  // FIX F: a blocking "Question" notif is lit while the agent is blocked, but when
+  // the user answers in the agent's own TUI perch auto-allows (no decideOne), the
+  // agent resumes to "running", and the notif would otherwise stay lit forever.
+  // A state transition into a resolved state must clear the session's blocking notifs.
+  it("blocking notif clears when the session transitions from awaiting-input to running", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await screen.findByRole("button", { name: /^Beta\b/ });
+
+    const { getItems } = await import("./lib/stores/notifications.svelte");
+    const agentCb = captured.agent.at(-1)!;
+
+    // The agent blocks on a question (ws-2 starts "running" in the fixture, so
+    // move it into a blocking state first for a genuine resolve edge below).
+    agentCb({ workspaceId: "ws-2", kind: "question", state: "awaiting-input" });
+    await tick();
+
+    // The blocking "Question" notification lights up for ws-2.
+    const notifyCb = captured.notify.at(-1)!;
+    notifyCb({ tier: "blocking", title: "Question", body: "Which option?", workspaceId: "ws-2" });
+    await tick();
+    expect(getItems().some(n => n.workspaceId === "ws-2" && n.tier === "blocking")).toBe(true);
+
+    // The user answers in the agent TUI → perch auto-allows → the agent resumes.
+    agentCb({ workspaceId: "ws-2", kind: "state", state: "running" });
+    await tick();
+
+    // The stale blocking notif for ws-2 must be gone.
+    expect(getItems().some(n => n.workspaceId === "ws-2" && n.tier === "blocking")).toBe(false);
+  });
+
+  // FIX F: a transition into "errored" is NOT a resolution — an unresolved error
+  // must keep its blocking notif.
+  it("blocking notif is NOT cleared when the session transitions to errored", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await screen.findByRole("button", { name: /^Beta\b/ });
+
+    const { getItems } = await import("./lib/stores/notifications.svelte");
+    const notifyCb = captured.notify.at(-1)!;
+    notifyCb({ tier: "blocking", title: "Agent error", body: "boom", workspaceId: "ws-2" });
+    await tick();
+    expect(getItems().some(n => n.workspaceId === "ws-2" && n.tier === "blocking")).toBe(true);
+
+    const agentCb = captured.agent.at(-1)!;
+    agentCb({ workspaceId: "ws-2", kind: "state", state: "errored" });
+    await tick();
+
+    // Still lit — an unresolved error keeps its notif.
+    expect(getItems().some(n => n.workspaceId === "ws-2" && n.tier === "blocking")).toBe(true);
   });
 
   it("onNotify: ambient tier routes to addAmbient in the store", async () => {
@@ -1936,11 +2004,12 @@ describe("App.svelte agent:approve-all / deny-all", () => {
     },
   ];
 
-  // "Approve all pending" resolves EVERY pending request across ALL workspaces —
-  // the badge counts every queue, so a batch that only touched the active session
-  // would leave background agents blocked forever. With Alpha active, approve-all
-  // resolves BOTH Alpha's and Beta's requests.
-  it("agent:approve-all resolves EVERY pending approval across all workspaces", async () => {
+  // "Approve all pending" resolves only the ACTIVE session's pending requests.
+  // The card the user is looking at belongs to the active session, so a batch
+  // there must NOT reach into a backgrounded session and silently approve its
+  // tools. With Alpha active, approve-all resolves Alpha's request only; Beta's
+  // stays pending until the user views Beta and batches there.
+  it("agent:approve-all resolves ONLY the active session's pending approvals", async () => {
     const { listWorkspaces, approve } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(twoApprovalWorkspaces);
     const { default: App } = await import("./App.svelte");
@@ -1969,30 +2038,29 @@ describe("App.svelte agent:approve-all / deny-all", () => {
     const approveAllItem = screen.getByRole("menuitem", { name: "Approve all pending" });
     await fireEvent.click(approveAllItem);
 
-    // BOTH requests are approved — the active AND the background one.
-    await waitFor(() => {
-      expect(approve).toHaveBeenCalledWith("req-a1", "allow");
-      expect(approve).toHaveBeenCalledWith("req-b1", "allow");
-    });
+    // Only Alpha (active) is approved; Beta (backgrounded) is NOT touched.
+    await waitFor(() => expect(approve).toHaveBeenCalledWith("req-a1", "allow"));
+    expect(approve).not.toHaveBeenCalledWith("req-b1", "allow");
 
     // Alpha (active) approval cleared.
     await waitFor(() =>
       expect(screen.queryByText("Alpha approval")).not.toBeInTheDocument()
     );
 
-    // Beta's approval was also resolved — switch to it and verify it is gone.
+    // Beta's approval is STILL pending — switch to it and verify it is shown.
     await fireEvent.click(screen.getByRole("button", { name: /^Beta\b/ }));
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
     await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
     await tick();
-    expect(screen.queryByText("Beta approval")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("Beta approval")).toBeInTheDocument());
   });
 
   it("agent:approve-all: a per-item failure keeps ONLY that item; the rest still resolve", async () => {
     const { listWorkspaces, approve } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(twoApprovalWorkspaces);
-    // Only the FIRST approve call (req-fail, ws-1 — enqueued first) rejects; the
-    // second (req-ok, ws-2) succeeds. approve-all must not abort on the failure.
+    // Both requests belong to the ACTIVE session (approve-all is active-scoped).
+    // Only the FIRST approve call (req-fail — enqueued first) rejects; the second
+    // (req-ok) succeeds. approve-all must not abort the rest of the queue on the failure.
     vi.mocked(approve).mockRejectedValueOnce(new Error("network error"));
     const { default: App } = await import("./App.svelte");
     render(App);
@@ -2008,10 +2076,11 @@ describe("App.svelte agent:approve-all / deny-all", () => {
     const { getItems } = await import("./lib/stores/notifications.svelte");
     const notifBefore = getItems().length;
 
+    // TWO requests, both on the active session (ws-1): the first fails, the second resolves.
     const cb = captured.agent.at(-1)!;
     cb({ workspaceId: "ws-1", kind: "approval", state: "awaiting-approval",
          approval: { reqId: "req-fail", tool: "bash", summary: "Will fail" } });
-    cb({ workspaceId: "ws-2", kind: "approval", state: "awaiting-approval",
+    cb({ workspaceId: "ws-1", kind: "approval", state: "awaiting-approval",
          approval: { reqId: "req-ok", tool: "bash", summary: "Should resolve" } });
     await tick();
 
@@ -2035,17 +2104,15 @@ describe("App.svelte agent:approve-all / deny-all", () => {
     });
     expect(getItems().length).toBeGreaterThan(notifBefore);
 
-    // ws-1 (req-fail, active) was NOT cleared — "Will fail" summary still present.
+    // req-fail was NOT cleared — its summary is still the shown head on the active card.
     await waitFor(() =>
       expect(screen.getByText("Will fail")).toBeInTheDocument()
     );
-
-    // ws-2 (req-ok) succeeded — switch to Beta and verify it is gone.
-    await fireEvent.click(screen.getByRole("button", { name: /^Beta\b/ }));
-    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
-    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
-    await tick();
-    expect(screen.queryByText("Should resolve")).not.toBeInTheDocument();
+    // req-ok DID resolve: the queue dropped from 2 → 1, so the batch buttons
+    // (rendered only when the active queue has >1 pending) are gone.
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /approve all/i })).not.toBeInTheDocument()
+    );
   });
 });
 
@@ -2192,17 +2259,20 @@ describe("App.svelte approval batch buttons", () => {
     },
   ];
 
-  it("with TWO pending approvals: batch buttons render (cross-workspace count); Approve all resolves EVERY pending request", async () => {
+  it("with TWO pending approvals on the ACTIVE session: batch buttons render; Approve all resolves both", async () => {
     const { listWorkspaces, approve } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(twoApprovalWs);
     const { default: App } = await import("./App.svelte");
     render(App);
 
-    // Inject approval events for both workspaces
+    // Two pending requests on Alpha (ws-1), the ACTIVE session, plus one on Beta
+    // to prove the batch stays active-scoped (Beta's is never touched).
     const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
     const cb = captured.agent.at(-1)!;
     cb({ workspaceId: "ws-1", kind: "approval", state: "awaiting-approval",
-         approval: { reqId: "req-a", tool: "bash", summary: "Alpha task" } });
+         approval: { reqId: "req-a1", tool: "bash", summary: "Alpha task 1" } });
+    cb({ workspaceId: "ws-1", kind: "approval", state: "awaiting-approval",
+         approval: { reqId: "req-a2", tool: "bash", summary: "Alpha task 2" } });
     cb({ workspaceId: "ws-2", kind: "approval", state: "awaiting-approval",
          approval: { reqId: "req-b", tool: "bash", summary: "Beta task" } });
     await tick();
@@ -2214,27 +2284,28 @@ describe("App.svelte approval batch buttons", () => {
     await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
     await tick();
 
-    // The cross-workspace queue (2 pending) DRIVES the batch-button render —
-    // the "N pending" indicator counts every queue.
+    // The ACTIVE session's queue (2 pending) DRIVES the batch-button render —
+    // the "N pending" indicator counts only this session's queue.
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /approve all/i })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: /deny all/i })).toBeInTheDocument();
     });
 
-    // Clicking Approve all resolves BOTH the active AND the background request —
-    // otherwise the unseen agent stays blocked forever.
+    // Clicking Approve all resolves BOTH of the active session's requests, but NOT
+    // the backgrounded Beta request.
     await fireEvent.click(screen.getByRole("button", { name: /approve all/i }));
     await waitFor(() => {
-      expect(approve).toHaveBeenCalledWith("req-a", "allow");
-      expect(approve).toHaveBeenCalledWith("req-b", "allow");
+      expect(approve).toHaveBeenCalledWith("req-a1", "allow");
+      expect(approve).toHaveBeenCalledWith("req-a2", "allow");
     });
+    expect(approve).not.toHaveBeenCalledWith("req-b", "allow");
 
-    // Beta's approval was also resolved — switch to it and confirm it is gone.
+    // Beta's approval is STILL pending — switch to it and confirm it is shown.
     await fireEvent.click(screen.getByRole("button", { name: /^Beta\b/ }));
     await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
     await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
     await tick();
-    expect(screen.queryByText("Beta task")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("Beta task")).toBeInTheDocument());
   });
 
   it("with ONE pending approval: batch buttons do NOT render", async () => {

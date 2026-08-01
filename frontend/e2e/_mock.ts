@@ -229,6 +229,10 @@ export function buildInitScriptContent(opts: MockOptions = {}): string {
           record('Approve', [reqId, decision]);
           return Promise.resolve();
         },
+        PendingApprovals: function() {
+          record('PendingApprovals', []);
+          return Promise.resolve([]);
+        },
         DiffStat: function(worktree) {
           record('DiffStat', [worktree]);
           return Promise.resolve([]);
