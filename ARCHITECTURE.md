@@ -285,10 +285,20 @@ claude agent
 `ClaudeMonitor` installs four hooks: `PreToolUse`, `Stop`, `StopFailure`, and
 `SessionStart`. The non-`PreToolUse` events become lifecycle events
 (`SessionStart` to running, `Stop` to done, `StopFailure` to errored). For
-opencode, the same events arrive over the `opencode serve` SSE stream:
+opencode, the same lifecycle events arrive over the `opencode serve` SSE stream:
 `session.status` carries busy and idle and the session id used for resume, and
 `session.error` becomes errored. opencode's experimental step frames sit behind
 an environment flag perch never sets, so they never fire.
+
+The approval loop above is Claude's alone. opencode's `attach` terminal is an
+independent interactive client that runs its own permission prompt in the pane,
+and perch has no hook to intercept it. So perch does not answer opencode
+approvals: `OpencodeMonitor.Capabilities()` returns `approvals: false`, its
+`permission.asked` frame becomes a passive `awaiting-approval` attention signal
+with no `Approval` payload, and no pending approval is registered. The user
+decides in opencode's own prompt. `OpencodeMonitor.Approve` remains only to
+satisfy the Monitor interface; it is an unreachable no-op, since nothing ever
+registers a pending opencode approval to answer.
 
 Claude status reporting needs no manual setup; the monitor writes the hook
 config into the worktree's `.claude/settings.json` when the session opens.
@@ -303,19 +313,25 @@ and for state events a `State`. The six states:
 |-------|---------|
 | `running` | The agent is working a turn |
 | `idle` | Steady idle, such as at connect or between turns |
-| `awaiting-approval` | A `PreToolUse` call is blocked on your verdict |
+| `awaiting-approval` | A tool call needs your verdict; for Claude perch gates it behind the card, for opencode it is a passive signal |
 | `awaiting-input` | The agent is asking you a question, distinct from an approval |
 | `done` | A turn completed; drives the ambient completion toast |
 | `errored` | The agent reported a failure |
 
-An approval is a request to act that perch gates behind the approval card until
-you decide. A question is the agent asking you to choose: Claude's
-`AskUserQuestion`, whose `PreToolUse` perch auto-allows so the agent renders the
-question in its own pane, and opencode's `question.asked`. A question is a signal
-only. perch renders no card and sends no reply; you answer in the agent's pane.
-Claude's `ExitPlanMode` stays on the normal approval path, so you still review a
-plan. opencode's `question.replied` resumes running and `question.rejected`
-falls back to idle.
+For Claude, an approval is a request to act that perch gates behind the approval
+card until you decide, because Claude's blocking `PreToolUse` hook lets perch own
+the answer and suppress Claude's own prompt. For opencode, `awaiting-approval` is
+a signal only: opencode's `attach` terminal owns the permission prompt, so perch
+renders no card, registers no pending, and sends no reply. It behaves exactly
+like a question in that respect, but keeps its own distinct amber
+`awaiting-approval` glance so you can tell an approval apart from a question.
+
+A question is the agent asking you to choose: Claude's `AskUserQuestion`, whose
+`PreToolUse` perch auto-allows so the agent renders the question in its own pane,
+and opencode's `question.asked`. A question is a signal only. perch renders no
+card and sends no reply; you answer in the agent's pane. Claude's `ExitPlanMode`
+stays on the normal approval path, so you still review a plan. opencode's
+`question.replied` resumes running and `question.rejected` falls back to idle.
 
 The sidebar gives each state a glanceable look, with color, icon, and label
 together so it never relies on color alone. Pulses are suppressed under
@@ -399,7 +415,10 @@ so the exposure is only from hooks already present in a local repository.
 
 Each Monitor advertises `Caps{approvals, attention}`. The frontend surfaces only
 the controls an agent supports, so an agent that omits a cap has that surface
-hidden rather than dead. Both monitors advertise both caps today.
+hidden rather than dead. Both monitors advertise `attention`. Only Claude
+advertises `approvals`, because only Claude's blocking hook lets perch own the
+decision and suppress the agent's own prompt; opencode returns `approvals: false`
+so the card stays hidden and its own terminal owns the approval.
 
 ## Debug aids
 

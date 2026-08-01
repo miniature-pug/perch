@@ -29,8 +29,10 @@ libraries, so macOS and Windows are out of scope for now.
   multiplexer sits in between.
 - **Glanceable status.** The sidebar tells you, at a glance, which agent is
   working, which is done, which hit an error, and which is waiting on you.
-- **Inline approvals.** When an agent asks to run a tool, perch blocks it and
-  shows you the request. You allow it once, allow it always, or deny it.
+- **Inline approvals.** When Claude asks to run a tool, perch blocks it and
+  shows you the request. You allow it once, allow it always, or deny it. opencode
+  runs its own approval prompt in its terminal, so for opencode perch stands back
+  and only lights the sidebar to tell you a decision is waiting.
 - **A diff you can act on.** Stage or discard individual hunks, or send a hunk
   back to the agent, without leaving the window.
 - **Desktop notifications.** When the window is in the background and an agent
@@ -75,6 +77,13 @@ from `frontend/dist/`, so `make gui-build` rebuilds it first. A plain `make
 build` skips that rebuild and embeds the committed placeholder, so prefer `make
 gui-build` for a binary you mean to run. The `wails` CLI is not used; see
 [CONTRIBUTING.md](CONTRIBUTING.md).
+
+`make gui-build` does not install the launcher icon. The GNOME and Wayland dock
+reads the icon from a `.desktop` entry, which `make desktop` writes. To build and
+install the icon in one step, then run the binary yourself, use `make
+gui-install` followed by `./bin/perch`. Log out and back in once if the icon does
+not refresh. `make gui-run` does the same build and icon install and then
+launches the binary for you.
 
 To install into your `GOBIN`:
 
@@ -122,15 +131,23 @@ ship today.
 - **claude** reports through hooks. When you open a Claude session, perch writes
   a hook configuration with a listener URL and a bearer token into the
   worktree's `.claude/settings.json`. Claude then posts tool and lifecycle
-  events back, and a `PreToolUse` event blocks until you approve.
+  events back, and a `PreToolUse` event blocks until you approve. Because that
+  hook blocks and perch answers it, perch owns Claude's approval: it shows the
+  approval card and Claude's own prompt never appears.
 - **opencode** reports through its own loopback HTTP server. Perch launches
   `opencode serve`, then reads the Server-Sent-Events stream to follow
-  lifecycle, approval, and question events.
+  lifecycle, approval, and question events. opencode's `attach` terminal is an
+  independent client that runs its own approval prompt, and perch cannot silence
+  it, so perch does not answer opencode approvals. It shows no card; it only
+  raises a passive attention signal so the sidebar tells you a decision waits,
+  and you answer in opencode's own prompt.
 
 The cockpit shows only what an agent supports. Each agent advertises a small
 capability set (approvals and attention), and any surface an agent does not
-support stays hidden rather than showing a dead control. Perch does not meter
-tokens or cost; that surface does not exist.
+support stays hidden rather than showing a dead control. Claude advertises
+approvals, so it gets the card; opencode does not, so perch surfaces only the
+attention signal and lets opencode's terminal own the decision. Perch does not
+meter tokens or cost; that surface does not exist.
 
 ## Configuration
 

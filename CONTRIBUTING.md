@@ -45,6 +45,7 @@ Run targets from the repository root.
 | `make install` | Install to `GOBIN` with the production tags |
 | `make run` | `build`, then run `./bin/perch` |
 | `make gui-build` | `npm ci`, build the frontend, then build the binary with the production tags |
+| `make gui-install` | `gui-build`, then install the launcher icon, without launching (run `./bin/perch` yourself) |
 | `make gui-run` | `gui-build`, install the desktop entry, then launch the binary |
 | `make desktop` | Install a user `.desktop` entry and icon so GNOME and Wayland show the app icon |
 | `make test` | Go unit tests, with the race detector |

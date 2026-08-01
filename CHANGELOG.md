@@ -25,8 +25,10 @@ tagged a release yet, so everything to date sits under Unreleased.
 - Agents for `claude` (a per-session loopback hook listener) and `opencode`
   (the `opencode serve` SSE stream), each advertising its capabilities so the UI
   shows only what it supports.
-- Inline tool-call approvals: a docked Allow, Deny, or Always card per request,
-  with Approve all and Deny all scoped to the active session.
+- Inline tool-call approvals for Claude: a docked Allow, Deny, or Always card per
+  request, with Approve all and Deny all scoped to the active session. opencode
+  approvals are owned by opencode's own terminal prompt; perch surfaces only a
+  passive attention signal for them, not a card.
 - Always-allow rules, stored and revocable in Settings, matched on the agent,
   the tool, and a hash of the exact input.
 - A question signal that distinguishes an agent asking you something from a tool
@@ -73,6 +75,13 @@ tagged a release yet, so everything to date sits under Unreleased.
 
 ### Fixed
 
+- A double approval prompt and a stuck approval card for opencode. opencode's
+  `attach` terminal runs its own permission prompt that perch cannot suppress,
+  and opencode emits no resolution event when you answer it, so perch's own card
+  both duplicated the prompt and never cleared. opencode now advertises
+  `approvals: false`; its `permission.asked` becomes a passive attention signal
+  (sidebar state plus a blocking notification) with no card and no reply, exactly
+  as opencode questions are already handled. Claude's card is unchanged.
 - Tool-approval notifications that never fired because of an event-kind mismatch.
 - A new-branch session that silently persisted a broken record when the branch
   already existed; the error now surfaces and nothing is saved.

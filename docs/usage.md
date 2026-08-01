@@ -84,9 +84,13 @@ their branches.
 
 ## Approvals
 
-When an agent wants to run a tool, perch blocks the call and shows an approval
-card docked at the bottom of the active session. The card names the tool and
-summarizes its input. You have three choices:
+Approvals work one way for Claude and another for opencode, because the two
+agents hand perch different reins.
+
+For **Claude**, perch owns the decision. When Claude wants to run a tool, its
+hook blocks the call and perch shows an approval card docked at the bottom of the
+active session. The card names the tool and summarizes its input. You have three
+choices:
 
 - **Allow** runs this one call.
 - **Deny** refuses it.
@@ -96,6 +100,12 @@ summarizes its input. You have three choices:
 
 **Approve all** and **Deny all** act on every pending request for the active
 session. You manage and revoke stored rules in Settings.
+
+For **opencode**, the agent owns the decision. opencode's own terminal runs its
+permission prompt, and perch cannot silence it, so perch stands back rather than
+prompting you twice. It shows no card and stores no rule. It only marks the
+session as waiting on you so the sidebar tells you a decision is due, and you
+answer in opencode's own prompt in the pane.
 
 ### Questions are a signal, not a card
 
