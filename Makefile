@@ -33,7 +33,7 @@ ifeq (, $(shell command -v go))
 $(error 'go' not found on PATH)
 endif
 
-.PHONY: build install run gui-build gui-run desktop image shell test test-integration test-front test-e2e test-all coverage lint fmt vet tidy vendor verify vulncheck verify-all doctor clean cross
+.PHONY: build install run gui-build gui-install gui-run desktop image shell test test-integration test-front test-e2e test-all coverage lint fmt vet tidy vendor verify vulncheck verify-all doctor clean cross
 
 # build: backend binary only — embeds the committed frontend/dist/index.html stub
 # (no frontend rebuild). For a full production artifact, use `make gui-build`.
@@ -52,6 +52,8 @@ gui-build:            ## build the production GUI binary (frontend build + go bu
 	npm --prefix frontend run build
 	@mkdir -p $(BIN_DIR)
 	@go build -tags '$(TAGS)' -trimpath -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/$(BIN) ./cmd/perch
+
+gui-install: gui-build desktop  ## build the GUI binary + install the launcher icon (no launch; run $(BIN_DIR)/$(BIN) yourself)
 
 gui-run: gui-build desktop  ## build, install the desktop entry, then launch the GUI
 	@$(BIN_DIR)/$(BIN)
