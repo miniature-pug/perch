@@ -29,4 +29,5 @@ sequenceDiagram
     HL->>App: agent:event (kind question, state awaiting-input)
     App->>FE: agent:event → sidebar "asking you" feel, cyan pulse. User answers in the agent's own pane TUI
 
-    Note over App,FE: opencode is equivalent: events arrive over the opencode serve SSE /event stream instead
+    Note over App,FE: opencode lifecycle events arrive over the opencode serve SSE /event stream. The approval loop above is Claude's ALONE
+    Note over App,User: opencode permission.asked is a passive SIGNAL like a question: caps.approvals=false, no card, no Approval payload, no reply. opencode's attach TUI owns the prompt; perch only lights the sidebar awaiting-approval feel + blocking notification

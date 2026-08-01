@@ -4,13 +4,13 @@ package agent_test
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,11 +19,14 @@ import (
 )
 
 // TestOpencodeMonitorSSEParser drives the real opencode v1.15.12 SSE contract:
-// frames are `data: {"id","type","properties":{…}}`, the stream is behind HTTP
-// Basic auth, and an approval is POST /permission/:id/reply with {"reply":…}.
-// The httptest server asserts the auth header and the reply path/body, so a
-// regression in any of those (wrong envelope, wrong endpoint, Bearer instead of
-// Basic) fails the test rather than passing against a fabricated contract.
+// frames are `data: {"id","type","properties":{…}}` and the stream is behind
+// HTTP Basic auth. A regression in the envelope or auth (wrong envelope, Bearer
+// instead of Basic) fails against the real contract rather than a fabricated one.
+//
+// permission.asked is a PASSIVE attention signal for opencode (Approvals: false):
+// opencode's own attach TUI owns the permission prompt, so the monitor surfaces
+// StateAwaitingApproval with NO Approval payload and NEVER POSTs a reply. The
+// server FAILS the test if any /permission/:id/reply arrives from the event path.
 func TestOpencodeMonitorSSEParser(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -35,7 +38,6 @@ func TestOpencodeMonitorSSEParser(t *testing.T) {
 	const pw = "test-pw"
 	expectedAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte("opencode:"+pw))
 
-	var gotReply, gotReplyAuth, gotReplyPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/event":
@@ -46,11 +48,7 @@ func TestOpencodeMonitorSSEParser(t *testing.T) {
 			w.Header().Set("Content-Type", "text/event-stream")
 			_, _ = w.Write(fixture)
 		case strings.HasPrefix(r.URL.Path, "/permission/") && strings.HasSuffix(r.URL.Path, "/reply"):
-			gotReplyAuth = r.Header.Get("Authorization")
-			gotReplyPath = r.URL.Path
-			var body map[string]string
-			_ = json.NewDecoder(r.Body).Decode(&body)
-			gotReply = body["reply"]
+			t.Errorf("unexpected reply POST %s — opencode approvals are TUI-owned; perch must not reply", r.URL.Path)
 			w.WriteHeader(http.StatusOK)
 		default:
 			w.WriteHeader(http.StatusNotFound)
@@ -82,15 +80,15 @@ func TestOpencodeMonitorSSEParser(t *testing.T) {
 	if got[0].SessionID != "ses-1" {
 		t.Errorf("ev[0].SessionID = %q, want ses-1", got[0].SessionID)
 	}
-	if got[1].State != agent.StateAwaitingApproval || got[1].Approval == nil {
-		t.Fatalf("ev[1]: want awaiting-approval, got %+v", got[1])
+	// permission.asked is a PASSIVE attention signal: state awaiting-approval but
+	// NO Approval payload (opencode's TUI owns the reply). The card is gated on
+	// caps.approvals=false in the frontend; a nil Approval also means the app event
+	// pump registers no pending approval and never calls Approve().
+	if got[1].State != agent.StateAwaitingApproval || got[1].Kind != "approval" {
+		t.Fatalf("ev[1]: want kind=approval/awaiting-approval, got %+v", got[1])
 	}
-	if got[1].Approval.ReqID != "perm-1" || got[1].Approval.Tool != "bash" {
-		t.Errorf("ev[1].Approval: want ReqID=perm-1 Tool=bash, got %+v", got[1].Approval)
-	}
-	// patterns are present → Input is a specific match key (never empty/loose).
-	if got[1].Approval.Input == "" || !strings.Contains(got[1].Approval.Input, "ls -la") {
-		t.Errorf("ev[1].Approval.Input = %q, want a specific key containing the pattern", got[1].Approval.Input)
+	if got[1].Approval != nil {
+		t.Errorf("ev[1] must carry NO Approval payload (passive signal, not a card), got %+v", got[1].Approval)
 	}
 	if got[2].State != agent.StateErrored || got[2].Err != "timeout" {
 		t.Errorf("ev[2]: want errored err=timeout, got %+v", got[2])
@@ -99,68 +97,40 @@ func TestOpencodeMonitorSSEParser(t *testing.T) {
 	if om.CurrentState() != agent.StateErrored {
 		t.Errorf("CurrentState = %q, want %q", om.CurrentState(), agent.StateErrored)
 	}
-	if om.LastApprovalTool() != "bash" {
-		t.Errorf("LastApprovalTool = %q, want bash", om.LastApprovalTool())
-	}
-
-	if err := om.Approve(got[1].Approval.ReqID, agent.Decision{Allow: true}); err != nil {
-		t.Fatalf("Approve: %v", err)
-	}
-	if gotReply != "once" {
-		t.Errorf("reply = %q, want once", gotReply)
-	}
-	if gotReplyPath != "/permission/perm-1/reply" {
-		t.Errorf("reply path = %q, want /permission/perm-1/reply", gotReplyPath)
-	}
-	if gotReplyAuth != expectedAuth {
-		t.Errorf("reply auth = %q, want Basic opencode:%s", gotReplyAuth, pw)
+	// opencode never owns an approval, so LastApprovalTool is always empty.
+	if om.LastApprovalTool() != "" {
+		t.Errorf("LastApprovalTool = %q, want empty (opencode approvals are TUI-owned)", om.LastApprovalTool())
 	}
 
 	caps := om.Capabilities()
-	if !caps.Approvals || !caps.Attention {
-		t.Errorf("caps: %+v", caps)
+	if caps.Approvals {
+		t.Errorf("caps.Approvals = true, want false (opencode TUI owns approvals)")
+	}
+	if !caps.Attention {
+		t.Errorf("caps.Attention = false, want true (perch surfaces the passive signal)")
 	}
 }
 
-// TestOpencodeMonitorApprove_AlwaysAndReject covers the other two reply values so
-// the once|always|reject enum mapping is fully guarded.
-func TestOpencodeMonitorApprove_AlwaysAndReject(t *testing.T) {
-	var got string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]string
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		got = body["reply"]
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-	om := agent.NewOpencodeMonitorWithServer(agent.NewOpencode(), srv.URL, "pw")
-
-	if err := om.Approve("p1", agent.Decision{Allow: true, Always: true}); err != nil {
-		t.Fatalf("Approve always: %v", err)
-	}
-	if got != "always" {
-		t.Errorf("reply = %q, want always", got)
-	}
-	if err := om.Approve("p1", agent.Decision{Allow: false}); err != nil {
-		t.Fatalf("Approve reject: %v", err)
-	}
-	if got != "reject" {
-		t.Errorf("reply = %q, want reject", got)
-	}
-}
-
-// TestOpencodeMonitorPermissionAsked_NoPatternsFailsClosed verifies the security
-// invariant: a permission.asked with no distinguishing patterns yields an EMPTY
-// Input, which app.maybeAutoApprove can never match — so it can never be
-// silently auto-approved by an always-rule. (Fail closed.)
-func TestOpencodeMonitorPermissionAsked_NoPatternsFailsClosed(t *testing.T) {
+// TestOpencodeMonitorPermissionAsked_PassiveSignalNoReply is the regression guard
+// for the double-prompt / stale-card bug: a permission.asked frame must produce a
+// PASSIVE attention signal (Kind=approval, StateAwaitingApproval, Approval=nil)
+// and the monitor must NEVER POST /permission/:id/reply from the event path (the
+// user answers in opencode's own attach TUI). If perch owned this approval it
+// would double-prompt, and since opencode emits no permission-resolved frame the
+// perch card would never clear.
+func TestOpencodeMonitorPermissionAsked_PassiveSignalNoReply(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	const fixture = `data: {"type":"permission.asked","properties":{"id":"perm-9","sessionID":"s","permission":"bash","patterns":[],"metadata":{}}}` + "\n\n"
+	const fixture = `data: {"type":"permission.asked","properties":{"id":"perm-9","sessionID":"s","permission":"bash","patterns":["ls -la"],"metadata":{}}}` + "\n\n"
+	var replyPosted int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/event" {
+		switch {
+		case r.URL.Path == "/event":
 			w.Header().Set("Content-Type", "text/event-stream")
 			_, _ = w.Write([]byte(fixture))
-		} else {
+		case strings.HasPrefix(r.URL.Path, "/permission/") && strings.HasSuffix(r.URL.Path, "/reply"):
+			atomic.AddInt32(&replyPosted, 1)
+			w.WriteHeader(http.StatusOK)
+		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
@@ -171,16 +141,18 @@ func TestOpencodeMonitorPermissionAsked_NoPatternsFailsClosed(t *testing.T) {
 	defer cancel()
 	om.Start(ctx)
 
-	select {
-	case ev := <-om.Events():
-		if ev.Approval == nil {
-			t.Fatalf("want approval event, got %+v", ev)
-		}
-		if ev.Approval.Input != "" {
-			t.Errorf("Input = %q, want empty (fail closed: no patterns ⇒ no auto-approve key)", ev.Approval.Input)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("timeout waiting for permission.asked event")
+	ev := nextEvent(t, om)
+	if ev.Kind != "approval" || ev.State != agent.StateAwaitingApproval {
+		t.Fatalf("want kind=approval/awaiting-approval, got %+v", ev)
+	}
+	if ev.Approval != nil {
+		t.Errorf("permission.asked must carry NO Approval payload (signal, not card), got %+v", ev.Approval)
+	}
+	// No pending is registered anywhere, and nothing replies. Give any errant
+	// background reply a window to land, then assert none did.
+	time.Sleep(200 * time.Millisecond)
+	if n := atomic.LoadInt32(&replyPosted); n != 0 {
+		t.Errorf("monitor POSTed %d permission replies from the event path; want 0 (TUI owns the reply)", n)
 	}
 }
 
@@ -573,152 +545,6 @@ func TestOpencodeMonitorSSE_QuestionRejected(t *testing.T) {
 	rejected := nextEvent(t, om)
 	if rejected.State != agent.StateIdle {
 		t.Errorf("question.rejected (from awaiting-input) → want StateIdle, got %+v", rejected)
-	}
-}
-
-// TestOpencodeMonitorApprove_ClearsAttention is the regression guard for the stuck
-// sidebar attention signal: after a permission.asked raises an approval
-// (StateAwaitingApproval) and the user resolves it via Approve, the monitor MUST
-// emit a Kind=="state"/StateRunning event so the frontend's last-event-wins
-// per-workspace state clears the amber awaiting-approval indicator, AND
-// CurrentState() must report StateRunning. opencode emits no permission-resolved
-// SSE frame, so the monitor synthesizes this (mirroring question.replied). Before
-// the fix, Approve only POSTed the reply and emitted nothing, so the indicator
-// stayed stuck forever.
-func TestOpencodeMonitorApprove_ClearsAttention(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	const fixture = `data: {"type":"permission.asked","properties":{"id":"perm-1","sessionID":"s","permission":"bash","patterns":["ls -la"]}}` + "\n\n"
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/event":
-			w.Header().Set("Content-Type", "text/event-stream")
-			_, _ = w.Write([]byte(fixture))
-		case strings.HasPrefix(r.URL.Path, "/permission/") && strings.HasSuffix(r.URL.Path, "/reply"):
-			w.WriteHeader(http.StatusOK)
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer srv.Close()
-
-	om := agent.NewOpencodeMonitorWithServer(agent.NewOpencode(), srv.URL, "pw")
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	om.Start(ctx)
-
-	asked := nextEvent(t, om)
-	if asked.State != agent.StateAwaitingApproval || asked.Approval == nil {
-		t.Fatalf("want awaiting-approval event, got %+v", asked)
-	}
-	if om.CurrentState() != agent.StateAwaitingApproval {
-		t.Fatalf("pre-condition: CurrentState = %q, want awaiting-approval", om.CurrentState())
-	}
-
-	if err := om.Approve(asked.Approval.ReqID, agent.Decision{Allow: true}); err != nil {
-		t.Fatalf("Approve: %v", err)
-	}
-
-	resolved := nextEvent(t, om)
-	if resolved.Kind != "state" || resolved.State != agent.StateRunning {
-		t.Errorf("after Approve, want Kind=state/StateRunning, got %+v", resolved)
-	}
-	if om.CurrentState() != agent.StateRunning {
-		t.Errorf("CurrentState after Approve = %q, want %q", om.CurrentState(), agent.StateRunning)
-	}
-}
-
-// TestOpencodeMonitorApprove_Deny_ClearsToIdle asserts a REJECT decision clears
-// the awaiting-approval attention signal to StateIdle (the agent may stop), not
-// StateRunning. Denying a permission does not resume work.
-func TestOpencodeMonitorApprove_Deny_ClearsToIdle(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	const fixture = `data: {"type":"permission.asked","properties":{"id":"perm-1","sessionID":"s","permission":"bash","patterns":["ls -la"]}}` + "\n\n"
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/event":
-			w.Header().Set("Content-Type", "text/event-stream")
-			_, _ = w.Write([]byte(fixture))
-		case strings.HasPrefix(r.URL.Path, "/permission/") && strings.HasSuffix(r.URL.Path, "/reply"):
-			w.WriteHeader(http.StatusOK)
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer srv.Close()
-
-	om := agent.NewOpencodeMonitorWithServer(agent.NewOpencode(), srv.URL, "pw")
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	om.Start(ctx)
-
-	asked := nextEvent(t, om)
-	if asked.State != agent.StateAwaitingApproval || asked.Approval == nil {
-		t.Fatalf("want awaiting-approval event, got %+v", asked)
-	}
-
-	if err := om.Approve(asked.Approval.ReqID, agent.Decision{Allow: false}); err != nil {
-		t.Fatalf("Approve(reject): %v", err)
-	}
-	resolved := nextEvent(t, om)
-	if resolved.Kind != "state" || resolved.State != agent.StateIdle {
-		t.Errorf("after reject, want Kind=state/StateIdle, got %+v", resolved)
-	}
-	if om.CurrentState() != agent.StateIdle {
-		t.Errorf("CurrentState after reject = %q, want %q", om.CurrentState(), agent.StateIdle)
-	}
-}
-
-// TestOpencodeMonitorApprove_DoesNotClobberNewerState guards the race where a
-// newer real state (StateErrored) arrives on the SSE stream BEFORE the user's
-// decision's HTTP round-trip completes. Approve must NOT clobber it and must NOT
-// emit a clearing event. The fixture emits permission.asked then session.error;
-// the test drains both, then decides, and asserts no further event + state kept.
-func TestOpencodeMonitorApprove_DoesNotClobberNewerState(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	const fixture = `data: {"type":"permission.asked","properties":{"id":"perm-1","sessionID":"s","permission":"bash","patterns":["ls -la"]}}` + "\n\n" +
-		`data: {"type":"session.error","properties":{"sessionID":"s","error":{"name":"X","message":"boom"}}}` + "\n\n"
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/event":
-			w.Header().Set("Content-Type", "text/event-stream")
-			_, _ = w.Write([]byte(fixture))
-		case strings.HasPrefix(r.URL.Path, "/permission/") && strings.HasSuffix(r.URL.Path, "/reply"):
-			w.WriteHeader(http.StatusOK)
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer srv.Close()
-
-	om := agent.NewOpencodeMonitorWithServer(agent.NewOpencode(), srv.URL, "pw")
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	om.Start(ctx)
-
-	asked := nextEvent(t, om)
-	if asked.State != agent.StateAwaitingApproval || asked.Approval == nil {
-		t.Fatalf("want awaiting-approval event, got %+v", asked)
-	}
-	errored := nextEvent(t, om)
-	if errored.State != agent.StateErrored {
-		t.Fatalf("want StateErrored from session.error, got %+v", errored)
-	}
-	if om.CurrentState() != agent.StateErrored {
-		t.Fatalf("pre-condition: CurrentState = %q, want errored", om.CurrentState())
-	}
-
-	// Decision lands late: must NOT emit and must NOT clobber the errored state.
-	if err := om.Approve(asked.Approval.ReqID, agent.Decision{Allow: true}); err != nil {
-		t.Fatalf("Approve: %v", err)
-	}
-	select {
-	case ev := <-om.Events():
-		t.Fatalf("Approve emitted an event after state advanced to Errored — clobbered newer state: %+v", ev)
-	case <-time.After(300 * time.Millisecond):
-		// no event — correct
-	}
-	if om.CurrentState() != agent.StateErrored {
-		t.Errorf("CurrentState after Approve = %q, want %q (Errored must not be clobbered)", om.CurrentState(), agent.StateErrored)
 	}
 }
 

@@ -3,17 +3,14 @@ package agent
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -41,7 +38,6 @@ type OpencodeMonitor struct {
 	httpClient *http.Client
 	mu         sync.Mutex
 	state      State
-	lastTool   string
 }
 
 const (
@@ -78,9 +74,6 @@ const (
 	// sseScannerMaxBuf is the maximum token size the SSE scanner will accept.
 	sseScannerMaxBuf = 1024 * 1024
 
-	// approveTimeout bounds the HTTP POST used to reply to a permission request.
-	approveTimeout = 10 * time.Second
-
 	// serveAndAttachFmt is the shell incantation Prepare returns. It backgrounds
 	// `opencode serve`, polls until the port is listening (budget: 50×0.2s≈10s),
 	// then exec's `opencode attach`. Arguments (in order): password, portStr,
@@ -110,7 +103,17 @@ func NewOpencodeMonitorWithServer(a Adapter, serverURL, pw string) *OpencodeMoni
 
 func (m *OpencodeMonitor) Events() <-chan Event { return m.events }
 func (m *OpencodeMonitor) Capabilities() Caps {
-	return Caps{Approvals: true, Attention: true}
+	// Approvals: false — opencode's own `attach` TUI owns the permission prompt
+	// (Allow once / Allow always / Reject) and perch cannot suppress it, so perch
+	// does NOT render its own ApprovalCard (the frontend gates the card on
+	// caps.approvals). perch surfaces permission.asked only as a PASSIVE attention
+	// signal (StateAwaitingApproval + the blocking notification), mirroring how
+	// question.asked is handled: the user answers in the TUI and perch never
+	// replies. This avoids a double prompt and the stale-card bug (opencode emits
+	// no permission-resolved SSE frame, so a perch-owned card would never clear).
+	// claude is DIFFERENT: its PreToolUse hook BLOCKS and perch's reply suppresses
+	// claude's native prompt, so claude keeps Approvals: true.
+	return Caps{Approvals: false, Attention: true}
 }
 
 // Prepare self-assigns a free loopback port + a random Basic-auth password (unless
@@ -388,52 +391,36 @@ func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
 			ev = idleTransition(prev)
 		}
 	case "permission.asked":
+		// A tool-run permission request. Unlike claude (whose PreToolUse hook BLOCKS
+		// so perch's reply is the sole answer, gating the ApprovalCard), opencode's
+		// `attach` TUI shows its OWN native permission prompt in the same pane and
+		// perch cannot suppress it. So perch does NOT own this approval: it emits a
+		// PASSIVE attention signal only — StateAwaitingApproval with NO Approval
+		// payload. This mirrors question.asked (the user answers in the TUI, perch
+		// never replies). Because Approval is nil, the app event pump registers no
+		// pending approval and never calls Approve(); dispatchNotify still fires the
+		// blocking "Approval needed" notification and the sidebar keeps its distinct
+		// amber awaiting-approval glance. Cleared when the agent's next real state
+		// (running/idle/done) arrives on the SSE stream. (opencode emits no
+		// permission-resolved frame, which is exactly why a perch-owned card would
+		// go stale — hence the passive signal.)
 		var p struct {
-			ID         string   `json:"id"`
-			Permission string   `json:"permission"`
-			Patterns   []string `json:"patterns"`
+			ID string `json:"id"`
 		}
 		if json.Unmarshal(env.Properties, &p) != nil {
 			return
 		}
-		summary := p.Permission
-		if len(p.Patterns) > 0 {
-			summary += ": " + strings.Join(p.Patterns, ", ")
-		}
-		// SECURITY: ApprovalReq.InputHash is the authoritative always-allow match key
-		// (app.maybeAutoApprove). An empty InputHash can never match a rule, so we
-		// FAIL CLOSED — compute hash only when the request carries distinguishing
-		// patterns; otherwise leave InputHash empty and force the user to approve
-		// every time. Never collapse distinct operations to one key.
-		// The hash is computed from the FULL (untruncated) input before truncation.
-		input := ""
-		inputHash := ""
-		if len(p.Patterns) > 0 {
-			key, _ := json.Marshal(struct {
-				Permission string   `json:"permission"`
-				Patterns   []string `json:"patterns"`
-			}{p.Permission, p.Patterns})
-			fullInput := string(key)
-			h := sha256.Sum256([]byte(fullInput))
-			inputHash = hex.EncodeToString(h[:])
-			input = fullInput
-			if len(input) > MaxApprovalInputLen {
-				input = input[:MaxApprovalInputLen]
-			}
-		}
-		ev = Event{Kind: "approval", State: StateAwaitingApproval,
-			Approval: &ApprovalReq{ReqID: p.ID, Tool: p.Permission, Summary: summary, Input: input, InputHash: inputHash}}
+		ev = Event{Kind: "approval", State: StateAwaitingApproval}
 	default:
 		return
 	}
-	// Track state/lastTool (mutex-guarded) BEFORE emitting, so a reader that
-	// observes the event on the channel also observes the updated state.
+	// Track state (mutex-guarded) BEFORE emitting, so a reader that observes the
+	// event on the channel also observes the updated state. opencode emits no
+	// Approval payload (approvals are owned by its own TUI), so there is no
+	// lastTool to track here — unlike claude, whose card-owned approval path does.
 	m.mu.Lock()
 	if ev.State != "" {
 		m.state = ev.State
-	}
-	if ev.Approval != nil && ev.Approval.Tool != "" {
-		m.lastTool = ev.Approval.Tool
 	}
 	m.mu.Unlock()
 	m.send(ctx, ev)
@@ -482,56 +469,22 @@ func (m *OpencodeMonitor) send(ctx context.Context, ev Event) {
 	}
 }
 
-// Approve replies to an opencode permission request: POST /permission/:id/reply
-// with {"reply": once|always|reject} (v1.15.12). reqID is the permission's id
-// from the permission.asked frame.
+// Approve is a deliberate no-op for opencode. It exists only to satisfy the
+// Monitor interface; it is NEVER reached in production for opencode.
+//
+// opencode advertises Capabilities().Approvals = false, so perch renders no
+// ApprovalCard and registers no pending approval for a permission.asked frame
+// (app's event pump only records a pending — and only ever calls mon.Approve —
+// when evt.Approval != nil, which opencode never emits). The user answers the
+// permission in opencode's own `attach` TUI, which owns the reply; perch must
+// not POST /permission/:id/reply as well (that would race the TUI and, since
+// opencode emits no permission-resolved SSE frame, could leave a stale feel).
+// With no pending registered, neither maybeAutoApprove, decideOne, nor
+// CloseWorkspace's deny-pending loop can reach this method for an opencode
+// workspace. Returning nil keeps the interface honest without touching the wire.
 func (m *OpencodeMonitor) Approve(reqID string, d Decision) error {
-	reply := "reject"
-	if d.Allow && d.Always {
-		reply = "always"
-	} else if d.Allow {
-		reply = "once"
-	}
-	body, _ := json.Marshal(map[string]string{"reply": reply})
-	ctx, cancel := context.WithTimeout(context.Background(), approveTimeout)
-	defer cancel()
-	endpoint := m.serverURL + "/permission/" + url.PathEscape(reqID) + "/reply"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", m.authHeader())
-	resp, err := m.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("opencode permission reply: status %d", resp.StatusCode)
-	}
-	// The reply lands and the agent resumes (once/always/reject all end the blocked
-	// permission request). opencode emits no permission-resolved SSE frame, so mirror
-	// question.replied and clear the amber awaiting-approval indicator — but ONLY if
-	// we are still awaiting approval. A newer real state (StateDone/StateErrored) may
-	// arrive on the SSE stream before this reply's HTTP round-trip completes;
-	// clobbering it with StateRunning would show a stale feel. The cleared state
-	// depends on the decision: allow/always → StateRunning (the tool proceeds),
-	// reject → StateIdle (the agent may stop). Update m.state under the same mutex the
-	// SSE path uses so CurrentState() agrees, and update it regardless of whether the
-	// buffered channel accepts the frame.
-	cleared := StateRunning
-	if !d.Allow {
-		cleared = StateIdle
-	}
-	m.mu.Lock()
-	if m.state != StateAwaitingApproval {
-		m.mu.Unlock()
-		return nil
-	}
-	m.state = cleared
-	m.mu.Unlock()
-	m.send(ctx, Event{Kind: "state", State: cleared})
+	_ = reqID
+	_ = d
 	return nil
 }
 
@@ -544,8 +497,8 @@ func (m *OpencodeMonitor) CurrentState() State {
 	return m.state
 }
 
-func (m *OpencodeMonitor) LastApprovalTool() string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.lastTool
-}
+// LastApprovalTool always returns "" for opencode: it exists only to satisfy the
+// Monitor interface. app.Approve reads it to name a card-answered tool, but perch
+// never answers an opencode approval (its TUI owns them), so there is no tool to
+// report. claude, which does own its approvals, tracks and returns a real value.
+func (m *OpencodeMonitor) LastApprovalTool() string { return "" }
