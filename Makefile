@@ -90,7 +90,7 @@ $(DZ): | image
 else
 test:             ; go test -race -count=1 $(PKG)
 test-integration: ; go test -race -count=1 -tags=integration $(PKG)
-test-front:       ; npm --prefix frontend ci && npm --prefix frontend run check && npm --prefix frontend test
+test-front:       ; npm --prefix frontend ci && npm --prefix frontend audit --omit=dev --audit-level=high && npm --prefix frontend run check && npm --prefix frontend test
 test-e2e:         ; npm --prefix frontend ci && npm --prefix frontend run test:e2e
 lint:             ; golangci-lint run
 vet:              ; go vet $(PKG)

@@ -165,8 +165,8 @@ project-local config, so opening a repository cannot change how perch behaves.
 
 ## Security
 
-Perch is built to be safe to point at a repository, with three deliberate
-boundaries.
+Perch draws three deliberate boundaries between the cockpit and a repository you
+open.
 
 - **No IPC port.** The frontend and backend speak over Wails bindings and
   events, not a socket. A release build opens no TCP or Unix socket for IPC.
@@ -184,13 +184,24 @@ boundaries.
   more than the exact request you approved. Rules are listed and revocable in
   Settings.
 
-One caveat is yours to own: perch runs `git worktree add` and `git checkout`,
-and git may run a repository's existing hooks, exactly as it would if you ran
-those commands yourself. Open repositories you trust. Cloned and fetched
-repositories do not carry their author's hooks, so the exposure is only from
-hooks already present in a local repository.
+Two caveats are yours to own, and they are different in kind. The first is git's
+own hooks. perch runs `git worktree add` and `git checkout`, and git may run a
+repository's `.git/hooks` exactly as it would if you ran those commands yourself.
+Those hooks live outside the tree and are not carried by clone, fetch, or push,
+so the exposure there is only from hooks already sitting in your local clone.
 
-The full system-level treatment is in [ARCHITECTURE.md](ARCHITECTURE.md).
+The second does travel with a clone. A repository can commit an agent's own
+configuration into its tree, a `.claude/settings.json` or an opencode config,
+whose `PreToolUse` or command entries the agent runtime executes as shell the
+moment a session opens in that worktree. perch merges its listener into that file
+and leaves any hooks it finds there untouched, and its approval boundary covers
+the tool calls an agent asks to make, not the hooks the agent's configuration
+runs on startup. Committed agent hooks therefore run ungated. Open repositories
+you trust, and give an unfamiliar one's `.claude` and opencode config a read
+before you open a session in it.
+
+To report a vulnerability privately, see [SECURITY.md](SECURITY.md). The full
+system-level treatment is in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Documentation
 
@@ -198,6 +209,7 @@ The full system-level treatment is in [ARCHITECTURE.md](ARCHITECTURE.md).
 |----------|-----|
 | [Usage guide](docs/usage.md) | Driving the cockpit day to day |
 | [Architecture](ARCHITECTURE.md) | How perch is built |
+| [Security policy](SECURITY.md) | Reporting a vulnerability privately |
 | [Contributing](CONTRIBUTING.md) | Toolchain, build, and the test workflow |
 | [Container framework](containers/README.md) | The one image every check runs in |
 | [Backend packages](internal/README.md) | A map of `internal/` |

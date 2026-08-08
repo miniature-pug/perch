@@ -50,7 +50,7 @@ Run targets from the repository root.
 | `make desktop` | Install a user `.desktop` entry and icon so GNOME and Wayland show the app icon |
 | `make test` | Go unit tests, with the race detector |
 | `make test-integration` | Go integration tests (`-tags=integration`); needs git |
-| `make test-front` | Frontend typecheck and unit tests |
+| `make test-front` | Frontend `npm audit` (production deps, fails on high or critical), typecheck, and unit tests |
 | `make test-e2e` | Playwright (chromium) end-to-end tests |
 | `make test-all` | The full gate: test, test-integration, test-front, lint, vet, vulncheck, test-e2e |
 | `make coverage` | Per-package coverage for `internal/` |
@@ -91,7 +91,10 @@ layout. The loop is:
 make gui-run          # rebuild the frontend and binary, then launch
 ```
 
-`make test-front` runs the frontend typecheck and unit tests in the container.
+`make test-front` runs `npm audit` over the production dependencies, then the
+frontend typecheck and unit tests, in the container. The audit fails the gate on
+any high or critical advisory, so a vulnerable shipped dependency cannot drift in
+unnoticed, the counterpart to `govulncheck` on the Go side.
 With a local Node toolchain, `npm --prefix frontend test` works for quick
 iteration, but `make test-front` is the canonical path. For Go logic without a
 display, `make test` and `make vet` cover the non-GUI code, and the production

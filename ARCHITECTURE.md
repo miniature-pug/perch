@@ -405,11 +405,26 @@ rule never grants more than the exact request you approved.
 
 ### Repository trust
 
-Perch runs `git worktree add` and `git checkout`, and git may run a repository's
-configured hooks, the same as if you ran those commands yourself. perch does not
-disable hooks, because that would break workflows like git-lfs and submodules.
-Open repositories you trust. Hooks are not transferred by clone, fetch, or push,
-so the exposure is only from hooks already present in a local repository.
+There are two paths by which opening a repository can run code, and they differ
+in kind. The first is git's own hooks. perch runs `git worktree add` and `git
+checkout`, and git may run a repository's configured `.git/hooks`, the same as if
+you ran those commands yourself. perch does not disable them, because that would
+break workflows like git-lfs and submodules. Those hooks live outside the tree
+and are not transferred by clone, fetch, or push, so their exposure is only from
+hooks already present in a local repository.
+
+The second path travels with the tree. An agent reads its configuration from the
+worktree on startup: `claude` from `.claude/settings.json`, opencode from its own
+config. A repository can commit such a file, and its `PreToolUse` or command
+hooks are executed as shell by the agent runtime the moment a session opens. Perch's
+own approval channel is itself one such command hook, so `ClaudeMonitor.writeHooks`
+merges into a repository's existing `.claude/settings.json` rather than replacing
+it, preserving any hooks already committed there. The approval gate intercepts the
+tool calls an agent routes through the loopback listener; it does not intercept the
+configuration's own hooks, which the runtime executes before and outside that
+channel. Committed agent-config hooks therefore run ungated, so opening an
+untrusted repository should include a look at its `.claude` and opencode
+configuration. Open repositories you trust.
 
 ## Capabilities and degradation
 
