@@ -7,6 +7,14 @@ vi.mock("./wails", () => ({
   listStaleSessions: vi.fn(async () => []),
 }));
 
+// The mocked module is shared across every test in this file (vi.mock is
+// hoisted once), so call history must be reset between tests — otherwise a
+// "not called" assertion in a later test can see calls left over from an
+// earlier one.
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
 function makeSession(overrides: Partial<StaleSessionVM> = {}): StaleSessionVM {
   return {
     id: "ws-1", title: "feat-old", branch: "feat/old", agent: "claude",
@@ -79,6 +87,99 @@ test("Remove selected calls cleanupSessions with checked ids", async () => {
   const confirmBtn = screen.getByRole("button", { name: /^remove$/i });
   await fireEvent.click(confirmBtn);
   await waitFor(() => expect(cleanupSessions).toHaveBeenCalledWith(["ws-a"], false));
+});
+
+// ---------------------------------------------------------------------------
+// WIN #4: force-remove path for checked unsafe (dirty/unmerged) rows.
+// Remove selected must NEVER force; force-remove is a distinct, separately
+// gated control so a single misclick cannot discard uncommitted changes or
+// unmerged commits.
+// ---------------------------------------------------------------------------
+
+test("Remove selected only removes checked SAFE rows with force=false, even when an unsafe row is also checked", async () => {
+  const { default: CleanupPanel } = await import("./CleanupPanel.svelte");
+  const { cleanupSessions } = await import("./wails");
+  const sessions = [
+    makeSession({ id: "ws-a", safe: true }),
+    makeSession({ id: "ws-b", safe: false, merged: false }),
+  ];
+  render(CleanupPanel, { props: { sessions, onClose: () => {} } });
+  // Manually check the unsafe row too.
+  await fireEvent.click(screen.getByTestId("row-check-ws-b"));
+  const removeBtn = screen.getByRole("button", { name: /remove selected/i });
+  await fireEvent.click(removeBtn);
+  const confirmBtn = screen.getByRole("button", { name: /^remove$/i });
+  await fireEvent.click(confirmBtn);
+  await waitFor(() => expect(cleanupSessions).toHaveBeenCalledWith(["ws-a"], false));
+  expect(cleanupSessions).not.toHaveBeenCalledWith(expect.arrayContaining(["ws-b"]), expect.anything());
+  expect(cleanupSessions).not.toHaveBeenCalledWith(expect.anything(), true);
+});
+
+test("Remove selected is disabled when only unsafe rows are checked (unsafe rows cannot go through the normal path)", async () => {
+  const { default: CleanupPanel } = await import("./CleanupPanel.svelte");
+  const sessions = [makeSession({ id: "ws-u", safe: false, merged: false })];
+  render(CleanupPanel, { props: { sessions, onClose: () => {} } });
+  await fireEvent.click(screen.getByTestId("row-check-ws-u"));
+  const removeBtn = screen.getByRole("button", { name: /remove selected/i }) as HTMLButtonElement;
+  expect(removeBtn.disabled).toBe(true);
+});
+
+test("Force remove unsafe control is hidden when there are no unsafe sessions", async () => {
+  const { default: CleanupPanel } = await import("./CleanupPanel.svelte");
+  const sessions = [makeSession({ id: "ws-a", safe: true })];
+  render(CleanupPanel, { props: { sessions, onClose: () => {} } });
+  expect(screen.queryByRole("button", { name: /force remove/i })).toBeNull();
+});
+
+test("Force remove unsafe control is disabled until an unsafe row is checked", async () => {
+  const { default: CleanupPanel } = await import("./CleanupPanel.svelte");
+  const sessions = [makeSession({ id: "ws-u", safe: false, merged: false })];
+  render(CleanupPanel, { props: { sessions, onClose: () => {} } });
+  const forceBtn = screen.getByRole("button", { name: /force remove unsafe/i }) as HTMLButtonElement;
+  expect(forceBtn.disabled).toBe(true);
+  await fireEvent.click(screen.getByTestId("row-check-ws-u"));
+  expect(forceBtn.disabled).toBe(false);
+});
+
+test("Force remove unsafe requires an explicit confirmation before calling cleanupSessions with force=true", async () => {
+  const { default: CleanupPanel } = await import("./CleanupPanel.svelte");
+  const { cleanupSessions } = await import("./wails");
+  const sessions = [makeSession({ id: "ws-u", safe: false, merged: false })];
+  render(CleanupPanel, { props: { sessions, onClose: () => {} } });
+  await fireEvent.click(screen.getByTestId("row-check-ws-u"));
+  const forceBtn = screen.getByRole("button", { name: /force remove unsafe/i });
+  await fireEvent.click(forceBtn);
+  // Clicking the trigger alone must not call the backend — the confirmation
+  // dialog must appear and require its own click.
+  expect(cleanupSessions).not.toHaveBeenCalled();
+  const confirmBtn = await screen.findByRole("button", { name: /^force remove$/i });
+  await fireEvent.click(confirmBtn);
+  await waitFor(() => expect(cleanupSessions).toHaveBeenCalledWith(["ws-u"], true));
+});
+
+test("the force-remove confirmation states plainly that it discards uncommitted changes and unmerged commits", async () => {
+  const { default: CleanupPanel } = await import("./CleanupPanel.svelte");
+  const sessions = [makeSession({ id: "ws-u", safe: false, merged: false })];
+  render(CleanupPanel, { props: { sessions, onClose: () => {} } });
+  await fireEvent.click(screen.getByTestId("row-check-ws-u"));
+  await fireEvent.click(screen.getByRole("button", { name: /force remove unsafe/i }));
+  await screen.findByRole("button", { name: /^force remove$/i });
+  expect(screen.getByText(/uncommitted changes/i)).toBeInTheDocument();
+  expect(screen.getByText(/unmerged commits/i)).toBeInTheDocument();
+});
+
+test("dismissing the force-remove confirmation does not call cleanupSessions", async () => {
+  const { default: CleanupPanel } = await import("./CleanupPanel.svelte");
+  const { cleanupSessions } = await import("./wails");
+  const sessions = [makeSession({ id: "ws-u", safe: false, merged: false })];
+  render(CleanupPanel, { props: { sessions, onClose: () => {} } });
+  await fireEvent.click(screen.getByTestId("row-check-ws-u"));
+  await fireEvent.click(screen.getByRole("button", { name: /force remove unsafe/i }));
+  const cancelBtn = await screen.findByRole("button", { name: /^cancel$/i });
+  await fireEvent.click(cancelBtn);
+  expect(cleanupSessions).not.toHaveBeenCalled();
+  // The dialog should be gone.
+  expect(screen.queryByRole("button", { name: /^force remove$/i })).toBeNull();
 });
 
 test("Open button calls onOpen with the session id", async () => {

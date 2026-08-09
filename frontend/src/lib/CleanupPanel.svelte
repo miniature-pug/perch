@@ -20,6 +20,7 @@
   // svelte-ignore state_referenced_locally
   let checked = $state<Set<string>>(new Set(sessions.filter(s => s.safe).map(s => s.id)));
   let confirmOpen = $state(false);
+  let forceConfirmOpen = $state(false);
   let removing = $state(false);
   let error = $state<string | null>(null);
 
@@ -39,6 +40,16 @@
 
   const allChecked = $derived(sessions.length > 0 && sessions.every(s => checked.has(s.id)));
 
+  // Split the checked selection by safety: the normal Remove control only ever
+  // touches safe rows (force=false, unchanged behavior); unsafe rows require the
+  // separate, explicitly-confirmed force path below. This is what makes it
+  // impossible for a checked-but-unsafe row to be removed non-destructively —
+  // the destructive git operations (worktree --force, branch -D) are gated
+  // behind their own control and their own confirmation.
+  const checkedSafeIds = $derived(sessions.filter(s => checked.has(s.id) && s.safe).map(s => s.id));
+  const checkedUnsafeIds = $derived(sessions.filter(s => checked.has(s.id) && !s.safe).map(s => s.id));
+  const hasUnsafeSessions = $derived(sessions.some(s => !s.safe));
+
   function toggleAll() {
     if (allChecked) checked = new Set();
     else checked = new Set(sessions.map(s => s.id));
@@ -57,7 +68,30 @@
     error = null;
     removing = true;
     try {
-      await cleanupSessions([...checked], false);
+      // Only ever the safe subset — force is never true on this path. An unsafe
+      // row that happens to also be checked is silently left for the force
+      // control below rather than failing (or force-destroying) the whole batch.
+      await cleanupSessions(checkedSafeIds, false);
+      onClose?.();
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      removing = false;
+    }
+  }
+
+  // Distinct destructive path: force-removes the checked UNSAFE rows only,
+  // discarding uncommitted changes (git worktree remove --force) and unmerged
+  // commits (git branch -D). Gated by its own control (disabled unless an
+  // unsafe row is checked) and its own explicit confirm dialog — never
+  // reachable from the normal Remove button or a single click.
+  async function handleForceRemove() {
+    if (removing) return;
+    forceConfirmOpen = false;
+    error = null;
+    removing = true;
+    try {
+      await cleanupSessions(checkedUnsafeIds, true);
       onClose?.();
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -133,18 +167,38 @@
   </div>
 
   <div class="cleanup-footer">
-    <button class="cleanup-remove-btn" disabled={checked.size === 0 || removing} onclick={() => { confirmOpen = true; }}>
-      Remove selected ({checked.size})
+    {#if hasUnsafeSessions}
+      <button
+        class="cleanup-force-btn"
+        disabled={checkedUnsafeIds.length === 0 || removing}
+        onclick={() => { forceConfirmOpen = true; }}
+        title="Discards uncommitted changes and unmerged commits"
+      >
+        ⚠ Force remove unsafe ({checkedUnsafeIds.length})
+      </button>
+    {/if}
+    <button class="cleanup-remove-btn" disabled={checkedSafeIds.length === 0 || removing} onclick={() => { confirmOpen = true; }}>
+      Remove selected ({checkedSafeIds.length})
     </button>
   </div>
 
   <ConfirmDialog
     open={confirmOpen}
-    message="Remove {checked.size} session{checked.size !== 1 ? 's' : ''}? This deletes the linked worktrees and branches."
+    message="Remove {checkedSafeIds.length} session{checkedSafeIds.length !== 1 ? 's' : ''}? This deletes the linked worktrees and branches."
     confirmLabel="Remove"
     destructive={true}
     onConfirm={handleRemove}
     onCancel={() => { confirmOpen = false; }}
+  />
+
+  <ConfirmDialog
+    open={forceConfirmOpen}
+    message="Force remove {checkedUnsafeIds.length} session{checkedUnsafeIds.length !== 1 ? 's' : ''}?"
+    confirmLabel="Force remove"
+    destructive={true}
+    note="Discards uncommitted changes and unmerged commits. This cannot be undone."
+    onConfirm={handleForceRemove}
+    onCancel={() => { forceConfirmOpen = false; }}
   />
 </div>
 </div>
@@ -183,9 +237,16 @@
   .dim { color: var(--perch-text-dim); }
   .cleanup-open-btn { background: transparent; border: 1px solid var(--perch-border); color: var(--perch-text-dim); border-radius: var(--perch-radius-sm); padding: 2px 8px; cursor: pointer; font-size: var(--perch-fs-caption); }
   .cleanup-open-btn:hover { border-color: var(--perch-accent); color: var(--perch-accent); }
-  .cleanup-footer { display: flex; justify-content: flex-end; padding: var(--perch-sp-2) var(--perch-sp-3); border-top: 1px solid var(--perch-border); }
+  .cleanup-footer { display: flex; justify-content: flex-end; align-items: center; gap: var(--perch-sp-2); padding: var(--perch-sp-2) var(--perch-sp-3); border-top: 1px solid var(--perch-border); }
   .cleanup-remove-btn { background: var(--perch-bg); color: var(--perch-err); border: 1px solid var(--perch-err); border-radius: var(--perch-radius-sm); padding: 4px 16px; cursor: pointer; font-family: var(--perch-font-sans); font-size: var(--perch-fs-body); }
   .cleanup-remove-btn:disabled { opacity: var(--perch-opacity-disabled); cursor: not-allowed; }
   .cleanup-remove-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--perch-err) 10%, var(--perch-bg)); }
+  /* Force-remove: visually distinct from the plain Remove button (warn color,
+     same token as the row's ⚠ unsafe badge) so the two controls can't be
+     confused at a glance; separated by the footer gap, and disabled until an
+     unsafe row is explicitly checked so it can never be a stray misclick. */
+  .cleanup-force-btn { background: var(--perch-bg); color: var(--perch-warn); border: 1px solid var(--perch-warn); border-radius: var(--perch-radius-sm); padding: 4px 16px; cursor: pointer; font-family: var(--perch-font-sans); font-size: var(--perch-fs-body); margin-right: auto; }
+  .cleanup-force-btn:disabled { opacity: var(--perch-opacity-disabled); cursor: not-allowed; }
+  .cleanup-force-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--perch-warn) 10%, var(--perch-bg)); }
   .cleanup-error { color: var(--perch-err); font-size: var(--perch-fs-caption); margin-top: var(--perch-sp-1); }
 </style>
