@@ -212,9 +212,16 @@ WebKit and cannot be checked headlessly.
 - [ ] With two sessions older than the stale threshold (set it low to trigger),
       the banner appears on relaunch with the right count, and dismissing hides
       it for the session.
+- [ ] Change the stale threshold in Settings (Sessions): sessions cross the
+      stale line at the new day count, and clearing the field restores the
+      30-day default.
 - [ ] Open the cleanup panel: clean and merged rows are checked, dirty or
       unmerged rows are unchecked with a warning, Select-all checks all, and
       Remove frees the trees and branches.
+- [ ] In the cleanup panel, check a dirty or unmerged row: the safe Remove skips
+      it, and a distinct warn-colored Force remove unsafe button appears, disabled
+      until such a row is checked. It asks a separate confirmation that names the
+      data loss, and only then discards the tree and the unmerged branch.
 - [ ] The cleanup panel's Open button opens that session.
 
 ## Sidebar resume and the home shell
@@ -223,6 +230,9 @@ WebKit and cannot be checked headlessly.
 - [ ] An empty sidebar shows the no-sessions hint.
 - [ ] Clicking a row shows the resume preview. Cancel leaves the session closed;
       Open resumes it.
+- [ ] The resume preview says whether Open continues the previous conversation or
+      starts fresh, and shows the fork point (Forked from ...) for a worktree
+      session that recorded one.
 - [ ] The home screen (no active session) shows a welcome card and a live shell
       drawer rooted at the launch directory or your home directory.
 - [ ] Run a command in the home shell, open a session, return home: the earlier
@@ -275,6 +285,10 @@ keep-alive, an agent that dies on its own, and the stubbed-binary guard.
       shows the welcome guidance: what a session needs (a git repo and `claude` or
       `opencode` on `PATH`), a plain-word note on worktrees, and the pointer to
       `perch doctor` and `docs/usage.md`.
+- [ ] **Attention count in the window title.** With perch backgrounded and a
+      session awaiting your approval or a question, the OS window title reads
+      `perch (N need you)`, and returns to `perch` once every session is handled.
+      The count follows approvals and questions, debounced so it does not thrash.
 
 ## Shutdown
 
