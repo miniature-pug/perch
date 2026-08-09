@@ -74,6 +74,11 @@ const (
 // fsDebounce is the coalescing window for fs:changed events emitted to the frontend.
 const fsDebounce = 150 * time.Millisecond
 
+// titleDebounce is the coalescing window for native OS window-title refreshes.
+// State events can arrive in bursts (many workspaces transitioning at once); the
+// debounce collapses a burst into a single WindowSetTitle call.
+const titleDebounce = 150 * time.Millisecond
+
 // Settings defaults — source of truth for settings defaults; frontend mirrors these in frontend/src/lib/constants.ts.
 const (
 	defaultTheme   = "gruvbox"
@@ -178,6 +183,16 @@ type App struct {
 	// terminal's environment and drives the relaunch. Stood up in startup; nil in
 	// tests that never call startup (drawers then inject no env-sync handles).
 	envsync *envsync.Listener
+
+	// titleMu guards titleTimer, the debounce timer that coalesces rapid state
+	// changes into a single native OS window-title refresh (WIN #6). It is a
+	// leaf lock: it must NEVER be held while acquiring a.mu, and refreshWindowTitle
+	// (the timer callback) takes a.mu only AFTER titleMu has been released by
+	// scheduleTitleUpdate. Concurrent event-pump goroutines can call
+	// scheduleTitleUpdate at once; titleMu serializes the Stop+reset so they cannot
+	// race the timer.
+	titleMu    sync.Mutex
+	titleTimer *time.Timer
 }
 
 // NewApp builds the production App.
@@ -307,6 +322,13 @@ func (a *App) shutdown(_ context.Context) {
 	if a.envsync != nil {
 		_ = a.envsync.Close()
 	}
+	// Stop any pending window-title refresh so the debounce timer does not fire a
+	// WindowSetTitle into a window that is being torn down.
+	a.titleMu.Lock()
+	if a.titleTimer != nil {
+		a.titleTimer.Stop()
+	}
+	a.titleMu.Unlock()
 }
 
 // putBridge registers b under paneID, closing any displaced bridge.
@@ -420,6 +442,15 @@ type WorkspaceVM struct {
 	Caps         agent.Caps  `json:"caps"`
 	PaneID       string      `json:"paneId"`
 	LastActive   time.Time   `json:"lastActive"`
+	// WillResume is true when reopening this session resumes the prior agent
+	// conversation rather than starting fresh — i.e. a session id was persisted
+	// (registry.Workspace.LastSessionID != ""). Projected read-only for the
+	// sidebar "resumes previous conversation" affordance.
+	WillResume bool `json:"willResume"`
+	// BaseRef is the ref this worktree session was forked from
+	// (registry.Workspace.BaseRef). Empty for old records and in-repo
+	// (non-worktree) sessions, in which case the frontend hides the fork-point.
+	BaseRef string `json:"baseRef,omitempty"`
 }
 
 // paneIDFor returns the deterministic pane ID for a given workspace ID.
@@ -444,6 +475,10 @@ func (a *App) ListWorkspaces() []WorkspaceVM {
 			PaneID:       paneIDFor(w.ID),
 			LastActive:   w.LastActive,
 			State:        agent.StateIdle,
+			// WIN #2: reopening resumes the prior conversation iff a session id
+			// was persisted. WIN #3: surface the fork point (empty for old/in-repo).
+			WillResume: w.LastSessionID != "",
+			BaseRef:    w.BaseRef,
 		}
 		a.mu.Lock()
 		m, ok := a.monitors[w.ID]
@@ -455,6 +490,86 @@ func (a *App) ListWorkspaces() []WorkspaceVM {
 		out = append(out, vm)
 	}
 	return out
+}
+
+// needsAttention reports whether a live agent state requires the user's action —
+// the same "need you" signal the sidebar surfaces: the agent is blocked waiting
+// for an approval decision or for the user to answer a question.
+func needsAttention(s agent.State) bool {
+	return s == agent.StateAwaitingApproval || s == agent.StateAwaitingInput
+}
+
+// countNeedsAttention counts how many of the given live states need the user.
+// Pure (no locks, no App state) so the count logic is unit-tested independently
+// of the untestable GTK WindowSetTitle call. See windowTitle / refreshWindowTitle.
+func countNeedsAttention(states []agent.State) int {
+	n := 0
+	for _, s := range states {
+		if needsAttention(s) {
+			n++
+		}
+	}
+	return n
+}
+
+// windowTitle renders the native OS window title for a given attention count:
+// "perch" when nothing needs the user, "perch (N need you)" otherwise. Pure and
+// exhaustively unit-tested; a non-positive count is treated as zero defensively.
+func windowTitle(needCount int) string {
+	if needCount <= 0 {
+		return "perch"
+	}
+	return fmt.Sprintf("perch (%d need you)", needCount)
+}
+
+// attentionCount snapshots the live monitors under a.mu, then reads each one's
+// CurrentState() OUTSIDE the lock (mirroring ListWorkspaces, so a monitor's state
+// accessor can never be called while a.mu is held) and returns how many need the
+// user. Registry records without a live monitor default to idle and never count.
+func (a *App) attentionCount() int {
+	a.mu.Lock()
+	mons := make([]agent.Monitor, 0, len(a.monitors))
+	for _, m := range a.monitors {
+		mons = append(mons, m)
+	}
+	a.mu.Unlock()
+	states := make([]agent.State, 0, len(mons))
+	for _, m := range mons {
+		states = append(states, m.CurrentState())
+	}
+	return countNeedsAttention(states)
+}
+
+// scheduleTitleUpdate coalesces rapid state changes into a single debounced
+// native window-title refresh (WIN #6). It is safe to call concurrently from
+// every workspace's event-pump goroutine: titleMu serializes the Stop+reset of
+// the shared timer so concurrent state events cannot race it. The refresh (which
+// recomputes the count and calls WindowSetTitle) fires titleDebounce after the
+// LAST call in a burst.
+func (a *App) scheduleTitleUpdate() {
+	a.titleMu.Lock()
+	defer a.titleMu.Unlock()
+	if a.titleTimer != nil {
+		a.titleTimer.Stop()
+	}
+	a.titleTimer = time.AfterFunc(titleDebounce, a.refreshWindowTitle)
+}
+
+// refreshWindowTitle recomputes the attention count across all live monitors and
+// pushes the native OS window title via the Wails runtime. Only the GTK call is
+// untestable (it needs a real display / main thread); the count/title logic it
+// delegates to (attentionCount, windowTitle) is pure and unit-tested. A nil ctx
+// (tests, or before startup wires it) makes the GTK call a no-op after the count,
+// so the pure path is still exercised. safe.Recover guards the timer goroutine.
+func (a *App) refreshWindowTitle() {
+	defer safe.Recover("window-title")
+	title := windowTitle(a.attentionCount())
+	if a.ctx == nil {
+		return
+	}
+	// WindowSetTitle marshals gtk_window_set_title to the main thread on the
+	// Linux/GTK backend (same runtime used for WindowUnminimise/WindowShow).
+	wailsruntime.WindowSetTitle(a.ctx, title)
 }
 
 // Settings is the persisted user preference blob.
@@ -883,6 +998,12 @@ func (a *App) OpenWorkspace(id string) error {
 				}
 				a.emit("agent:event", evt)
 				a.dispatchNotify(evt)
+				// WIN #6: every state transition is centrally observed here (the
+				// single point every monitor event flows through, right beside the
+				// notify dispatch), so recompute the "need you" count and debounce a
+				// native window-title refresh. Recomputing from live monitors keeps it
+				// correct regardless of which event fired; the debounce coalesces bursts.
+				a.scheduleTitleUpdate()
 			}
 		}
 	}()
@@ -1134,6 +1255,12 @@ func (a *App) CloseWorkspace(id string) error {
 	if shellBr != nil {
 		_ = shellBr.Close()
 	}
+	// WIN #6: closing a session removes its monitor from the attention set, but its
+	// event pump is now cancelled and can no longer fire the state-change hook, so
+	// the native title would go stale (e.g. stuck at "perch (1 need you)" after the
+	// only awaiting session is closed). Debounce a refresh; by the time it fires the
+	// monitor is already removed above, so attentionCount reflects the removal.
+	a.scheduleTitleUpdate()
 	return nil
 }
 
