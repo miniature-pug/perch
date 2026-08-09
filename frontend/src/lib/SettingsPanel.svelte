@@ -87,6 +87,23 @@
     try { await settingsStore.setGlass(!next); } catch (err) { addBlocking("", "Failed to save settings", String(err)); }
   }
 
+  // Validate as a non-negative integer. Blank clears the override (backend
+  // falls back to its default of 30 days); anything negative or non-numeric
+  // is ignored — the input keeps its prior committed value.
+  async function onStaleThresholdChange(e: Event) {
+    const raw = (e.currentTarget as HTMLInputElement).value.trim();
+    let v: number | undefined;
+    if (raw === "") {
+      v = undefined;
+    } else {
+      const n = Number(raw);
+      if (!Number.isInteger(n) || n < 0) return;
+      v = n;
+    }
+    settings = { ...settings, staleThresholdDays: v };
+    try { await settingsStore.setStaleThresholdDays(v); } catch (err) { addBlocking("", "Failed to save settings", String(err)); }
+  }
+
   async function revokeRule(i: number) {
     const reduced = settings.alwaysRules.filter((_, j) => j !== i);
     settings = { ...settings, alwaysRules: reduced };
@@ -160,6 +177,23 @@
           >
             {settings.dnd ? "On" : "Off"}
           </button>
+        </div>
+      </section>
+
+      <section class="settings-section">
+        <h2>Sessions</h2>
+        <div class="setting-row">
+          <span class="setting-label">Stale after</span>
+          <input
+            type="number"
+            min="0"
+            step="1"
+            aria-label="Stale threshold (days)"
+            class="setting-number"
+            value={settings.staleThresholdDays ?? ""}
+            oninput={onStaleThresholdChange}
+          />
+          <span class="setting-hint">Days of inactivity before a session is flagged stale in Cleanup (0 or blank = default 30)</span>
         </div>
       </section>
 
@@ -248,6 +282,18 @@
 
   .setting-row select {
     flex: 1;
+    background: var(--perch-bg);
+    color: var(--perch-text);
+    border: 1px solid var(--perch-border-strong);
+    border-radius: var(--perch-radius-sm);
+    padding: 2px 6px;
+    font-size: var(--perch-fs-body);
+    font-family: var(--perch-font-sans);
+  }
+
+  .setting-number {
+    width: 72px;
+    flex: 0 0 auto;
     background: var(--perch-bg);
     color: var(--perch-text);
     border: 1px solid var(--perch-border-strong);

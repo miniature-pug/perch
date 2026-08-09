@@ -122,4 +122,52 @@ describe("settings store", () => {
       expect.objectContaining({ staleThresholdDays: 14 }),
     );
   });
+
+  // WIN #1 — setStaleThresholdDays mirrors the other setters exactly (update
+  // state, then persist through the shared persistPref path).
+  it("setStaleThresholdDays updates state and calls saveSettings with the new value", async () => {
+    const { settings } = await import("./settings.svelte");
+    const w = await import("../wails");
+    await settings.load();
+    await settings.setStaleThresholdDays(45);
+    expect(settings.staleThresholdDays).toBe(45);
+    expect(vi.mocked(w.saveSettings)).toHaveBeenCalledWith(
+      expect.objectContaining({ staleThresholdDays: 45 }),
+    );
+  });
+
+  it("setStaleThresholdDays(0) is accepted and persisted as 0 (backend treats <=0 as default)", async () => {
+    const { settings } = await import("./settings.svelte");
+    const w = await import("../wails");
+    await settings.load();
+    await settings.setStaleThresholdDays(0);
+    expect(settings.staleThresholdDays).toBe(0);
+    expect(vi.mocked(w.saveSettings)).toHaveBeenCalledWith(
+      expect.objectContaining({ staleThresholdDays: 0 }),
+    );
+  });
+
+  it("setStaleThresholdDays(undefined) is accepted and persisted as undefined (blank input)", async () => {
+    const { settings } = await import("./settings.svelte");
+    const w = await import("../wails");
+    await settings.load();
+    await settings.setStaleThresholdDays(undefined);
+    expect(settings.staleThresholdDays).toBeUndefined();
+    expect(vi.mocked(w.saveSettings)).toHaveBeenCalledWith(
+      expect.objectContaining({ staleThresholdDays: undefined }),
+    );
+  });
+
+  it("a valid positive integer round-trips through load after setStaleThresholdDays + a fresh getSettings", async () => {
+    const { settings } = await import("./settings.svelte");
+    const w = await import("../wails");
+    await settings.load();
+    await settings.setStaleThresholdDays(21);
+    vi.mocked(w.getSettings).mockResolvedValueOnce({
+      theme: "gruvbox", density: "dense", font: "geist", dnd: false,
+      glassDisabled: false, alwaysRules: [], staleThresholdDays: 21,
+    });
+    await settings.load();
+    expect(settings.staleThresholdDays).toBe(21);
+  });
 });

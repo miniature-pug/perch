@@ -43,6 +43,7 @@ class SettingsStore {
   async setFont(v: string): Promise<void>                               { this.font = v;        await this.persistPref(); }
   async setDnd(v: boolean): Promise<void>                               { this.dnd = v;         await this.persistPref(); }
   async setGlass(v: boolean): Promise<void>                             { this.glass = v;       await this.persistPref(); }
+  async setStaleThresholdDays(v: number | undefined): Promise<void>     { this.staleThresholdDays = v; await this.persistPref(); }
   // setAlwaysRules is the authoritative writer of rules: it must NOT reload (that
   // would race its own write). The frontend never appends rules — only overwrites
   // via the settings UI — so its in-memory alwaysRules is authoritative here.

@@ -206,6 +206,87 @@ describe("SettingsPanel — F52 appearance display names", () => {
   });
 });
 
+describe("SettingsPanel — stale threshold persists", () => {
+  it("renders the input with the current staleThresholdDays value", async () => {
+    const w = await import("./wails");
+    vi.mocked(w.getSettings).mockResolvedValueOnce({ ...fixture, staleThresholdDays: 14 });
+    const { default: SettingsPanel } = await import("./SettingsPanel.svelte");
+    render(SettingsPanel, { props: { open: true, onClose: vi.fn() } });
+
+    const input = (await screen.findByLabelText(/stale/i)) as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe("14"));
+  });
+
+  it("renders the input blank when staleThresholdDays is unset", async () => {
+    const { default: SettingsPanel } = await import("./SettingsPanel.svelte");
+    render(SettingsPanel, { props: { open: true, onClose: vi.fn() } });
+
+    const input = (await screen.findByLabelText(/stale/i)) as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe(""));
+  });
+
+  it("changing the stale threshold to a valid positive integer calls saveSettings exactly once with the new value", async () => {
+    const w = await import("./wails");
+    const { default: SettingsPanel } = await import("./SettingsPanel.svelte");
+    render(SettingsPanel, { props: { open: true, onClose: vi.fn() } });
+
+    const input = (await screen.findByLabelText(/stale/i)) as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: "45" } });
+
+    await waitFor(() =>
+      expect(vi.mocked(w.saveSettings)).toHaveBeenCalledWith(
+        expect.objectContaining({ staleThresholdDays: 45 })
+      )
+    );
+    expect(vi.mocked(w.saveSettings)).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts 0 without raising an error", async () => {
+    const w = await import("./wails");
+    const { default: SettingsPanel } = await import("./SettingsPanel.svelte");
+    render(SettingsPanel, { props: { open: true, onClose: vi.fn() } });
+
+    const input = (await screen.findByLabelText(/stale/i)) as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: "0" } });
+
+    await waitFor(() =>
+      expect(vi.mocked(w.saveSettings)).toHaveBeenCalledWith(
+        expect.objectContaining({ staleThresholdDays: 0 })
+      )
+    );
+    expect(screen.queryByText(/failed to save settings/i)).not.toBeInTheDocument();
+  });
+
+  it("accepts a blank value without raising an error", async () => {
+    const w = await import("./wails");
+    vi.mocked(w.getSettings).mockResolvedValueOnce({ ...fixture, staleThresholdDays: 14 });
+    const { default: SettingsPanel } = await import("./SettingsPanel.svelte");
+    render(SettingsPanel, { props: { open: true, onClose: vi.fn() } });
+
+    const input = (await screen.findByLabelText(/stale/i)) as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe("14"));
+    await fireEvent.input(input, { target: { value: "" } });
+
+    await waitFor(() =>
+      expect(vi.mocked(w.saveSettings)).toHaveBeenCalledWith(
+        expect.objectContaining({ staleThresholdDays: undefined })
+      )
+    );
+    expect(screen.queryByText(/failed to save settings/i)).not.toBeInTheDocument();
+  });
+
+  it("ignores a negative value (no saveSettings call, input unchanged)", async () => {
+    const w = await import("./wails");
+    const { default: SettingsPanel } = await import("./SettingsPanel.svelte");
+    render(SettingsPanel, { props: { open: true, onClose: vi.fn() } });
+
+    const input = (await screen.findByLabelText(/stale/i)) as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: "-5" } });
+
+    expect(vi.mocked(w.saveSettings)).not.toHaveBeenCalled();
+  });
+});
+
 describe("SettingsPanel — close behaviour", () => {
   it("clicking the close button calls onClose", async () => {
     const onClose = vi.fn();
