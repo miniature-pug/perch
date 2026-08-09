@@ -13,8 +13,9 @@ losing your place.
 Perch is a single static binary. There is no tmux, no daemon, and no background
 server. The Svelte frontend talks to the Go backend through Wails bindings and
 events rather than HTTP, so a release build opens no network port of its own.
-The one local listener is a short-lived, loopback, token-gated channel for each
-active Claude session, covered under [Security](#security).
+The local listeners perch does run, one per active Claude session and one for
+`perch reload`, are loopback-only and token-gated, covered under
+[Security](#security).
 
 Perch runs on Linux. It depends on WebKit2GTK and GTK3, which are Linux
 libraries, so macOS and Windows are out of scope for now.
@@ -169,12 +170,24 @@ keyboard control, read the [usage guide](docs/usage.md).
 | `perch attach <query>` | Focus the running window on the session matching the query, or launch the cockpit if none is running |
 | `perch doctor` | Check that dependencies and configuration are in order |
 | `perch version` | Print version and build information |
+| `perch reload` | Run inside a session terminal. Sends its current environment to the running agent and relaunches it, conversation preserved |
 
 `perch attach` relies on a single-instance lock. If perch is already running,
 the query goes to that window, which raises itself and selects the best match
 by worktree path, then by a case-insensitive match on path, title, or branch.
 The forwarding process exits afterward, with a non-zero status on Linux, which
 is expected.
+
+`perch reload` gives a running agent a variable it did not have at launch. A
+process reads its environment once, at exec, so exporting a new
+`AWS_PROFILE`, an API token, or any other variable in the session terminal
+never reaches the agent on its own. Running `perch reload` there, or clicking
+the reload button in the terminal drawer, captures the drawer's environment
+and relaunches the agent against its saved session, so the conversation continues.
+File-based credentials are the common exception: an `aws sso login` writes a
+new token to `~/.aws/sso/cache`, and the agent's SDK rereads that file on its
+next call, so a reload buys you nothing there. Reach for `perch reload` only
+for a new or changed environment variable.
 
 ## Agents
 
@@ -230,7 +243,14 @@ open.
   to `127.0.0.1` on an ephemeral port, guarded by a random per-listener bearer
   token compared in constant time. It receives Claude's hook posts and blocks
   `PreToolUse` until you decide. perch tears it down when the session closes.
-  This is the entire production network surface.
+- **One env-sync listener for `perch reload`.** The app binds a single loopback
+  listener on `127.0.0.1` at startup, shared by every session. Each session
+  terminal drawer gets its own bearer token, minted the first time the drawer
+  opens and compared in constant time, so a token minted for one session's
+  drawer is rejected for another's. It accepts only the environment `perch
+  reload` posts, holds it in memory only, and never writes or logs it. perch
+  tears the listener down on exit. Between the two listeners above, this is
+  the entire production network surface.
 - **Exact-match always-allow.** Choosing "Always" on an approval stores a rule
   keyed on the agent, the tool, and a SHA-256 hash of the full tool input. A
   later call auto-approves only when all three match, so a rule can never grant

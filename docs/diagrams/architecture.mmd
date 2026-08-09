@@ -7,6 +7,7 @@ flowchart TD
         apppkg["app/\nWails App + bound methods\ninput validation + event forwarding"]
         pty["internal/pty\ndirect pty Bridge\n(creack/pty + login shell)\nxterm.js events, no tmux"]
         notify["internal/notify\ntiered desktop notifications\n(D-Bus, runner fallback)"]
+        envsync["internal/envsync\n127.0.0.1:ephemeral, one per app\nper-workspace Bearer token\nPOST /sync -> env delta"]
         frontend["frontend/\nSvelte 5 SPA\nWails bindings + events"]
     end
 
@@ -20,6 +21,7 @@ flowchart TD
     subgraph CLIFlows["CLI sub-commands"]
         attach["perch attach &lt;query&gt;\nsingle-instance lock → raises\nrunning window; routes workspace:attach"]
         doctor["internal/doctor\nperch doctor"]
+        reload["perch reload\nrun in a session terminal;\nnever launches the GUI"]
     end
 
     subgraph DataLayer["Data & config"]
@@ -47,10 +49,15 @@ flowchart TD
     main -->|"launch GUI"| apppkg
     main -->|"sub-cmd"| attach
     main -->|"sub-cmd"| doctor
+    main -->|"sub-cmd"| reload
 
     frontend <-->|"Wails bindings + events\n(no TCP port)"| apppkg
+    frontend -->|"ReloadAgentEnv(paneID)\n(drawer button)"| apppkg
     apppkg -->|"App → Bridge → Shell"| pty
     apppkg -->|"dispatchNotify (tiered)"| notify
+    apppkg -->|"new envsync.Listener at startup;\nTokenFor per workspace on OpenShell"| envsync
+    reload -.->|"POST /sync\n(Bearer token, session os.Environ())"| envsync
+    envsync -->|"onSync: store overlay,\nasync OpenWorkspace relaunch"| apppkg
     apppkg -->|"new Monitor"| monitor
     apppkg -->|"read/write"| registry
     apppkg -->|"load config"| config

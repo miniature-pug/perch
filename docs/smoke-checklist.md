@@ -60,6 +60,25 @@ This is the one path no automated test covers.
       confirm output renders. This is a separate pty from the agent pane, keyed
       `shell-<id>`.
 
+## Session environment reload
+
+`perch reload` and its drawer button relaunch a running agent so it picks up an
+environment variable it did not have at launch. This is real-credential,
+real-agent territory the mock gate cannot exercise.
+
+- [ ] Run `aws sso login` (or an equivalent file-based credential refresh) in the
+      session terminal. With no reload, confirm the running agent's next call
+      uses the fresh credentials.
+- [ ] Export a new environment variable in the session terminal and click the
+      reload button in the drawer header. Confirm the agent relaunches, the
+      conversation is intact (not a fresh session), and the agent can see the
+      new variable.
+- [ ] Repeat by running `perch reload` by hand in the session terminal instead
+      of clicking the button. Confirm the same outcome.
+- [ ] After the relaunch, confirm the session terminal is left in a clean state,
+      not mid-command or showing stray output from the reload.
+- [ ] The reload button is absent from the home shell drawer.
+
 ## Tool-call approval
 
 - [ ] Ask the agent to write a file.

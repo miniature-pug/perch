@@ -12,6 +12,7 @@ the frontend. For how they interact, see [ARCHITECTURE.md](../ARCHITECTURE.md).
 | `git` | git operations behind a `proc.Runner`: ref validation, worktree management, and diff and hunk staging. | `ValidRef`, `AddWorktree`, `AddWorktreeExisting`, `RemoveWorktree`, `WorktreeDirty`, `BranchMerged`, `DiffStat`, `Hunks`, `StageHunk`, `DiscardHunk`, and the `Err*` sentinels |
 | `agent` | The Monitor and Adapter seams, with concrete monitors for the two agents. | `Monitor`, `Adapter`, `NewMonitor`, `NewClaude`, `NewOpencode`, `State`, `Caps`, `Event` |
 | `hooklistener` | The per-session loopback listener that receives Claude hook posts and blocks `PreToolUse` until a verdict. | `Listener`, `New`, `LoopbackHost`, `HookEvent`, `Decision` |
+| `envsync` | The one-per-app loopback listener behind `perch reload`: a per-workspace bearer token, an in-memory environment delta, never persisted. | `Listener`, `New`, `SyncFunc`, `SyncRequest`, `EnvURL`, `EnvToken`, `EnvWS` |
 | `notify` | Desktop notifications over D-Bus, with a `notify-send` fallback. | `Notifier`, `New`, `FakeNotifier` |
 | `fs` | gitignore-aware directory listing, a recursive change watcher, and atomic file writes. | `Node`, `ListDir`, `Watch`, `ReadFile`, `WriteFile`, `RevealInFiles` |
 | `discover` | Finds git repositories under the roots, frecency-ordered, grouped with their worktrees. | `Scan`, `Projects`, `Options` |

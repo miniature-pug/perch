@@ -2,7 +2,17 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import Terminal from "./Terminal.svelte";
-  import { openShell } from "./wails";
+  import { openShell, reloadAgentEnv } from "./wails";
+
+  const HOME_SHELL_PANE_ID = "shell-home";
+
+  // File-based credentials (an AWS SSO token cache, for example) reach a running
+  // agent on its own next call — no reload needed. This button is for the other
+  // case: an exported variable a running process can only pick up via a fresh
+  // exec. Kept in one string so the button's title and the on-page hint never drift.
+  const RELOAD_HINT =
+    "File-based credentials (e.g. AWS SSO) refresh on the agent's next call with no reload. " +
+    "Use this only for a new or changed environment variable.";
 
   // collapsed is driven by layout.collapsed['shell'] via App.svelte;
   // onToggleCollapse lets the in-drawer button call back to the authoritative store.
@@ -24,6 +34,13 @@
 <div class="shell-drawer" class:collapsed>
   <div class="shell-header">
     <span class="shell-title">Shell — {cwd}</span>
+    {#if paneId !== HOME_SHELL_PANE_ID}
+      <button
+        onclick={() => { reloadAgentEnv(paneId).catch(() => {}); }}
+        aria-label="Reload agent with this terminal's environment"
+        title={RELOAD_HINT}
+      >↻ env → agent</button>
+    {/if}
     {#if collapsed}
       <button onclick={() => onToggleCollapse?.()} aria-label="expand shell">▲ Expand</button>
     {:else}

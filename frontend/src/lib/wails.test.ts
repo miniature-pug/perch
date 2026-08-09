@@ -51,6 +51,14 @@ test("onFsChanged subscribes to fs:changed", async () => {
   expect(eventsOn).toHaveBeenCalledWith("fs:changed", expect.any(Function));
 });
 
+test("reloadAgentEnv dispatches to window.go.app.App.ReloadAgentEnv", async () => {
+  const ReloadAgentEnv = vi.fn(async () => {});
+  (globalThis as any).go = { app: { App: { ReloadAgentEnv } } };
+  const mod = await import("./wails");
+  await mod.reloadAgentEnv("shell-ws1");
+  expect(ReloadAgentEnv).toHaveBeenCalledWith("shell-ws1");
+});
+
 test("listWorkspaces dispatches to ListWorkspaces and propagates return value", async () => {
   const KNOWN_WORKSPACES = [{ id: "ws-1", title: "my session" }, { id: "ws-2", title: "other" }];
   const ListWorkspaces = vi.fn(async () => KNOWN_WORKSPACES);

@@ -22,8 +22,9 @@ The shape of the system:
   spawns with a login shell, using `creack/pty`. No multiplexer.
 - **No IPC port.** The frontend calls the backend over Wails bindings
   (`window.go.app.App.<Method>`) and receives Wails events. The only production
-  network surface is the per-agent listener described under
-  [Security model](#security-model).
+  network surface is the two listeners described under
+  [Security model](#security-model): the per-agent hook listener and the
+  app-wide env-sync listener behind `perch reload`.
 - **JSON state.** The registry, settings, and layout are small JSON files. There
   is no database.
 
@@ -191,6 +192,7 @@ for the two pty prefixes; the frontend mirrors them as `EVT_*` constants in
 | `internal/pty` | The direct pty bridge; runs a login shell, forwards output, routes keystrokes and resize |
 | `internal/agent` | The Monitor seam and Adapter interface, with `ClaudeMonitor` and `OpencodeMonitor` |
 | `internal/hooklistener` | The per-session loopback listener that receives Claude hook posts and blocks `PreToolUse` |
+| `internal/envsync` | The one-per-app loopback listener behind `perch reload`, with a per-workspace bearer token and an in-memory-only environment delta |
 | `internal/registry` | The workspace registry persisted at `~/.config/perch/workspaces.json` |
 | `internal/config` | The single-layer TOML config that exposes `Config{Roots}` |
 | `internal/discover` | The filesystem scanner that finds repositories under the roots |
@@ -393,7 +395,27 @@ port, guarded by a per-listener bearer token of 32 random bytes.
 | Blocking | `PreToolUse` blocks in the handler until `Decide` supplies a verdict; client disconnect or shutdown cancels cleanly |
 | Lifetime | One listener per active Claude session; `Teardown` closes it and strips its hook entries |
 
-This is the entire production network surface.
+### The env-sync listener for `perch reload`
+
+`internal/envsync` backs `perch reload` and the drawer's reload button
+(`App.ReloadAgentEnv`, which just types `perch reload` into the drawer's
+bridge, so both share one code path). Unlike the hook listener, this is one
+listener for the app's whole run, shared by every workspace, standing up at
+startup and torn down at exit (`app/app.go`, wired alongside the baseline
+`os.Environ()` capture).
+
+| Constraint | Detail |
+|------------|--------|
+| Bind address | `127.0.0.1:0`, loopback only |
+| Port | Ephemeral, one listener shared by every workspace |
+| Auth | Per-workspace bearer token, minted on first use (`TokenFor`) and compared with `subtle.ConstantTimeCompare`; a token minted for one workspace is rejected for another (`workspace mismatch`, 403) |
+| Body | Capped at 1 MiB |
+| Storage | `computeDelta` keeps only keys new or changed versus the app's baseline `os.Environ()`, excludes `PERCH_*`, and stores the result in an in-memory-only overlay (`App.envOverlay`), never written to disk or logged |
+| Relaunch | `onSync` stores the overlay, then dispatches `OpenWorkspace` on its own goroutine, never inline in the handler, so the conversation resumes from its saved session id (claude `--resume`, opencode `--session`) without stalling the request or the event pump |
+| Lifetime | One listener for the app's whole run; closed on shutdown |
+
+Between the two listeners above, this is the entire production network
+surface.
 
 ### Always-allow rules
 

@@ -183,6 +183,25 @@ when no session is active, has its own shell drawer rooted at the launch
 directory (or your home directory). The home shell stays mounted as you move
 around, so its scrollback survives.
 
+### Giving the agent a new environment variable
+
+A process reads its environment once, at exec. Export a new `AWS_PROFILE`, an
+API token, or any other variable in the session terminal, and the running agent
+never sees it: it started before the export and has no way to notice one made
+later. `perch reload`, run in the session terminal, or the reload button in that
+session's shell drawer, closes that gap. Both take the drawer's current
+environment and relaunch the agent with it, resuming the same conversation
+rather than starting over. The reload button sits in the drawer's header, next
+to the collapse control, and is absent on the home shell, which has no agent to
+relaunch.
+
+Most credential refreshes need no reload at all. Something like `aws sso login`
+writes a fresh token to a cache file on disk, and the agent's SDK rereads that
+file on its next call, so the update reaches a running agent with no restart.
+Reach for `perch reload` only when the agent needs a variable it did not have at
+launch: a new or changed environment variable, not a refreshed file-based
+credential.
+
 ## The file tree and editor
 
 The file tree lists the session's worktree, respecting `.gitignore`. Right-click
