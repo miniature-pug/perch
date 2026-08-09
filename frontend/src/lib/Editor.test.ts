@@ -290,3 +290,100 @@ test("external change does NOT reload a dirty editor, so the draft survives", as
   expect(document.querySelector(".dirty-dot")).not.toBeNull();
   expect(view.state.doc.toString()).toContain("DRAFT ");
 });
+
+// --- F14b: unmounting a dirty editor must not silently drop the unsaved draft ---
+
+test("unmounting a dirty editor persists the draft instead of silently dropping it", async () => {
+  const { default: Editor } = await import("./Editor.svelte");
+  const { EditorView } = await import("@codemirror/view");
+  const w = await import("./wails");
+  vi.mocked(w.readFile).mockResolvedValue("original\n");
+  vi.mocked(w.hunks).mockResolvedValue([]);
+  vi.mocked(w.writeFile).mockClear();
+
+  const { unmount } = render(Editor, { props: { path: "/wt/a.ts", worktree: "/wt" } });
+  await waitFor(() => expect(document.querySelector(".cm-editor")).not.toBeNull());
+  const view = EditorView.findFromDOM(document.querySelector(".cm-editor") as HTMLElement)!;
+  // An unsaved edit: the buffer is now dirty.
+  view.dispatch({ changes: { from: 0, to: 0, insert: "DRAFT " } });
+  await waitFor(() => expect(document.querySelector(".dirty-dot")).not.toBeNull());
+
+  // A session switch destroys the editor. onDestroy must save the dirty buffer
+  // (capturing the current document) rather than discarding it with view.destroy().
+  unmount();
+  await waitFor(() =>
+    expect(w.writeFile).toHaveBeenCalledWith("/wt/a.ts", "DRAFT original\n")
+  );
+});
+
+// --- F7b: a same-file reload preserves the caret/selection (not reset to 0) ---
+
+test("selection survives a same-file reloadToken 1->0->1 oscillation", async () => {
+  const { default: Editor } = await import("./Editor.svelte");
+  const { EditorView } = await import("@codemirror/view");
+  const { EditorSelection } = await import("@codemirror/state");
+  const w = await import("./wails");
+  // Identical clean content on every reload, long enough to hold an offset-40 caret.
+  vi.mocked(w.readFile).mockResolvedValue("0123456789\n".repeat(20));
+  vi.mocked(w.hunks).mockResolvedValue([]);
+
+  const { rerender } = render(Editor, {
+    props: { path: "/wt/a.ts", worktree: "/wt", reloadToken: 1 },
+  });
+  await waitFor(() => expect(document.querySelector(".cm-editor")).not.toBeNull());
+  const view = EditorView.findFromDOM(document.querySelector(".cm-editor") as HTMLElement)!;
+  // Place the caret at offset 40. A selection-only dispatch must not mark dirty, so
+  // the same-file reload below still proceeds.
+  view.dispatch({ selection: EditorSelection.single(40) });
+  expect(view.state.selection.main.head).toBe(40);
+  expect(document.querySelector(".dirty-dot")).toBeNull();
+
+  // Oscillate reloadToken 1 -> 0 -> 1: same clean file, unchanged content. Before the
+  // fix each reload rebuilt state via setState and reset the caret to 0.
+  await rerender({ path: "/wt/a.ts", worktree: "/wt", reloadToken: 0 });
+  await new Promise((r) => setTimeout(r, 20));
+  await rerender({ path: "/wt/a.ts", worktree: "/wt", reloadToken: 1 });
+  await new Promise((r) => setTimeout(r, 20));
+
+  const after = EditorView.findFromDOM(document.querySelector(".cm-editor") as HTMLElement)!;
+  expect(after.state.selection.main.head).toBe(40);
+});
+
+// --- F9: an out-of-order readFile resolve must not show a stale file ---
+
+test("readFile(A) resolving after readFile(B) leaves the editor showing B", async () => {
+  const { default: Editor } = await import("./Editor.svelte");
+  const { EditorView } = await import("@codemirror/view");
+  const w = await import("./wails");
+  vi.mocked(w.hunks).mockResolvedValue([]);
+
+  // Gate readFile("/wt/a.ts") so it resolves AFTER readFile("/wt/b.ts").
+  let releaseA: () => void = () => {};
+  const aPending = new Promise<string>((resolve) => {
+    releaseA = () => resolve("A-content");
+  });
+  vi.mocked(w.readFile).mockImplementation(async (p: string) => {
+    if (p === "/wt/a.ts") return aPending;
+    if (p === "/wt/b.ts") return "B-content";
+    return "";
+  });
+
+  const { rerender } = render(Editor, {
+    props: { path: "/wt/a.ts", worktree: "/wt", reloadToken: 0 },
+  });
+  // A is in-flight (gated). Switch to B before A resolves.
+  await rerender({ path: "/wt/b.ts", worktree: "/wt", reloadToken: 0 });
+  // B resolves first and mounts with B-content.
+  await waitFor(() => {
+    const cm = document.querySelector(".cm-editor");
+    expect(cm).not.toBeNull();
+    const v = EditorView.findFromDOM(cm as HTMLElement);
+    expect(v?.state.doc.toString()).toBe("B-content");
+  });
+
+  // Now let the stale A resolve — its generation is superseded, so it must be dropped.
+  releaseA();
+  await new Promise((r) => setTimeout(r, 30));
+  const v = EditorView.findFromDOM(document.querySelector(".cm-editor") as HTMLElement)!;
+  expect(v.state.doc.toString()).toBe("B-content");
+});

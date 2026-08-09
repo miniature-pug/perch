@@ -41,6 +41,14 @@ test("Esc calls onClose", async () => {
   expect(onClose).toHaveBeenCalled();
 });
 
+test("placeholder advertises the Linux palette keys (Ctrl-K or :) — no ⌘", async () => {
+  const { default: CommandPalette } = await import("./CommandPalette.svelte");
+  render(CommandPalette, { props: { open: true, commands, onRun: () => {}, onClose: () => {} } });
+  const input = screen.getByRole("combobox");
+  expect(input.getAttribute("placeholder")).toBe("Type a command… (Ctrl-K or :)");
+  expect(input.getAttribute("placeholder")).not.toContain("⌘");
+});
+
 test("prefix group labels and inline keybindings are shown", async () => {
   const { default: CommandPalette } = await import("./CommandPalette.svelte");
   render(CommandPalette, { props: { open: true, commands, onRun: () => {}, onClose: () => {} } });

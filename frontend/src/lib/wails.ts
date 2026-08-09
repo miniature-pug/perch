@@ -60,6 +60,7 @@ interface App {
   Hunks(worktree: string, file: string): Promise<Hunk[]>;
   StageHunk(worktree: string, file: string, index: number): Promise<void>;
   DiscardHunk(worktree: string, file: string, index: number): Promise<void>;
+  UnstageHunk(worktree: string, file: string, index: number): Promise<void>;
   ListDir(absDir: string): Promise<FsNode[]>;
   ReadFile(absPath: string): Promise<string>;
   WriteFile(absPath: string, content: string): Promise<void>;
@@ -109,6 +110,7 @@ export const diffStat    = (worktree: string)                                   
 export const hunks       = (worktree: string, file: string)                       => app().Hunks(worktree, file);
 export const stageHunk   = (worktree: string, file: string, index: number)       => app().StageHunk(worktree, file, index);
 export const discardHunk = (worktree: string, file: string, index: number)       => app().DiscardHunk(worktree, file, index);
+export const unstageHunk = (worktree: string, file: string, index: number)       => app().UnstageHunk(worktree, file, index);
 export const branches      = (repo: string)                                       => app().Branches(repo);
 export const discoverRepos = ()                                                   => app().DiscoverRepos();
 // FS

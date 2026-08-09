@@ -27,8 +27,10 @@
   --perch-dur-pop: 240ms;
   --perch-dur-countup: 380ms;
   --perch-pop-scale: 1.18;
-  /* Attention pulse — the looping "needs you" / "asking you" sidebar signal */
-  --perch-dur-attn-approval: 1s;
+  /* Attention pulse — the looping "needs you" / "asking you" sidebar signal.
+     Approval pulses at a calm 1.6s cadence (was a busier 1s) so the "needs
+     you" signal reads as steady attention rather than an urgent flicker. */
+  --perch-dur-attn-approval: 1.6s;
   --perch-dur-attn-input: 1.6s;
   --perch-attn-opacity-min: 0.45;
   /* Interaction feedback — state */

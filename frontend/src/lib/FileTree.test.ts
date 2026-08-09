@@ -335,6 +335,27 @@ test("overlapping rebuilds: a stale rebuild must not prune expanded state", asyn
   expect(screen.getByText("c.ts")).toBeInTheDocument();
 });
 
+// --- F11b: the rebuild is gated on `visible` (no listing fires on hide) ---
+
+test("does not re-list while hidden, and re-lists a deferred refresh when shown", async () => {
+  const { default: FileTree } = await import("./FileTree.svelte");
+  const w = await import("./wails");
+  const { rerender } = render(FileTree, { props: { root: "/wt", onOpen: () => {}, refresh: 0 } });
+  await waitFor(() => screen.getByText("src"));
+  const callsBefore = vi.mocked(w.listDir).mock.calls.length;
+
+  // Hide the tree AND bump refresh: an off-screen file write must not re-list.
+  await rerender({ root: "/wt", onOpen: () => {}, refresh: 1, visible: false });
+  await new Promise((r) => setTimeout(r, 30));
+  expect(vi.mocked(w.listDir).mock.calls.length).toBe(callsBefore);
+
+  // Reveal the tree: the deferred refresh is picked up and the root is re-listed.
+  await rerender({ root: "/wt", onOpen: () => {}, refresh: 1, visible: true });
+  await waitFor(() =>
+    expect(vi.mocked(w.listDir).mock.calls.length).toBeGreaterThan(callsBefore)
+  );
+});
+
 test("selectedPath marks the matching file row with is-selected + aria-current", async () => {
   const { default: FileTree } = await import("./FileTree.svelte");
   mockListDir.mockImplementation(async (p: string) => (p === "/wt"

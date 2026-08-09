@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { StaleSessionVM } from "./wails";
   import { cleanupSessions } from "./wails";
+  import { formatRelativeAge } from "./constants";
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import { trapFocus } from "./actions";
 
@@ -48,14 +49,6 @@
     if (next.has(id)) next.delete(id);
     else next.add(id);
     checked = next;
-  }
-
-  function formatRelative(iso: string): string {
-    const d = new Date(iso);
-    const days = Math.floor((Date.now() - d.getTime()) / 86400000);
-    if (days < 1) return "today";
-    if (days === 1) return "yesterday";
-    return `${days}d ago`;
   }
 
   async function handleRemove() {
@@ -110,7 +103,7 @@
             <td class="cleanup-title-cell">{s.title}</td>
             <td class="cleanup-branch">{s.branch}</td>
             <td class="cleanup-agent">{s.agent}</td>
-            <td class="cleanup-age">{formatRelative(s.lastActive)}</td>
+            <td class="cleanup-age">{formatRelativeAge(s.lastActive)}</td>
             <td class="cleanup-diff">
               {#if s.added > 0 || s.removed > 0}
                 <span class="diff-add">+{s.added}</span>

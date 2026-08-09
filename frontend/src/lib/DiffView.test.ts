@@ -2,12 +2,13 @@
 import { render, screen, waitFor } from "@testing-library/svelte";
 import { fireEvent } from "@testing-library/svelte";
 import { vi } from "vitest";
+import type { FileDiff, Hunk } from "./wails";
 
-const fakeStat = [
+const fakeStat: FileDiff[] = [
   { path: "src/main.go", added: 3, removed: 1, status: "M" },
   { path: "README.md",   added: 10, removed: 0, status: "A" },
 ];
-const fakeHunks = [{
+const fakeHunks: Hunk[] = [{
   file: "src/main.go", index: 0, header: "@@ -1,3 +1,4 @@",
   oldStart: 1, oldLines: 3, newStart: 1, newLines: 4,
   lines: [{ kind: "ctx", text: "package main" }, { kind: "add", text: `import "fmt"` }],
@@ -18,6 +19,7 @@ vi.mock("./wails", () => ({
   hunks:       vi.fn(async () => fakeHunks),
   stageHunk:   vi.fn(async () => {}),
   discardHunk: vi.fn(async () => {}),
+  unstageHunk: vi.fn(async () => {}),
 }));
 
 test("renders file list with status icon+label and +/- counts", async () => {
@@ -64,26 +66,81 @@ test("stage refreshes file list (diffStat re-called) and fires onDiffChanged", a
   expect(onDiffChanged).toHaveBeenCalledTimes(1);
 });
 
-test("discard refreshes file list (diffStat re-called) and fires onDiffChanged", async () => {
+// --- F1: Discard is deferred behind an undo toast (irreversible-action guard) ---
+
+test("discard shows an undo toast and does NOT revert immediately", async () => {
   const { default: DiffView } = await import("./DiffView.svelte");
   const w = await import("./wails");
-  vi.mocked(w.diffStat).mockClear();
+  vi.mocked(w.discardHunk).mockClear();
+
+  render(DiffView, { props: { worktree: "/wt" } });
+  await waitFor(() => screen.getByText("src/main.go"));
+
+  await fireEvent.click(screen.getByRole("button", { name: /src\/main\.go/ }));
+  await waitFor(() => screen.getByRole("button", { name: /discard/i }));
+  await fireEvent.click(screen.getByRole("button", { name: /discard/i }));
+
+  // Toast appears; the working tree is NOT touched yet.
+  await waitFor(() => expect(screen.getByTestId("discard-undo-toast")).toBeInTheDocument());
+  expect(screen.getByRole("button", { name: /undo/i })).toBeInTheDocument();
+  expect(w.discardHunk).not.toHaveBeenCalled();
+});
+
+test("Undo cancels the discard entirely — the backend revert never runs", async () => {
+  const { default: DiffView } = await import("./DiffView.svelte");
+  const w = await import("./wails");
+  vi.mocked(w.discardHunk).mockClear();
   const onDiffChanged = vi.fn();
 
   render(DiffView, { props: { worktree: "/wt", onDiffChanged } });
   await waitFor(() => screen.getByText("src/main.go"));
 
-  const callsBefore = vi.mocked(w.diffStat).mock.calls.length;
-
-  // Expand and discard
   await fireEvent.click(screen.getByRole("button", { name: /src\/main\.go/ }));
   await waitFor(() => screen.getByRole("button", { name: /discard/i }));
   await fireEvent.click(screen.getByRole("button", { name: /discard/i }));
 
-  await waitFor(() => {
-    expect(vi.mocked(w.diffStat).mock.calls.length).toBeGreaterThan(callsBefore);
-  });
-  expect(onDiffChanged).toHaveBeenCalledTimes(1);
+  await waitFor(() => screen.getByRole("button", { name: /undo/i }));
+  await fireEvent.click(screen.getByRole("button", { name: /undo/i }));
+
+  // Nothing was lost: no git revert, toast dismissed, hunk restored.
+  await waitFor(() => expect(screen.queryByTestId("discard-undo-toast")).toBeNull());
+  expect(w.discardHunk).not.toHaveBeenCalled();
+  await waitFor(() => screen.getByRole("button", { name: /discard/i }));
+});
+
+test("an un-undone discard commits the real revert after the delay, then refreshes", async () => {
+  vi.useFakeTimers();
+  try {
+    const { default: DiffView } = await import("./DiffView.svelte");
+    const w = await import("./wails");
+    vi.mocked(w.discardHunk).mockClear();
+    vi.mocked(w.diffStat).mockClear();
+    const onDiffChanged = vi.fn();
+
+    render(DiffView, { props: { worktree: "/wt", onDiffChanged } });
+    // Flush the initial diffStat effect (past the 150ms loading-delay timer).
+    await vi.advanceTimersByTimeAsync(200);
+
+    await fireEvent.click(screen.getByRole("button", { name: /src\/main\.go/ }));
+    await vi.advanceTimersByTimeAsync(0); // flush the hunks fetch
+    await fireEvent.click(screen.getByRole("button", { name: /discard/i }));
+    await vi.advanceTimersByTimeAsync(0); // flush the optimistic-hide state update
+
+    // Deferred: nothing reverted yet.
+    expect(w.discardHunk).not.toHaveBeenCalled();
+    const statBefore = vi.mocked(w.diffStat).mock.calls.length;
+
+    // Let the 6s undo window elapse with no Undo.
+    await vi.advanceTimersByTimeAsync(6000);
+
+    expect(w.discardHunk).toHaveBeenCalledTimes(1);
+    expect(w.discardHunk).toHaveBeenCalledWith("/wt", "src/main.go", 0);
+    // A committed discard refreshes the file list and notifies the parent.
+    expect(vi.mocked(w.diffStat).mock.calls.length).toBeGreaterThan(statBefore);
+    expect(onDiffChanged).toHaveBeenCalledTimes(1);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("renders an error message (not 'No changes') when the initial diffStat rejects", async () => {
@@ -160,4 +217,42 @@ test("dragstart on a hunk row sets application/x-perch-text to the hunk text", a
   const expectedText = fakeHunks[0].lines.map((l) => l.text).join("\n");
   expect(dt.setData).toHaveBeenCalledWith("application/x-perch-text", expectedText);
   expect(dt.effectAllowed).toBe("copy");
+});
+
+// --- F5: fast fetches must not flash the "Loading…" placeholder ---
+
+test("a fast diffStat resolve does not flash the 'Loading…' placeholder", async () => {
+  const { default: DiffView } = await import("./DiffView.svelte");
+  render(DiffView, { props: { worktree: "/wt-fast" } });
+  // The placeholder is armed on a delay, so it is absent even synchronously.
+  expect(screen.queryByText("Loading…")).toBeNull();
+  // The list arrives without the placeholder ever appearing.
+  await waitFor(() => screen.getByText("src/main.go"));
+  expect(screen.queryByText("Loading…")).toBeNull();
+});
+
+// --- F2-fe: staged hunks are no longer a one-way trap — Unstage is offered ---
+
+test("a staged hunk offers Unstage in place of Stage/Discard, and Unstage calls unstageHunk", async () => {
+  const { default: DiffView } = await import("./DiffView.svelte");
+  const w = await import("./wails");
+  vi.mocked(w.unstageHunk).mockClear();
+  // The first expand returns a STAGED hunk.
+  vi.mocked(w.hunks).mockResolvedValueOnce([{ ...fakeHunks[0], staged: true }]);
+
+  render(DiffView, { props: { worktree: "/wt" } });
+  await waitFor(() => screen.getByText("src/main.go"));
+  await fireEvent.click(screen.getByRole("button", { name: /src\/main\.go/ }));
+
+  // Staged → only Unstage is offered; the one-way-trap Stage/Discard are gone.
+  await waitFor(() => screen.getByRole("button", { name: /unstage/i }));
+  expect(screen.queryByRole("button", { name: /^stage$/i })).toBeNull();
+  expect(screen.queryByRole("button", { name: /discard/i })).toBeNull();
+
+  await fireEvent.click(screen.getByRole("button", { name: /unstage/i }));
+  expect(w.unstageHunk).toHaveBeenCalledWith("/wt", "src/main.go", 0);
+
+  // The refetched (now unstaged) hunk toggles the action back to Stage/Discard.
+  await waitFor(() => screen.getByRole("button", { name: /^stage$/i }));
+  expect(screen.queryByRole("button", { name: /unstage/i })).toBeNull();
 });

@@ -153,7 +153,7 @@
       <input type="text" role="combobox" aria-autocomplete="list" aria-controls="palette-list"
         aria-expanded={open}
         aria-activedescendant={activeId}
-        bind:value={query} onkeydown={handleKey} placeholder="Type a command… (⌘K)"
+        bind:value={query} onkeydown={handleKey} placeholder="Type a command… (Ctrl-K or :)"
         use:focusOnMount />
       <ul id="palette-list" role="listbox" class="palette-list scrollable">
         {#if filtered.length === 0}

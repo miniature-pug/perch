@@ -183,13 +183,15 @@ it("full-composition smoke: assembly → select → view-switch → approval →
     expect(screen.getByTestId("editor")).not.toBeVisible();
   });
 
-  // '1' → Agent view: terminal visible again (the diff view unmounts)
+  // '1' → Agent view: terminal visible again; the DiffView stays MOUNTED (hidden)
+  // so its expanded hunks + scroll survive a view switch (F3), rather than being
+  // destroyed and re-fetched every time.
   await fireEvent.keyDown(document.body, { key: "1" });
   await tick();
   await waitFor(() => {
-    expect(screen.queryByTestId("diff")).not.toBeInTheDocument();
     expect(screen.getByTestId("terminal")).toBeVisible();
   });
+  expect(screen.getByTestId("diff")).not.toBeVisible();
 
   // -------------------------------------------------------------------------
   // Step 4 — Approval flow: event → card surfaces → Allow → approve() called → card gone
@@ -239,7 +241,7 @@ it("full-composition smoke: assembly → select → view-switch → approval →
   await tick();
 
   // Open the notification hub via the MenuBar bell
-  const bellBtn = screen.getByRole("button", { name: "notifications" });
+  const bellBtn = screen.getByRole("menuitem", { name: "notifications" });
   await fireEvent.click(bellBtn);
   await tick();
 

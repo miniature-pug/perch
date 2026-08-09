@@ -11,10 +11,12 @@
 // duplication is inherent (no shared module across IPC) — keep them in sync.
 
 // ── Timers (milliseconds) ───────────────────────────────────────────────────
-export const AMBIENT_DISMISS_MS = 6000;
-export const ROUTINE_DISMISS_MS = 3000;
 export const LAYOUT_SAVE_DEBOUNCE_MS = 300;
 export const UNDO_REMOVE_DELAY_MS = 6000;
+// How long a multi-key chord prefix (e.g. the `g` in `g d`) stays armed before it
+// auto-clears, so a stray `g` never silently swallows the next unrelated keystroke
+// and the transient "g…" indicator does not linger (F54).
+export const GCHORD_TIMEOUT_MS = 1500;
 // Fallback for the count-up duration when the CSS token --perch-dur-countup
 // cannot be read (jsdom / no computed styles). Mirrors that token's value.
 export const COUNTUP_FALLBACK_MS = 380;
@@ -79,18 +81,53 @@ export const WORKTREE_COLORS = [
 ] as const;
 
 /**
- * Deterministic worktree accent color.
+ * Worktree accent color.
  *
- * Uses a djb2 hash (hash = hash * 33 ^ charCode) over every character of `id`
- * and maps the unsigned result into WORKTREE_COLORS.  The same `id` will always
- * produce the same color across reloads and processes; empty string maps to
- * index 0.
+ * Prefer a position-based assignment: when the caller supplies the session's
+ * index in the list, the first WORKTREE_COLORS.length sessions each get a
+ * distinct palette entry (round-robin, wrapping past the palette size). This
+ * eliminates the djb2 hash's birthday-paradox collisions (~59% chance two of
+ * four sessions share a color when mapping arbitrary ids into 8 buckets), so
+ * the common case of a handful of open sessions is always visually distinct.
+ *
+ * When no index is supplied (e.g. a notification that only knows a workspace
+ * id, or a caller that has no positional context) it falls back to a stable
+ * djb2 hash (hash = hash * 33 ^ charCode) over every character of `id`, mapping
+ * the unsigned result into WORKTREE_COLORS.  That fallback is deterministic:
+ * the same `id` always produces the same color across reloads and processes;
+ * empty string maps to index 0.
  */
-export function worktreeColor(id: string): string {
+export function worktreeColor(id: string, index?: number): string {
+  // Position-based (round-robin) assignment — guarantees the first
+  // WORKTREE_COLORS.length sessions are pairwise distinct.
+  if (index !== undefined && Number.isInteger(index) && index >= 0) {
+    return WORKTREE_COLORS[index % WORKTREE_COLORS.length];
+  }
   let hash = 5381;
   for (let i = 0; i < id.length; i++) {
     hash = (hash * 33) ^ id.charCodeAt(i);
   }
   // Force unsigned 32-bit before modulo so negative values are handled safely.
   return WORKTREE_COLORS[(hash >>> 0) % WORKTREE_COLORS.length];
+}
+
+/**
+ * Human-readable relative age of an ISO-8601 timestamp: "today", "1d ago",
+ * "5d ago".  Returns "" for an empty string or an unparseable timestamp (the
+ * isNaN/empty guard).
+ *
+ * Single source of truth for the sidebar session-age label and the cleanup
+ * panel's last-active column, which previously diverged (the sidebar rendered
+ * "1d ago" while the cleanup panel rendered "yesterday", and the cleanup panel
+ * lacked the empty/invalid guard).  Standardized on the numeric "1d ago" form
+ * so every bucket reads the same way (today, 1d ago, 2d ago, …).
+ */
+export function formatRelativeAge(isoOrEmpty: string): string {
+  if (!isoOrEmpty) return "";
+  const d = new Date(isoOrEmpty);
+  if (isNaN(d.getTime())) return "";
+  const days = Math.floor((Date.now() - d.getTime()) / 86400000);
+  if (days < 1) return "today";
+  if (days === 1) return "1d ago";
+  return `${days}d ago`;
 }

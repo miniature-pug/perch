@@ -75,10 +75,10 @@ test("ApprovalCard renders after agent:event with kind=approval", async ({ page 
   await expect(card.locator(".tool-name")).toContainText("bash");
   await expect(card.locator(".approval-summary")).toContainText("npm install");
 
-  // All three action buttons present
-  await expect(card.locator("button", { hasText: "Allow" })).toBeVisible();
+  // All three action buttons present (exact "Allow" avoids matching "Always allow")
+  await expect(card.getByRole("button", { name: "Allow", exact: true })).toBeVisible();
   await expect(card.locator("button", { hasText: "Deny" })).toBeVisible();
-  await expect(card.locator("button", { hasText: "Always" })).toBeVisible();
+  await expect(card.getByRole("button", { name: "Always allow" })).toBeVisible();
 
   await page.screenshot({ path: path.join(SCREENSHOT_DIR, "approval-card.png"), fullPage: true });
 });
@@ -91,7 +91,7 @@ test("clicking Allow calls Approve with (reqId, 'allow')", async ({ page }) => {
   );
 
   const card = page.locator('section[aria-label="approval card"]');
-  await card.locator("button", { hasText: "Allow" }).click();
+  await card.getByRole("button", { name: "Allow", exact: true }).click();
   await page.waitForTimeout(500);
 
   const approveCalls = await page.evaluate(() =>

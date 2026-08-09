@@ -288,7 +288,134 @@ test("does not crash and branch list is empty when loadBranches resolves null", 
   render(D, { props: defaultProps({ loadBranches }) });
   // Dialog must render without throwing
   await waitFor(() => expect(screen.getByRole("dialog", { name: /new session/i })).toBeInTheDocument());
+  // Wait for the load to settle so the loading placeholder is gone.
+  await waitFor(() => expect(screen.queryByText(/loading branches/i)).not.toBeInTheDocument());
   // No branch options should be rendered in the "starting point" select (branches treated as [])
   const startingPointSelect = screen.getByRole("combobox", { name: /starting point/i });
   expect(startingPointSelect.querySelectorAll("option").length).toBe(0);
+});
+
+// ── 11. F29 — unique branch suggestion (no per-agent constant collision) ──────
+
+test("typing a Name derives a slugified branch suggestion", async () => {
+  const { default: D } = await import("./NewSessionDialog.svelte");
+  render(D, { props: defaultProps() });
+  await waitFor(() => screen.getByLabelText(/^branch name$/i));
+  await fireEvent.input(screen.getByLabelText(/^name$/i), { target: { value: "fix login" } });
+  await waitFor(() => {
+    const input = screen.getByLabelText(/^branch name$/i) as HTMLInputElement;
+    expect(input.value).toBe("claude/fix-login");
+  });
+});
+
+test("empty Name twice suggests claude/work then claude/work-2 (auto-increment)", async () => {
+  const { default: D } = await import("./NewSessionDialog.svelte");
+  // First default session: claude/work is free.
+  const first = render(D, { props: defaultProps({ loadBranches: vi.fn(async () => ["main"]) }) });
+  await waitFor(() => {
+    const input = screen.getByLabelText(/^branch name$/i) as HTMLInputElement;
+    expect(input.value).toBe("claude/work");
+  });
+  first.unmount();
+  // Second default session: claude/work now exists as a branch → auto-increment.
+  render(D, { props: defaultProps({ loadBranches: vi.fn(async () => ["main", "claude/work"]) }) });
+  await waitFor(() => {
+    const input = screen.getByLabelText(/^branch name$/i) as HTMLInputElement;
+    expect(input.value).toBe("claude/work-2");
+  });
+});
+
+test("editing the branch field stops auto-suggestion from clobbering it", async () => {
+  const { default: D } = await import("./NewSessionDialog.svelte");
+  render(D, { props: defaultProps() });
+  await waitFor(() => screen.getByLabelText(/^branch name$/i));
+  await fireEvent.input(screen.getByLabelText(/^branch name$/i), { target: { value: "my/custom" } });
+  // Changing the Name afterwards must NOT overwrite the user's branch choice.
+  await fireEvent.input(screen.getByLabelText(/^name$/i), { target: { value: "something else" } });
+  const input = screen.getByLabelText(/^branch name$/i) as HTMLInputElement;
+  expect(input.value).toBe("my/custom");
+});
+
+// ── 12. F30 — base ref defaults to the repo's default branch ──────────────────
+
+test("default baseRef is the repo's default branch, not the alphabetically-first branch", async () => {
+  const { default: D } = await import("./NewSessionDialog.svelte");
+  render(D, { props: defaultProps({ loadBranches: vi.fn(async () => ["dev", "feature-x", "main"]) }) });
+  await waitFor(() => screen.getByLabelText(/starting point/i));
+  await waitFor(() => {
+    const sel = screen.getByLabelText(/starting point/i) as HTMLSelectElement;
+    expect(sel.value).toBe("main");
+  });
+  // ...and the default branch is pinned to the top of the list.
+  const options = Array.from((screen.getByLabelText(/starting point/i) as HTMLSelectElement).options).map((o) => o.value);
+  expect(options[0]).toBe("main");
+});
+
+// ── 13. F43 — in-flight feedback (Creating… + Loading branches…) ──────────────
+
+test("Create button reads 'Creating…' while onCreate is pending", async () => {
+  const { default: D } = await import("./NewSessionDialog.svelte");
+  let resolveCreate!: () => void;
+  const onCreate = vi.fn(() => new Promise<void>((r) => { resolveCreate = r; }));
+  render(D, { props: defaultProps({ onCreate }) });
+  await waitFor(() => screen.getByLabelText(/starting point/i));
+  await fireEvent.change(screen.getByLabelText(/starting point/i), { target: { value: "main" } });
+  await fireEvent.input(screen.getByLabelText(/^branch name$/i), { target: { value: "feat/x" } });
+  await fireEvent.click(screen.getByRole("button", { name: /^create$/i }));
+  await waitFor(() => expect(screen.getByRole("button", { name: /creating/i })).toBeInTheDocument());
+  resolveCreate();
+  await waitFor(() => expect(screen.getByRole("button", { name: /^create$/i })).toBeInTheDocument());
+});
+
+test("selects show a 'Loading branches…' placeholder while the branch list is in flight", async () => {
+  const { default: D } = await import("./NewSessionDialog.svelte");
+  let resolveBranches!: (v: string[]) => void;
+  const loadBranches = vi.fn(() => new Promise<string[]>((r) => { resolveBranches = r; }));
+  render(D, { props: defaultProps({ loadBranches }) });
+  await waitFor(() => screen.getByRole("dialog", { name: /new session/i }));
+  expect(screen.getByText(/loading branches/i)).toBeInTheDocument();
+  resolveBranches(["main", "feat/x"]);
+  await waitFor(() => expect(screen.queryByText(/loading branches/i)).not.toBeInTheDocument());
+});
+
+// ── 14. F26b — inline error prop ──────────────────────────────────────────────
+
+test("error prop renders inline as an alert above the actions", async () => {
+  const { default: D } = await import("./NewSessionDialog.svelte");
+  render(D, { props: defaultProps({ error: "A branch named 'feat/x' already exists." }) });
+  await waitFor(() => screen.getByRole("dialog", { name: /new session/i }));
+  const alert = screen.getByRole("alert");
+  expect(alert).toHaveTextContent(/a branch named 'feat\/x' already exists\./i);
+});
+
+test("no alert is rendered when the error prop is absent", async () => {
+  const { default: D } = await import("./NewSessionDialog.svelte");
+  render(D, { props: defaultProps() });
+  await waitFor(() => screen.getByRole("dialog", { name: /new session/i }));
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+// ── 15. F57 — worktree hint reflects checked state ────────────────────────────
+
+test("worktree checkbox shows a state-dependent hint", async () => {
+  const { default: D } = await import("./NewSessionDialog.svelte");
+  render(D, { props: defaultProps() });
+  await waitFor(() => screen.getByRole("dialog", { name: /new session/i }));
+  // Checked by default → isolated-worktree hint.
+  expect(screen.getByText(/isolated git worktree/i)).toBeInTheDocument();
+  // Uncheck → repo-mode hint mentioning a clean working tree.
+  await fireEvent.click(screen.getByLabelText(/^worktree$/i));
+  await waitFor(() => {
+    expect(screen.getByText(/clean working tree/i)).toBeInTheDocument();
+    expect(screen.queryByText(/isolated git worktree/i)).not.toBeInTheDocument();
+  });
+});
+
+// ── 16. F50 — sentence-case title ─────────────────────────────────────────────
+
+test("dialog heading uses sentence case", async () => {
+  const { default: D } = await import("./NewSessionDialog.svelte");
+  render(D, { props: defaultProps() });
+  await waitFor(() => screen.getByRole("dialog", { name: /new session/i }));
+  expect(screen.getByRole("heading", { name: "New session" })).toBeInTheDocument();
 });

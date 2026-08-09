@@ -182,6 +182,30 @@ describe("SettingsPanel — security caveat and pattern display", () => {
   });
 });
 
+describe("SettingsPanel — F52 appearance display names", () => {
+  it("shows human-readable option labels while keeping slugs as the values", async () => {
+    const { default: SettingsPanel } = await import("./SettingsPanel.svelte");
+    render(SettingsPanel, { props: { open: true, onClose: vi.fn() } });
+
+    const themeSelect = (await screen.findByLabelText("Theme")) as HTMLSelectElement;
+    const densitySelect = screen.getByLabelText("Density") as HTMLSelectElement;
+    const fontSelect = screen.getByLabelText("Font") as HTMLSelectElement;
+
+    const optByText = (sel: HTMLSelectElement, text: string) =>
+      Array.from(sel.options).find((o) => o.textContent?.trim() === text);
+
+    // Display name shown, slug preserved as the value
+    expect(optByText(themeSelect, "Tokyo Night")?.value).toBe("tokyo-night");
+    expect(optByText(themeSelect, "Rosé Pine")?.value).toBe("rose-pine");
+    expect(optByText(densitySelect, "Comfortable")?.value).toBe("comfortable");
+    expect(optByText(fontSelect, "IBM Plex")?.value).toBe("ibm-plex");
+
+    // Raw slugs are no longer rendered as option text
+    expect(optByText(themeSelect, "tokyo-night")).toBeUndefined();
+    expect(optByText(fontSelect, "ibm-plex")).toBeUndefined();
+  });
+});
+
 describe("SettingsPanel — close behaviour", () => {
   it("clicking the close button calls onClose", async () => {
     const onClose = vi.fn();

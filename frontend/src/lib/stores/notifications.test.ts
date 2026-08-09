@@ -57,11 +57,10 @@ describe("notification store", () => {
     expect(getItems().filter((n) => !n.read)).toHaveLength(0);
   });
 
-  it("caps retained notifications at MAX and leaks no timer for dropped ids", async () => {
-    const { addAmbient, getItems, MAX_NOTIFICATIONS, _pendingTimerIds } =
+  it("caps retained notifications at MAX, keeping the newest", async () => {
+    const { addAmbient, getItems, MAX_NOTIFICATIONS } =
       await import("./notifications.svelte");
-    // Push well past the cap. Ambient items each schedule an auto-dismiss timer,
-    // so this exercises the timer-cleanup path when the oldest are dropped.
+    // Push well past the cap; the oldest are dropped, the newest are kept.
     const total = MAX_NOTIFICATIONS + 50;
     for (let i = 0; i < total; i++) addAmbient("ws_a", `A${i}`, "b");
 
@@ -70,13 +69,6 @@ describe("notification store", () => {
     expect(items).toHaveLength(MAX_NOTIFICATIONS);
     // Newest-first: the most recent push sits at the front.
     expect(items[0].title).toBe(`A${total - 1}`);
-
-    // No leaked timers: every pending timer id must still correspond to a
-    // retained notification (dropped ids had their timers cleared).
-    const held = new Set(items.map((n) => n.id));
-    for (const id of _pendingTimerIds()) expect(held.has(id)).toBe(true);
-    // And no more pending timers than retained items.
-    expect(_pendingTimerIds().length).toBeLessThanOrEqual(items.length);
   });
 
   it("dropForWorkspace removes only items for that workspace", async () => {
@@ -90,5 +82,57 @@ describe("notification store", () => {
     const left = getItems();
     expect(left).toHaveLength(1);
     expect(left[0].workspaceId).toBe("ws_b");
+  });
+
+  // -----------------------------------------------------------------------
+  // F41 — every notification is tagged with an explicit kind at creation.
+  // -----------------------------------------------------------------------
+
+  it("F41: addBlocking tags an error title as kind 'error', not 'approval'", async () => {
+    const { addBlocking, getItems } = await import("./notifications.svelte");
+    addBlocking("ws_a", "Stage failed", "Could not stage hunk in main.go");
+    expect(getItems()[0].kind).toBe("error");
+  });
+
+  it("F41: addBlocking tags an approval-style notice as kind 'approval'", async () => {
+    const { addBlocking, getItems } = await import("./notifications.svelte");
+    addBlocking("ws_a", "Approval needed", "Claude wants to run bash");
+    expect(getItems()[0].kind).toBe("approval");
+  });
+
+  it("F41: addAmbient defaults to kind 'done'; an explicit kind overrides it", async () => {
+    const { addAmbient, getItems } = await import("./notifications.svelte");
+    addAmbient("ws_a", "Turn done", "finished");
+    expect(getItems()[0].kind).toBe("done");
+    addAmbient("ws_b", "Synced", "background", "info");
+    expect(getItems()[0].kind).toBe("info");
+  });
+
+  // -----------------------------------------------------------------------
+  // F42b — ambient/routine stay unread until the hub is opened (no auto-dismiss
+  // timer): the docked hub is not a transient toast, so an unseen event must not
+  // silently tick the unread badge down while the hub is closed.
+  // -----------------------------------------------------------------------
+
+  it("F42b: an ambient notification stays unread past its old dismiss window while the hub is closed", async () => {
+    vi.useFakeTimers();
+    try {
+      const { addAmbient, getItems } = await import("./notifications.svelte");
+      addAmbient("ws_a", "Turn done", "finished");
+      expect(getItems()[0].read).toBe(false);
+      // Advance far beyond the former 6s ambient (and 3s routine) dismiss window.
+      vi.advanceTimersByTime(60_000);
+      expect(getItems()[0].read).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("F42b: opening the hub (markAllRead) is what clears the ambient unread", async () => {
+    const { addAmbient, markAllRead, getItems } = await import("./notifications.svelte");
+    addAmbient("ws_a", "Turn done", "finished");
+    expect(getItems()[0].read).toBe(false);
+    markAllRead();
+    expect(getItems()[0].read).toBe(true);
   });
 });

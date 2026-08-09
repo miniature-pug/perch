@@ -1,12 +1,12 @@
 <!-- frontend/src/lib/Sidebar.svelte -->
 <script lang="ts">
   import type { WorkspaceVM } from "./wails";
-  import { MIME_SESSION, worktreeColor } from "./constants";
+  import { MIME_SESSION, worktreeColor, formatRelativeAge } from "./constants";
   import { countUp, focusOnMount } from "./actions";
 
   let {
     workspaces, activeId, onSelect, onNew, onReorder,
-    diffStats = {}, openIds, ackedInputIds, onRename, onEditStart,
+    diffStats = {}, openIds, ackedInputIds, onRename, onEditStart, requestRemove,
   }: {
     workspaces: WorkspaceVM[];
     activeId: string | null;
@@ -26,6 +26,10 @@
     // dismiss any transient overlay (e.g. resume preview) when editing begins.
     onRename?: (id: string, title: string) => void;
     onEditStart?: () => void;
+    // Optional: request removal of a session by id (hover ×/right-click Remove).
+    // The parent (App) wires this in a later phase; the remove affordances are
+    // only rendered when the callback is provided, so nothing dangles unwired.
+    requestRemove?: (id: string) => void;
   } = $props();
 
   // The state to RENDER for a row. When a session is awaiting-input but the user
@@ -49,12 +53,18 @@
     return ws.title || repoName(ws.repoPath);
   }
 
-  // Enter inline-rename mode for ws (from dblclick or contextmenu).
-  function startEdit(e: Event, ws: WorkspaceVM) {
-    e.stopPropagation();
+  // Enter inline-rename mode for ws (core, event-agnostic — used by the
+  // double-click gesture and the right-click menu's Rename item).
+  function beginEdit(ws: WorkspaceVM) {
     onEditStart?.();
     editingId = ws.id;
     editValue = primaryLabel(ws);
+  }
+
+  // Enter rename from a double-click on the title span.
+  function startEdit(e: Event, ws: WorkspaceVM) {
+    e.stopPropagation();
+    beginEdit(ws);
   }
 
   // Commit the in-progress rename (Enter or blur): only when the trimmed value is
@@ -80,6 +90,53 @@
     done:                { icon: "✓", label: "done" },
     errored:             { icon: "✗", label: "error" },
   } as const;
+
+  // Right-click row menu (Rename + Remove). Mirrors the FileTree context-menu
+  // pattern: a solid fixed-position card anchored at the cursor, closed on an
+  // outside click (svelte:window), Escape, or after an action.
+  let rowMenu = $state<{ ws: WorkspaceVM; x: number; y: number } | null>(null);
+
+  const ROW_MENU_APPROX_W = 160;
+  const ROW_MENU_APPROX_H = 88;
+  function openRowMenu(e: MouseEvent, ws: WorkspaceVM) {
+    e.preventDefault();
+    e.stopPropagation();
+    const x = Math.min(e.clientX, window.innerWidth  - ROW_MENU_APPROX_W);
+    const y = Math.min(e.clientY, window.innerHeight - ROW_MENU_APPROX_H);
+    rowMenu = { ws, x, y };
+  }
+  function closeRowMenu() { rowMenu = null; }
+  function menuRename() { if (!rowMenu) return; const ws = rowMenu.ws; closeRowMenu(); beginEdit(ws); }
+  function menuRemove() { if (!rowMenu) return; const id = rowMenu.ws.id; closeRowMenu(); requestRemove?.(id); }
+
+  function handleRowMenuKey(e: KeyboardEvent, action: () => void) {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      action();
+    } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const menuEl = (e.currentTarget as HTMLElement).closest('[role="menu"]') as HTMLElement | null;
+      if (!menuEl) return;
+      const items = Array.from(menuEl.querySelectorAll<HTMLElement>('[role="menuitem"]'));
+      const idx = items.findIndex((el) => el === e.currentTarget);
+      const next = e.key === "ArrowDown" ? items[idx + 1] : items[idx - 1];
+      if (next) next.focus();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      closeRowMenu();
+    }
+  }
+
+  // States that warrant a visible compact status word beside the colored icon.
+  // Attention/terminal states (and the active row, whatever its state) get the
+  // visible word; calm background rows (idle/running) keep it screen-reader-only
+  // so the list stays quiet where nothing needs the user.
+  const STATE_TEXT_SHOWN = new Set<WorkspaceVM["state"]>([
+    "awaiting-approval", "awaiting-input", "done", "errored",
+  ]);
+  function showStateText(ws: WorkspaceVM, rowState: WorkspaceVM["state"]): boolean {
+    return ws.id === activeId || STATE_TEXT_SHOWN.has(rowState);
+  }
 
   let dragOverId = $state<string | null>(null);
 
@@ -113,20 +170,13 @@
     return s.length ? s[s.length - 1] : (p || "");
   }
 
-  function formatAge(isoOrEmpty: string): string {
-    if (!isoOrEmpty) return "";
-    const d = new Date(isoOrEmpty);
-    if (isNaN(d.getTime())) return "";
-    const days = Math.floor((Date.now() - d.getTime()) / 86400000);
-    if (days < 1) return "today";
-    if (days === 1) return "1d ago";
-    return `${days}d ago`;
-  }
 </script>
+
+<svelte:window onclick={closeRowMenu} />
 
 <nav aria-label="sessions" class="sidebar">
   <ul class="workspace-list">
-    {#each workspaces as ws (ws.id)}
+    {#each workspaces as ws, i (ws.id)}
       {@const rowState = displayState(ws)}
       {@const st = STATUS[rowState as keyof typeof STATUS] ?? { icon: "·", label: rowState }}
       {@const ds = diffStats[ws.id]}
@@ -143,11 +193,13 @@
       >
         <button class="workspace-row"
           class:closed={closed}
+          class:has-remove={requestRemove != null}
           aria-current={ws.id === activeId ? "page" : undefined}
           onclick={() => onSelect(ws.id)}
+          oncontextmenu={(e) => openRowMenu(e, ws)}
           aria-label={`${primaryLabel(ws)} ${repoName(ws.repoPath)} ${ws.branch}`}
           title={closed ? "Click to open" : undefined}
-          style:--row-color={worktreeColor(ws.id)}
+          style:--row-color={worktreeColor(ws.id, i)}
         >
           <!-- Line 1: status icon + bold primary name (room to read it before ellipsis) -->
           <span class="workspace-row-primary">
@@ -169,16 +221,20 @@
                 onblur={() => commitEdit(ws)}
               />
             {:else}
-              <!-- Double-click / right-click on the title are mouse-gesture
-                   enhancements for inline rename; the row button remains the
-                   accessible primary control, so this span needs no ARIA role. -->
+              <!-- Double-click on the title is a mouse-gesture shortcut for
+                   inline rename; right-click anywhere on the row opens the
+                   Rename/Remove menu (handled on the row button). The row button
+                   remains the accessible primary control, so this span needs no
+                   ARIA role. -->
               <!-- svelte-ignore a11y_no_static_element_interactions -->
               <span
                 class="workspace-title"
                 title={primaryLabel(ws)}
                 ondblclick={(e) => startEdit(e, ws)}
-                oncontextmenu={(e) => { e.preventDefault(); startEdit(e, ws); }}
               >{primaryLabel(ws)}</span>
+            {/if}
+            {#if showStateText(ws, rowState)}
+              <span class="status-text st-{rowState}">{st.label}</span>
             {/if}
           </span>
 
@@ -187,7 +243,7 @@
             <span class="workspace-repo dim" title={repoName(ws.repoPath)}>{repoName(ws.repoPath)}</span>
             <span class="workspace-branch dim" title={ws.branch}>{ws.branch}</span>
             <span class="workspace-agent dim" title={ws.agent}>{ws.agent}</span>
-            <span class="workspace-age dim">{formatAge(ws.lastActive)}</span>
+            <span class="workspace-age dim">{formatRelativeAge(ws.lastActive)}</span>
             {#if ds && (ds.added > 0 || ds.removed > 0)}
               <span class="sidebar-diffstat" aria-label="+{ds.added} minus {ds.removed}">
                 <span class="diff-added">+<span use:countUp={ds.added}></span></span>
@@ -198,8 +254,24 @@
               {/if}
             {/if}
           </span>
-          <span class="status-label">{st.label}</span>
+          <!-- When the compact word is shown visibly (attention/active rows),
+               drop this duplicate so screen readers announce the state once. -->
+          {#if !showStateText(ws, rowState)}
+            <span class="status-label">{st.label}</span>
+          {/if}
         </button>
+        {#if requestRemove}
+          <button
+            class="row-remove"
+            type="button"
+            draggable="false"
+            data-testid="row-remove-{ws.id}"
+            aria-label={`Remove ${primaryLabel(ws)}`}
+            title="Remove session"
+            onclick={(e) => { e.stopPropagation(); requestRemove?.(ws.id); }}
+            onpointerdown={(e) => e.stopPropagation()}
+          >✕</button>
+        {/if}
       </li>
     {/each}
     {#if workspaces.length === 0}
@@ -210,6 +282,20 @@
   </ul>
   <button class="new-session-cta" onclick={() => onNew()} aria-label="New session">+ New session</button>
 </nav>
+
+{#if rowMenu}
+  <ul role="menu" class="context-menu" aria-label="Session actions"
+      style="position:fixed;left:{rowMenu.x}px;top:{rowMenu.y}px">
+    <li role="menuitem" tabindex="0" use:focusOnMount
+      onclick={(e) => { e.stopPropagation(); menuRename(); }}
+      onkeydown={(e) => handleRowMenuKey(e, menuRename)}>Rename</li>
+    {#if requestRemove}
+      <li role="menuitem" tabindex="0"
+        onclick={(e) => { e.stopPropagation(); menuRemove(); }}
+        onkeydown={(e) => handleRowMenuKey(e, menuRemove)}>Remove</li>
+    {/if}
+  </ul>
+{/if}
 
 <style>
   /* ── Sidebar container ────────────────────────────────────────── */
@@ -256,6 +342,7 @@
 
   .workspace-list > li {
     display: block;
+    position: relative; /* anchor for the absolutely-positioned remove (×) control */
     border-bottom: 1px solid var(--perch-border-strong);
     transition: border-color var(--perch-dur) var(--perch-ease);
   }
@@ -294,6 +381,12 @@
                 transform var(--perch-dur) var(--perch-ease),
                 box-shadow var(--perch-dur) var(--perch-ease);
     user-select: none;
+  }
+
+  /* Reserve a right gutter for the hover-revealed remove (×) control so the
+     status word never sits under it (only present once requestRemove is wired). */
+  .workspace-row.has-remove {
+    padding-right: calc(var(--perch-sp-1) * var(--perch-density-scale) * 1.5 + 20px);
   }
 
   .workspace-row:hover {
@@ -357,9 +450,12 @@
     color: var(--perch-text-dim);
   }
 
+  /* Approval can't be dismissed until decided, so its pulse runs a few cycles
+     to catch the eye, then settles to a steady (full-opacity) colored dot rather
+     than nagging forever. The warn color + ⚠ glyph + "needs you" word persist. */
   .status-awaiting-approval {
     color: var(--perch-warn);
-    animation: perch-attn-pulse var(--perch-dur-attn-approval) ease-in-out infinite;
+    animation: perch-attn-pulse var(--perch-dur-attn-approval) ease-in-out 6;
   }
 
   .status-awaiting-input {
@@ -367,8 +463,11 @@
     animation: perch-attn-pulse var(--perch-dur-attn-input) ease-in-out infinite;
   }
 
+  /* "done" gets the accent color (distinct from running's ok-green) so a finished
+     session that wants your review reads apart from one still working; it also
+     ties to the accent-colored review pill. */
   .status-done {
-    color: var(--perch-ok);
+    color: var(--perch-accent);
     animation: perch-settle-pop var(--perch-dur-pop) var(--perch-ease);
   }
 
@@ -382,7 +481,25 @@
     .status-icon.status-done { animation: none; }
     .workspace-row { transition: none; }
     .workspace-row:hover { transform: none; }
+    .row-remove { transition: none; }
   }
+
+  /* ── Compact visible status word ─────────────────────────────── */
+  /* Shown on attention/terminal states and the active row (see showStateText);
+     colored to match the state so the word reinforces the icon. Sits at the
+     right of line 1, left of the reserved remove-(×) gutter. */
+  .status-text {
+    flex-shrink: 0;
+    font-size: var(--perch-fs-caption);
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .st-running           { color: var(--perch-ok); }
+  .st-idle              { color: var(--perch-text-dim); }
+  .st-awaiting-approval { color: var(--perch-warn); }
+  .st-awaiting-input    { color: var(--perch-info); }
+  .st-done              { color: var(--perch-accent); }
+  .st-errored           { color: var(--perch-err); }
 
   /* ── Session title ────────────────────────────────────────────── */
   .workspace-title {
@@ -508,6 +625,81 @@
     clip: rect(0 0 0 0);
     white-space: nowrap;
     border: 0;
+  }
+
+  /* ── Row remove (×) — hover/focus revealed ───────────────────── */
+  /* Sibling of the row button inside the <li> (never nested — a button in a
+     button is invalid); revealed on row hover or when anything in the row is
+     focused, so mouse and keyboard both reach it. */
+  .row-remove {
+    position: absolute;
+    top: 50%;
+    right: calc(var(--perch-sp-1) * var(--perch-density-scale));
+    transform: translateY(-50%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-radius: var(--perch-radius-sm);
+    color: var(--perch-text-dim);
+    font-size: var(--perch-fs-caption);
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity var(--perch-dur) var(--perch-ease),
+                background var(--perch-dur) var(--perch-ease),
+                color var(--perch-dur) var(--perch-ease);
+  }
+  .workspace-list > li:hover .row-remove,
+  .workspace-list > li:focus-within .row-remove {
+    opacity: 1;
+  }
+  .row-remove:hover {
+    background: color-mix(in srgb, var(--perch-err) 14%, transparent);
+    color: var(--perch-err);
+  }
+  .row-remove:focus-visible {
+    opacity: 1;
+    outline: var(--perch-ring-w) solid var(--perch-accent);
+    outline-offset: -2px;
+  }
+
+  /* ── Row context menu (Rename / Remove) ──────────────────────── */
+  /* Solid, never glass: this menu can overlap the agent terminal, where
+     WebKitGTK paints backdrop-filter surfaces transparent over the composited
+     terminal subtree (mirrors the FileTree/ApprovalCard fix). */
+  .context-menu {
+    list-style: none;
+    margin: 0;
+    padding: var(--perch-sp-1) 0;
+    min-width: 160px;
+    background: var(--perch-glass-bg-solid);
+    border: 1px solid var(--perch-glass-border);
+    border-radius: var(--perch-radius-md);
+    box-shadow: var(--perch-shadow-float);
+    z-index: var(--perch-z-context-menu);
+    font-family: var(--perch-font-sans);
+    font-size: var(--perch-fs-body);
+  }
+  .context-menu [role="menuitem"] {
+    display: flex;
+    align-items: center;
+    padding: calc(var(--perch-sp-1) * var(--perch-density-scale)) var(--perch-sp-2);
+    color: var(--perch-text);
+    cursor: pointer;
+    transition: background var(--perch-dur) var(--perch-ease);
+    user-select: none;
+  }
+  .context-menu [role="menuitem"]:hover {
+    background: color-mix(in srgb, var(--perch-accent) 10%, transparent);
+  }
+  .context-menu [role="menuitem"]:focus-visible {
+    outline: var(--perch-ring-w) solid var(--perch-accent);
+    outline-offset: -2px;
   }
 
   /* ── New session CTA ──────────────────────────────────────────── */

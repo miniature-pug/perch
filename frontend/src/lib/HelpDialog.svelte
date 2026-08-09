@@ -2,11 +2,37 @@
 <script lang="ts">
   import { trapFocus } from "./actions";
   let {
-    open, onClose,
+    open, onClose, section = "all",
   }: {
     open: boolean;
     onClose: () => void;
+    // Which panel to show. "all" (default) renders both the shortcuts table and
+    // the About blurb. App.svelte can pass "shortcuts" or "about" so the Help
+    // menu's two entries open genuinely distinct views instead of the same dialog.
+    section?: "shortcuts" | "about" | "all";
   } = $props();
+
+  // Single source of truth for the shortcut table. Each row lists one or more
+  // key chips (each rendered as its own <kbd>) joined by `joiner`, plus the
+  // action it triggers. Mirrors the bindings in App.svelte's onKeyDown handler
+  // and Editor.svelte's Ctrl-S save so the table never drifts from reality.
+  type Shortcut = { combos: string[]; joiner?: string; action: string };
+  const shortcuts: Shortcut[] = [
+    { combos: ["j", "k"], joiner: " / ", action: "Previous / next session" },
+    { combos: ["Enter"], action: "Open the selected session" },
+    { combos: ["1", "2", "3"], joiner: " / ", action: "Agent / Code / Diff view" },
+    { combos: ["g d"], action: "Diff view" },
+    { combos: ["g e"], action: "Code view" },
+    { combos: ["g t", "g T"], joiner: " / ", action: "Next / previous view" },
+    { combos: ["\\"], action: "Toggle split" },
+    { combos: ["Ctrl-b"], action: "Toggle sidebar" },
+    { combos: ["Ctrl-` (backtick)"], action: "Toggle shell drawer" },
+    { combos: ["/"], action: "Filter sessions" },
+    { combos: ["Ctrl-K", ":"], joiner: " / ", action: "Command palette" },
+    { combos: ["Ctrl-S"], action: "Save file" },
+    { combos: ["i"], action: "Enter TERMINAL mode (keys go to the agent)" },
+    { combos: ["Ctrl-\\", "Ctrl-n"], joiner: " then ", action: "Leave TERMINAL mode" },
+  ];
 
   function handleKey(e: KeyboardEvent) {
     if (e.key === "Escape") onClose();
@@ -18,6 +44,7 @@
   <div role="dialog" aria-modal="true" aria-label="help" class="dialog-overlay"
        tabindex="-1" onkeydown={handleKey} use:trapFocus>
     <div class="dialog help-dialog">
+      {#if section !== "about"}
       <section class="help-section">
         <h2>Keyboard Shortcuts</h2>
         <table class="shortcuts-table">
@@ -25,25 +52,23 @@
             <tr><th>Key</th><th>Action</th></tr>
           </thead>
           <tbody>
-            <tr><td><kbd>j</kbd> / <kbd>k</kbd></td><td>Previous / next session</td></tr>
-            <tr><td><kbd>Enter</kbd></td><td>Open the selected session</td></tr>
-            <tr><td><kbd>1</kbd> / <kbd>2</kbd> / <kbd>3</kbd></td><td>Agent / Code / Diff view</td></tr>
-            <tr><td><kbd>g d</kbd></td><td>Diff view</td></tr>
-            <tr><td><kbd>g e</kbd></td><td>Code view</td></tr>
-            <tr><td><kbd>\</kbd></td><td>Toggle split</td></tr>
-            <tr><td><kbd>Ctrl-` (backtick)</kbd></td><td>Toggle shell drawer</td></tr>
-            <tr><td><kbd>/</kbd></td><td>Filter sessions</td></tr>
-            <tr><td><kbd>:</kbd></td><td>Command palette</td></tr>
-            <tr><td><kbd>i</kbd></td><td>Enter TERMINAL mode (keys go to the agent)</td></tr>
-            <tr><td><kbd>Ctrl-\</kbd> then <kbd>Ctrl-n</kbd></td><td>Leave TERMINAL mode</td></tr>
+            {#each shortcuts as s}
+              <tr>
+                <td>{#each s.combos as c, i}{#if i > 0}{s.joiner ?? " / "}{/if}<kbd>{c}</kbd>{/each}</td>
+                <td>{s.action}</td>
+              </tr>
+            {/each}
           </tbody>
         </table>
       </section>
+      {/if}
 
+      {#if section !== "shortcuts"}
       <section class="help-section">
         <h2>About perch</h2>
         <p>perch — a worktree-native cockpit for agent-assisted coding.</p>
       </section>
+      {/if}
 
       <button aria-label="close help" onclick={onClose}>Close</button>
     </div>

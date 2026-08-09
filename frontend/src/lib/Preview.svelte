@@ -5,12 +5,23 @@
   import DOMPurify from "dompurify";
 
   let {
-    path, kind, content,
-  }: { path: string; kind: "markdown" | "mermaid" | "image"; content: string } = $props();
+    path, kind, content, visible = true,
+  }: {
+    path: string;
+    kind: "markdown" | "mermaid" | "image";
+    content: string;
+    // False when the preview is mounted but off-screen (on the agent/diff views).
+    // Gates the render side-effect so marked/mermaid never run while hidden; the
+    // effect re-runs and renders the current content when it becomes visible again.
+    visible?: boolean;
+  } = $props();
 
   let html = $state("");
 
   $effect(() => {
+    // Read `visible` first so it is tracked: while hidden, return before touching
+    // kind/content so a background content change does not re-render off-screen.
+    if (!visible) return;
     let cancelled = false;
     if (kind === "markdown" && content) {
       Promise.resolve(marked(content)).then((h) => {

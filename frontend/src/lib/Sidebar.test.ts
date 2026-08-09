@@ -249,20 +249,22 @@ test("review pill is absent when files is undefined", async () => {
 // Feature: per-worktree row color identity
 // ---------------------------------------------------------------------------
 
-test("workspace-row carries --row-color style based on ws.id", async () => {
+test("workspace-row carries --row-color style for its row position", async () => {
   const { default: Sidebar } = await import("./Sidebar.svelte");
   const { worktreeColor } = await import("./constants");
   render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {} } });
   await waitFor(() => screen.getByText("feat-auth"));
 
   const btn = screen.getByRole("button", { name: /feat-auth/ }) as HTMLElement;
-  const expected = worktreeColor("ws_a");
+  // ws_a is the first row (index 0) → position-based palette entry 0 (F39 wired:
+  // App now passes the loop index so the first 8 rows are pairwise distinct).
+  const expected = worktreeColor("ws_a", 0);
   // style:--row-color is set as a CSS custom property on the element's inline style
   const styleAttr = btn.getAttribute("style") ?? "";
   expect(styleAttr).toContain(expected);
 });
 
-test("workspace-row --row-color is stable and deterministic per id", async () => {
+test("workspace-row --row-color is assigned by row position (F39 distinct colors)", async () => {
   const { default: Sidebar } = await import("./Sidebar.svelte");
   const { worktreeColor } = await import("./constants");
   render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {} } });
@@ -270,8 +272,34 @@ test("workspace-row --row-color is stable and deterministic per id", async () =>
 
   const btnA = screen.getByRole("button", { name: /feat-auth/ }) as HTMLElement;
   const btnB = screen.getByRole("button", { name: /feat-core/ }) as HTMLElement;
-  expect(btnA.getAttribute("style") ?? "").toContain(worktreeColor("ws_a"));
-  expect(btnB.getAttribute("style") ?? "").toContain(worktreeColor("ws_b"));
+  // Rows 0 and 1 → distinct palette entries 0 and 1 (round-robin), not a hash.
+  expect(btnA.getAttribute("style") ?? "").toContain(worktreeColor("ws_a", 0));
+  expect(btnB.getAttribute("style") ?? "").toContain(worktreeColor("ws_b", 1));
+});
+
+test("the first WORKTREE_COLORS.length rows each render a distinct --row-color (F39 wired)", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  const { WORKTREE_COLORS } = await import("./constants");
+  const many: WorkspaceVM[] = Array.from({ length: WORKTREE_COLORS.length }, (_, i) => ({
+    id: `wsN_${i}`, worktreePath: `/wt/n${i}`, repoPath: `/repo/repo-n${i}`, agent: "claude",
+    title: `n-title-${i}`, branch: `feat/n${i}`, state: "idle" as const,
+    caps: { approvals: false, attention: false }, paneId: `pn${i}`, lastActive: "",
+  }));
+  render(Sidebar, { props: { workspaces: many, activeId: null, onSelect: () => {}, onNew: () => {} } });
+  await waitFor(() => screen.getByText("n-title-0"));
+
+  const rows = Array.from(document.querySelectorAll<HTMLElement>(".workspace-row"));
+  expect(rows.length).toBe(WORKTREE_COLORS.length);
+  // Each row i renders palette entry i (position-based round-robin), so the
+  // first 8 sessions are pairwise distinct — the live-component proof of F39,
+  // not just the helper's unit test.
+  rows.forEach((r, i) => {
+    expect(r.getAttribute("style") ?? "").toContain(WORKTREE_COLORS[i]);
+  });
+  const colors = rows.map(
+    (r) => (r.getAttribute("style") ?? "").match(/--row-color:\s*([^;]+)/)?.[1]?.trim(),
+  );
+  expect(new Set(colors).size).toBe(WORKTREE_COLORS.length);
 });
 
 // ---------------------------------------------------------------------------
@@ -350,13 +378,18 @@ test("double-click on the title enters an input seeded with the current title", 
   expect(onEditStart).toHaveBeenCalled();
 });
 
-test("right-click on the title enters an input (contextmenu prevented)", async () => {
+test("right-click opens the row menu; choosing Rename enters the input", async () => {
   const { default: Sidebar } = await import("./Sidebar.svelte");
   render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {} } });
   await waitFor(() => screen.getByText("feat-auth"));
 
+  // Right-click on a row now opens a Rename/Remove menu (bubbles to the row
+  // button's oncontextmenu) instead of jumping straight into rename.
   const titleSpan = document.querySelector(".workspace-title")!;
   await fireEvent.contextMenu(titleSpan);
+  const renameItem = screen.getByRole("menuitem", { name: /rename/i });
+  expect(renameItem).toBeInTheDocument();
+  await fireEvent.click(renameItem);
   expect(screen.getByLabelText(/rename session/i)).toBeInTheDocument();
 });
 
@@ -402,4 +435,145 @@ test("committing an unchanged title does NOT call onRename", async () => {
   const input = screen.getByLabelText(/rename session/i);
   await fireEvent.keyDown(input, { key: "Enter" });
   expect(onRename).not.toHaveBeenCalled();
+});
+
+// ---------------------------------------------------------------------------
+// F37: per-row remove affordance (hover × + right-click Remove) via requestRemove
+// ---------------------------------------------------------------------------
+
+test("F37: a non-active row exposes a remove (×) control wired to requestRemove", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  const requestRemove = vi.fn();
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {}, requestRemove } });
+  await waitFor(() => screen.getByText("feat-core"));
+
+  // ws_b is a background (non-active) row. The × control is always in the DOM
+  // (CSS reveals it on hover/focus), so presence + click are directly testable.
+  const removeBtn = screen.getByTestId("row-remove-ws_b") as HTMLButtonElement;
+  expect(removeBtn).toBeInTheDocument();
+  await fireEvent.click(removeBtn);
+  expect(requestRemove).toHaveBeenCalledWith("ws_b");
+});
+
+test("F37: the remove (×) control is absent until requestRemove is provided", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {} } });
+  await waitFor(() => screen.getByText("feat-core"));
+  expect(screen.queryByTestId("row-remove-ws_b")).toBeNull();
+});
+
+test("F37: clicking the × does not also trigger row onSelect", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  const onSelect = vi.fn();
+  const requestRemove = vi.fn();
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect, onNew: () => {}, requestRemove } });
+  await waitFor(() => screen.getByText("feat-core"));
+
+  await fireEvent.click(screen.getByTestId("row-remove-ws_b"));
+  expect(requestRemove).toHaveBeenCalledWith("ws_b");
+  expect(onSelect).not.toHaveBeenCalled();
+});
+
+test("F37: right-click opens a Rename/Remove menu; Remove calls requestRemove and closes the menu", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  const requestRemove = vi.fn();
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {}, requestRemove } });
+  await waitFor(() => screen.getByText("feat-auth"));
+
+  const titleSpan = document.querySelector(".workspace-title")!; // first row = ws_a
+  await fireEvent.contextMenu(titleSpan);
+
+  expect(screen.getByRole("menu")).toBeInTheDocument();
+  expect(screen.getByRole("menuitem", { name: /rename/i })).toBeInTheDocument();
+  const removeItem = screen.getByRole("menuitem", { name: /remove/i });
+  expect(removeItem).toBeInTheDocument();
+
+  await fireEvent.click(removeItem);
+  expect(requestRemove).toHaveBeenCalledWith("ws_a");
+  await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+});
+
+test("F37: the menu's Remove item is absent when requestRemove is not provided", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {} } });
+  await waitFor(() => screen.getByText("feat-auth"));
+
+  const titleSpan = document.querySelector(".workspace-title")!;
+  await fireEvent.contextMenu(titleSpan);
+  expect(screen.getByRole("menuitem", { name: /rename/i })).toBeInTheDocument();
+  expect(screen.queryByRole("menuitem", { name: /remove/i })).toBeNull();
+});
+
+// ---------------------------------------------------------------------------
+// F38: distinct done color + visible compact status word on attention/active rows
+// ---------------------------------------------------------------------------
+
+test("F38: done and running status icons resolve to different color tokens", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {} } });
+  // jsdom cannot resolve custom properties, so compare the raw color tokens each
+  // status class maps to in the injected component CSS.
+  const styleText = [...document.querySelectorAll("style")].map((s) => s.textContent).join("\n");
+  const colorOf = (cls: string) =>
+    new RegExp(`\\.${cls}[^{}]*\\{[^{}]*?color:\\s*(var\\(--perch-[a-z0-9-]+\\))`).exec(styleText)?.[1];
+  const running = colorOf("status-running");
+  const done = colorOf("status-done");
+  expect(running).toBeTruthy();
+  expect(done).toBeTruthy();
+  expect(done).not.toBe(running);
+});
+
+test("F38: attention rows show a visible compact status word; calm rows keep it sr-only", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {} } });
+
+  // ws_c is awaiting-approval (attention) → visible .status-text "needs you".
+  const approvalBtn = screen.getByRole("button", { name: /bug-fix/ });
+  const stateText = approvalBtn.querySelector(".status-text");
+  expect(stateText).toBeInTheDocument();
+  expect(stateText!.textContent).toBe("needs you");
+  expect(approvalBtn.querySelector(".status-label")).toBeNull();
+
+  // ws_b is idle + not active → no visible word, sr-only label retained.
+  const idleBtn = screen.getByRole("button", { name: /feat-core/ });
+  expect(idleBtn.querySelector(".status-text")).toBeNull();
+  expect(idleBtn.querySelector(".status-label")).toBeInTheDocument();
+});
+
+test("F38: the active row shows its state as a visible compact word", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {} } });
+  const activeBtn = screen.getByRole("button", { name: /feat-auth/ });
+  expect(activeBtn.querySelector(".status-text")!.textContent).toBe("running");
+});
+
+// ---------------------------------------------------------------------------
+// F45: approval pulse decays to a steady dot (finite iterations, not infinite)
+// ---------------------------------------------------------------------------
+
+test("F45: awaiting-approval pulse decays to a steady dot (finite iterations)", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {} } });
+  const styleText = [...document.querySelectorAll("style")].map((s) => s.textContent).join("\n");
+  const rule = /\.status-awaiting-approval[^{}]*\{([^}]*perch-attn-pulse[^}]*)\}/.exec(styleText)?.[1] ?? "";
+  expect(rule).toContain("perch-attn-pulse");
+  expect(rule).not.toContain("infinite");
+});
+
+// ---------------------------------------------------------------------------
+// F49a: sidebar last-active uses the shared formatRelativeAge helper
+// ---------------------------------------------------------------------------
+
+test("F49a: sidebar last-active renders the shared formatRelativeAge output", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  const { formatRelativeAge } = await import("./constants");
+  const iso = new Date(Date.now() - 3 * 86400000).toISOString();
+  const ws: WorkspaceVM[] = [{
+    id: "ws-age", worktreePath: "/wt/age", repoPath: "/home/me/agerepo", agent: "claude", title: "age-test",
+    branch: "feat/age", state: "idle", caps: { approvals: false, attention: false }, paneId: "pa", lastActive: iso,
+  }];
+  render(Sidebar, { props: { workspaces: ws, activeId: null, onSelect: () => {}, onNew: () => {} } });
+  const ageSpan = document.querySelector(".workspace-age")!;
+  expect(ageSpan.textContent).toBe(formatRelativeAge(iso));
+  expect(ageSpan.textContent).toBe("3d ago");
 });

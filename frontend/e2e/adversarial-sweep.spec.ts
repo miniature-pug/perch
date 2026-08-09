@@ -373,7 +373,7 @@ test("A5-background-approval-pulse", async ({ page }) => {
     await shot(page, "A5-approval-card");
     expect.soft(cardVisible, "approval card should show for ws-2 after opening it").toBe(true);
     if (cardVisible) {
-      await card.locator("button", { hasText: "Allow" }).click().catch(() => {});
+      await card.getByRole("button", { name: "Allow", exact: true }).click().catch(() => {});
       await page.waitForTimeout(400);
       const gone = await card.isVisible().catch(() => false);
       await shot(page, "A5-after-allow");
@@ -460,13 +460,32 @@ test("A7-rename-session-dblclick-and-contextmenu", async ({ page }) => {
     await shot(page, "A7-after-commit");
   });
 
-  await test.step("right-click → inline input, Escape cancels (no rename)", async () => {
+  await test.step("right-click → context menu (Rename + Remove); Rename opens inline input, Escape cancels", async () => {
+    // F37 redesign: right-click no longer jumps straight into inline rename. It
+    // opens a Rename/Remove context menu (mirrors the FileTree context-menu
+    // pattern); the inline input is reached by choosing Rename from that menu.
     const t2 = page.locator("span.workspace-title").first();
     await t2.click({ button: "right", timeout: 4000 }).catch(() => {});
     await page.waitForTimeout(250);
+
+    const menu = page.getByRole("menu", { name: "Session actions" });
+    const menuShown = await menu.isVisible().catch(() => false);
+    await shot(page, "A7-contextmenu-open");
+    expect.soft(menuShown, "right-click should open the Rename/Remove context menu").toBe(true);
+
+    const renameItem = menu.getByRole("menuitem", { name: "Rename" });
+    const removeItem = menu.getByRole("menuitem", { name: "Remove" });
+    expect.soft(await renameItem.isVisible().catch(() => false), "context menu offers Rename").toBe(true);
+    expect.soft(await removeItem.isVisible().catch(() => false), "context menu offers Remove").toBe(true);
+
+    // Choosing Rename enters inline-rename mode (the input replaces the title span).
+    if (menuShown) {
+      await renameItem.click().catch(() => {});
+      await page.waitForTimeout(250);
+    }
     const shown = await input.isVisible().catch(() => false);
     await shot(page, "A7-inline-input-contextmenu");
-    expect.soft(shown, "right-click should open inline rename input").toBe(true);
+    expect.soft(shown, "choosing Rename should open the inline rename input").toBe(true);
     if (shown) {
       await input.fill("SHOULD NOT STICK");
       await input.press("Escape");

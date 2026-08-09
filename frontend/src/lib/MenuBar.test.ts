@@ -59,3 +59,43 @@ test("Enter on top-level menu button opens the menu", async () => {
   await fireEvent.keyDown(sessionBtn, { key: "Enter" });
   await waitFor(() => expect(screen.getByRole("menuitem", { name: /new session/i })).toBeInTheDocument());
 });
+
+// ── F56: Left/Right roving across the top-level menu buttons ──────────────────
+test("ArrowRight / ArrowLeft rove focus between top-level menu buttons", async () => {
+  const { default: MenuBar } = await import("./MenuBar.svelte");
+  render(MenuBar, { props: { onCommand: () => {}, unreadCount: 0 } });
+  const sessionBtn = screen.getByRole("menuitem", { name: "Session" });
+  sessionBtn.focus();
+  await fireEvent.keyDown(sessionBtn, { key: "ArrowRight" });
+  // F51: "Worktree" was folded into "Session", so the menu adjacent to Session
+  // is now "View".
+  const viewBtn = screen.getByRole("menuitem", { name: "View" });
+  expect(viewBtn).toHaveFocus();
+  await fireEvent.keyDown(viewBtn, { key: "ArrowLeft" });
+  expect(sessionBtn).toHaveFocus();
+});
+
+// ── F56: menu items render their keyboard accelerators (aria-hidden chips) ─────
+test("View menu items render keyboard accelerators without polluting the item name", async () => {
+  const { default: MenuBar } = await import("./MenuBar.svelte");
+  render(MenuBar, { props: { onCommand: () => {}, unreadCount: 0 } });
+  await fireEvent.click(screen.getByRole("menuitem", { name: "View" }));
+  await waitFor(() => screen.getByRole("menuitem", { name: "Diff view" }));
+  // Accelerator chips for the view shortcuts are shown
+  expect(screen.getByText("1")).toBeInTheDocument();
+  expect(screen.getByText("3")).toBeInTheDocument();
+  // The chip is aria-hidden so the menuitem's accessible name is still the label
+  expect(screen.getByRole("menuitem", { name: "Diff view" })).toBeInTheDocument();
+});
+
+// ── F48: the theme menu item cycles (no ellipsis promising a dialog) ──────────
+test("View menu shows 'Cycle theme' (not 'Theme…') and dispatches view:theme", async () => {
+  const { default: MenuBar } = await import("./MenuBar.svelte");
+  const onCommand = vi.fn();
+  render(MenuBar, { props: { onCommand, unreadCount: 0 } });
+  await fireEvent.click(screen.getByRole("menuitem", { name: "View" }));
+  await waitFor(() => screen.getByRole("menuitem", { name: "Cycle theme" }));
+  expect(screen.queryByText("Theme…")).toBeNull();
+  await fireEvent.click(screen.getByRole("menuitem", { name: "Cycle theme" }));
+  expect(onCommand).toHaveBeenCalledWith("view:theme");
+});

@@ -12,6 +12,14 @@
   // opacity — enough to tint the selection without hiding the glyphs underneath.
   const SELECTION_ALPHA_HEX = "66";
 
+  // Trailing-edge debounce for the pty resize. A splitter drag fires the
+  // ResizeObserver dozens of times per second; each resizePty is a SIGWINCH the
+  // agent TUI reflows on, so a raw storm makes it splutter. We coalesce fit() into
+  // one layout pass per animation frame and only send the resize once the drag
+  // settles, and only when the dimensions actually changed. 80ms spans a drag's
+  // frame cadence yet still feels instant on release.
+  const PTY_RESIZE_DEBOUNCE_MS = 80;
+
   let host:     HTMLDivElement;
   let term:     Terminal;
   let fit:      FitAddon;
@@ -20,6 +28,15 @@
   let obs:      ResizeObserver | undefined;
   let themeObs: MutationObserver | undefined;
   let disposed = false;
+
+  // Resize coalescing state: one pending rAF for fit(), one trailing-edge timer
+  // for the pty resize, and the last cols/rows we actually sent (so an unchanged
+  // observation is a no-op). -1 is an impossible dimension, so the first real
+  // measurement always sends.
+  let rafId:       number | undefined;
+  let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+  let lastCols = -1;
+  let lastRows = -1;
 
   /** Read a CSS custom property from :root, returning a trimmed string or fallback. */
   function cssVar(name: string, fallback: string): string {
@@ -81,12 +98,29 @@
     term.onData((d) => writeToPty(paneId, Array.from(new TextEncoder().encode(d))));
 
     obs = new ResizeObserver(() => {
-      fit.fit();
-      const cols = Math.max(1, Math.min(PTY_MAX_DIM, term.cols | 0));
-      const rows = Math.max(1, Math.min(PTY_MAX_DIM, term.rows | 0));
-      if (Number.isFinite(cols) && Number.isFinite(rows) && cols > 0 && rows > 0) {
-        resizePty(paneId, cols, rows);
-      }
+      // Coalesce fit() to one layout pass per frame — many ticks can land inside
+      // a single animation frame during a drag.
+      if (rafId !== undefined) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = undefined;
+        if (disposed) return;
+        fit.fit();
+        const cols = Math.max(1, Math.min(PTY_MAX_DIM, term.cols | 0));
+        const rows = Math.max(1, Math.min(PTY_MAX_DIM, term.rows | 0));
+        if (!(Number.isFinite(cols) && Number.isFinite(rows) && cols > 0 && rows > 0)) return;
+        // Nothing to tell the pty if the grid is unchanged from the last send.
+        if (cols === lastCols && rows === lastRows) return;
+        // Trailing edge: reset the timer on every changed frame so a whole drag
+        // collapses to one resizePty when it settles.
+        if (resizeTimer !== undefined) clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => {
+          resizeTimer = undefined;
+          if (disposed) return;
+          lastCols = cols;
+          lastRows = rows;
+          resizePty(paneId, cols, rows);
+        }, PTY_RESIZE_DEBOUNCE_MS);
+      });
     });
     obs.observe(host);
 
@@ -103,6 +137,8 @@
 
   onDestroy(() => {
     disposed = true;
+    if (rafId !== undefined) cancelAnimationFrame(rafId);
+    if (resizeTimer !== undefined) clearTimeout(resizeTimer);
     offData?.();
     offExit?.();
     obs?.disconnect();

@@ -41,6 +41,38 @@ describe("HelpDialog — open", () => {
   });
 });
 
+describe("HelpDialog — F46 complete keymap", () => {
+  it("includes the previously-missing shortcut rows (Ctrl-K, Ctrl-b, g t / g T, Ctrl-S)", () => {
+    render(HelpDialog, { props: { open: true, onClose: vi.fn() } });
+    expect(screen.getByText("Ctrl-K")).toBeInTheDocument();
+    expect(screen.getByText("Ctrl-b")).toBeInTheDocument();
+    expect(screen.getByText("g t")).toBeInTheDocument();
+    expect(screen.getByText("g T")).toBeInTheDocument();
+    expect(screen.getByText("Ctrl-S")).toBeInTheDocument();
+  });
+});
+
+describe("HelpDialog — F53 section views", () => {
+  it("section='about' shows the About blurb but not the shortcuts table", () => {
+    render(HelpDialog, { props: { open: true, onClose: vi.fn(), section: "about" } });
+    expect(screen.getByText(/a worktree-native cockpit/i)).toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    expect(screen.queryByText("Keyboard Shortcuts")).not.toBeInTheDocument();
+  });
+
+  it("section='shortcuts' shows the table but not the About blurb", () => {
+    render(HelpDialog, { props: { open: true, onClose: vi.fn(), section: "shortcuts" } });
+    expect(screen.getByRole("table")).toBeInTheDocument();
+    expect(screen.queryByText(/a worktree-native cockpit/i)).not.toBeInTheDocument();
+  });
+
+  it("default (no section) renders both the table and the About blurb", () => {
+    render(HelpDialog, { props: { open: true, onClose: vi.fn() } });
+    expect(screen.getByRole("table")).toBeInTheDocument();
+    expect(screen.getByText(/a worktree-native cockpit/i)).toBeInTheDocument();
+  });
+});
+
 describe("HelpDialog — interactions", () => {
   it("clicking the close button calls onClose", async () => {
     const onClose = vi.fn();

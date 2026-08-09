@@ -42,12 +42,12 @@ describe("ApprovalCard", () => {
     expect(onDecision).toHaveBeenCalledWith("req-1", "deny");
   });
 
-  it("clicking Always calls onDecision(reqId, 'always')", async () => {
+  it("clicking Always allow calls onDecision(reqId, 'always')", async () => {
     const { default: ApprovalCard } = await import("./ApprovalCard.svelte");
     const onDecision = vi.fn();
     render(ApprovalCard, { props: { req, queue, caps, onDecision } });
-    await waitFor(() => screen.getByRole("button", { name: "Always" }));
-    await fireEvent.click(screen.getByRole("button", { name: "Always" }));
+    await waitFor(() => screen.getByRole("button", { name: "Always allow" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Always allow" }));
     expect(onDecision).toHaveBeenCalledWith("req-1", "always");
   });
 

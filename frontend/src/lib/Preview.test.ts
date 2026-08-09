@@ -30,6 +30,25 @@ test("renders image", async () => {
   expect(screen.getByRole("img")).toHaveAttribute("src", "/wt/logo.png");
 });
 
+// --- F8b: the render side-effect is gated on `visible` (no work while off-screen) ---
+
+test("does not render marked while hidden (visible=false), renders when shown", async () => {
+  const { default: Preview } = await import("./Preview.svelte");
+  const m = await import("marked");
+  vi.mocked(m.marked).mockClear();
+
+  // Mounted but off-screen: marked must not run even though content is present.
+  const { rerender } = render(Preview, {
+    props: { path: "/wt/a.md", kind: "markdown", content: "# Hi", visible: false },
+  });
+  await new Promise((r) => setTimeout(r, 20));
+  expect(m.marked).not.toHaveBeenCalled();
+
+  // Revealed: the effect re-runs and renders the current content.
+  await rerender({ path: "/wt/a.md", kind: "markdown", content: "# Hi", visible: true });
+  await waitFor(() => expect(m.marked).toHaveBeenCalled());
+});
+
 test("strips dangerous HTML from rendered markdown (no XSS)", async () => {
   const w = await import("marked");
   // Force marked to emit a malicious payload as if a markdown file contained raw HTML

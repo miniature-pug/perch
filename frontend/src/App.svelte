@@ -10,6 +10,7 @@
   import FileTree           from "./lib/FileTree.svelte";
   import { isPreviewable, previewKind } from "./lib/preview";
   import { focusOnMount, countUp } from "./lib/actions";
+  import { keepHome, adoptInto } from "./lib/portal";
   import DiffView           from "./lib/DiffView.svelte";
   import { shouldFocusAwaitingInput, isViewingAgentPane } from "./lib/engagement";
   import MenuBar            from "./lib/MenuBar.svelte";
@@ -29,7 +30,7 @@
   import CleanupPanel from "./lib/CleanupPanel.svelte";
   import { listWorkspaces, createWorkspace, setWorkspaceTitle, workspaceForBranch, removeWorkspace, openWorkspace, closeWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, onWorkspaceAttach, approve, pendingApprovals, branches, readFile, setWindowFocus, writeToPty, discoverRepos, diffStat, listStaleSessions, forceRemoveWorkspace, homeShellCwd as fetchHomeShellCwd } from "./lib/wails";
   import type { WorkspaceVM, ApprovalReq, StaleSessionVM } from "./lib/wails";
-  import { UNDO_REMOVE_DELAY_MS, SIDEBAR_MIN_W, SIDEBAR_MAX_W, SHELL_MIN_H, SHELL_MAX_H, RESIZE_STEP_PX, THEMES, MIME_SESSION, MENTION_PREFIX, AGENT_CLAUDE, AGENT_OPENCODE } from "./lib/constants";
+  import { UNDO_REMOVE_DELAY_MS, GCHORD_TIMEOUT_MS, SIDEBAR_MIN_W, SIDEBAR_MAX_W, SHELL_MIN_H, SHELL_MAX_H, RESIZE_STEP_PX, THEMES, MIME_SESSION, MENTION_PREFIX, AGENT_CLAUDE, AGENT_OPENCODE } from "./lib/constants";
 
   let workspaces      = $state<WorkspaceVM[]>([]);
   let activeId        = $state<string | null>(null);
@@ -39,12 +40,25 @@
   // SvelteSet so .add()/.delete()/.has() are genuinely reactive — the in-pane
   // reopen overlay and the Sidebar "closed" cue both read openIds.has() directly.
   let openIds         = new SvelteSet<string>();
+  // Sessions opened at least once THIS app-run. A cold persisted session (never
+  // opened this run) shows the resume-preview on a sidebar click so its branch/
+  // agent/last-active can be confirmed before spawning a pty; a DORMANT session
+  // (opened then closed this run) reopens DIRECTLY on click, matching the Enter
+  // key, notification-click, and the in-pane Reopen overlay — you just had it
+  // live, so the extra modal is redundant friction (F22). Pruned only on genuine
+  // removal (a closed-but-kept session must stay "dormant", not on close/exit).
+  let everOpened      = new SvelteSet<string>();
   // Per-session terminal epoch. Bumped on every genuine (re)open so the agent
   // terminal-zone {#key} remounts a fresh xterm (a respawned pty must not
   // interleave over a stale buffer). A view switch or focus does NOT bump it,
   // so the scroll buffer survives those.
   let termEpoch       = $state<Record<string, number>>({});
-  let codePath        = $state<string | null>(null);
+  // Per-session code-view file selection. Each open session keeps its own
+  // FileTree/Editor/Preview mounted (hidden via display), so its currently-open
+  // file must be tracked independently — a single top-level value would load one
+  // session's path against another's worktree and reset on every switch. Keyed by
+  // session id, like termEpoch/fsVersion.
+  let codePaths       = $state<Record<string, string | null>>({});
   let previewContent  = $state<string>("");
   // Per-workspace approval QUEUE. A session's agent can have more than one tool
   // waiting at once (each is a distinct blocking hook); a single-valued map would
@@ -52,7 +66,14 @@
   // (index 0) is the one currently shown for that session; resolving it pops it so
   // the next queued request surfaces. reqId is unique per request → dedupe on push.
   let approvals       = $state<Record<string, ApprovalReq[]>>({});
+  // Per-WORKSPACE fs version: bumped on ANY file change in that worktree. Drives
+  // the FileTree re-list and the DiffView refresh (both cover every file).
   let fsVersion  = $state<Record<string, number>>({});
+  // Per-PATH fs version: bumped only when THAT absolute path changes on disk.
+  // Drives the Editor reload and the Preview content refresh, so an agent write
+  // to an UNRELATED file never disturbs the file the user is editing/previewing
+  // (F15). Keyed by absolute path (shared across sessions — a path is unique).
+  let fsPathVersion = $state<Record<string, number>>({});
   let wsDiffStats = $state<Record<string, { added: number; removed: number; files: number }>>({});
 
   // Acknowledged "awaiting-input" signals. The left-pane "asking you a question"
@@ -71,9 +92,17 @@
   // by session id because every open session now keeps its own Terminal mounted.
   let termRefs       = $state<Record<string, { focus: () => void }>>({});
   let emphasizeInput = $state(false);
+  // Per-session ref to the agent terminal-zone DOM node. The split session's
+  // Terminal is mounted ONCE in the primary keep-alive loop; when it becomes the
+  // secondary pane its node is physically relocated into the secondary host
+  // (see lib/portal.ts) so toggling split never rebuilds a blank xterm (F10a).
+  let termZoneEls    = $state<Record<string, HTMLElement | undefined>>({});
 
-  // Repo discovery — populated lazily when the New Session dialog opens.
+  // Repo discovery — populated lazily the FIRST time the New Session dialog opens.
+  // discoverRepos walks the filesystem, so it must not re-run on every open (F21);
+  // the flag guards it, and is reset on failure so a later open can retry.
   let discoveredRepoPaths = $state<string[]>([]);
+  let discoveredReposScanned = false;
 
   // Pending removals — each entry is an optimistically-hidden workspace with a
   // scheduled real removeWorkspace call.  Using an array lets us handle multiple
@@ -90,29 +119,28 @@
 
   // Keymap state machine helpers
   let pendingG     = $state(false);
+  // Auto-clear timer for the `g` chord prefix: a stray `g` must not silently
+  // swallow the next key forever, and the transient "g…" indicator must not
+  // linger (F54). Set when `g` is armed, cleared when the chord resolves.
+  let pendingGTimer: ReturnType<typeof setTimeout> | undefined;
   let pendingLeave = $state(false);
   let filtering    = $state(false);
   let filterQuery  = $state("");
 
-  // Load file content when codePath changes to a previewable (non-image) file.
-  // Cancellation guard prevents a stale readFile resolve from clobbering newer content.
+  // Load file content for the ACTIVE session's previewable (non-image) file. Only
+  // the active session's Preview is on screen, so a single previewContent tracks
+  // the active codePath. Re-reads when the file itself changes on disk (its
+  // fsPathVersion bumps) — never on an unrelated write (F15). Cancellation guard
+  // prevents a stale readFile resolve from clobbering newer content.
   $effect(() => {
-    const p = codePath;
+    const p = activeCodePath;
+    if (p) fsPathVersion[p]; // track: re-read when THIS file changes on disk
     if (!p || !isPreviewable(p) || previewKind(p) === "image") { previewContent = ""; return; }
     let cancelled = false;
     readFile(p)
       .then((c) => { if (!cancelled) previewContent = c; })
       .catch(() => { if (!cancelled) previewContent = ""; });
     return () => { cancelled = true; };
-  });
-
-  // Reset the code-view file selection when the active session changes: codePath is
-  // a single top-level value, so a leftover path from the previous session would be
-  // loaded against the NEW worktree. untrack the reset so writing codePath does not
-  // re-trigger this effect (it keys only on active?.id).
-  $effect(() => {
-    active?.id; // track
-    untrack(() => { codePath = null; });
   });
 
   // Acknowledge the active session's awaiting-input signal once the user is
@@ -132,11 +160,12 @@
   });
 
   // Invariant: the active session is never ALSO the split session. Each open
-  // session keeps exactly one Terminal bound to its paneId; the split session's
-  // Terminal lives ONLY in the secondary pane (the primary keep-alive loop filters
-  // it out). If navigation makes the split session active it would be filtered out
-  // of the primary AND shown in the secondary — a single pane, no primary. Clear
-  // the split id in that case so the secondary pane shows its picker instead.
+  // session keeps exactly one Terminal bound to its paneId, mounted once in the
+  // primary keep-alive loop; the split session's node is relocated into the
+  // secondary pane (see lib/portal.ts), never a second instance. If navigation
+  // makes the split session active it would be shown in the primary AND relocated
+  // into the secondary at once — a tug-of-war over one node. Clear the split id in
+  // that case so the secondary pane shows its picker instead.
   $effect(() => {
     if (layout.split && layout.splitId !== null && layout.splitId === activeId) layout.setSplitId(null);
   });
@@ -144,9 +173,16 @@
   // Dialog / overlay state
   let newSessionOpen        = $state(false);
   let newSessionInitialAgent = $state<string | null>(null);
+  // Inline create error surfaced in the New Session dialog. A genuine user error
+  // (branch-name collision) must read as actionable copy, never raw git plumbing;
+  // App feeds the humanized message here after a failed create (F26a).
+  let createError           = $state<string | null>(null);
   let confirmRemove         = $state<WorkspaceVM | null>(null);
   let notifOpen             = $state(false);
   let helpOpen              = $state(false);
+  // Which Help panel to show: the Help menu's two entries open genuinely distinct
+  // views (shortcuts vs about); the `?`/F1 key opens the full help (F24/F53).
+  let helpSection           = $state<"shortcuts" | "about" | "all">("all");
   let settingsOpen          = $state(false);
   let staleSessions         = $state<StaleSessionVM[]>([]);
   let homeShellCwdValue     = $state<string>("");
@@ -155,6 +191,8 @@
   let confirmDirty          = $state<WorkspaceVM | null>(null);
 
   const active          = $derived(workspaces.find(w => w.id === activeId) ?? null);
+  // The active session's open code-view file (per-session; null when none).
+  const activeCodePath  = $derived(activeId ? (codePaths[activeId] ?? null) : null);
   const unreadCount     = $derived(getItems().filter(n => !n.read).length);
   // Every session with a live pty this app-run. The agent terminals and shell
   // drawers loop over this so each open session keeps its own kept-alive xterm
@@ -163,15 +201,33 @@
   // workspaces is $state, so this stays reactive to both.
   const openWorkspaces  = $derived(workspaces.filter(w => openIds.has(w.id)));
   // Sessions whose agent Terminal is kept MOUNTED: every open session, plus the
-  // active session if its pty has just exited (not in openIds). Keeping the
-  // exited-but-active pane mounted preserves its final xterm buffer (the
-  // "[process exited]" line) under the Reopen overlay instead of unmounting the
-  // xterm the instant the pty dies.
-  const mountedWorkspaces = $derived(
-    active && !openIds.has(active.id)
+  // active session if its pty has just exited (not in openIds), plus the split
+  // session (its Terminal is mounted here ONCE and relocated into the secondary
+  // pane — see the primary {#each} + lib/portal.ts). Keeping the exited-but-active
+  // pane mounted preserves its final xterm buffer (the "[process exited]" line)
+  // under the Reopen overlay instead of unmounting the xterm the instant the pty
+  // dies. chooseSplit always opens the split session first, so it is normally
+  // already in openWorkspaces; the explicit union keeps the two consistent even
+  // when splitId is assigned without an open (belt-and-suspenders / tests).
+  // NB: keyed on splitId (not on split being ON) so the split session stays
+  // mounted while it is *assigned* to the secondary pane, even when the pane is
+  // toggled off with the assignment retained. That is what lets a split off→on
+  // toggle re-show the SAME live terminal instead of rebuilding a blank one.
+  const mountedWorkspaces = $derived((() => {
+    let mounted = active && !openIds.has(active.id)
       ? [...openWorkspaces, active]
-      : openWorkspaces
-  );
+      : openWorkspaces;
+    if (layout.splitId) {
+      const splitWs = workspaces.find(w => w.id === layout.splitId);
+      if (splitWs && !mounted.some(w => w.id === splitWs.id)) mounted = [...mounted, splitWs];
+    }
+    return mounted;
+  })());
+
+  // The split session's terminal-zone node, once mounted in the primary loop.
+  // The secondary pane host adopts this exact node (via use:adoptInto) so the
+  // split terminal keeps its live xterm buffer across split on/off toggles.
+  const splitZoneEl = $derived(layout.splitId ? termZoneEls[layout.splitId] : undefined);
 
   // Apply user-defined order: ids in layout.order come first (in that order),
   // remaining workspaces (not yet in order) follow in backend order.
@@ -314,8 +370,15 @@
       if (ev.kind === "question") {
         attnAck.delete(ev.workspaceId);
       }
-      // Only the ACTIVE workspace, only the agent view, only on the edge.
-      if (ev.state && shouldFocusAwaitingInput(prev, ev.state, ev.workspaceId, activeId, layout.view)) {
+      // Only the ACTIVE workspace, only the agent view, only on the edge — and
+      // only when no App modal/overlay or the command palette owns the keyboard:
+      // otherwise a background awaiting-input would flip to terminal mode and pull
+      // focus into the hidden pty while Settings / the palette is open, routing the
+      // user's keystrokes (Escape included) into the agent (F16). The left-pane
+      // sidebar pulse (attnAck path above) still fires — only the focus theft is
+      // suppressed.
+      if (ev.state && shouldFocusAwaitingInput(prev, ev.state, ev.workspaceId, activeId, layout.view)
+          && !modalOpen && mode.current !== "command") {
         focusAwaitingInput();
       }
     });
@@ -327,12 +390,22 @@
     });
 
     offFsChanged = onFsChanged((p) => {
+      // Workspace-wide bump: re-lists the FileTree and refreshes the DiffView
+      // (both span every file in the worktree).
       fsVersion[p.workspaceId] = (fsVersion[p.workspaceId] ?? 0) + 1;
+      // Per-path bump: only the Editor/Preview showing THIS exact file reloads, so
+      // an agent write to an unrelated file never disturbs the edited buffer (F15).
+      if (p.path) fsPathVersion[p.path] = (fsPathVersion[p.path] ?? 0) + 1;
       const ws = workspaces.find(w => w.id === p.workspaceId);
       if (ws) refreshDiffStat(ws);
     });
 
     offWorkspaceAttach = onWorkspaceAttach((p) => {
+      // A background `perch attach` must not hijack the app while a modal/overlay
+      // is open: routing it through onSelect would swap the active session or the
+      // target of an open resume-preview underneath the user. Drop it — the app
+      // behind a modal is inert (F18).
+      if (modalOpen) return;
       // Find by exact worktreePath first, then fuzzy match on title/branch/path.
       const q = p.query;
       const exact = workspaces.find(w => w.worktreePath === q);
@@ -375,6 +448,7 @@
     window.removeEventListener("blur",  onWindowBlur);
     // Cancel any pending deferred removals to avoid use-after-unmount calls.
     for (const p of pendingRemovals) clearTimeout(p.timer);
+    clearTimeout(pendingGTimer);
   });
 
   // Resume preview state: the workspace pending confirmation before opening.
@@ -395,7 +469,12 @@
     // live and re-running openWorkspace would respawn it and re-type the launch
     // command over the running xterm.
     if (openIds.has(id)) { activeId = id; return; }
-    // Not open → show the resume-preview before spawning the pty.
+    // Not open, but DORMANT (opened then closed this run) → reopen DIRECTLY, the
+    // same as the Enter key, a notification click, and the in-pane Reopen overlay.
+    // You just had it live, so the resume-preview is redundant friction (F22).
+    if (everOpened.has(id)) { openSession(id); return; }
+    // Cold persisted session (never opened this run) → show the resume-preview so
+    // its branch/agent/last-active can be confirmed before spawning the pty.
     previewWs = ws;
   }
 
@@ -406,6 +485,7 @@
     termEpoch[id] = (termEpoch[id] ?? 0) + 1;
     activeId = id;
     openIds.add(id);
+    everOpened.add(id); // opened this run → a later click reopens directly (F22)
     try {
       await openWorkspace(id);
       // Refresh caps/state now that the monitor is live. openWorkspace registers
@@ -418,8 +498,12 @@
       // still spawning (before its monitor was live / before it was listed);
       // reconcile the backend's authoritative pending set so a card surfaces.
       await seedPendingApprovals();
-    } catch {
+    } catch (e) {
       openIds.delete(id);
+      // A genuinely-failed OpenWorkspace (e.g. a missing worktree → "spawn pty")
+      // was silently swallowed before, leaving the row dimmed with no explanation.
+      // Surface it so the user knows the reopen didn't take (F35).
+      addBlocking(id, "Could not open session", String(e), "error");
     }
   }
 
@@ -449,6 +533,10 @@
     mode.leaveTerminal();
     openIds.delete(id);
     attnAck.delete(id);
+    // Prune any pending approval for the now-dead session: its ApprovalCard points
+    // at a reqId whose agent process is gone, so approve() would reject and the card
+    // would be undismissable. Drop the whole queue for this session (F19).
+    if (approvals[id]) { const { [id]: _drop, ...rest } = approvals; approvals = rest; }
     const ws = workspaces.find(w => w.id === id);
     if (ws) ws.state = "idle";
   }
@@ -510,17 +598,25 @@
 
   function openNewSession(initialAgent?: string) {
     newSessionOpen = true;
-    // Lazily discover repos each time the dialog opens — runs in background,
-    // merges with workspace-derived paths (deduped in the repos $derived).
-    discoverRepos()
-      .then((list) => { discoveredRepoPaths = list.map(r => r.path); })
-      .catch(() => {}); // non-fatal — fresh-install still sees workspace paths
+    createError = null; // start clean — no stale inline error from a prior attempt
+    // Discover repos ONCE (the first open) — the scan walks the filesystem, so
+    // re-running it on every open is wasteful (F21). The flag is set synchronously
+    // so a rapid second open before the scan resolves cannot double-scan; a failed
+    // scan resets it so a later open retries. Results merge with workspace-derived
+    // paths (deduped in the repos $derived).
+    if (!discoveredReposScanned) {
+      discoveredReposScanned = true;
+      discoverRepos()
+        .then((list) => { discoveredRepoPaths = list.map(r => r.path); })
+        .catch(() => { discoveredReposScanned = false; }); // non-fatal — retry on next open
+    }
     // Guard: only accept a genuine string (Sidebar passes this as onclick which
     // injects a MouseEvent; we must not treat that as an agent name).
     newSessionInitialAgent = typeof initialAgent === "string" ? initialAgent : null;
   }
 
   async function handleCreate(agent: string, repo: string, baseRef: string, branch: string, title: string, worktree: boolean) {
+    createError = null; // clear any prior inline error on a fresh attempt
     // Guard: if the branch is already owned by a perch session, offer resume instead.
     const existing = await workspaceForBranch(repo, branch);
     if (existing.found) {
@@ -540,13 +636,21 @@
       await onSelect(vm.id);
     } catch (e) {
       const msg = String(e);
+      // Never surface the raw error to the user — it's git/plumbing noise
+      // ("exit status 128: fatal: …"). Log it for diagnosis, show human copy.
+      console.error("create session failed:", e);
       if (msg.includes("uncommitted changes")) {
         // ErrWorktreeDirty: non-worktree session can't switch to a different branch
         // while the working tree has uncommitted changes.
         addBlocking("", "Cannot switch branch",
-          "Your working tree has uncommitted changes. Commit or stash them before switching to a different branch.");
+          "Your working tree has uncommitted changes. Commit or stash them before switching to a different branch.", "error");
+      } else if (/already exists/i.test(msg)) {
+        // ErrBranchExists at the git layer (new-branch mode collision): a genuine
+        // user error that MUST surface as actionable copy, inline in the dialog,
+        // not as raw git plumbing (F26a).
+        createError = `A branch named "${branch}" already exists. Choose a different name, or turn on "Use existing branch" to resume it.`;
       } else {
-        addBlocking("", "Failed to create session", msg);
+        createError = "Could not create the session. Check the repo and branch, then try again.";
       }
       // Keep the dialog open so the user can correct their choice.
     }
@@ -562,6 +666,7 @@
     const { [id]: _a, ...restA } = approvals;   approvals   = restA;
     const { [id]: _f, ...restF } = fsVersion;   fsVersion   = restF;
     const { [id]: _e, ...restE } = termEpoch;   termEpoch   = restE;
+    const { [id]: _c, ...restC } = codePaths;   codePaths   = restC;
     const { [id]: _t, ...restT } = termRefs;    termRefs    = restT;
     const { [id]: _d, ...restD } = wsDiffStats; wsDiffStats = restD;
     attnAck.delete(id);
@@ -593,6 +698,7 @@
       try {
         await removeWorkspace(wsToRemove.id);
         openIds.delete(wsToRemove.id);
+        everOpened.delete(wsToRemove.id);
         dropForWorkspace(wsToRemove.id);
         pruneWorkspaceState(wsToRemove.id);
         workspaces = await listWorkspaces();
@@ -630,6 +736,7 @@
     pendingRemovals = pendingRemovals.filter(p => p.ws.id !== id);
     if (layout.splitId === id) layout.setSplitId(null);
     openIds.delete(id);
+    everOpened.delete(id);
     dropForWorkspace(id);
     pruneWorkspaceState(id);
     // Fire-and-forget — do not await so we don't block the caller.
@@ -647,6 +754,7 @@
     try {
       await forceRemoveWorkspace(ws.id);
       openIds.delete(ws.id);
+      everOpened.delete(ws.id);
       dropForWorkspace(ws.id);
       pruneWorkspaceState(ws.id);
       workspaces = await listWorkspaces();
@@ -695,7 +803,7 @@
       }
       clearAttentionBackstop(ownerWsId);
     } catch (e) {
-      addBlocking(ownerWsId, "Approval failed", String(e));
+      addBlocking(ownerWsId, "Approval failed", String(e), "error");
     } finally {
       decidingReqs.delete(reqId);
     }
@@ -740,7 +848,7 @@
       } },
     { id: "session:remove", group: "Session", label: "Remove session",     run: () => { if (active) requestRemove(active); } },
     // Worktree
-    { id: "worktree:open",   group: "Worktree", label: "Open worktree",    keybinding: "Enter",       run: () => { if (active) openSession(active.id); } },
+    { id: "worktree:open",   group: "Worktree", label: "Open worktree",    keybinding: "Enter",       run: () => { if (active && !openIds.has(active.id)) openSession(active.id); } },
     { id: "worktree:reveal", group: "Worktree", label: "Reveal in Files",  run: () => { if (active) revealInFiles(active.worktreePath); } },
     // View
     { id: "view:agent", group: "View", label: "Agent view",  keybinding: "1",  run: () => layout.setView("agent") },
@@ -758,9 +866,9 @@
     // Notifications
     { id: "notifications:open", group: "Notifications", label: "Open notifications",    run: () => { openNotif(!notifOpen); } },
     { id: "notifications:dnd",  group: "Notifications", label: "Toggle Do Not Disturb", run: () => setDnd(!getDnd()) },
-    // Help
-    { id: "help:shortcuts", group: "Help", label: "Keyboard shortcuts", run: () => { helpOpen = true; } },
-    { id: "help:about",     group: "Help", label: "About perch",        run: () => { helpOpen = true; } },
+    // Help — the two entries open genuinely distinct panels (F53).
+    { id: "help:shortcuts", group: "Help", label: "Keyboard shortcuts", run: () => { helpSection = "shortcuts"; helpOpen = true; } },
+    { id: "help:about",     group: "Help", label: "About perch",        run: () => { helpSection = "about";     helpOpen = true; } },
     // Settings
     { id: "settings:open", group: "Settings", label: "Settings…", run: () => { settingsOpen = true; } },
   ];
@@ -820,7 +928,11 @@
       return;
     }
 
-    // TERMINAL mode: only intercept the Ctrl-\ Ctrl-n leave sequence.
+    // TERMINAL mode: only intercept the Ctrl-\ Ctrl-n leave sequence. Everything
+    // else — including Ctrl-K and `:` — is deliberately passed straight to the pty:
+    // Ctrl-K is readline kill-line and `:` is ordinary input, so the command
+    // palette is intentionally NOT reachable from TERMINAL mode. Leave TERMINAL
+    // mode first (Ctrl-\ Ctrl-n) to open it. Documented, no behavior change (F55).
     if (mode.current === "terminal") {
       if (e.ctrlKey && e.key === "\\") {
         pendingLeave = true;
@@ -856,6 +968,7 @@
     // g-prefix resolution must come first so gd/ge/gt/gT work correctly.
     if (pendingG) {
       pendingG = false;
+      clearTimeout(pendingGTimer); // chord resolved — stop the auto-clear (F54)
       if (e.key === "d") { e.preventDefault(); layout.setView("diff"); }
       else if (e.key === "e") { e.preventDefault(); layout.setView("code"); }
       else if (e.key === "t") {
@@ -907,6 +1020,10 @@
       case "g": {
         e.preventDefault();
         pendingG = true;
+        // Arm an auto-clear so a stray `g` shows its transient "g…" indicator
+        // briefly and then resets, rather than silently eating the next key (F54).
+        clearTimeout(pendingGTimer);
+        pendingGTimer = setTimeout(() => { pendingG = false; }, GCHORD_TIMEOUT_MS);
         return;
       }
       case "\\": e.preventDefault(); layout.toggleSplit(); break;
@@ -932,10 +1049,32 @@
       }
       case "Enter": {
         e.preventDefault();
-        if (activeId) openSession(activeId);
+        // Only (re)open a session whose pty is not already live — reopening a live
+        // session displaces its backend pty (SIGKILLs the running agent's process
+        // group) and re-types the launch command over a blanked xterm (F13). Mirror
+        // onSelect's liveness guard.
+        if (activeId && !openIds.has(activeId)) openSession(activeId);
         break;
       }
-      case "i": e.preventDefault(); mode.enterTerminal(); break;
+      case "i": {
+        e.preventDefault();
+        mode.enterTerminal();
+        // enterTerminal only flips the mode flag; move DOM focus into the active
+        // pty so keystrokes actually route to the agent (F17). Guarded to the
+        // active session; Terminal exposes a focus() export.
+        if (activeId) termRefs[activeId]?.focus();
+        break;
+      }
+      // New session — the one-key entry point matching the sidebar CTA / menu (F23).
+      case "n": e.preventDefault(); openNewSession(); break;
+      // Remove the active session — opens the CANCELABLE confirm dialog rather than
+      // acting immediately, so a stray keypress can never destroy a worktree
+      // (tmux-style `x` = kill/remove). The lone destructive key is deliberately
+      // NOT bound to session:close, which would SIGKILL a live agent with no undo.
+      case "x": e.preventDefault(); if (active) requestRemove(active); break;
+      // Help — `?` (and F1) open the full shortcuts + about panel (F24).
+      case "?":
+      case "F1": e.preventDefault(); helpSection = "all"; helpOpen = true; break;
       case ":": e.preventDefault(); mode.enterCommand();  break;
     }
   }
@@ -1037,7 +1176,8 @@
         {/if}
         <Sidebar workspaces={shownWorkspaces} {activeId} onSelect={onSelect} onNew={openNewSession} onReorder={handleReorder} diffStats={wsDiffStats} openIds={openIds} ackedInputIds={attnAck}
           onRename={(id, title) => { const ws = workspaces.find(w => w.id === id); if (ws) ws.title = title; setWorkspaceTitle(id, title); }}
-          onEditStart={() => { previewWs = null; }} />
+          onEditStart={() => { previewWs = null; }}
+          requestRemove={(id) => { const ws = workspaces.find(w => w.id === id); if (ws) requestRemove(ws); }} />
       </aside>
 
       <div class="divider divider-v" role="slider" aria-label="Resize sidebar"
@@ -1078,18 +1218,27 @@
               <!-- One agent Terminal per MOUNTED session, kept mounted (hidden via
                    display) so switching sessions never rebuilds a blank xterm or
                    loses scrollback — the same keep-alive pattern as the home shell.
-                   The mounted set is every open session PLUS a just-exited active one:
-                   an exited pty's Terminal must NOT unmount on the exit event, or its
-                   final buffer (the "[process exited]" line) is destroyed — instead its
-                   "session ended / Reopen" overlay is laid on top of the still-mounted,
-                   dimmed pane. Keyed by session id + epoch so only a genuine reopen
-                   (epoch bump) respawns a pane; a session or view switch just toggles
-                   visibility. -->
-              {#each mountedWorkspaces.filter(ws => !(layout.split && layout.splitId === ws.id)) as ws (ws.id + ":" + (termEpoch[ws.id] ?? 0))}
+                   The mounted set is every open session PLUS a just-exited active one
+                   PLUS the split session: an exited pty's Terminal must NOT unmount on
+                   the exit event, or its final buffer (the "[process exited]" line) is
+                   destroyed — instead its "session ended / Reopen" overlay is laid on
+                   top of the still-mounted, dimmed pane. Keyed by session id + epoch so
+                   only a genuine reopen (epoch bump) respawns a pane; a session or view
+                   switch just toggles visibility.
+                   The split session is mounted HERE too (not filtered out): its node is
+                   relocated into the secondary pane via use:adoptInto on that host, so
+                   toggling split never destroys+recreates its xterm (F10a). While split,
+                   the split session's zone shows unconditionally (it lives in secondary,
+                   which ignores the primary view); otherwise the usual active+agent
+                   visibility rule applies. -->
+              {#each mountedWorkspaces as ws (ws.id + ":" + (termEpoch[ws.id] ?? 0))}
                 {@const ended = !openIds.has(ws.id)}
+                {@const isSplit = layout.split && layout.splitId === ws.id}
                 <div class="terminal-zone" class:input-emphasis={ws.id === activeId && emphasizeInput}
+                     bind:this={termZoneEls[ws.id]}
+                     use:keepHome
                      data-terminal-zone role="group" aria-label="agent terminal"
-                     style:display={ws.id === activeId && layout.view === "agent" ? "" : "none"}
+                     style:display={isSplit || (ws.id === activeId && layout.view === "agent") ? "" : "none"}
                      onanimationend={(e) => { if (e.animationName === "perch-emphasis") emphasizeInput = false; }}
                      onpointerdown={() => { if (mode.current === "normal") mode.enterTerminal(); }}>
                   {#if ended}
@@ -1103,55 +1252,70 @@
                   </DragDrop>
                 </div>
               {/each}
+              <!-- One code layout per MOUNTED session, kept mounted (hidden via
+                   display) so switching sessions preserves each session's open
+                   file, folder expansion, scroll, and unsaved Editor buffer instead
+                   of destroying them — the same keep-alive pattern as the agent
+                   terminals. A session or view switch just toggles visibility; only
+                   a genuine remove/close destroys a layout (Editor.onDestroy then
+                   saves a dirty buffer). Per-session codePaths keep each file
+                   selection independent, and the `visible` prop freezes a hidden
+                   pane so it does no background listing, reloading, or rendering. -->
+              {#each mountedWorkspaces as ws (ws.id)}
+                {@const codePath = codePaths[ws.id] ?? null}
+                {@const showing  = ws.id === activeId && layout.view === "code"}
+                <div class="code-layout" style:display={showing ? "" : "none"}>
+                  <!-- FileTree re-lists IN PLACE on a file write via the monotonic
+                       refresh signal (never remounted — that would collapse open
+                       folders). The `visible` guard freezes it while hidden so no
+                       listing fires on a hide or on a background write. -->
+                  <FileTree root={ws.worktreePath}
+                    refresh={fsVersion[ws.id] ?? 0}
+                    visible={showing}
+                    selectedPath={codePath}
+                    onOpen={(p) => {
+                      // FileTree may send '@mention:'+path for "Send to agent".
+                      // Route to sendToAgent; otherwise treat as a regular file open.
+                      if (p.startsWith(MENTION_PREFIX)) {
+                        const path = p.slice(MENTION_PREFIX.length);
+                        // Format matches DragDrop: '@'+path+' '
+                        sendToAgent("@" + path + " ");
+                      } else {
+                        codePaths[ws.id] = p;
+                      }
+                    }} />
+                  {#if isPreviewable(codePath)}
+                    <!-- Keyed only by the file path (same key on every view), so a
+                         file switch gives a fresh render but an fs change does not
+                         remount — the render side-effect is frozen via `visible`. -->
+                    {#key codePath}
+                      <Preview path={codePath ?? ""} kind={previewKind(codePath ?? "")}
+                               content={previewContent} visible={showing} />
+                    {/key}
+                  {:else}
+                    <!-- reloadToken is the monotonic per-FILE fs version, so the
+                         editor reloads only when ITS file changes on disk (and only
+                         when it has no unsaved edits), never on an unrelated write
+                         or a view toggle. Visibility is handled by `visible`. -->
+                    <Editor path={codePath} worktree={ws.worktreePath}
+                            reloadToken={fsPathVersion[codePath ?? ""] ?? 0}
+                            visible={showing}
+                            onSendToAgent={sendToAgent} />
+                  {/if}
+                </div>
+              {/each}
               {#if active}
-                <!-- The code layout stays mounted while a session is active and is hidden on the agent
-                     and diff views, so an in-progress Editor draft survives a view switch. Preview is
-                     keyed on the fs version (only while this view shows, so a hidden pane does no
-                     background work) to refresh when files change. FileTree refreshes in place via its
-                     refresh prop (never remounted on an fs change — that would collapse open folders).
-                     The Editor is NOT keyed on it, so a background file change never discards unsaved
-                     edits; it reloads on an external change only when it has none, via its reloadToken
-                     prop. Keyed by session id so a session switch starts a fresh layout. -->
-                {#key active.id}
-                  <div class="code-layout" style:display={layout.view === "code" ? "" : "none"}>
-                    <!-- FileTree is NOT remounted on an fs change (that would collapse every
-                         open folder). It is keyed only by session id (via the outer {#key}),
-                         so switching sessions resets the tree, while a file write refreshes
-                         its listing IN PLACE via the refresh prop, preserving expansion. The
-                         refresh signal is frozen (-1) while this view is hidden so a hidden
-                         pane does no background re-listing. -->
-                    <FileTree root={active.worktreePath}
-                      refresh={layout.view === "code" ? (fsVersion[active.id] ?? 0) : -1}
-                      selectedPath={codePath}
-                      onOpen={(p) => {
-                        // FileTree may send '@mention:'+path for "Send to agent".
-                        // Route to sendToAgent; otherwise treat as a regular file open.
-                        if (p.startsWith(MENTION_PREFIX)) {
-                          const path = p.slice(MENTION_PREFIX.length);
-                          // Format matches DragDrop: '@'+path+' '
-                          sendToAgent("@" + path + " ");
-                        } else {
-                          codePath = p;
-                        }
-                      }} />
-                    {#if isPreviewable(codePath)}
-                      {#key layout.view === "code" ? `${fsVersion[active.id] ?? 0}:${codePath}` : codePath}
-                        <Preview path={codePath ?? ""} kind={previewKind(codePath ?? "")} content={previewContent} />
-                      {/key}
-                    {:else}
-                      <Editor path={codePath} worktree={active.worktreePath}
-                              reloadToken={layout.view === "code" ? (fsVersion[active.id] ?? 0) : 0}
-                              visible={layout.view === "code"}
-                              onSendToAgent={sendToAgent} />
-                    {/if}
-                  </div>
-                {/key}
-                {#if layout.view === "diff"}
-                  {#key fsVersion[active.id] ?? 0}
-                    <DiffView worktree={active.worktreePath} onSendToAgent={sendToAgent}
-                              onDiffChanged={() => { if (active) refreshDiffStat(active); }} />
-                  {/key}
-                {/if}
+                <!-- DiffView stays mounted while a session is active and is hidden on
+                     the agent/code views (display toggle, never {#if}-unmounted), so
+                     switching views preserves its expanded hunks and scroll (F3). An
+                     agent file write refreshes the file list IN PLACE via the refresh
+                     prop rather than remounting the view (F4), so expanded hunks and
+                     scroll survive the refresh. -->
+                <div class="diff-host" style:display={layout.view === "diff" ? "" : "none"}>
+                  <DiffView worktree={active.worktreePath} refresh={fsVersion[active.id] ?? 0}
+                            onSendToAgent={sendToAgent}
+                            onDiffChanged={() => { if (active) refreshDiffStat(active); }} />
+                </div>
               {:else}
                 <div class="empty-state home-view" data-testid="empty-state">
                   <div class="home-welcome">
@@ -1204,14 +1368,13 @@
               {#if layout.split}
                 {@const splitWs = workspaces.find(w => w.id === layout.splitId) ?? null}
                 {#if splitWs}
-                  <!-- Keyed by session id so re-picking the split session remounts the terminal and
-                       re-subscribes its pty; a Terminal subscribes to its paneId only at mount. -->
-                  {#key splitWs.id}
-                    <DragDrop paneId={splitWs.paneId} fileDrop={true}>
-                      <Terminal paneId={splitWs.paneId} cwd={splitWs.worktreePath}
-                                onExit={() => { openIds.delete(splitWs.id); }} />
-                    </DragDrop>
-                  {/key}
+                  <!-- The split session's agent Terminal is mounted ONCE in the primary
+                       keep-alive loop above; this host adopts that already-live node so
+                       toggling split (or re-picking the secondary session) never rebuilds
+                       a blank xterm — the DOM node and its scroll buffer are preserved
+                       (F10a, lib/portal.ts). adoptInto returns the node to its primary
+                       home when this host unmounts, so the toggle-off is loss-free too. -->
+                  <div class="split-secondary-host" data-split-host use:adoptInto={splitZoneEl}></div>
                 {:else}
                   <div class="split-picker" data-testid="split-picker">
                     <p class="split-picker-hint">Pick a session for this pane</p>
@@ -1246,11 +1409,14 @@
         <div data-zone="shell-drawer" class="shell-drawer-zone" data-terminal-zone role="group" aria-label="shell drawer"
              onpointerdown={() => { if (mode.current === "normal") mode.enterTerminal(); }}
              style:height={layout.collapsed["shell"] ? undefined : `${layout.shellH}px`}>
-          <!-- One ShellDrawer per OPEN session, kept mounted (hidden via display)
+          <!-- One ShellDrawer per MOUNTED session, kept mounted (hidden via display)
                so openShell runs once per session and switching never displaces or
                SIGKILLs the previous session's shell pty. display:contents keeps
-               each ShellDrawer a direct child of the zone (its layout is unchanged). -->
-          {#each openWorkspaces as ws (ws.id)}
+               each ShellDrawer a direct child of the zone (its layout is unchanged).
+               Gated on mountedWorkspaces (not openWorkspaces) so an AGENT pty exit
+               does not unmount the independent shell pty — the shell is its own pty
+               and outlives the agent; reopening it would SIGKILL the live shell (F20a). -->
+          {#each mountedWorkspaces as ws (ws.id)}
             <div style:display={ws.id === activeId ? "contents" : "none"}>
               <ShellDrawer paneId="shell-{ws.id}" cwd={ws.worktreePath}
                 collapsed={layout.collapsed["shell"] ?? false}
@@ -1260,6 +1426,9 @@
         </div>
         <div data-zone="status-line" class="status-line">
           <span class="status-mode">{mode.current.toUpperCase()}</span>
+          {#if pendingG}
+            <span class="status-chord" data-testid="pending-chord" aria-hidden="true">g…</span>
+          {/if}
           {#if active}
             <span class="status-sep" aria-hidden="true">·</span>
             <span class="status-session" title={active.title}>{active.title}</span>
@@ -1316,6 +1485,7 @@
           onToggleDnd={() => setDnd(!getDnd())}
           onClearRead={clearRead}
           onSelect={onNotificationSelect}
+          onClose={() => openNotif(false)}
         />
       </div>
     {/if}
@@ -1325,8 +1495,9 @@
       {repos}
       loadBranches={(repo) => branches(repo)}
       onCreate={handleCreate}
-      onClose={() => { newSessionOpen = false; newSessionInitialAgent = null; }}
+      onClose={() => { newSessionOpen = false; newSessionInitialAgent = null; createError = null; }}
       initialAgent={newSessionInitialAgent}
+      error={createError}
     />
 
     <ConfirmDialog
@@ -1383,13 +1554,14 @@
               // and notifications so nothing dangles for a gone workspace.
               const freshIds = new Set(fresh.map(w => w.id));
               for (const id of [...openIds]) {
-                if (!freshIds.has(id)) { openIds.delete(id); dropForWorkspace(id); }
+                if (!freshIds.has(id)) { openIds.delete(id); everOpened.delete(id); dropForWorkspace(id); }
               }
               // Prune per-workspace state for any session cleanup removed (may
               // include sessions that were never open, so iterate the tracked keys).
               const tracked = new Set([
                 ...Object.keys(approvals), ...Object.keys(fsVersion),
-                ...Object.keys(termEpoch), ...Object.keys(wsDiffStats),
+                ...Object.keys(termEpoch), ...Object.keys(codePaths),
+                ...Object.keys(wsDiffStats),
               ]);
               for (const id of tracked) if (!freshIds.has(id)) pruneWorkspaceState(id);
               workspaces = fresh;
@@ -1400,7 +1572,7 @@
       </div>
     {/if}
 
-    <HelpDialog open={helpOpen} onClose={() => { helpOpen = false; }} />
+    <HelpDialog open={helpOpen} section={helpSection} onClose={() => { helpOpen = false; }} />
 
     <SettingsPanel open={settingsOpen} onClose={() => { settingsOpen = false; }} />
 
@@ -1435,6 +1607,7 @@
   .stage-zone       { flex: 1; min-height: 0; display: flex; flex-direction: column;
                       transition: outline-color var(--perch-dur) var(--perch-ease); }
   .code-layout      { display: flex; flex-direction: row; flex: 1; min-height: 0; min-width: 0; }
+  .diff-host        { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
   .terminal-zone    { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
   /* In-pane "session ended" overlay — covers the dead xterm on the agent view
      only (it lives inside the terminal-zone, which is hidden on code/diff).
@@ -1491,6 +1664,9 @@
   .status-mode       { font-size: var(--perch-fs-label); font-weight: 600;
                        letter-spacing: 0.06em; text-transform: uppercase;
                        color: var(--perch-accent); }
+  /* Transient chord indicator (e.g. "g…" while the g-prefix is armed). */
+  .status-chord      { font-family: var(--perch-font-mono); font-size: var(--perch-fs-caption);
+                       color: var(--perch-accent); font-weight: 600; }
   .status-sep        { color: var(--perch-border); }
   .status-session    { color: var(--perch-text); font-weight: 500; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .status-branch     { font-family: var(--perch-font-mono); font-size: var(--perch-fs-caption); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1592,6 +1768,13 @@
   .home-welcome { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; }
   .home-shell-zone { flex: none; height: 220px; border-top: 1px solid var(--perch-border); overflow: hidden; }
 
+  /* Split secondary host: adopts the split session's relocated terminal-zone
+     (see lib/portal.ts). Mirrors the primary pane's flex so the adopted zone
+     fills the secondary pane exactly as it would in the primary. */
+  .split-secondary-host {
+    display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0;
+  }
+
   /* Split pane session picker */
   .split-picker {
     display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -1620,9 +1803,10 @@
   .undo-toast {
     display: flex; align-items: center; gap: var(--perch-sp-2);
     padding: var(--perch-sp-1) var(--perch-sp-2);
-    background: var(--perch-glass-bg);
-    -webkit-backdrop-filter: var(--perch-glass-filter);
-    backdrop-filter: var(--perch-glass-filter);
+    /* Solid, never glass: this toast floats over the composited agent terminal,
+       where WebKitGTK paints backdrop-filter surfaces transparent (the terminal
+       bleeds through). Mirrors the ApprovalCard / NotificationHub fix (F59a). */
+    background: var(--perch-glass-bg-solid);
     border: 1px solid var(--perch-glass-border);
     border-radius: var(--perch-radius-md);
     box-shadow: var(--perch-glass-shadow);
@@ -1656,7 +1840,9 @@
   .modal-overlay { position: fixed; inset: 0; background: var(--perch-scrim); display: flex; align-items: center; justify-content: center; z-index: var(--perch-z-modal); }
 
   /* Resume preview modal */
-  .resume-preview { background: var(--perch-glass-bg); -webkit-backdrop-filter: var(--perch-glass-filter); backdrop-filter: var(--perch-glass-filter); border: 1px solid var(--perch-glass-border); border-radius: var(--perch-radius-lg); padding: var(--perch-sp-3); min-width: 320px; max-width: 480px; color: var(--perch-text); font-family: var(--perch-font-sans); }
+  /* Solid, never glass: the resume-preview can float over the composited agent
+     terminal, where WebKitGTK paints backdrop-filter surfaces transparent (F59a). */
+  .resume-preview { background: var(--perch-glass-bg-solid); border: 1px solid var(--perch-glass-border); border-radius: var(--perch-radius-lg); padding: var(--perch-sp-3); min-width: 320px; max-width: 480px; color: var(--perch-text); font-family: var(--perch-font-sans); }
   .resume-preview-title { margin: 0 0 var(--perch-sp-2) 0; font-size: var(--perch-fs-body); font-weight: 600; }
   .resume-preview-meta { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0 0 var(--perch-sp-2) 0; font-size: var(--perch-fs-caption); }
   .resume-preview-meta dt { color: var(--perch-text-dim); }

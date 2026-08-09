@@ -22,11 +22,16 @@
     // The currently-open file path, so the matching row can render a selected cue
     // that persists across refreshes.
     selectedPath = null,
+    // False when the tree is mounted but off-screen (on the agent/diff views).
+    // Guards the rebuild so no directory listing fires on a hide or on a background
+    // file write while hidden; the effect re-lists when the tree becomes visible.
+    visible = true,
   }: {
     root: string;
     onOpen: (path: string) => void;
     refresh?: number;
     selectedPath?: string | null;
+    visible?: boolean;
   } = $props();
 
   type TreeNode = FsNode & { children?: TreeNode[]; expanded?: boolean };
@@ -101,7 +106,12 @@
   $effect(() => {
     root;      // track: a new session's worktree resets the tree
     refresh;   // track: a file write re-lists in place, keeping folders open
+    visible;   // track: becoming visible again re-lists any deferred refresh
     untrack(() => {
+      // Off-screen: don't list on a hide or on a background write while hidden. The
+      // effect re-runs when `visible` flips back to true and rebuilds then, so a
+      // refresh that arrived while hidden is picked up on show.
+      if (!visible) return;
       if (root !== prevRoot) {
         prevRoot = root;
         expanded.clear();

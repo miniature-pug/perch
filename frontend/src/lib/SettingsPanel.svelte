@@ -15,6 +15,31 @@
     onClose?: () => void;
   } = $props();
 
+  // Human-readable display names for the appearance slugs. The <option> value
+  // stays the raw slug (what the backend stores); only the visible label is
+  // prettified. Any slug without an entry falls back to the slug itself.
+  const THEME_LABELS: Record<string, string> = {
+    "gruvbox": "Gruvbox",
+    "tokyo-night": "Tokyo Night",
+    "catppuccin": "Catppuccin",
+    "dracula": "Dracula",
+    "nord": "Nord",
+    "rose-pine": "Rosé Pine",
+    "one-dark": "One Dark",
+    "perch-cyan": "Perch Cyan",
+    "light": "Light",
+  };
+  const DENSITY_LABELS: Record<string, string> = {
+    "dense": "Dense",
+    "comfortable": "Comfortable",
+    "ultra": "Ultra",
+  };
+  const FONT_LABELS: Record<string, string> = {
+    "geist": "Geist",
+    "ibm-plex": "IBM Plex",
+    "inter": "Inter",
+  };
+
   let settings = $state<AppSettings>({
     theme: DEFAULT_THEME, density: DEFAULT_DENSITY as Density, font: DEFAULT_FONT, dnd: false, glassDisabled: false, alwaysRules: [],
   });
@@ -82,7 +107,7 @@
           <span class="setting-label">Theme</span>
           <select aria-label="Theme" value={settings.theme} onchange={onThemeChange}>
             {#each THEMES as t}
-              <option value={t}>{t}</option>
+              <option value={t}>{THEME_LABELS[t] ?? t}</option>
             {/each}
           </select>
         </label>
@@ -91,7 +116,7 @@
           <span class="setting-label">Density</span>
           <select aria-label="Density" value={settings.density} onchange={onDensityChange}>
             {#each DENSITIES as d}
-              <option value={d}>{d}</option>
+              <option value={d}>{DENSITY_LABELS[d] ?? d}</option>
             {/each}
           </select>
         </label>
@@ -100,7 +125,7 @@
           <span class="setting-label">Font</span>
           <select aria-label="Font" value={settings.font} onchange={onFontChange}>
             {#each FONTS as f}
-              <option value={f}>{f}</option>
+              <option value={f}>{FONT_LABELS[f] ?? f}</option>
             {/each}
           </select>
         </label>

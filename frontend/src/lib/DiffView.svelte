@@ -1,14 +1,18 @@
 <!-- frontend/src/lib/DiffView.svelte -->
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { diffStat, hunks as fetchHunks, stageHunk, discardHunk, type FileDiff, type Hunk } from "./wails";
-  import { MIME_TEXT } from "./constants";
+  import { diffStat, hunks as fetchHunks, stageHunk, discardHunk, unstageHunk, type FileDiff, type Hunk } from "./wails";
+  import { MIME_TEXT, UNDO_REMOVE_DELAY_MS } from "./constants";
   import { addBlocking } from "./stores/notifications.svelte";
 
   // Torn-down guard: a stage/discard promise resolving after the component is
   // destroyed must not write into freed reactive state.
   let mounted = true;
   onDestroy(() => { mounted = false; });
+
+  // Delay before the "Loading…" placeholder appears, so a fast diffStat never
+  // flashes it (F5). Kept local — visual tuning value, not a cross-boundary limit.
+  const DIFF_LOADING_DELAY_MS = 150;
 
   function handleHunkDragStart(e: DragEvent, h: Hunk) {
     if (!e.dataTransfer) return;
@@ -18,10 +22,15 @@
 
   let {
     worktree,
+    refresh = 0,
     onSendToAgent,
     onDiffChanged,
   }: {
     worktree: string;
+    // A monotonic signal (the workspace fs version) bumped by the parent when
+    // files change on disk. It re-fetches the file list IN PLACE — expanded hunks
+    // and scroll survive — instead of the parent remounting the whole view (F4).
+    refresh?: number;
     onSendToAgent?: (text: string) => void;
     onDiffChanged?: () => void;
   } = $props();
@@ -37,20 +46,59 @@
   let files     = $state<FileDiff[]>([]);
   let expanded  = $state<Record<string, Hunk[]>>({});
   let loading   = $state(false);
+  let hasLoaded = $state(false);
   let error     = $state(false);
   let flashFile = $state<string | null>(null);
 
+  // Deferred-discard queue (F1). Discard is the one irreversible working-tree
+  // action (no reflog, no re-apply binding), so instead of reverting immediately
+  // it is HELD: the hunk is optimistically hidden, an Undo toast shows for
+  // UNDO_REMOVE_DELAY_MS, and only when that elapses unopposed does the real
+  // git revert run. Undo cancels it outright — nothing is ever lost. Mirrors the
+  // session-remove undo pattern in App.svelte.
+  type PendingDiscard = {
+    id: string; worktree: string; file: string; index: number;
+    timer: ReturnType<typeof setTimeout>;
+  };
+  let pendingDiscards = $state<PendingDiscard[]>([]);
+  let discardSeq = 0;
+  // Files with a discard in flight: their remaining hunk actions are frozen so a
+  // concurrent stage/unstage/discard on the same file can't shift the pending
+  // hunk's index out from under the deferred revert.
+  const pendingDiscardFiles = $derived(new Set(pendingDiscards.map((p) => p.file)));
+
   // Cancellation guard: if `worktree` changes before an in-flight diffStat resolves,
   // the stale resolve must not clobber the newer worktree's files / loading flag.
+  // The "Loading…" placeholder is armed on a delay (F5) so a fast resolve — the
+  // common case — never flashes it; the previous file list stays visible until
+  // the new one arrives.
   $effect(() => {
     const wt = worktree;
+    refresh; // track: an fs change re-fetches the file list in place (F4)
     let cancelled = false;
-    loading = true;
     error = false;
+    const loadingTimer = setTimeout(() => { if (!cancelled) loading = true; }, DIFF_LOADING_DELAY_MS);
+    const settle = () => { clearTimeout(loadingTimer); if (!cancelled) { loading = false; hasLoaded = true; } };
     diffStat(wt)
-      .then((r) => { if (!cancelled) { files = r; loading = false; } })
-      .catch(() => { if (!cancelled) { loading = false; error = true; } });
-    return () => { cancelled = true; };
+      .then((r) => { if (!cancelled) { files = r; settle(); } })
+      .catch(() => { if (!cancelled) { error = true; settle(); } });
+    return () => { cancelled = true; clearTimeout(loadingTimer); };
+  });
+
+  // Commit any discard still pending when we navigate away from a worktree (or the
+  // component is destroyed): the user asked to discard and did not Undo, so honor
+  // it. Runs in the effect cleanup, which fires on both worktree change and
+  // destroy. Timers are cleared so the commit never double-fires.
+  $effect(() => {
+    const wt = worktree;
+    return () => {
+      for (const p of pendingDiscards) {
+        if (p.worktree !== wt) continue;
+        clearTimeout(p.timer);
+        discardHunk(p.worktree, p.file, p.index).catch(() => {});
+      }
+      if (mounted) pendingDiscards = pendingDiscards.filter((p) => p.worktree !== wt);
+    };
   });
 
   async function toggleFile(f: FileDiff) {
@@ -95,16 +143,63 @@
     }
   }
 
-  async function discard(h: Hunk) {
+  async function unstage(h: Hunk) {
     try {
-      await discardHunk(worktree, h.file, h.index);
+      await unstageHunk(worktree, h.file, h.index);
+      if (mounted) flashFile = h.file;
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      addBlocking(worktree, "Discard failed", `Could not discard hunk in ${h.file}: ${msg}`);
+      addBlocking(worktree, "Unstage failed", `Could not unstage hunk in ${h.file}: ${msg}`);
     } finally {
       await refreshHunks(h.file);
       await refreshFiles();
       if (mounted) onDiffChanged?.();
+    }
+  }
+
+  // F1: schedule a discard instead of running it now. The hunk is hidden right
+  // away (it reads as discarded) and an Undo toast is shown; the working tree is
+  // untouched until the timer fires.
+  function requestDiscard(h: Hunk) {
+    if (pendingDiscardFiles.has(h.file)) return; // one deferred discard per file
+    // Optimistically hide the hunk. No re-fetch, so every other hunk keeps the
+    // index the deferred revert was captured against.
+    const current = expanded[h.file];
+    if (current) {
+      expanded = { ...expanded, [h.file]: current.filter((x) => x.index !== h.index) };
+    }
+    const id = `${h.file}#${h.index}#${discardSeq++}`;
+    const wt = worktree;
+    const file = h.file;
+    const index = h.index;
+    const timer = setTimeout(() => { void commitDiscard(id); }, UNDO_REMOVE_DELAY_MS);
+    pendingDiscards = [...pendingDiscards, { id, worktree: wt, file, index, timer }];
+  }
+
+  function undoDiscard(id: string) {
+    const p = pendingDiscards.find((x) => x.id === id);
+    if (!p) return;
+    clearTimeout(p.timer);
+    pendingDiscards = pendingDiscards.filter((x) => x.id !== id);
+    // Nothing was reverted in git — re-derive the file's hunks to bring the row back.
+    if (p.worktree === worktree) void refreshHunks(p.file);
+  }
+
+  async function commitDiscard(id: string) {
+    const p = pendingDiscards.find((x) => x.id === id);
+    if (!p) return;
+    pendingDiscards = pendingDiscards.filter((x) => x.id !== id);
+    try {
+      await discardHunk(p.worktree, p.file, p.index);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      addBlocking(p.worktree, "Discard failed", `Could not discard hunk in ${p.file}: ${msg}`);
+    } finally {
+      if (p.worktree === worktree) {
+        await refreshHunks(p.file);
+        await refreshFiles();
+        if (mounted) onDiffChanged?.();
+      }
     }
   }
 
@@ -118,10 +213,13 @@
 </script>
 
 <section aria-label="diff view" class="diff-view">
-  {#if loading}
+  {#if loading && !hasLoaded}
     <p class="diff-empty">Loading…</p>
   {:else if error}
     <p class="diff-empty">Could not load diff</p>
+  {:else if !hasLoaded}
+    <!-- Initial fetch in flight and still under the loading-delay threshold:
+         render nothing so neither "Loading…" nor "No changes" flashes (F5). -->
   {:else if files.length === 0}
     <p class="diff-empty">No changes</p>
   {:else}
@@ -167,8 +265,12 @@
                         onclick={() => sendHunk(h)}
                       >↗ send</button>
                     {/if}
-                    <button class="btn" onclick={() => stage(h)} disabled={h.staged} title={h.staged ? "Already staged" : undefined}>Stage</button>
-                    <button class="btn btn-danger" onclick={() => discard(h)} disabled={h.staged} title={h.staged ? "Already staged" : undefined}>Discard</button>
+                    {#if h.staged}
+                      <button class="btn" onclick={() => unstage(h)} disabled={pendingDiscardFiles.has(h.file)}>Unstage</button>
+                    {:else}
+                      <button class="btn" onclick={() => stage(h)} disabled={pendingDiscardFiles.has(h.file)}>Stage</button>
+                      <button class="btn btn-danger btn-discard" onclick={() => requestDiscard(h)} disabled={pendingDiscardFiles.has(h.file)}>Discard</button>
+                    {/if}
                   </div>
                 </div>
                 <pre class="hunk-body">{#each h.lines as l}<span class="line line-{l.kind}">{l.text}{"\n"}</span>{/each}</pre>
@@ -180,6 +282,17 @@
     </div>
   {/if}
 </section>
+
+{#if pendingDiscards.length > 0}
+  <div class="undo-toast-stack" aria-live="polite">
+    {#each pendingDiscards as pending (pending.id)}
+      <div class="undo-toast" role="status" data-testid="discard-undo-toast">
+        <span class="undo-toast-msg">Change discarded</span>
+        <button class="undo-toast-btn" onclick={() => undoDiscard(pending.id)}>Undo</button>
+      </div>
+    {/each}
+  </div>
+{/if}
 
 <style>
   /* ---------- Layout ---------- */
@@ -375,6 +488,8 @@
   }
   .btn:hover { border-color: var(--perch-accent); color: var(--perch-accent); }
   .btn:focus-visible { outline: var(--perch-ring-w) solid var(--perch-accent); outline-offset: 2px; }
+  .btn:disabled { opacity: 0.45; cursor: default; }
+  .btn:disabled:hover { border-color: var(--perch-border-strong); color: var(--perch-text); background: var(--perch-bg); }
 
   .btn-danger {
     color: var(--perch-err);
@@ -382,6 +497,24 @@
   }
   .btn-danger:hover { background: color-mix(in srgb, var(--perch-err) 12%, var(--perch-bg)); }
   .btn-danger:focus-visible { outline-color: var(--perch-err); }
+  .btn-danger:disabled:hover { border-color: var(--perch-err); color: var(--perch-err); background: var(--perch-bg); }
+
+  /* F6: keep the irreversible Discard out of fat-finger range of the safe Stage.
+     A clear gap plus a divider so the two are not coplanar tap targets. */
+  .btn-discard {
+    margin-left: var(--perch-sp-2);
+    position: relative;
+  }
+  .btn-discard::before {
+    content: "";
+    position: absolute;
+    left: calc(var(--perch-sp-1) * -1);
+    top: 50%;
+    transform: translateY(-50%);
+    width: 1px;
+    height: 60%;
+    background: var(--perch-border);
+  }
 
   .btn-send {
     color: var(--perch-accent);
@@ -398,4 +531,54 @@
   @media (prefers-reduced-motion: reduce) {
     .file-row.flash { animation: none; }
   }
+
+  /* ---------- Discard undo toast (F1) ---------- */
+  /* Solid background (not translucent glass) so it never bleeds through onto the
+     content behind it — the same lesson as the WebKit glass fix elsewhere. */
+  .undo-toast-stack {
+    position: fixed;
+    bottom: var(--perch-sp-3);
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: var(--perch-z-undo-toast);
+    display: flex;
+    flex-direction: column;
+    gap: var(--perch-sp-1);
+  }
+  .undo-toast {
+    display: flex;
+    align-items: center;
+    gap: var(--perch-sp-2);
+    padding: var(--perch-sp-1) var(--perch-sp-2);
+    background: var(--perch-glass-bg-solid);
+    border: 1px solid var(--perch-glass-border);
+    border-radius: var(--perch-radius-md);
+    box-shadow: var(--perch-shadow-toast);
+    font-family: var(--perch-font-sans);
+    font-size: var(--perch-fs-body);
+    color: var(--perch-text);
+    min-width: 220px;
+    animation: discard-toast-in var(--perch-dur) var(--perch-ease);
+  }
+  @keyframes discard-toast-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .undo-toast { animation: none; }
+  }
+  .undo-toast-msg { flex: 1; }
+  .undo-toast-btn {
+    padding: 3px 10px;
+    background: var(--perch-accent);
+    color: var(--perch-accent-fg);
+    border: none;
+    border-radius: var(--perch-radius-sm);
+    font-family: var(--perch-font-sans);
+    font-size: var(--perch-fs-body);
+    cursor: pointer;
+    transition: filter var(--perch-dur) var(--perch-ease);
+  }
+  .undo-toast-btn:hover { filter: brightness(1.1); }
+  .undo-toast-btn:focus-visible { outline: var(--perch-ring-w) solid var(--perch-accent); outline-offset: 2px; }
 </style>

@@ -1,10 +1,10 @@
 <!-- frontend/src/lib/NotificationHub.svelte -->
 <script lang="ts">
-  import type { Notification, Tier } from "./stores/notifications.svelte";
+  import type { Notification } from "./stores/notifications.svelte";
   import { worktreeColor } from "./constants";
 
   let {
-    items, dnd, onDismiss, onToggleDnd, onClearRead, onSelect,
+    items, dnd, onDismiss, onToggleDnd, onClearRead, onSelect, onClose,
   }: {
     items: Notification[];
     dnd: boolean;
@@ -12,20 +12,48 @@
     onToggleDnd: () => void;
     onClearRead: () => void;
     onSelect?: (workspaceId: string) => void;
+    onClose?: () => void;
   } = $props();
 
   type Filter = "all" | "approvals" | "errors" | "done";
   let filter = $state<Filter>("all");
 
+  let hubEl = $state<HTMLElement>();
+
+  // Filter on the explicit kind tagged at creation, not tier/title heuristics —
+  // an error ("Stage failed") and an approval are both tier "blocking", so only
+  // the kind separates them.
   let visible = $derived(
     filter === "all"       ? items :
-    filter === "approvals" ? items.filter((n) => n.tier === "blocking") :
-    filter === "errors"    ? items.filter((n) => /error|fail/i.test(n.title)) :
-                             items.filter((n) => n.tier === "ambient")
+    filter === "approvals" ? items.filter((n) => n.kind === "approval") :
+    filter === "errors"    ? items.filter((n) => n.kind === "error") :
+                             items.filter((n) => n.kind === "done")
   );
+
+  // Filter-aware empty state: name what is absent under the active filter rather
+  // than always claiming "No notifications".
+  let emptyText = $derived(
+    filter === "approvals" ? "No approvals" :
+    filter === "errors"    ? "No errors" :
+    filter === "done"      ? "No completed notifications" :
+                             "No notifications"
+  );
+
+  // Self-close (F40): the hub is a docked panel App renders conditionally, so it
+  // owns its own dismissal — Escape or a click outside the panel asks the parent
+  // to close via onClose. This does not depend on App's global modal Escape
+  // handling (the dock is intentionally excluded from modalOpen).
+  function onWindowKey(e: KeyboardEvent) {
+    if (e.key === "Escape") { e.stopPropagation(); onClose?.(); }
+  }
+  function onWindowClick(e: MouseEvent) {
+    if (hubEl && !hubEl.contains(e.target as Node)) onClose?.();
+  }
 </script>
 
-<section aria-label="notification hub" class="notif-hub">
+<svelte:window onkeydown={onWindowKey} onclick={onWindowClick} />
+
+<section bind:this={hubEl} aria-label="notification hub" class="notif-hub">
   <div class="hub-toolbar">
     <button onclick={() => (filter = "all")}       aria-pressed={filter === "all"}>All</button>
     <button onclick={() => (filter = "approvals")} aria-pressed={filter === "approvals"}>Approvals</button>
@@ -53,7 +81,7 @@
         <button class="dismiss-btn" onclick={(e) => { e.stopPropagation(); onDismiss(n.id); }} aria-label="dismiss notification">✕</button>
       </li>
     {/each}
-    {#if visible.length === 0}<li class="notif-empty">No notifications</li>{/if}
+    {#if visible.length === 0}<li class="notif-empty">{emptyText}</li>{/if}
   </ul>
 </section>
 

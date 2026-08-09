@@ -39,9 +39,13 @@ vi.mock("./wails", () => ({
   resizePty:  vi.fn(async () => {}),
 }));
 
+const realRAF = globalThis.requestAnimationFrame;
+
 afterEach(() => {
   cleanup(); writeSpy.mockClear(); disposeSpy.mockClear(); focusSpy.mockClear();
   ptyCbs.length = 0; onDataCbs.length = 0; exitCbs.length = 0;
+  globalThis.requestAnimationFrame = realRAF;
+  vi.useRealTimers();
 });
 
 describe("Terminal.svelte", () => {
@@ -102,6 +106,46 @@ describe("Terminal.svelte", () => {
     unmount();
     expect(offSpy).toHaveBeenCalled();
   });
+  it("collapses a resize storm into a single pty resize (rAF fit + trailing-edge dedup)", async () => {
+    // Capture the ResizeObserver callback so we can fire ticks like a drag would.
+    let roCb: () => void = () => {};
+    (globalThis as any).ResizeObserver = class {
+      constructor(fn: () => void) { roCb = fn; }
+      observe()    {}
+      unobserve()  {}
+      disconnect() {}
+    };
+    // Queue rAF callbacks instead of running them synchronously, so the per-frame
+    // fit() coalescing is exercised the same way a real animation frame would.
+    const rafQueue: FrameRequestCallback[] = [];
+    globalThis.requestAnimationFrame = ((fn: FrameRequestCallback) => rafQueue.push(fn)) as any;
+    const flushRaf = () => { rafQueue.splice(0).forEach((fn) => fn(0)); };
+
+    vi.useFakeTimers();
+
+    const { default: Terminal } = await import("./Terminal.svelte");
+    const w = await import("./wails");
+    render(Terminal, { props: { paneId: "paneR", cwd: "/repo" } });
+    vi.mocked(w.resizePty).mockClear();
+
+    // 10 frames, 2 ticks each — 20 observations, all reporting the mock's 80x24.
+    for (let frame = 0; frame < 10; frame++) {
+      roCb(); roCb();
+      flushRaf();
+    }
+    // Nothing sent yet: the trailing edge has not elapsed.
+    expect(w.resizePty).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(200);
+    expect(w.resizePty).toHaveBeenCalledTimes(1);
+    expect(w.resizePty).toHaveBeenCalledWith("paneR", 80, 24);
+
+    // Further ticks at the same size must not re-send (dedup on unchanged grid).
+    for (let i = 0; i < 5; i++) { roCb(); flushRaf(); }
+    vi.advanceTimersByTime(200);
+    expect(w.resizePty).toHaveBeenCalledTimes(1);
+  });
+
   it("exported focus() forwards to the underlying xterm (awaiting-input auto-focus mechanism)", async () => {
     const { default: Terminal } = await import("./Terminal.svelte");
     const { component } = render(Terminal, { props: { paneId: "pane9", cwd: "/repo" } });

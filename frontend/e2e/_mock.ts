@@ -249,6 +249,10 @@ export function buildInitScriptContent(opts: MockOptions = {}): string {
           record('DiscardHunk', [worktree, file, index]);
           return Promise.resolve();
         },
+        UnstageHunk: function(worktree, file, index) {
+          record('UnstageHunk', [worktree, file, index]);
+          return Promise.resolve();
+        },
         ListDir: function(absDir) {
           record('ListDir', [absDir]);
           return Promise.resolve([]);

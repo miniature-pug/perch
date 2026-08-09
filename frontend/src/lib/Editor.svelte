@@ -2,7 +2,7 @@
 <script lang="ts">
   import { onMount, onDestroy, untrack } from "svelte";
   import { EditorView, keymap, gutter, GutterMarker } from "@codemirror/view";
-  import { EditorState, StateField, StateEffect } from "@codemirror/state";
+  import { EditorState, StateField, StateEffect, EditorSelection } from "@codemirror/state";
   import { defaultKeymap, indentWithTab } from "@codemirror/commands";
   import { bracketMatching } from "@codemirror/language";
   import { perchSyntaxHighlighting } from "./highlight";
@@ -154,14 +154,20 @@
     }
   }
 
-  async function load(p: string) {
-    const [content, hunkList] = await Promise.all([
-      readFile(p),
-      fetchHunks(worktree, p).catch(() => [] as Hunk[]),
-    ]);
-    const gutterState = gutterChangesFromHunks(hunkList);
+  // Generation counter: each load() claims a generation. If a newer load starts (a
+  // file switch or a reloadToken bump) before this one's async reads resolve, this
+  // call's generation no longer matches and its stale result is dropped — so a slow
+  // readFile(A) that resolves after readFile(B) can never show A's content over B's.
+  let loadGen = 0;
+  // The path whose content is currently applied to the view. Lets load() tell a
+  // same-file reload (preserve caret + scroll) apart from a real file switch (fresh
+  // state, caret reset to the top).
+  let renderedPath: string | null = null;
 
-    const state = EditorState.create({
+  // Build a fresh EditorState for a file. Used on first mount and on a file switch,
+  // where resetting selection and scroll to the top is the intended behavior.
+  function buildState(p: string, content: string): EditorState {
+    return EditorState.create({
       doc: content,
       extensions: [
         changedLinesField,
@@ -240,17 +246,53 @@
         }),
       ],
     });
-    if (view) {
-      view.setState(state);
-    } else if (container) {
-      view = new EditorView({ state, parent: container });
+  }
+
+  async function load(p: string, cancelled: () => boolean = () => false) {
+    const gen = ++loadGen;
+    const [content, hunkList] = await Promise.all([
+      readFile(p),
+      fetchHunks(worktree, p).catch(() => [] as Hunk[]),
+    ]);
+    // Drop a superseded result: a newer load claimed a later generation, or the
+    // component is tearing down (cancelled). Guards against a stale file flashing in
+    // and against dispatching into a view that is about to be destroyed.
+    if (cancelled() || gen !== loadGen) return;
+    const gutterState = gutterChangesFromHunks(hunkList);
+
+    const sameFile = view !== null && renderedPath === p;
+    if (!view) {
+      if (!container) return;
+      view = new EditorView({ state: buildState(p, content), parent: container });
+    } else if (!sameFile) {
+      // File switch: a fresh state (caret/scroll intentionally reset to the top).
+      view.setState(buildState(p, content));
+    } else {
+      // Same-file reload (an on-disk change bumped reloadToken while clean). Keep the
+      // caret/selection and scroll: replace the document only when the text actually
+      // changed, clamping the old selection into the new length. A bare setState here
+      // would reset the cursor to 0 and jump scroll to the top on every reload.
+      const current = view.state.doc.toString();
+      if (current !== content) {
+        const max = content.length;
+        const sel = view.state.selection;
+        const ranges = sel.ranges.map((r) =>
+          EditorSelection.range(Math.min(r.anchor, max), Math.min(r.head, max)),
+        );
+        view.dispatch({
+          changes: { from: 0, to: view.state.doc.length, insert: content },
+          selection: EditorSelection.create(ranges, sel.mainIndex),
+          scrollIntoView: false,
+        });
+      }
     }
-    // setState/new EditorView fires docChanged via the update listener;
-    // overwrite immediately so the freshly-loaded file starts clean.
+    renderedPath = p;
+    // Refresh the git gutter to match the freshly-loaded hunks (also clears stale
+    // markers on a same-file reload where the changes were just staged away).
+    view.dispatch({ effects: setChangedLines.of(gutterState) });
+    // setState / the doc-replacing dispatch fires docChanged via the update listener;
+    // clear dirty so the freshly-loaded buffer starts clean.
     dirty = false;
-    if (gutterState.changed.size > 0 || gutterState.deleted.size > 0) {
-      view?.dispatch({ effects: setChangedLines.of(gutterState) });
-    }
   }
 
   async function save() {
@@ -295,18 +337,29 @@
   $effect(() => {
     const p = path;
     reloadToken;
+    // Cancellation flag for this run: the cleanup below flips it when the effect
+    // re-runs (path/reloadToken changed) or the component is destroyed, so an
+    // in-flight load resolving afterward drops its stale result (see load()).
+    let cancelled = false;
     untrack(() => {
       if (!p) { loadedPath = null; return; }
       if (p !== loadedPath || !dirty) {
         loadedPath = p;
-        load(p);
+        load(p, () => cancelled);
       }
     });
+    return () => { cancelled = true; };
   });
 
   onMount(() => document.addEventListener("keydown", handleKeyDown));
   onDestroy(() => {
     document.removeEventListener("keydown", handleKeyDown);
+    // A dirty buffer here means unsaved edits, and destroying the view discards the
+    // document. Persist first (mirroring save()'s care) rather than silently dropping
+    // the user's work on a session switch. save() captures the document synchronously
+    // before the write and raises a blocking notification if the write fails, so a
+    // failed save is surfaced — never swallowed.
+    if (dirty) save();
     view?.destroy();
     view = null;
   });

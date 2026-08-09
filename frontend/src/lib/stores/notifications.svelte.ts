@@ -1,32 +1,47 @@
 // frontend/src/lib/stores/notifications.svelte.ts
-import { AMBIENT_DISMISS_MS, ROUTINE_DISMISS_MS } from "../constants";
 export type Tier = "blocking" | "ambient" | "routine";
+
+// The semantic category a notification represents, tagged at CREATION so the
+// hub filters on intent rather than re-deriving it from tier/title heuristics.
+// Errors and approvals are both tier "blocking", so tier alone cannot tell an
+// "Approval needed" apart from a "Stage failed"; the explicit kind can. Callers
+// may pass an explicit kind; when omitted we derive a safe default from the
+// tier and title.
+export type Kind = "approval" | "error" | "done" | "info";
+
 export interface Notification {
-  id: string; workspaceId: string; tier: Tier;
+  id: string; workspaceId: string; tier: Tier; kind: Kind;
   title: string; body: string; read: boolean; ts: number;
 }
 
 // Hard cap on retained notifications. The hub is prepended to on every agent
 // event, so without a ceiling a long-running cockpit session grows the array
 // (and the docked list it feeds) without bound. When we exceed the cap we drop
-// the OLDEST entries (the array is newest-first), always clearing each dropped
-// id's pending auto-dismiss timer so trimming can never leak a timer.
+// the OLDEST entries (the array is newest-first), while never dropping an
+// unresolved (unread) blocking notification just because it aged past the cap.
 export const MAX_NOTIFICATIONS = 500;
 
 let items = $state<Notification[]>([]);
 let dnd   = $state(false);
 let _seq  = 0;
 
-// Auto-dismiss timeouts keyed by notification id.
-// Ambient notifications dismiss after 6 s; routine after 3 s.
-// Blocking notifications NEVER auto-dismiss.
-const _timers = new Map<string, ReturnType<typeof setTimeout>>();
-
 export function getItems(): Notification[] { return items; }
 export function getDnd():   boolean         { return dnd; }
 export function setDnd(v: boolean)          { dnd = v; }
 
-function add(tier: Tier, workspaceId: string, title: string, body: string) {
+// Derive a safe default kind when a caller does not tag one explicitly. Errors
+// reach the hub through addBlocking/addAmbient with a "failed"/"error" title,
+// so they must classify as "error" and never fall under the Approvals filter;
+// an untitled blocking notice is an approval, ambient is a completed turn, and
+// routine is background info.
+function defaultKind(tier: Tier, title: string): Kind {
+  if (/error|fail/i.test(title)) return "error";
+  if (tier === "blocking") return "approval";
+  if (tier === "ambient")  return "done";
+  return "info";
+}
+
+function add(tier: Tier, workspaceId: string, title: string, body: string, kind?: Kind) {
   const id = `notif-${++_seq}`;
   // DND silences tiers 2-3: it does NOT drop them. They are still logged to the
   // hub so the away catch-up stays complete, but recorded as already-read so they
@@ -34,28 +49,20 @@ function add(tier: Tier, workspaceId: string, title: string, body: string) {
   // notifications fire for blocking only). Blocking (tier 1) is never silenced.
   // DND mutes tiers 2-3: mute = silence the interruption, keep the record.
   const silenced = dnd && tier !== "blocking";
-  items = [{ id, workspaceId, tier, title, body, read: silenced, ts: Date.now() }, ...items];
+  items = [{ id, workspaceId, tier, kind: kind ?? defaultKind(tier, title), title, body, read: silenced, ts: Date.now() }, ...items];
   trimToCap();
 
-  // Auto-dismiss for non-blocking tiers that were actually surfaced.
-  // Silenced items are already read, so no timer is needed.
-  if (tier !== "blocking" && !silenced) {
-    const delay = tier === "ambient" ? AMBIENT_DISMISS_MS : ROUTINE_DISMISS_MS;
-    const t = setTimeout(() => {
-      _timers.delete(id);
-      markRead(id);
-    }, delay);
-    _timers.set(id, t);
-  }
+  // No auto-dismiss timer: the hub is a docked panel, not a transient toast, so
+  // an unseen ambient/routine event must stay UNREAD until the user actually
+  // opens the hub (markAllRead fires on open). Timing out to read while the hub
+  // is closed would silently tick the unread badge down for events nobody saw.
 }
 
 // Enforce the MAX_NOTIFICATIONS ceiling after a prepend. The array is
 // newest-first, so a straight cap keeps the first N (newest) and drops the
-// tail (oldest). We keep it minimal but avoid silently discarding an
-// unresolved (unread) blocking notification just because it aged past the cap:
-// those are partitioned to the front so they survive; everything else obeys
-// the newest-N rule. For every entry we drop we clear its pending
-// auto-dismiss timer (mirrors markRead / dropForWorkspace) so no timer leaks.
+// tail (oldest). We avoid silently discarding an unresolved (unread) blocking
+// notification just because it aged past the cap: those are partitioned to the
+// front so they survive; everything else obeys the newest-N rule.
 function trimToCap() {
   if (items.length <= MAX_NOTIFICATIONS) return;
 
@@ -70,52 +77,28 @@ function trimToCap() {
   const keepRest = rest.slice(0, budget);
   const keep = new Set([...keepBlocking, ...keepRest].map((n) => n.id));
 
-  // Clear timers for everything being dropped so trimming cannot leak a timer.
-  for (const n of items) {
-    if (!keep.has(n.id)) {
-      const t = _timers.get(n.id);
-      if (t !== undefined) { clearTimeout(t); _timers.delete(n.id); }
-    }
-  }
-
   // Rebuild preserving newest-first order (filter keeps original order).
   items = items.filter((n) => keep.has(n.id));
 }
 
-export function addBlocking(w: string, t: string, b: string) { add("blocking", w, t, b); }
-export function addAmbient (w: string, t: string, b: string) { add("ambient",  w, t, b); }
-export function addRoutine (w: string, t: string, b: string) { add("routine",  w, t, b); }
+export function addBlocking(w: string, t: string, b: string, kind?: Kind) { add("blocking", w, t, b, kind); }
+export function addAmbient (w: string, t: string, b: string, kind?: Kind) { add("ambient",  w, t, b, kind); }
+export function addRoutine (w: string, t: string, b: string, kind?: Kind) { add("routine",  w, t, b, kind); }
 
 export function markRead(id: string) {
-  // Cancel any pending auto-dismiss timer before manual dismiss
-  const t = _timers.get(id);
-  if (t !== undefined) { clearTimeout(t); _timers.delete(id); }
   items = items.map((n) => n.id === id ? { ...n, read: true } : n);
 }
 
-// Mark every item read and cancel all pending auto-dismiss timers.
-// Called when the hub is OPENED — seeing the hub is the catch-up, so the
-// unread badge clears. Items stay in the list (read), they are not dropped.
+// Mark every item read. Called when the hub is OPENED — seeing the hub is the
+// catch-up, so the unread badge clears. Items stay in the list (read), they are
+// not dropped.
 export function markAllRead() {
-  for (const t of _timers.values()) clearTimeout(t);
-  _timers.clear();
   items = items.map((n) => n.read ? n : { ...n, read: true });
 }
 
-// Drop every notification belonging to a removed workspace, cancelling any
-// pending auto-dismiss timer for the dropped items so they never fire late.
+// Drop every notification belonging to a removed workspace.
 export function dropForWorkspace(wsId: string) {
-  for (const n of items) {
-    if (n.workspaceId === wsId) {
-      const t = _timers.get(n.id);
-      if (t !== undefined) { clearTimeout(t); _timers.delete(n.id); }
-    }
-  }
   items = items.filter((n) => n.workspaceId !== wsId);
 }
 
 export function clearRead() { items = items.filter((n) => !n.read); }
-
-// Test-only: snapshot of the pending auto-dismiss timer ids. Used to assert
-// that trimming/dropping never leaks a timer for a notification no longer held.
-export function _pendingTimerIds(): string[] { return [..._timers.keys()]; }

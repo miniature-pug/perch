@@ -90,3 +90,28 @@ test("Open button calls onOpen with the session id", async () => {
   await fireEvent.click(openBtn);
   expect(onOpen).toHaveBeenCalledWith("ws-open");
 });
+
+// ---------------------------------------------------------------------------
+// F49a: last-active uses the shared formatRelativeAge helper (was a divergent
+// local formatRelative that rendered "yesterday" and lacked the empty guard).
+// ---------------------------------------------------------------------------
+
+test("F49a: last-active renders the shared helper output ('1d ago', not 'yesterday')", async () => {
+  const { default: CleanupPanel } = await import("./CleanupPanel.svelte");
+  const { formatRelativeAge } = await import("./constants");
+  const iso = new Date(Date.now() - 1 * 86400000).toISOString();
+  const sessions = [makeSession({ id: "ws-1d", lastActive: iso })];
+  render(CleanupPanel, { props: { sessions, onClose: () => {} } });
+  const ageCell = document.querySelector(".cleanup-age")!;
+  expect(ageCell.textContent).toBe(formatRelativeAge(iso));
+  expect(ageCell.textContent).toBe("1d ago");
+  expect(ageCell.textContent).not.toContain("yesterday");
+});
+
+test("F49a: last-active guards empty/invalid dates (renders empty, not 'NaN')", async () => {
+  const { default: CleanupPanel } = await import("./CleanupPanel.svelte");
+  const sessions = [makeSession({ id: "ws-empty", lastActive: "" })];
+  render(CleanupPanel, { props: { sessions, onClose: () => {} } });
+  const ageCell = document.querySelector(".cleanup-age")!;
+  expect(ageCell.textContent).toBe("");
+});
