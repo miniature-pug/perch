@@ -19,6 +19,7 @@ import (
 
 	"github.com/miniature-pug/perch/internal/agent"
 	"github.com/miniature-pug/perch/internal/discover"
+	"github.com/miniature-pug/perch/internal/envsync"
 	fspkg "github.com/miniature-pug/perch/internal/fs"
 	gitpkg "github.com/miniature-pug/perch/internal/git"
 	modelpkg "github.com/miniature-pug/perch/internal/model"
@@ -161,6 +162,22 @@ type App struct {
 	// Updated by SetWindowFocus (bound method called by the frontend on window
 	// focus/blur events).
 	focused bool
+
+	// baselineEnv is the app's os.Environ() captured at construction — the
+	// reference the env-sync endpoint computes each delta against. Immutable.
+	baselineEnv []string
+
+	// envOverlay holds, per workspace id, the KEY=VALUE environment delta a
+	// `perch reload` captured from the session terminal. It is applied on top of
+	// os.Environ() at every agent-pane and drawer spawn (see mergeEnv). It lives
+	// in memory ONLY and is NEVER persisted to disk — the payload may hold
+	// secrets. Guarded by mu.
+	envOverlay map[string][]string
+
+	// envsync is the app-owned loopback endpoint that receives a session
+	// terminal's environment and drives the relaunch. Stood up in startup; nil in
+	// tests that never call startup (drawers then inject no env-sync handles).
+	envsync *envsync.Listener
 }
 
 // NewApp builds the production App.
@@ -182,6 +199,8 @@ func NewApp(store *registry.Store, roots []string) *App {
 		settingsPath: filepath.Join(registry.DefaultConfigDir(), perchSettingsFile),
 		layoutPath:   filepath.Join(registry.DefaultConfigDir(), perchLayoutFile),
 		focused:      true, // default: assume focused until the frontend reports otherwise
+		baselineEnv:  os.Environ(),
+		envOverlay:   map[string][]string{},
 	}
 }
 
@@ -204,6 +223,22 @@ func (a *App) startup(ctx context.Context) {
 	// startup is called are not overwritten (tests never call startup directly).
 	if a.notifier == nil {
 		a.notifier = notify.New()
+	}
+	// Capture the baseline environment (the delta reference) if a construction path
+	// left it unset. NewApp already captures it; this guards raw &App{} paths.
+	if a.baselineEnv == nil {
+		a.baselineEnv = os.Environ()
+	}
+	// Stand up the env-sync endpoint. Best-effort: a loopback bind failure only
+	// disables `perch reload` (the drawer then injects no PERCH_ENVSYNC_* handles
+	// and the command prints a friendly "not in a perch session" error), so it
+	// must never crash startup. No secret is involved in a bind failure.
+	if a.envsync == nil {
+		if ls, err := envsync.New(a.baselineEnv, a.onEnvSync); err == nil {
+			a.envsync = ls
+		} else {
+			fmt.Fprintf(os.Stderr, "perch: env-sync endpoint unavailable; `perch reload` disabled: %v\n", err)
+		}
 	}
 }
 
@@ -266,6 +301,11 @@ func (a *App) shutdown(_ context.Context) {
 	}
 	for _, b := range bridges {
 		_ = b.Close()
+	}
+	// Tear down the env-sync endpoint so its loopback listener does not outlive
+	// the app. Guarded: tests that never call startup leave it nil.
+	if a.envsync != nil {
+		_ = a.envsync.Close()
 	}
 }
 
@@ -678,9 +718,11 @@ func (a *App) OpenWorkspace(id string) error {
 		return fmt.Errorf("monitor prepare: %w", err)
 	}
 
-	// Merge the monitor's pane env onto the inherited environment (append, never
-	// clobber): the exit sentinel references these by name.
-	paneEnv := append(os.Environ(), mon.PaneEnv()...)
+	// Compose the pane env: os.Environ() underlays the monitor's pane env (the
+	// exit sentinel's PERCH_EXIT_* handles, referenced by name) which underlays any
+	// env-sync overlay captured for this workspace, so a `perch reload` reaches the
+	// relaunched agent. mergeEnv dedups and protects the sentinel from the overlay.
+	paneEnv := mergeEnv(os.Environ(), mon.PaneEnv(), a.overlayFor(id))
 
 	br, err := a.spawnPty(wctx, w.WorktreePath, internalpty.LoginShellArgv(), paneEnv, event, exitEvent, a.emit, defaultPtyCols, defaultPtyRows)
 	if err != nil {
@@ -1326,9 +1368,23 @@ func (a *App) OpenShell(paneID, cwd string) error {
 	event := ptyDataEventPrefix + paneID
 	exitEvent := ptyExitEventPrefix + paneID
 	ctx := context.Background()
-	// The shell drawer is a plain login shell with no agent and no exit sentinel, so
-	// it needs no injected pane env: nil inherits the process environment unchanged.
-	br, err := a.spawnPty(ctx, cwd, internalpty.LoginShellArgv(), nil, event, exitEvent, a.emit, defaultPtyCols, defaultPtyRows)
+	// The home drawer (shell-home) has no workspace: it is a plain login shell that
+	// inherits the process environment unchanged (nil env), with no env-sync handles
+	// and no overlay. A per-workspace drawer (shell-<id>) instead receives the
+	// env-sync handles so `perch reload` run inside it can post its environment, plus
+	// any overlay already captured for the workspace (so a reopen carries it too).
+	var env []string
+	if paneID != homeShellPaneID {
+		workspaceID := strings.TrimPrefix(paneID, "shell-")
+		var injected []string
+		if a.envsync != nil {
+			if tok, terr := a.envsync.TokenFor(workspaceID); terr == nil {
+				injected = envsyncPaneEnv(a.envsync.URL(), tok, workspaceID)
+			}
+		}
+		env = mergeEnv(os.Environ(), injected, a.overlayFor(workspaceID))
+	}
+	br, err := a.spawnPty(ctx, cwd, internalpty.LoginShellArgv(), env, event, exitEvent, a.emit, defaultPtyCols, defaultPtyRows)
 	if err != nil {
 		return fmt.Errorf("OpenShell spawn: %w", err)
 	}

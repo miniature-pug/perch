@@ -1,13 +1,18 @@
 package main
 
 import (
+	"encoding/json"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/miniature-pug/perch/internal/discover"
+	"github.com/miniature-pug/perch/internal/envsync"
 	"github.com/miniature-pug/perch/internal/model"
 )
 
@@ -262,6 +267,107 @@ func TestPrintUsage_ShowsAttach(t *testing.T) {
 		if strings.Contains(errOut, hidden) {
 			t.Errorf("printUsage must not mention %q; stderr: %q", hidden, errOut)
 		}
+	}
+}
+
+// ── reload command ────────────────────────────────────────────────────────────
+
+// TestRun_Reload_IsARealCommand mirrors the not-a-command tests (setup/status/
+// resurrect): `reload` must dispatch to its own handler, NOT fall through to the
+// path-arg handler. Outside a perch session (PERCH_ENVSYNC_* absent) it prints a
+// friendly error and exits non-zero — but never prints Usage (which would prove a
+// fall-through) and never exits 2.
+func TestRun_Reload_IsARealCommand(t *testing.T) {
+	t.Setenv("PERCH_ENVSYNC_URL", "")
+	t.Setenv("PERCH_ENVSYNC_TOKEN", "")
+	t.Setenv("PERCH_ENVSYNC_WS", "")
+
+	_, errOut, code := callRun([]string{"reload"})
+	if code == 0 {
+		t.Errorf("reload outside a session: want non-zero exit, got 0")
+	}
+	if code == 2 {
+		t.Errorf("reload must not fall through to path handling (exit 2); got a real dispatch")
+	}
+	if strings.Contains(errOut, "Usage") {
+		t.Errorf("reload is a real command; stderr must not contain Usage: %q", errOut)
+	}
+	if !strings.Contains(errOut, "session") {
+		t.Errorf("reload outside a session should hint at the perch session terminal; got %q", errOut)
+	}
+}
+
+// TestRun_Reload_PostsEnvWhenInSession verifies that with the PERCH_ENVSYNC_*
+// handles present, `reload` POSTs its environment and workspace id to the endpoint
+// with the Bearer token, and exits 0.
+func TestRun_Reload_PostsEnvWhenInSession(t *testing.T) {
+	const token = "test-token-abc"
+	var mu sync.Mutex
+	var (
+		gotAuth   string
+		gotMethod string
+		gotReq    envsync.SyncRequest
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		gotAuth = r.Header.Get("Authorization")
+		gotMethod = r.Method
+		_ = json.NewDecoder(r.Body).Decode(&gotReq)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	t.Setenv("PERCH_ENVSYNC_URL", srv.URL)
+	t.Setenv("PERCH_ENVSYNC_TOKEN", token)
+	t.Setenv("PERCH_ENVSYNC_WS", "ws-x")
+	t.Setenv("PERCH_RELOAD_TEST_VAR", "captured")
+
+	out, errOut, code := callRun([]string{"reload"})
+	if code != 0 {
+		t.Fatalf("reload in session: want exit 0, got %d (stderr: %q)", code, errOut)
+	}
+	if out == "" {
+		t.Errorf("reload should print a confirmation on success")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if gotMethod != http.MethodPost {
+		t.Errorf("method = %q, want POST", gotMethod)
+	}
+	if gotAuth != "Bearer "+token {
+		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer "+token)
+	}
+	if gotReq.WorkspaceID != "ws-x" {
+		t.Errorf("body workspace_id = %q, want ws-x", gotReq.WorkspaceID)
+	}
+	found := false
+	for _, e := range gotReq.Env {
+		if e == "PERCH_RELOAD_TEST_VAR=captured" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("posted env must include the caller's own os.Environ(); missing PERCH_RELOAD_TEST_VAR")
+	}
+}
+
+// TestRun_Reload_NeverLaunchesGUI proves the reload path never touches the GUI
+// seam, in or out of a session.
+func TestRun_Reload_NeverLaunchesGUI(t *testing.T) {
+	t.Setenv("PERCH_ENVSYNC_URL", "")
+	t.Setenv("PERCH_ENVSYNC_TOKEN", "")
+	t.Setenv("PERCH_ENVSYNC_WS", "")
+
+	orig := launchGUI
+	t.Cleanup(func() { launchGUI = orig })
+	launched := false
+	launchGUI = func([]string) error { launched = true; return nil }
+
+	_, _, _ = callRun([]string{"reload"})
+	if launched {
+		t.Error("reload must never launch the GUI")
 	}
 }
 

@@ -6,9 +6,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"runtime"
 	"runtime/debug"
@@ -17,6 +20,7 @@ import (
 
 	"github.com/miniature-pug/perch/internal/discover"
 	"github.com/miniature-pug/perch/internal/doctor"
+	"github.com/miniature-pug/perch/internal/envsync"
 	"github.com/miniature-pug/perch/internal/proc"
 )
 
@@ -49,6 +53,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return handleDebug(args[1:], stdout, stderr)
 	case "attach":
 		return handleAttach(args[1:], stdout, stderr)
+	case "reload":
+		return handleReload(stdout, stderr)
 	default:
 		// Treat the first argument as a path to a project root.
 		return handlePathArg(args[0], stdout, stderr)
@@ -133,6 +139,62 @@ func handleAttach(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	return handleLaunch("", stdout, stderr)
+}
+
+// reloadHTTPTimeout bounds the loopback POST so a wedged endpoint cannot hang the
+// session terminal. The endpoint is on 127.0.0.1 and responds immediately, so this
+// is generous.
+const reloadHTTPTimeout = 10 * time.Second
+
+// handleReload implements `perch reload`, run inside a per-workspace session
+// terminal. It reads its own environment (os.Environ — everything the user just
+// exported) and the env-sync handles the drawer injected (PERCH_ENVSYNC_URL/TOKEN/
+// WS), and POSTs the environment plus the workspace id to the app's loopback
+// endpoint with the Bearer token. The app computes the delta versus its baseline
+// and relaunches the agent, preserving the conversation.
+//
+// It NEVER launches the GUI. When the PERCH_ENVSYNC_* handles are absent the
+// command was not run inside a perch session terminal, so it prints a friendly
+// error and exits non-zero. Environment values are never printed or logged — only
+// a generic confirmation.
+func handleReload(stdout, stderr io.Writer) int {
+	url := strings.TrimSpace(os.Getenv(envsync.EnvURL))
+	token := strings.TrimSpace(os.Getenv(envsync.EnvToken))
+	ws := strings.TrimSpace(os.Getenv(envsync.EnvWS))
+	if url == "" || token == "" || ws == "" {
+		_, _ = fmt.Fprintln(stderr, "perch reload: not inside a perch session terminal (PERCH_ENVSYNC_* not set).")
+		_, _ = fmt.Fprintln(stderr, "Run it from a workspace terminal drawer, or use the reload button there.")
+		return 1
+	}
+
+	body, err := json.Marshal(envsync.SyncRequest{WorkspaceID: ws, Env: os.Environ()})
+	if err != nil {
+		// Never include the body in the error — it may hold secrets.
+		_, _ = fmt.Fprintln(stderr, "perch reload: could not encode environment.")
+		return 1
+	}
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, "perch reload: could not build request.")
+		return 1
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: reloadHTTPTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "perch reload: could not reach the perch app: %v\n", err)
+		return 1
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		_, _ = fmt.Fprintf(stderr, "perch reload: the perch app rejected the request (%s).\n", resp.Status)
+		return 1
+	}
+
+	_, _ = fmt.Fprintln(stdout, "perch: environment sent; relaunching the agent with your updated environment (your conversation is preserved).")
+	return 0
 }
 
 // printUsage writes the usage summary to w.
