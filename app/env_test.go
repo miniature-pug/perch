@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -131,6 +133,53 @@ func TestReloadAgentEnv_WritesReloadCommand(t *testing.T) {
 	}
 }
 
+// When perchBin is set (the app knows its own absolute path), the reload button
+// must type the shell-quoted absolute path so it resolves even if a login profile
+// clobbers PATH — the binary lives at bin/perch and is not on PATH.
+func TestReloadAgentEnv_WritesAbsoluteBinaryPathWhenSet(t *testing.T) {
+	var mu sync.Mutex
+	var written []byte
+	br := internalpty.NewBridgeForTest(func() error { return nil })
+	br.OverrideWriteForTest(func(p []byte) (int, error) {
+		mu.Lock()
+		written = append(written, p...)
+		mu.Unlock()
+		return len(p), nil
+	})
+	const bin = "/home/me/repo/bin/perch"
+	a := &App{perchBin: bin, bridges: map[string]*internalpty.Bridge{"shell-ws1": br}}
+
+	if err := a.ReloadAgentEnv("shell-ws1"); err != nil {
+		t.Fatalf("ReloadAgentEnv: %v", err)
+	}
+	mu.Lock()
+	got := string(written)
+	mu.Unlock()
+	want := shellQuote(bin) + " reload\n"
+	if got != want {
+		t.Errorf("wrote %q, want %q", got, want)
+	}
+}
+
+func TestShellQuote(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"plain", "/usr/bin/perch", "'/usr/bin/perch'"},
+		{"spaces", "/opt/my apps/perch", "'/opt/my apps/perch'"},
+		{"embedded single quote", "/home/o'brien/perch", `'/home/o'\''brien/perch'`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shellQuote(tc.in); got != tc.want {
+				t.Errorf("shellQuote(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestReloadAgentEnv_RejectsHomeShell(t *testing.T) {
 	br := internalpty.NewBridgeForTest(func() error { return nil })
 	wrote := false
@@ -162,8 +211,9 @@ func TestReloadAgentEnv_InvalidPaneID(t *testing.T) {
 // ── OpenShell env injection ──────────────────────────────────────────────────
 
 // openShellCapturesEnv builds an App whose spawnPty records the env slice, opens
-// the given drawer pane, and returns the captured env.
-func openShellCapturesEnv(t *testing.T, paneID, cwd string, ls *envsync.Listener, overlay map[string][]string) []string {
+// the given drawer pane, and returns the captured env. perchBin seeds a.perchBin
+// so the PATH-prepend / PERCH_BIN injection can be exercised (pass "" for none).
+func openShellCapturesEnv(t *testing.T, paneID, cwd string, ls *envsync.Listener, overlay map[string][]string, perchBin string) []string {
 	t.Helper()
 	var mu sync.Mutex
 	var captured []string
@@ -174,6 +224,7 @@ func openShellCapturesEnv(t *testing.T, paneID, cwd string, ls *envsync.Listener
 		monitors:   map[string]agent.Monitor{},
 		envsync:    ls,
 		envOverlay: overlay,
+		perchBin:   perchBin,
 		spawnPty: func(_ context.Context, _ string, _ []string, env []string, _, _ string,
 			_ internalpty.EmitFunc, _, _ uint16) (*internalpty.Bridge, error) {
 			mu.Lock()
@@ -200,7 +251,7 @@ func TestOpenShell_InjectsEnvsyncVars_WorkspaceDrawer(t *testing.T) {
 	t.Cleanup(func() { _ = ls.Close() })
 
 	cwd := t.TempDir()
-	env := openShellCapturesEnv(t, "shell-ws1", cwd, ls, nil)
+	env := openShellCapturesEnv(t, "shell-ws1", cwd, ls, nil, "")
 
 	tok, _ := ls.TokenFor("ws1")
 	if !envSliceHasApp(env, "PERCH_ENVSYNC_URL="+ls.URL()) {
@@ -226,7 +277,7 @@ func TestOpenShell_HomeDrawer_NoEnvsyncVars(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = ls.Close() })
 
-	env := openShellCapturesEnv(t, homeShellPaneID, t.TempDir(), ls, nil)
+	env := openShellCapturesEnv(t, homeShellPaneID, t.TempDir(), ls, nil, "")
 	if envSliceHasPrefix(env, "PERCH_ENVSYNC_") {
 		t.Errorf("home drawer must NOT receive PERCH_ENVSYNC_* vars; got %v", env)
 	}
@@ -236,9 +287,91 @@ func TestOpenShell_AppliesOverlay(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("SHELL", "/bin/sh")
 	cwd := t.TempDir()
-	env := openShellCapturesEnv(t, "shell-ws1", cwd, nil, map[string][]string{"ws1": {"MYVAR=hello"}})
+	env := openShellCapturesEnv(t, "shell-ws1", cwd, nil, map[string][]string{"ws1": {"MYVAR=hello"}}, "")
 	if !envSliceHasApp(env, "MYVAR=hello") {
 		t.Errorf("drawer env missing overlay var MYVAR=hello; got %v", env)
+	}
+}
+
+// envSliceGet returns the value of the last KEY=... entry, and whether present.
+func envSliceGet(env []string, key string) (string, bool) {
+	val, ok := "", false
+	for _, e := range env {
+		if v, found := strings.CutPrefix(e, key+"="); found {
+			val, ok = v, true
+		}
+	}
+	return val, ok
+}
+
+// When perchBin is an absolute path, a per-workspace drawer must get PATH
+// prepended with the binary's dir (so a MANUAL `perch reload` resolves) and a
+// PERCH_BIN escape hatch, without dropping the rest of the existing PATH.
+func TestOpenShell_InjectsPerchBinPath_WhenAbsolute(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("SHELL", "/bin/sh")
+	oldPath := "/usr/bin" + string(os.PathListSeparator) + "/bin"
+	t.Setenv("PATH", oldPath)
+	ls, err := envsync.New(nil, func(string, []string) {})
+	if err != nil {
+		t.Fatalf("envsync.New: %v", err)
+	}
+	t.Cleanup(func() { _ = ls.Close() })
+
+	cwd := t.TempDir()
+	const bin = "/opt/perch/bin/perch"
+	env := openShellCapturesEnv(t, "shell-ws1", cwd, ls, nil, bin)
+
+	gotPath, ok := envSliceGet(env, "PATH")
+	if !ok {
+		t.Fatalf("drawer env has no PATH entry; got %v", env)
+	}
+	first := strings.SplitN(gotPath, string(os.PathListSeparator), 2)[0]
+	if first != filepath.Dir(bin) {
+		t.Errorf("PATH first element = %q, want %q (full PATH=%q)", first, filepath.Dir(bin), gotPath)
+	}
+	wantPath := filepath.Dir(bin) + string(os.PathListSeparator) + oldPath
+	if gotPath != wantPath {
+		t.Errorf("PATH = %q, want %q (old tail must be preserved)", gotPath, wantPath)
+	}
+	if !envSliceHasApp(env, "PERCH_BIN="+bin) {
+		t.Errorf("drawer env missing PERCH_BIN=%s; got %v", bin, env)
+	}
+}
+
+// When perchBin is empty or non-absolute, neither a PATH-prepend nor PERCH_BIN
+// may be injected (prepending "." or a bare name would poison PATH).
+func TestOpenShell_NoPerchBinInjection_WhenEmptyOrRelative(t *testing.T) {
+	for _, bin := range []string{"", "perch"} {
+		name := "empty"
+		if bin != "" {
+			name = "relative"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			t.Setenv("SHELL", "/bin/sh")
+			oldPath := "/usr/bin" + string(os.PathListSeparator) + "/bin"
+			t.Setenv("PATH", oldPath)
+			ls, err := envsync.New(nil, func(string, []string) {})
+			if err != nil {
+				t.Fatalf("envsync.New: %v", err)
+			}
+			t.Cleanup(func() { _ = ls.Close() })
+
+			cwd := t.TempDir()
+			env := openShellCapturesEnv(t, "shell-ws1", cwd, ls, nil, bin)
+
+			if envSliceHasPrefix(env, "PERCH_BIN=") {
+				t.Errorf("drawer env must NOT have PERCH_BIN for perchBin=%q; got %v", bin, env)
+			}
+			gotPath, ok := envSliceGet(env, "PATH")
+			if !ok {
+				t.Fatalf("drawer env has no PATH entry; got %v", env)
+			}
+			if gotPath != oldPath {
+				t.Errorf("PATH = %q, want unchanged %q (no prepend for perchBin=%q)", gotPath, oldPath, bin)
+			}
+		})
 	}
 }
 

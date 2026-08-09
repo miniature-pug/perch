@@ -104,6 +104,15 @@ func (a *App) onEnvSync(workspaceID string, delta []string) {
 	}()
 }
 
+// shellQuote wraps s in single quotes for safe insertion into a shell command
+// line typed into a pty, using the standard POSIX escape for an embedded single
+// quote: close the quote, add a backslash-escaped literal quote, then reopen the
+// quote. An absolute path containing spaces or single quotes therefore survives
+// being typed into the drawer shell intact and reaches the shell as one argument.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // ReloadAgentEnv is the bound method the drawer's reload button calls. It resolves
 // the workspace id from the drawer pane id and types `perch reload` into that
 // drawer's shell, so the button and the manual command share exactly one code
@@ -125,6 +134,14 @@ func (a *App) ReloadAgentEnv(paneID string) error {
 	if !ok {
 		return fmt.Errorf("unknown pane %q", paneID)
 	}
-	_, err := br.Write([]byte("perch reload\n"))
+	// The binary lives at bin/perch and is launched by absolute path, so it is NOT
+	// on PATH. When we know our own absolute path, type the shell-quoted absolute
+	// path so the button works even if a login profile clobbers PATH; otherwise
+	// fall back to a bare `perch` (no regression when os.Executable failed).
+	line := "perch reload\n"
+	if a.perchBin != "" {
+		line = shellQuote(a.perchBin) + " reload\n"
+	}
+	_, err := br.Write([]byte(line))
 	return err
 }

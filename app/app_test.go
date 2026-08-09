@@ -3846,6 +3846,32 @@ func envSliceHasPrefix(env []string, prefix string) bool {
 	return false
 }
 
+// ── host-side clipboard routes (ctx==nil no-op guard) ────────────────────────
+//
+// Mirror CopyPath's ctx==nil guard so headless tests can exercise the methods
+// without a Wails runtime. With ctx == nil both must be no-ops (no panic, no
+// error), matching CopyPath's behavior in security_fixes_test.go.
+
+func TestClipboardSetText_NilCtxNoOp(t *testing.T) {
+	a := &App{}
+	a.ctx = nil // headless, no Wails runtime
+	if err := a.ClipboardSetText("hello"); err != nil {
+		t.Fatalf("ClipboardSetText with nil ctx returned unexpected error: %v", err)
+	}
+}
+
+func TestClipboardText_NilCtxNoOp(t *testing.T) {
+	a := &App{}
+	a.ctx = nil // headless, no Wails runtime
+	got, err := a.ClipboardText()
+	if err != nil {
+		t.Fatalf("ClipboardText with nil ctx returned unexpected error: %v", err)
+	}
+	if got != "" {
+		t.Errorf("ClipboardText with nil ctx = %q, want empty string", got)
+	}
+}
+
 // openExitTestApp opens a workspace backed by a FakeMonitor and captures emits +
 // OS notifications. Returns the app, the fake monitor, an accessor for the captured
 // emits, and the fake notifier. The window is left UNFOCUSED so a blocking event

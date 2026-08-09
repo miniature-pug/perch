@@ -172,6 +172,14 @@ type App struct {
 	// reference the env-sync endpoint computes each delta against. Immutable.
 	baselineEnv []string
 
+	// perchBin is the running binary's own absolute path (os.Executable, symlinks
+	// resolved), captured once at startup. The binary lives at bin/perch and is
+	// launched by absolute path, so it is NOT on PATH; the drawer's reload button
+	// types this quoted absolute path (and the workspace drawer prepends its dir to
+	// PATH + exports PERCH_BIN) so `perch reload` resolves regardless of PATH. Empty
+	// when os.Executable fails — callers then fall back to a bare `perch`.
+	perchBin string
+
 	// envOverlay holds, per workspace id, the KEY=VALUE environment delta a
 	// `perch reload` captured from the session terminal. It is applied on top of
 	// os.Environ() at every agent-pane and drawer spawn (see mergeEnv). It lives
@@ -243,6 +251,18 @@ func (a *App) startup(ctx context.Context) {
 	// left it unset. NewApp already captures it; this guards raw &App{} paths.
 	if a.baselineEnv == nil {
 		a.baselineEnv = os.Environ()
+	}
+	// Capture the running binary's own absolute path once (symlinks resolved) so the
+	// drawer's reload button and a manual `perch reload` resolve the actual binary:
+	// it lives at bin/perch, is launched by absolute path, and is not on PATH. On
+	// failure leave it empty and fall back to a bare `perch` (no regression).
+	if a.perchBin == "" {
+		if exe, err := os.Executable(); err == nil {
+			if resolved, rerr := filepath.EvalSymlinks(exe); rerr == nil {
+				exe = resolved
+			}
+			a.perchBin = exe
+		}
 	}
 	// Stand up the env-sync endpoint. Best-effort: a loopback bind failure only
 	// disables `perch reload` (the drawer then injects no PERCH_ENVSYNC_* handles
@@ -1509,6 +1529,18 @@ func (a *App) OpenShell(paneID, cwd string) error {
 				injected = envsyncPaneEnv(a.envsync.URL(), tok, workspaceID)
 			}
 		}
+		// When we know our own absolute path, prepend its dir to PATH so a MANUAL
+		// `perch reload` typed into the drawer resolves the binary (it lives at
+		// bin/perch, off PATH), and export PERCH_BIN as a documented escape hatch
+		// (`$PERCH_BIN reload`). Only when absolute: a bare name or "." would poison
+		// PATH. mergeEnv lets this injected PATH override base, and building it from
+		// os.Getenv("PATH") preserves the rest of the existing PATH.
+		if filepath.IsAbs(a.perchBin) {
+			injected = append(injected,
+				"PATH="+filepath.Dir(a.perchBin)+string(os.PathListSeparator)+os.Getenv("PATH"),
+				"PERCH_BIN="+a.perchBin,
+			)
+		}
 		env = mergeEnv(os.Environ(), injected, a.overlayFor(workspaceID))
 	}
 	br, err := a.spawnPty(ctx, cwd, internalpty.LoginShellArgv(), env, event, exitEvent, a.emit, defaultPtyCols, defaultPtyRows)
@@ -1753,6 +1785,27 @@ func (a *App) CopyPath(absPath string) error {
 		return nil
 	}
 	return wailsruntime.ClipboardSetText(a.ctx, absPath)
+}
+
+// ClipboardSetText writes s to the system clipboard via the Wails runtime.
+// WebKit2GTK's navigator.clipboard is unreliable, so clipboard writes route
+// host-side. Mirrors CopyPath's ctx==nil guard (Wails not started → no-op) so it
+// is safe to call headless in tests.
+func (a *App) ClipboardSetText(s string) error {
+	if a.ctx == nil {
+		return nil
+	}
+	return wailsruntime.ClipboardSetText(a.ctx, s)
+}
+
+// ClipboardText reads the system clipboard via the Wails runtime, host-side for
+// the same WebKit2GTK reason as ClipboardSetText. Returns "" with no error when
+// the Wails runtime is not started (ctx == nil), mirroring CopyPath's guard.
+func (a *App) ClipboardText() (string, error) {
+	if a.ctx == nil {
+		return "", nil
+	}
+	return wailsruntime.ClipboardGetText(a.ctx)
 }
 
 // Branches returns git branch names for the repo at repo.
