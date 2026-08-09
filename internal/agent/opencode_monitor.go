@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -46,11 +47,11 @@ const (
 	// single source of truth for the loopback address.
 	loopbackServerURLFmt = "http://" + hooklistener.LoopbackHost + ":%d"
 
-	// opencodeServePollMaxIters and opencodeServePollIntervalSec bound the readiness
-	// poll baked into serveAndAttachFmt (budget: 50×0.2s≈10s). They are string consts
-	// because they are interpolated directly into the emitted shell command.
-	opencodeServePollMaxIters    = "50"
-	opencodeServePollIntervalSec = "0.2"
+	// opencodeServePollInterval is the sleep between readiness-poll iterations in
+	// the launch incantation. The poll's ITERATION COUNT is derived from
+	// firstConnectDeadline / this interval (see opencodeServePollMaxIters) so the
+	// shell poll's total budget equals the monitor's connect deadline.
+	opencodeServePollInterval = 200 * time.Millisecond
 
 	// randomTokenBytes is the number of cryptographically-random bytes used when
 	// generating the Basic-auth password for opencode serve.
@@ -60,8 +61,17 @@ const (
 	// server expects (v1.15.12 server/auth.ts).
 	opencodeBasicAuthUser = "opencode"
 
-	// firstConnectDeadline bounds the initial connection attempt to the opencode
-	// server before the monitor reports StateErrored.
+	// firstConnectDeadline bounds BOTH the monitor's initial connection to the
+	// opencode server (before it reports StateErrored) AND — via the derived poll
+	// count below — the readiness poll baked into the launch incantation. Deriving
+	// both bounds from ONE budget closes the attach-timing gap: previously the poll
+	// gave up at ~10s while this deadline was 30s, so a serve that bound between 10s
+	// and 30s left the poll to `exec opencode attach` into a not-yet-listening
+	// server. attach makes a single non-retrying connection and exits 1, killing the
+	// pane with no error until this deadline finally fired StateErrored (~20s later).
+	// With one budget the poll keeps probing until the connect deadline, so a serve
+	// that binds any time before the deadline is caught and attach runs against a
+	// live server; if it never binds, the pane dies and StateErrored fire together.
 	firstConnectDeadline = 30 * time.Second
 
 	// sseRetryBackoff is the sleep between SSE reconnect attempts.
@@ -75,16 +85,28 @@ const (
 	sseScannerMaxBuf = 1024 * 1024
 
 	// serveAndAttachFmt is the shell incantation Prepare returns. It backgrounds
-	// `opencode serve`, polls until the port is listening (budget: 50×0.2s≈10s),
-	// then exec's `opencode attach`. Arguments (in order): password, portStr,
-	// serverURL, attach. The leading space keeps the password out of
-	// history-ignoring shells. The 50-iteration / 0.2 s values are baked into
-	// the shell command and must not be changed without updating the comment above
-	// that documents the ~10 s budget.
+	// `opencode serve`, polls until the port is listening, then exec's
+	// `opencode attach`. Arguments (in order): password, portStr, pollMaxIters,
+	// serverURL, pollIntervalSec, attach. The leading space keeps the password out
+	// of history-ignoring shells. The poll count and interval are passed in (not
+	// baked in) because they are DERIVED from firstConnectDeadline (see the var
+	// block below) so the poll budget and the monitor's connect deadline stay in
+	// lockstep — do not hard-code them back into this string.
 	serveAndAttachFmt = " ( export OPENCODE_SERVER_PASSWORD=%s;" +
 		" opencode serve --port %s --hostname " + hooklistener.LoopbackHost + " >/dev/null 2>&1 &" +
-		" i=0; while [ $i -lt " + opencodeServePollMaxIters + " ]; do curl -s -o /dev/null %s && break; i=$((i+1)); sleep " + opencodeServePollIntervalSec + "; done;" +
+		" i=0; while [ $i -lt %s ]; do curl -s -o /dev/null %s && break; i=$((i+1)); sleep %s; done;" +
 		" exec %s )\n"
+)
+
+// opencodeServePollMaxIters and opencodeServePollIntervalSec are the readiness-poll
+// parameters interpolated into serveAndAttachFmt as shell tokens. Both are DERIVED
+// from firstConnectDeadline and opencodeServePollInterval so the shell poll's total
+// budget (iters × interval) equals the monitor's connect deadline — one budget, no
+// attach-timing gap (see firstConnectDeadline). They are vars, not consts, only
+// because they are computed; treat them as read-only.
+var (
+	opencodeServePollMaxIters    = strconv.Itoa(int(firstConnectDeadline / opencodeServePollInterval))
+	opencodeServePollIntervalSec = strconv.FormatFloat(opencodeServePollInterval.Seconds(), 'f', -1, 64)
 )
 
 func newOpencodeMonitor(a Adapter) *OpencodeMonitor {
@@ -176,10 +198,12 @@ func (m *OpencodeMonitor) Prepare(_ context.Context, _, _, resumeID string) (str
 	// through to Prepare, then add the flag here.
 
 	// Leading space keeps the password out of history-ignoring shells. The poll
-	// caps at ~10s (50 × 0.2s) then falls through to attach, which will surface
-	// its own error if serve never came up.
+	// budget (iters × interval) is derived from firstConnectDeadline, so it keeps
+	// probing until the same deadline the monitor's connect uses before falling
+	// through to attach — a serve that binds before the deadline is caught here
+	// rather than abandoned early into a dead attach.
 	cmd := fmt.Sprintf(serveAndAttachFmt,
-		m.password, portStr, m.serverURL, attach)
+		m.password, portStr, opencodeServePollMaxIters, m.serverURL, opencodeServePollIntervalSec, attach)
 	return cmd, nil
 }
 

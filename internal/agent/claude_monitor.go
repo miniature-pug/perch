@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/Miniature-Pug/perch/internal/hooklistener"
 	"github.com/Miniature-Pug/perch/internal/safe"
@@ -100,8 +101,17 @@ func (m *ClaudeMonitor) translateAndEmit(ctx context.Context, he hooklistener.Ho
 			ev = Event{Kind: "question", State: StateAwaitingInput}
 		} else {
 			sum := he.ToolName
-			if len(he.ToolInput) > 0 && len(he.ToolInput) < toolInputSummaryCutoff {
-				sum += ": " + string(he.ToolInput)
+			if n := len(he.ToolInput); n > 0 {
+				if n < toolInputSummaryCutoff {
+					sum += ": " + string(he.ToolInput)
+				} else {
+					// The full input is shipped separately (Input, below, up to
+					// MaxApprovalInputLen), so a long input is ELLIPSIZED into the
+					// summary rather than dropped — otherwise the approval card would
+					// show only the bare tool name and the user could not tell what
+					// the agent is asking to run.
+					sum += ": " + ellipsizeInput(string(he.ToolInput), toolInputSummaryCutoff)
+				}
 			}
 			fullInput := string(he.ToolInput)
 			// Compute hash of the FULL (untruncated) input before truncation so
@@ -209,8 +219,33 @@ const toolAskUserQuestion = "AskUserQuestion"
 
 // toolInputSummaryCutoff is the maximum raw ToolInput byte length that is
 // included verbatim in the approval-event Summary. Inputs at or above this
-// threshold are omitted from the summary (the full input is still hashed).
+// threshold are ELLIPSIZED to this byte budget (first ~cutoff bytes + "…") rather
+// than dropped, so the card always conveys what the tool is about to do. The full
+// (untruncated) input is still hashed and shipped separately as Input.
 const toolInputSummaryCutoff = 120
+
+// summaryEllipsis marks a truncated tool-input summary. Its 3-byte width is
+// subtracted from the byte budget so the ellipsized string stays within the cutoff.
+const summaryEllipsis = "…"
+
+// ellipsizeInput truncates s to a maxBytes byte budget (INCLUDING the ellipsis
+// marker) and appends "…", cutting on a UTF-8 rune boundary so a multi-byte rune
+// is never split. Inputs shorter than the budget are returned unchanged.
+func ellipsizeInput(s string, maxBytes int) string {
+	if len(s) < maxBytes {
+		return s
+	}
+	budget := maxBytes - len(summaryEllipsis)
+	if budget <= 0 {
+		return summaryEllipsis
+	}
+	truncated := s[:budget]
+	// Trim any trailing bytes that form an incomplete final rune.
+	for len(truncated) > 0 && !utf8.ValidString(truncated) {
+		truncated = truncated[:len(truncated)-1]
+	}
+	return truncated + summaryEllipsis
+}
 
 // claudeMonitorDirMode is the directory mode used when creating .claude/.
 const claudeMonitorDirMode = 0o755

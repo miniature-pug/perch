@@ -385,6 +385,70 @@ func TestClaudeMonitorPreToolUse_NonQuestionBlocksUntilDecide(t *testing.T) {
 	}
 }
 
+// TestClaudeMonitorApprovalSummary_EllipsizesLongInput is the regression guard for
+// the all-or-nothing summary: a tool input at/above the summary cutoff must be
+// ELLIPSIZED into the approval Summary (tool name + ": " + first bytes + "…"), not
+// dropped, so the card conveys what the agent wants to run rather than showing the
+// bare tool name. The full untruncated input must still ship separately in Input.
+func TestClaudeMonitorApprovalSummary_EllipsizesLongInput(t *testing.T) {
+	m, l, cleanup := newMonitorWithTestListener(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.Start(ctx)
+
+	// A tool_input whose raw JSON is well over the 120-byte summary cutoff.
+	bigVal := strings.Repeat("x", 200)
+	payload := fmt.Sprintf(
+		`{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":%q},"session_id":"s","cwd":"/p"}`,
+		bigVal)
+
+	respCh := make(chan string, 1)
+	go func() { respCh <- postHook(t, l, payload) }()
+
+	var ev agent.Event
+	select {
+	case ev = <-m.Events():
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for approval event")
+	}
+	if ev.Approval == nil {
+		t.Fatalf("want approval event with payload, got %+v", ev)
+	}
+	sum := ev.Approval.Summary
+
+	// Must NOT be the bare tool name (the old drop behavior) and must carry the
+	// "<tool>: " prefix with ellipsized content.
+	if sum == "Bash" {
+		t.Fatalf("summary was dropped to the bare tool name; want an ellipsized input summary")
+	}
+	if !strings.HasPrefix(sum, "Bash: ") {
+		t.Errorf("summary missing the \"Bash: \" prefix; got %q", sum)
+	}
+	if !strings.HasSuffix(sum, "…") {
+		t.Errorf("long input must be ellipsized (end with …); got %q", sum)
+	}
+	// Bounded: the 200-byte input must be truncated, not shipped whole in the summary.
+	if len(sum) >= len(bigVal) {
+		t.Errorf("summary not truncated (%d bytes); want it bounded near the cutoff: %q", len(sum), sum)
+	}
+	// The full, untruncated input must still be available on Input for the card.
+	if !strings.Contains(ev.Approval.Input, bigVal) {
+		t.Errorf("full input must still ship in Approval.Input; got %q", ev.Approval.Input)
+	}
+
+	// Unblock the hook POST goroutine so it does not leak.
+	if err := m.Approve(ev.Approval.ReqID, agent.Decision{Allow: true}); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	select {
+	case <-respCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("hook POST never returned after Approve")
+	}
+}
+
 // TestClaudeMonitorApprove_ClearsAttention is the regression guard for the stuck
 // sidebar attention signal: after a non-question PreToolUse raises an approval
 // (StateAwaitingApproval) and the user ALLOWS it via Approve, the monitor MUST

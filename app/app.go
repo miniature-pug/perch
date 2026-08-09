@@ -558,6 +558,25 @@ func (a *App) CreateWorkspace(agentName, repoPath, baseRef, branch, title string
 		LastActive:   now,
 	}
 	if err := a.store.Upsert(w); err != nil {
+		// The git worktree (and, in new-branch mode, the new branch) already exist
+		// on disk, but the record did not persist. Left as-is they orphan the tree
+		// and, in new-branch mode, block every retry forever with ErrBranchExists.
+		// Best-effort roll them back so a retry starts clean. Do NOT mask the
+		// original persist error (rollback errors are swallowed intentionally).
+		if worktree {
+			rollbackCtx := context.Background()
+			_ = gitpkg.RemoveWorktree(rollbackCtx, a.runner(), repoPath, worktreePath, true)
+			if baseRef != "" {
+				// New-branch mode (AddWorktree -b) created this branch; delete it.
+				// Existing-branch mode did NOT create the branch, so it is left intact.
+				_ = gitpkg.DeleteBranch(rollbackCtx, a.runner(), repoPath, branch, true)
+			}
+		}
+		// Drop the in-memory record too: Upsert wrote it into the map before the
+		// failed flush, so without this a phantom workspace (pointing at the now-
+		// removed tree) would linger in List() and WorkspaceForBranch. Remove's own
+		// flush will fail the same way; its error is intentionally ignored.
+		_ = a.store.Remove(id)
 		return WorkspaceVM{}, fmt.Errorf("persist workspace: %w", err)
 	}
 
@@ -975,9 +994,15 @@ func (a *App) CloseWorkspace(id string) error {
 		return fmt.Errorf("invalid workspace id: %w", err)
 	}
 	paneID := paneIDFor(id)
+	shellPaneID := "shell-" + id
 	a.mu.Lock()
 	br := a.bridges[paneID]
 	delete(a.bridges, paneID)
+	// The workspace shell drawer registers its own pty under "shell-<id>" (see
+	// OpenShell). Close and drop it here too — otherwise it leaks until shutdown,
+	// left running against a now-deleted worktree cwd after RemoveWorkspace.
+	shellBr := a.bridges[shellPaneID]
+	delete(a.bridges, shellPaneID)
 	mon := a.monitors[id]
 	delete(a.monitors, id)
 	var cancel context.CancelFunc
@@ -1021,6 +1046,9 @@ func (a *App) CloseWorkspace(id string) error {
 	}
 	if br != nil {
 		_ = br.Close()
+	}
+	if shellBr != nil {
+		_ = shellBr.Close()
 	}
 	return nil
 }
@@ -1675,6 +1703,24 @@ func (a *App) DiscardHunk(worktree, file string, index int) error {
 	ctx, cancel := context.WithTimeout(context.Background(), uiGitTimeout)
 	defer cancel()
 	return gitpkg.DiscardHunk(ctx, a.runner(), worktree, file, index)
+}
+
+// UnstageHunk moves the staged hunk at merged Hunks(worktree, file) index `index`
+// back to the working tree (git apply --reverse --cached). `index` is the same
+// merged-Hunks() index StageHunk/DiscardHunk take — NOT a `git diff --cached`
+// position — and MUST identify a Staged==true hunk. It is the inverse of StageHunk
+// and touches the index only, never the working-tree content; the frontend
+// re-fetches hunks after each call so indices stay fresh.
+func (a *App) UnstageHunk(worktree, file string, index int) error {
+	if err := validateWorktreeUnderRoots(worktree, a.roots); err != nil {
+		return err
+	}
+	if err := validateRelFile(file); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), uiGitTimeout)
+	defer cancel()
+	return gitpkg.UnstageHunk(ctx, a.runner(), worktree, file, index)
 }
 
 // RepoInfo is a frontend-friendly summary of a discovered git repository.

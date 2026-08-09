@@ -108,6 +108,44 @@ func TestSortOrderLastActiveDesc(t *testing.T) {
 	}
 }
 
+// TestSortStableOnEqualLastActive verifies that records sharing a LastActive
+// timestamp keep a FIXED order across repeated List() calls (deterministic ID
+// tie-breaker), rather than reordering with the random map iteration order. Before
+// the fix List used a non-stable sort.Slice with no tie-breaker, so equal-timestamp
+// records could swap between refreshes and flicker the sidebar.
+func TestSortStableOnEqualLastActive(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	s, _ := registry.Load(dir)
+
+	// Same LastActive for both records; IDs chosen so the deterministic tie-break
+	// order (ID ascending) is "ws-aaa" then "ws-bbb".
+	ts := time.Now().Truncate(time.Second)
+	for _, id := range []string{"ws-bbb", "ws-aaa"} {
+		_ = s.Upsert(registry.Workspace{
+			ID: id, WorktreePath: "/tmp/" + id, Agent: "claude",
+			Title: id, LastActive: ts,
+		})
+	}
+
+	// Repeat List() many times: with a random map order feeding the sort, a
+	// non-stable / tie-breaker-less sort would eventually flip the pair.
+	first := s.List()
+	if len(first) != 2 {
+		t.Fatalf("want 2 workspaces, got %d", len(first))
+	}
+	if first[0].ID != "ws-aaa" || first[1].ID != "ws-bbb" {
+		t.Fatalf("tie-break order = [%s %s], want [ws-aaa ws-bbb]", first[0].ID, first[1].ID)
+	}
+	for i := 0; i < 50; i++ {
+		got := s.List()
+		if got[0].ID != first[0].ID || got[1].ID != first[1].ID {
+			t.Fatalf("List order changed across calls: iter %d got [%s %s], want [%s %s]",
+				i, got[0].ID, got[1].ID, first[0].ID, first[1].ID)
+		}
+	}
+}
+
 func TestRemove(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()

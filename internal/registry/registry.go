@@ -91,7 +91,11 @@ func Load(configDir string) (*Store, error) {
 	return s, nil
 }
 
-// List returns all workspaces sorted by LastActive descending.
+// List returns all workspaces sorted by LastActive descending, with the workspace
+// ID as a stable tie-breaker. items is a map, so its iteration order is random;
+// without the ID tie-breaker two records sharing a LastActive timestamp would
+// reorder arbitrarily between refreshes, making the sidebar flicker. SliceStable +
+// the explicit ID comparison pins a single deterministic order for equal timestamps.
 func (s *Store) List() []Workspace {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -99,7 +103,10 @@ func (s *Store) List() []Workspace {
 	for _, w := range s.items {
 		out = append(out, w)
 	}
-	sort.Slice(out, func(i, j int) bool {
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].LastActive.Equal(out[j].LastActive) {
+			return out[i].ID < out[j].ID
+		}
 		return out[i].LastActive.After(out[j].LastActive)
 	})
 	return out

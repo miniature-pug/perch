@@ -1482,6 +1482,55 @@ func TestApp_CloseWorkspace_ClosesAndKeepsInRegistry(t *testing.T) {
 	}
 }
 
+// TestApp_CloseWorkspace_ClosesShellBridge is the regression guard for the leaked
+// shell drawer pty: OpenShell registers a workspace shell under "shell-<id>", and
+// CloseWorkspace must close AND drop it (mirroring the "pane-<id>" close). Before
+// the fix only the pane bridge was closed, so the shell bridge leaked until
+// shutdown, left running against a now-deleted worktree cwd after RemoveWorkspace.
+func TestApp_CloseWorkspace_ClosesShellBridge(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	wt := t.TempDir()
+	_ = store.Upsert(registry.Workspace{ID: "ws-shell", WorktreePath: wt, Agent: "claude", Title: "t"})
+
+	paneClosed := false
+	shellClosed := false
+	paneBr := internalpty.NewBridgeForTest(func() error { paneClosed = true; return nil })
+	shellBr := internalpty.NewBridgeForTest(func() error { shellClosed = true; return nil })
+
+	a := &App{
+		store: store,
+		emit:  func(string, ...any) {},
+		bridges: map[string]*internalpty.Bridge{
+			"pane-ws-shell":  paneBr,
+			"shell-ws-shell": shellBr,
+		},
+		monitors: map[string]agent.Monitor{},
+	}
+
+	if err := a.CloseWorkspace("ws-shell"); err != nil {
+		t.Fatalf("CloseWorkspace: %v", err)
+	}
+	if !paneClosed {
+		t.Error("pane bridge must be closed")
+	}
+	if !shellClosed {
+		t.Error("shell bridge (shell-<id>) must be closed by CloseWorkspace, not leaked")
+	}
+
+	a.mu.Lock()
+	_, paneStillThere := a.bridges["pane-ws-shell"]
+	_, shellStillThere := a.bridges["shell-ws-shell"]
+	a.mu.Unlock()
+	if paneStillThere {
+		t.Error("pane bridge key must be removed from the map")
+	}
+	if shellStillThere {
+		t.Error("shell bridge key (shell-<id>) must be removed from the map")
+	}
+}
+
 func TestApp_RemoveWorkspace_RemovesFromRegistry(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cfgDir := t.TempDir()

@@ -37,6 +37,78 @@ func TestBranches(t *testing.T) {
 	}
 }
 
+// TestBranches_PinsDefaultOrCurrentFirst is the FakeRunner ordering guard: the
+// current/default branch must come FIRST (callers take branches[0]), with the rest
+// alphabetical — regardless of the order `git branch` emitted them.
+func TestBranches_PinsDefaultOrCurrentFirst(t *testing.T) {
+	branchList := proc.FakeResult{Stdout: []byte("zeta\nmain\nalpha\n")}
+
+	t.Run("current branch pinned first", func(t *testing.T) {
+		r := proc.NewFakeRunner()
+		r.Respond(branchList, "git", "-C", "/repo", "branch", "--format=%(refname:short)")
+		// HEAD is on "main" → it is pinned first.
+		r.Respond(proc.FakeResult{Stdout: []byte("main\n")},
+			"git", "-C", "/repo", "symbolic-ref", "--quiet", "--short", "HEAD")
+
+		got, err := git.Branches(context.Background(), r, "/repo")
+		if err != nil {
+			t.Fatalf("Branches: %v", err)
+		}
+		want := []string{"main", "alpha", "zeta"}
+		if !equalStrings(got, want) {
+			t.Errorf("Branches = %v, want %v (current branch first, rest alphabetical)", got, want)
+		}
+	})
+
+	t.Run("detached HEAD falls back to origin/HEAD default", func(t *testing.T) {
+		r := proc.NewFakeRunner()
+		r.Respond(branchList, "git", "-C", "/repo", "branch", "--format=%(refname:short)")
+		// Detached HEAD → symbolic-ref HEAD fails.
+		r.Respond(proc.FakeResult{Err: proc.FakeExitError{Code: 1}},
+			"git", "-C", "/repo", "symbolic-ref", "--quiet", "--short", "HEAD")
+		// Default resolves from origin/HEAD → origin/main.
+		r.Respond(proc.FakeResult{Stdout: []byte("origin/main\n")},
+			"git", "-C", "/repo", "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
+
+		got, err := git.Branches(context.Background(), r, "/repo")
+		if err != nil {
+			t.Fatalf("Branches: %v", err)
+		}
+		if len(got) == 0 || got[0] != "main" {
+			t.Errorf("Branches = %v, want default branch \"main\" first", got)
+		}
+	})
+
+	t.Run("no HEAD/origin info falls back to main convention", func(t *testing.T) {
+		r := proc.NewFakeRunner()
+		r.Respond(branchList, "git", "-C", "/repo", "branch", "--format=%(refname:short)")
+		r.Respond(proc.FakeResult{Err: proc.FakeExitError{Code: 1}},
+			"git", "-C", "/repo", "symbolic-ref", "--quiet", "--short", "HEAD")
+		r.Respond(proc.FakeResult{Err: proc.FakeExitError{Code: 1}},
+			"git", "-C", "/repo", "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
+
+		got, err := git.Branches(context.Background(), r, "/repo")
+		if err != nil {
+			t.Fatalf("Branches: %v", err)
+		}
+		if len(got) == 0 || got[0] != "main" {
+			t.Errorf("Branches = %v, want \"main\" first via convention fallback", got)
+		}
+	})
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // TestBranches_UnbornRepo_ReturnsNonNilEmptySlice verifies that Branches returns
 // a non-nil empty slice (not nil) for a repo with no commits (unborn HEAD).
 // A nil return marshals to JSON null and crashes the Svelte frontend's {#each branches}.
