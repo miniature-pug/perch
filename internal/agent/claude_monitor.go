@@ -28,6 +28,12 @@ type ClaudeMonitor struct {
 	mu       sync.Mutex
 	state    State
 	lastTool string
+	// exited is set once the AgentExit sentinel is translated to StateExited. Like
+	// the opencode monitor's exited flag it makes StateExited terminal: a straggler
+	// hook — e.g. a fire-and-forget Stop curl that raced the AgentExit curl and was
+	// serialized onto the listener channel AFTER it — must not clobber StateExited
+	// back to done/running. Guarded by mu.
+	exited bool
 	// ctx is the monitor's lifetime context, captured in Start. Approve selects
 	// on it so a reliable clearing-event send never blocks past teardown.
 	ctx context.Context
@@ -79,6 +85,16 @@ func (m *ClaudeMonitor) translateAndEmit(ctx context.Context, he hooklistener.Ho
 		ev = Event{Kind: "state", State: StateDone}
 	case "StopFailure":
 		ev = Event{Kind: "state", State: StateErrored, Err: he.ErrorType}
+	case hookEventAgentExit:
+		// The exit sentinel (see exit_sentinel.go) fired: the claude PROCESS is gone
+		// while the login shell survives, so no pty:exit will. Surface StateExited
+		// (terminal, distinct from StateErrored). The state-write tail below ARMS the
+		// exited guard on this event and RE-CHECKS it on every later one: claude fires
+		// no hook once its process is dead, so AgentExit is normally last — but a
+		// fire-and-forget Stop curl that raced the AgentExit curl could be delivered
+		// (serialized onto this listener) AFTER it, and the guard keeps that straggler
+		// from clobbering StateExited back to done. Mirrors the opencode monitor.
+		ev = Event{Kind: "state", State: StateExited, Err: exitReason(he.ErrorType)}
 	// NOTE: "Notification" is intentionally absent. perch hooks exactly four
 	// events: PreToolUse, Stop, StopFailure, and SessionStart. "Notification"
 	// is not among them and is NOT installed in perchMonitorEvents, so the hook
@@ -131,6 +147,19 @@ func (m *ClaudeMonitor) translateAndEmit(ctx context.Context, he hooklistener.Ho
 	// Track state/lastTool (mutex-guarded) BEFORE emitting, so a reader that
 	// observes the event on the channel also observes the updated state.
 	m.mu.Lock()
+	// StateExited is terminal (F32): once the AgentExit sentinel has been translated,
+	// drop any straggler hook so it cannot clobber StateExited back to done/running or
+	// emit a non-exited state event. Unlike opencode this pump is single-goroutine so
+	// there is no in-function check-then-act window, but two near-simultaneous loopback
+	// POSTs (a fire-and-forget Stop curl vs the AgentExit curl) can be serialized onto
+	// the listener out of order — this guard keeps AgentExit terminal regardless.
+	if m.exited {
+		m.mu.Unlock()
+		return
+	}
+	if ev.State == StateExited {
+		m.exited = true
+	}
 	if ev.State != "" {
 		m.state = ev.State
 	}
@@ -278,10 +307,24 @@ func (m *ClaudeMonitor) Prepare(ctx context.Context, workspaceID, cwd, resumeID 
 		args = m.adapter.NewArgs()
 	}
 	// The returned command is written verbatim into the pane's pty (see
-	// pty.Bridge.Write — raw passthrough, no transformation). The trailing
-	// newline is what actually submits it to the shell; without it the launch
-	// command sits on the prompt unexecuted and the agent never starts.
-	return strings.Join(append([]string{m.adapter.Name()}, args...), " ") + "\n", nil
+	// pty.Bridge.Write — raw passthrough, no transformation). exitSentinel is
+	// appended so that when claude exits (gracefully or via SIGKILL/OOM) the shell
+	// pings the listener with the captured exit code; PaneEnv() supplies the token/
+	// URL it references by name (never inlined — the interactive shell echoes the
+	// line). The trailing newline is what actually submits it to the shell; without
+	// it the launch command sits on the prompt unexecuted and the agent never starts.
+	return strings.Join(append([]string{m.adapter.Name()}, args...), " ") + exitSentinel + "\n", nil
+}
+
+// PaneEnv supplies the exit sentinel's token/URL via the pane shell's process
+// environment so the launch line references them by name rather than inlining the
+// bearer token (which the interactive shell would echo on-screen). Called after
+// Prepare, which creates m.listener. claude reuses its existing hook listener.
+func (m *ClaudeMonitor) PaneEnv() []string {
+	// m.listener is written in Prepare and read here + in Start, all sequenced by
+	// OpenWorkspace (Prepare → PaneEnv → spawn → Start) on one goroutine, so this
+	// unlocked read matches the existing unlocked listener access with no race.
+	return exitPaneEnv(m.listener)
 }
 
 func (m *ClaudeMonitor) writeHooks(cwd string) error {

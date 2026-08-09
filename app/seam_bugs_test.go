@@ -106,7 +106,7 @@ func TestOpenWorkspace_EventForwarding_StampsWorkspaceID(t *testing.T) {
 		bridges:  map[string]*internalpty.Bridge{},
 		monitors: map[string]agent.Monitor{},
 		cancels:  map[string]context.CancelFunc{},
-		spawnPty: func(_ context.Context, _ string, _ []string, _, _ string,
+		spawnPty: func(_ context.Context, _ string, _ []string, _ []string, _, _ string,
 			_ internalpty.EmitFunc, _, _ uint16) (*internalpty.Bridge, error) {
 			return internalpty.NewBridgeForTest(func() error { return nil }), nil
 		},
@@ -207,7 +207,7 @@ func TestOpenWorkspace_ApprovalReqIDComposition(t *testing.T) {
 		// focused defaults to false here (unfocused), so a blocking-tier event
 		// must fire the OS notification through this injected runner.
 		notifier: notify.NewWithRunner(osNotify),
-		spawnPty: func(_ context.Context, _ string, _ []string, _, _ string,
+		spawnPty: func(_ context.Context, _ string, _ []string, _ []string, _, _ string,
 			_ internalpty.EmitFunc, _, _ uint16) (*internalpty.Bridge, error) {
 			return internalpty.NewBridgeForTest(func() error { return nil }), nil
 		},

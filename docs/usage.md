@@ -126,8 +126,13 @@ color alone.
 | `awaiting-input` | ? | asking you | cyan, slow pulse |
 | `done` | ✓ | done | green, steady |
 | `errored` | ✗ | error | red, steady |
+| `exited` | ⏻ | exited | dim, steady |
 | `running` | ◐ | running | dim, steady |
 | `idle` | ◯ | idle | dim, steady |
+
+The `exited` state means the agent process ended, gracefully or by a crash, while
+its shell stayed alive; the session shows the in-pane "session has ended" overlay
+with a Reopen button, and its sidebar row reads dim rather than as a red error.
 
 Pulses are suppressed when your system asks for reduced motion. Each session
 also carries a stable color, shown as a stripe on its row and on its
@@ -187,9 +192,9 @@ The notification hub collects events and can be filtered by approvals, errors,
 and completions. Clicking a notification takes you to the session it belongs to.
 Opening the hub marks its notifications read, so the unread count clears once you
 have seen them. A desktop notification fires only for a blocking event, an
-approval you need to make or an agent error, and only while the perch window is
-in the background. Completions are ambient and stay in the hub without
-interrupting you.
+approval you need to make, an agent error, or an agent that has exited, and only
+while the perch window is in the background. Completions are ambient and stay in
+the hub without interrupting you.
 
 ## Keyboard control
 

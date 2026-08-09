@@ -577,3 +577,21 @@ test("F49a: sidebar last-active renders the shared formatRelativeAge output", as
   expect(ageSpan.textContent).toBe(formatRelativeAge(iso));
   expect(ageSpan.textContent).toBe("3d ago");
 });
+
+test("F32: exited state renders the ⏻ icon with status-exited class + 'exited' label (dim, NOT error)", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  const ws: WorkspaceVM[] = [{
+    id: "ws-x", worktreePath: "/wt/x", repoPath: "/repo/repo-exited", agent: "claude", title: "exited-work",
+    branch: "feat/exit", state: "exited", caps: { approvals: false, attention: false }, paneId: "px", lastActive: "",
+  }];
+  render(Sidebar, { props: { workspaces: ws, activeId: "ws-x", onSelect: () => {}, onNew: () => {} } });
+
+  const btn = screen.getByRole("button", { name: /exited-work/ });
+  const icon = btn.querySelector(".status-icon")!;
+  expect(icon).toBeInTheDocument();
+  expect(icon.classList.contains("status-exited")).toBe(true);
+  expect(icon.textContent).toContain("⏻");
+  expect(btn).toHaveTextContent("exited");
+  // A terminal exit is NEUTRAL, not a red error.
+  expect(icon.classList.contains("status-errored")).toBe(false);
+});

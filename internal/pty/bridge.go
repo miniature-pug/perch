@@ -84,12 +84,20 @@ func LoginShellArgv() []string {
 // a map payload {"code": <int>} where code is the process exit code or -1 on
 // signal death / forced close. No tmux. Closing the returned Bridge kills the
 // process group; the reaper goroutine owns the single cmd.Wait call.
-func Spawn(ctx context.Context, cwd string, argv []string, dataEvent, exitEvent string, emit EmitFunc, cols, rows uint16) (*Bridge, error) {
+//
+// env, when non-nil, becomes the child process environment verbatim; callers that
+// want to ADD variables must pass append(os.Environ(), extra...) so the inherited
+// environment is preserved. A nil env leaves cmd.Env unset, so Go inherits the
+// current process environment unchanged (the plain-shell case).
+func Spawn(ctx context.Context, cwd string, argv []string, env []string, dataEvent, exitEvent string, emit EmitFunc, cols, rows uint16) (*Bridge, error) {
 	if len(argv) == 0 {
 		return nil, fmt.Errorf("pty Spawn: argv must not be empty")
 	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // caller-controlled input
 	cmd.Dir = cwd
+	if env != nil {
+		cmd.Env = env
+	}
 	f, err := creackpty.StartWithSize(cmd, &creackpty.Winsize{Cols: cols, Rows: rows})
 	if err != nil {
 		return nil, fmt.Errorf("pty Spawn: start %q: %w", argv[0], err)

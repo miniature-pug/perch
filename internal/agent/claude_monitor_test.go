@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -771,7 +772,7 @@ func TestClaudeMonitorPrepare_LaunchCommandSubmitsToShell(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	br, err := pty.Spawn(ctx, cwd, []string{"/bin/sh"}, "data", "exit", emit, 80, 24)
+	br, err := pty.Spawn(ctx, cwd, []string{"/bin/sh"}, nil, "data", "exit", emit, 80, 24)
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -796,6 +797,188 @@ func TestClaudeMonitorPrepare_LaunchCommandSubmitsToShell(t *testing.T) {
 	mu.Unlock()
 	t.Errorf("launch command never executed in the shell: sentinel %q absent from pty output %q "+
 		"(command written but not submitted — missing trailing newline?)", sentinel, got)
+}
+
+// TestClaudeMonitorAgentExit_EmitsStateExited is the F32 core for claude: the shell
+// exit sentinel POSTs an AgentExit (carrying the captured $?) to the SAME loopback
+// listener as the other lifecycle hooks; the monitor must translate it to a terminal
+// StateExited (distinct from StateErrored) so a dead agent stops reading "running".
+// CurrentState must also flip so the state survives a webview reload.
+func TestClaudeMonitorAgentExit_EmitsStateExited(t *testing.T) {
+	m, l, cleanup := newMonitorWithTestListener(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.Start(ctx)
+
+	// 137 = 128+SIGKILL, what bash reports for an OOM-killed foreground child.
+	_ = postHook(t, l, `{"hook_event_name":"AgentExit","error_type":"137"}`)
+
+	select {
+	case ev := <-m.Events():
+		if ev.Kind != "state" || ev.State != agent.StateExited {
+			t.Fatalf("AgentExit must emit state/StateExited; got %+v", ev)
+		}
+		if ev.Err != "exited (code 137)" {
+			t.Errorf("Err = %q, want %q", ev.Err, "exited (code 137)")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for AgentExit event")
+	}
+	if m.CurrentState() != agent.StateExited {
+		t.Errorf("CurrentState after AgentExit = %q, want exited", m.CurrentState())
+	}
+}
+
+// TestClaudeMonitorAgentExit_StateExitedIsTerminal is the symmetric F32 guard for
+// claude: once AgentExit has been translated to StateExited, a straggler hook must
+// NOT clobber it. claude fires no hook after its process is dead, so AgentExit is
+// normally the last event — but the exit sentinel's AgentExit curl and a
+// fire-and-forget Stop curl are two independent loopback POSTs that can be
+// serialized onto the listener out of order. This posts AgentExit, drains the
+// terminal StateExited, THEN posts a Stop and asserts (a) no StateDone/running event
+// follows and (b) CurrentState stays StateExited. Against the un-fixed monitor (no
+// exited field/guard) the Stop translates to StateDone and this FAILS.
+func TestClaudeMonitorAgentExit_StateExitedIsTerminal(t *testing.T) {
+	m, l, cleanup := newMonitorWithTestListener(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.Start(ctx)
+
+	// AgentExit → terminal StateExited (drain it so exited is armed before the Stop).
+	_ = postHook(t, l, `{"hook_event_name":"AgentExit","error_type":"0"}`)
+	select {
+	case ev := <-m.Events():
+		if ev.Kind != "state" || ev.State != agent.StateExited {
+			t.Fatalf("AgentExit must emit state/StateExited; got %+v", ev)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for AgentExit event")
+	}
+	if m.CurrentState() != agent.StateExited {
+		t.Fatalf("pre-condition: CurrentState = %q, want exited", m.CurrentState())
+	}
+
+	// A straggler Stop (a fire-and-forget curl serialized after AgentExit) MUST be
+	// dropped: StateExited is terminal, so no StateDone event may follow.
+	_ = postHook(t, l, `{"hook_event_name":"Stop","session_id":"s","transcript_path":"/t","cwd":"/p"}`)
+	select {
+	case ev := <-m.Events():
+		t.Fatalf("exited guard failed: a post-exit Stop was emitted: %+v", ev)
+	case <-time.After(300 * time.Millisecond):
+		// good — no event
+	}
+	if m.CurrentState() != agent.StateExited {
+		t.Errorf("StateExited was clobbered by a straggler Stop: %q", m.CurrentState())
+	}
+}
+
+// TestClaudeMonitorPrepare_ExitSentinelUsesEnvNotLiteralToken proves the launch line
+// carries the exit sentinel referencing PERCH_EXIT_TOKEN/PERCH_EXIT_URL BY NAME —
+// and NOT the literal bearer token, which the interactive shell would echo on-screen
+// (a new secret exposure for claude, whose launch line carries no secret today). The
+// token/URL travel via PaneEnv (the process environment), which is never echoed.
+func TestClaudeMonitorPrepare_ExitSentinelUsesEnvNotLiteralToken(t *testing.T) {
+	m, l, cleanup := newMonitorWithTestListener(t)
+	defer cleanup()
+	worktree := filepath.Join(os.Getenv("HOME"), "repo")
+	_ = os.MkdirAll(worktree, 0o755)
+
+	cmd, err := m.Prepare(context.Background(), "ws1", worktree, "")
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	for _, want := range []string{"; ec=$?", "curl", "$PERCH_EXIT_TOKEN", "$PERCH_EXIT_URL", "AgentExit"} {
+		if !strings.Contains(cmd, want) {
+			t.Errorf("launch cmd missing %q; got %q", want, cmd)
+		}
+	}
+	if strings.Contains(cmd, l.Token()) {
+		t.Errorf("launch cmd LEAKS the literal bearer token (would be echoed on-screen): %q", cmd)
+	}
+
+	env := m.PaneEnv()
+	if !envSliceHas(env, "PERCH_EXIT_TOKEN="+l.Token()) {
+		t.Errorf("PaneEnv missing PERCH_EXIT_TOKEN=<token>; got %v", env)
+	}
+	if !envSliceHas(env, "PERCH_EXIT_URL=http://"+l.Addr()+"/hook") {
+		t.Errorf("PaneEnv missing PERCH_EXIT_URL=<addr>; got %v", env)
+	}
+}
+
+// envSliceHas reports whether env contains an exact KEY=VALUE entry.
+func envSliceHas(env []string, want string) bool {
+	for _, e := range env {
+		if e == want {
+			return true
+		}
+	}
+	return false
+}
+
+// TestClaudeMonitor_ExitSentinelFiresEndToEnd is the falsifying guard for the WHOLE
+// F32 mechanism, not just the translate step: it runs Prepare's REAL launch line
+// through a REAL shell with a fake `claude` that exits 42, injects PaneEnv exactly
+// as app.OpenWorkspace does, and asserts the shell's exit sentinel captures $? and
+// curls the listener → StateExited("exited (code 42)"). This proves the crux the bug
+// hinges on — the shell OUTLIVES the agent and the sentinel fires on the agent's exit
+// (no pty:exit needed) — with the token arriving via the process ENV (never the typed
+// line). curl-gated so it skips gracefully where curl is absent.
+func TestClaudeMonitor_ExitSentinelFiresEndToEnd(t *testing.T) {
+	if _, err := exec.LookPath("curl"); err != nil {
+		t.Skip("curl not on PATH; the exit sentinel needs it")
+	}
+	m, l, cleanup := newMonitorWithTestListener(t)
+	defer cleanup()
+
+	binDir := t.TempDir()
+	// Fake `claude` that exits 42 (a crash-like nonzero code the shell reports as $?).
+	if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte("#!/bin/sh\nexit 42\n"), 0o755); err != nil {
+		t.Fatalf("write fake claude: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	cwd := t.TempDir()
+	launch, err := m.Prepare(context.Background(), "ws", cwd, "")
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	// The launch line must NOT carry the literal token (env-injected, not inlined).
+	if strings.Contains(launch, l.Token()) {
+		t.Fatalf("launch line leaked the bearer token: %q", launch)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.Start(ctx)
+
+	// Inject the exit env exactly as app.OpenWorkspace does: PaneEnv merged onto
+	// os.Environ() (so PERCH_EXIT_TOKEN/PERCH_EXIT_URL are in the shell's process env).
+	env := append(os.Environ(), m.PaneEnv()...)
+	br, err := pty.Spawn(ctx, cwd, []string{"/bin/sh"}, env, "data", "exit", func(string, ...any) {}, 80, 24)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	defer func() { _ = br.Close() }()
+
+	if _, err := br.Write([]byte(launch)); err != nil {
+		t.Fatalf("write launch: %v", err)
+	}
+
+	select {
+	case ev := <-m.Events():
+		if ev.Kind != "state" || ev.State != agent.StateExited {
+			t.Fatalf("shell exit sentinel must yield StateExited, got %+v", ev)
+		}
+		if ev.Err != "exited (code 42)" {
+			t.Errorf("Err = %q, want 'exited (code 42)' (the shell's captured $?)", ev.Err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("exit sentinel never reached the listener — the shell did not curl on agent exit")
+	}
 }
 
 // TestClaudeNewArgs_NoModel verifies NewArgs returns an empty slice (no --model ever).

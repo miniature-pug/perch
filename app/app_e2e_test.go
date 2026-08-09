@@ -136,7 +136,7 @@ func TestE2E_HeadlessFullLoop(t *testing.T) {
 	// NOTE: the true cross-process round-trip (real pty bytes → WebKit → xterm)
 	// is smoke-tested via the manual checklist; this test uses a fake bridge.
 	var capturedDataEvent, capturedExitEvent string
-	a.spawnPty = func(_ context.Context, _ string, _ []string, dataEvent, exitEvent string,
+	a.spawnPty = func(_ context.Context, _ string, _ []string, _ []string, dataEvent, exitEvent string,
 		_ internalpty.EmitFunc, _, _ uint16) (*internalpty.Bridge, error) {
 		capturedDataEvent = dataEvent
 		capturedExitEvent = exitEvent

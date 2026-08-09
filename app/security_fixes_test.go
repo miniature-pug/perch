@@ -115,7 +115,7 @@ func TestSecFix_L10_ShellMetacharSessionID_NotPersisted(t *testing.T) {
 		pending:      map[string]agent.ApprovalReq{},
 		cancels:      map[string]context.CancelFunc{},
 		settingsPath: filepath.Join(cfgDir, "settings.json"),
-		spawnPty: func(_ context.Context, _ string, _ []string, _, _ string,
+		spawnPty: func(_ context.Context, _ string, _ []string, _ []string, _, _ string,
 			_ internalpty.EmitFunc, _, _ uint16) (*internalpty.Bridge, error) {
 			return internalpty.NewBridgeForTest(func() error { return nil }), nil
 		},

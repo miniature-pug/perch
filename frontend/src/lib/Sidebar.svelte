@@ -89,6 +89,7 @@
     "awaiting-input":    { icon: "?", label: "asking you" },
     done:                { icon: "✓", label: "done" },
     errored:             { icon: "✗", label: "error" },
+    exited:              { icon: "⏻", label: "exited" },
   } as const;
 
   // Right-click row menu (Rename + Remove). Mirrors the FileTree context-menu
@@ -132,7 +133,7 @@
   // visible word; calm background rows (idle/running) keep it screen-reader-only
   // so the list stays quiet where nothing needs the user.
   const STATE_TEXT_SHOWN = new Set<WorkspaceVM["state"]>([
-    "awaiting-approval", "awaiting-input", "done", "errored",
+    "awaiting-approval", "awaiting-input", "done", "errored", "exited",
   ]);
   function showStateText(ws: WorkspaceVM, rowState: WorkspaceVM["state"]): boolean {
     return ws.id === activeId || STATE_TEXT_SHOWN.has(rowState);
@@ -475,6 +476,13 @@
     color: var(--perch-err);
   }
 
+  /* "exited" is a NEUTRAL terminal state (a graceful /exit or a crash the user must
+     reopen), NOT a red error — it reads dim, like idle, so a clean exit never looks
+     alarming. The distinct ⏻ glyph + "exited" word carry the meaning. */
+  .status-exited {
+    color: var(--perch-text-dim);
+  }
+
   @keyframes perch-attn-pulse { 0%, 100% { opacity: 1; } 50% { opacity: var(--perch-attn-opacity-min); } }
   @media (prefers-reduced-motion: reduce) {
     .status-awaiting-approval, .status-awaiting-input { animation: none; }
@@ -500,6 +508,7 @@
   .st-awaiting-input    { color: var(--perch-info); }
   .st-done              { color: var(--perch-accent); }
   .st-errored           { color: var(--perch-err); }
+  .st-exited            { color: var(--perch-text-dim); }
 
   /* ── Session title ────────────────────────────────────────────── */
   .workspace-title {

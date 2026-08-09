@@ -91,7 +91,7 @@ const (
 
 // spawnPtyFunc and newMonitorFunc are injectable seams (real funcs in NewApp,
 // replaced in tests for headless execution).
-type spawnPtyFunc func(ctx context.Context, cwd string, argv []string, dataEvent, exitEvent string,
+type spawnPtyFunc func(ctx context.Context, cwd string, argv []string, env []string, dataEvent, exitEvent string,
 	emit internalpty.EmitFunc, cols, rows uint16) (*internalpty.Bridge, error)
 
 type newMonitorFunc func(tool string, adapter agent.Adapter) (agent.Monitor, error)
@@ -258,11 +258,14 @@ func (a *App) shutdown(_ context.Context) {
 	for _, c := range cancels {
 		c()
 	}
-	for _, b := range bridges {
-		_ = b.Close()
-	}
+	// Tear down monitors (closing their exit listeners) BEFORE SIGKILLing the pane
+	// process groups, so a late exit sentinel fired during shutdown has nowhere to
+	// land and cannot surface a spurious "Agent exited" notification on the way out.
 	for _, m := range monitors {
 		_ = m.Teardown()
+	}
+	for _, b := range bridges {
+		_ = b.Close()
 	}
 }
 
@@ -655,26 +658,35 @@ func (a *App) OpenWorkspace(id string) error {
 
 	wctx, cancel := context.WithCancel(context.Background())
 
-	br, err := a.spawnPty(wctx, w.WorktreePath, internalpty.LoginShellArgv(), event, exitEvent, a.emit, defaultPtyCols, defaultPtyRows)
-	if err != nil {
-		cancel()
-		return fmt.Errorf("spawn pty: %w", err)
-	}
-
+	// Prepare the monitor BEFORE spawning the pty: Prepare creates the exit listener
+	// (and, for claude, writes the hooks), and PaneEnv then yields the exit
+	// sentinel's PERCH_EXIT_TOKEN/PERCH_EXIT_URL that must be present in the shell's
+	// PROCESS environment at spawn time (env is inherited at exec and is never
+	// echoed, unlike the typed launch line). A monitor/prepare failure needs no
+	// bridge cleanup because the pty is not spawned yet.
 	adpt := a.newAdapter(w.Agent)
 	mon, err := a.newMonitor(w.Agent, adpt)
 	if err != nil {
 		cancel()
-		_ = br.Close()
 		return fmt.Errorf("new monitor: %w", err)
 	}
 
 	launchCmd, err := mon.Prepare(wctx, id, w.WorktreePath, w.LastSessionID)
 	if err != nil {
 		cancel()
-		_ = br.Close()
 		_ = mon.Teardown()
 		return fmt.Errorf("monitor prepare: %w", err)
+	}
+
+	// Merge the monitor's pane env onto the inherited environment (append, never
+	// clobber): the exit sentinel references these by name.
+	paneEnv := append(os.Environ(), mon.PaneEnv()...)
+
+	br, err := a.spawnPty(wctx, w.WorktreePath, internalpty.LoginShellArgv(), paneEnv, event, exitEvent, a.emit, defaultPtyCols, defaultPtyRows)
+	if err != nil {
+		cancel()
+		_ = mon.Teardown()
+		return fmt.Errorf("spawn pty: %w", err)
 	}
 
 	// REQUIRED: start the monitor's event pump (translation/SSE), bound to wctx.
@@ -745,11 +757,14 @@ func (a *App) OpenWorkspace(id string) error {
 	if oldCancel != nil {
 		oldCancel()
 	}
-	if oldBr != nil {
-		_ = oldBr.Close()
-	}
+	// Tear down the OLD monitor (closing its exit listener) BEFORE SIGKILLing the
+	// old pane's process group, so a late exit sentinel from the displaced shell has
+	// nowhere to land and cannot surface a spurious "Agent exited" on reopen.
 	if oldMon != nil {
 		_ = oldMon.Teardown()
+	}
+	if oldBr != nil {
+		_ = oldBr.Close()
 	}
 
 	if launchCmd != "" {
@@ -911,6 +926,33 @@ func (a *App) dispatchNotify(evt agent.Event) {
 		tier, title, body = "ambient", "Turn complete", "Agent finished a turn."
 	case evt.Kind == "state" && evt.State == agent.StateErrored:
 		tier, title, body = "blocking", "Agent error", evt.Err
+	case evt.Kind == "state" && evt.State == agent.StateExited:
+		// Prune any pending approval for the exited workspace: a PreToolUse-time
+		// crash leaves an unresolved a.pending entry whose reqID's agent is gone;
+		// without this it would false-resolve to a live approval card on a webview
+		// reload (ListWorkspaces reports StateExited, but pendingApprovals would
+		// still surface the dead card). Keys are "<raw>:<workspaceID>".
+		a.mu.Lock()
+		_, live := a.monitors[evt.WorkspaceID]
+		suffix := ":" + evt.WorkspaceID
+		for k := range a.pending {
+			if strings.HasSuffix(k, suffix) {
+				delete(a.pending, k)
+			}
+		}
+		a.mu.Unlock()
+		// Suppress a spurious "Agent exited" on INTENTIONAL teardown: CloseWorkspace /
+		// displacement / shutdown deregister the monitor (under a.mu) before the pane
+		// is torn down, so a late exit sentinel here finds no live monitor and must
+		// not notify. A genuine crash keeps its monitor registered (only the agent
+		// process, inside the still-alive shell, died) so it still surfaces.
+		if !live {
+			return
+		}
+		tier, title, body = "blocking", "Agent exited", evt.Err
+		if body == "" {
+			body = "The agent process ended."
+		}
 	default:
 		return
 	}
@@ -1284,7 +1326,9 @@ func (a *App) OpenShell(paneID, cwd string) error {
 	event := ptyDataEventPrefix + paneID
 	exitEvent := ptyExitEventPrefix + paneID
 	ctx := context.Background()
-	br, err := a.spawnPty(ctx, cwd, internalpty.LoginShellArgv(), event, exitEvent, a.emit, defaultPtyCols, defaultPtyRows)
+	// The shell drawer is a plain login shell with no agent and no exit sentinel, so
+	// it needs no injected pane env: nil inherits the process environment unchanged.
+	br, err := a.spawnPty(ctx, cwd, internalpty.LoginShellArgv(), nil, event, exitEvent, a.emit, defaultPtyCols, defaultPtyRows)
 	if err != nil {
 		return fmt.Errorf("OpenShell spawn: %w", err)
 	}

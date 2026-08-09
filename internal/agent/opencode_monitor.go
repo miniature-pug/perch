@@ -37,8 +37,19 @@ type OpencodeMonitor struct {
 	password   string
 	events     chan Event
 	httpClient *http.Client
-	mu         sync.Mutex
-	state      State
+	// exitListener is a dedicated loopback listener the shell exit sentinel POSTs
+	// to when `opencode attach` exits (opencode has no hook system, so unlike claude
+	// it cannot reuse an existing listener). Created in Prepare, drained by a second
+	// goroutine in Start, closed in Teardown.
+	exitListener *hooklistener.Listener
+	mu           sync.Mutex
+	state        State
+	// exited is set once the exit sentinel reports the agent is gone. It makes
+	// StateExited terminal: the backgrounded `opencode serve` can outlive `attach`
+	// and keep pushing session.status SSE frames that would otherwise clobber
+	// StateExited back to running/idle, so translateSSE and emit early-return once
+	// it is set. Guarded by mu.
+	exited bool
 }
 
 const (
@@ -95,7 +106,7 @@ const (
 	serveAndAttachFmt = " ( export OPENCODE_SERVER_PASSWORD=%s;" +
 		" opencode serve --port %s --hostname " + hooklistener.LoopbackHost + " >/dev/null 2>&1 &" +
 		" i=0; while [ $i -lt %s ]; do curl -s -o /dev/null %s && break; i=$((i+1)); sleep %s; done;" +
-		" exec %s )\n"
+		" exec %s )" + exitSentinel + "\n"
 )
 
 // opencodeServePollMaxIters and opencodeServePollIntervalSec are the readiness-poll
@@ -121,6 +132,17 @@ func newOpencodeMonitor(a Adapter) *OpencodeMonitor {
 func NewOpencodeMonitorWithServer(a Adapter, serverURL, pw string) *OpencodeMonitor {
 	return &OpencodeMonitor{serverURL: serverURL, password: pw,
 		events: make(chan Event, monitorEventChanBuf), httpClient: &http.Client{}}
+}
+
+// NewOpencodeMonitorWithServerAndExitListener injects both the SSE server creds and
+// the exit-sentinel listener. Test-only: it lets a test POST an AgentExit to the
+// same loopback listener the shell sentinel would hit (and then feed a later SSE
+// frame to prove the exited guard drops it) without a real pane/pty. Production
+// goes through newOpencodeMonitor + Prepare, which self-assigns both.
+func NewOpencodeMonitorWithServerAndExitListener(a Adapter, serverURL, pw string, exitLn *hooklistener.Listener) *OpencodeMonitor {
+	m := NewOpencodeMonitorWithServer(a, serverURL, pw)
+	m.exitListener = exitLn
+	return m
 }
 
 func (m *OpencodeMonitor) Events() <-chan Event { return m.events }
@@ -173,6 +195,17 @@ func (m *OpencodeMonitor) Prepare(_ context.Context, _, _, resumeID string) (str
 		m.password = pw
 	}
 
+	// Stand up the exit listener the shell sentinel POSTs to on attach exit. Unlike
+	// claude, opencode has no hook system to reuse, so this is a dedicated listener.
+	// Skipped when one was injected for tests.
+	if m.exitListener == nil {
+		l, err := hooklistener.New()
+		if err != nil {
+			return "", fmt.Errorf("OpencodeMonitor.Prepare: exit listener: %w", err)
+		}
+		m.exitListener = l
+	}
+
 	_, portStr, err := net.SplitHostPort(strings.TrimPrefix(m.serverURL, "http://"))
 	if err != nil {
 		return "", fmt.Errorf("OpencodeMonitor.Prepare: parse server URL %q: %w", m.serverURL, err)
@@ -207,7 +240,22 @@ func (m *OpencodeMonitor) Prepare(_ context.Context, _, _, resumeID string) (str
 	return cmd, nil
 }
 
-func (m *OpencodeMonitor) Teardown() error { return nil }
+// PaneEnv supplies the exit sentinel's token/URL via the pane shell's process
+// environment (the sentinel appended to serveAndAttachFmt references them by name
+// so no secret is echoed). Called after Prepare, which creates m.exitListener.
+func (m *OpencodeMonitor) PaneEnv() []string {
+	return exitPaneEnv(m.exitListener)
+}
+
+// Teardown closes the exit listener (the SSE stream is reaped by ctx cancellation,
+// not here). Closing before the pane bridge is SIGKILLed — the order OpenWorkspace/
+// CloseWorkspace/shutdown enforce — leaves a late exit sentinel nowhere to land.
+func (m *OpencodeMonitor) Teardown() error {
+	if m.exitListener != nil {
+		return m.exitListener.Close()
+	}
+	return nil
+}
 
 // freeLoopbackPort asks the kernel for a free TCP port on 127.0.0.1 and releases
 // it. There is a small race between release and `opencode serve` binding it; if
@@ -273,6 +321,56 @@ func (m *OpencodeMonitor) Start(ctx context.Context) {
 			}
 		}
 	}()
+
+	// Second pump: the exit sentinel. When `opencode attach` exits, the shell POSTs
+	// an AgentExit to the exit listener; translate it to a terminal StateExited.
+	if m.exitListener == nil {
+		return
+	}
+	go func() {
+		defer safe.Recover("opencode-exit-monitor")
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case he, ok := <-m.exitListener.Events():
+				if !ok {
+					return
+				}
+				if he.Type == hookEventAgentExit {
+					m.handleExit(ctx, he.ErrorType)
+				}
+			}
+		}
+	}()
+}
+
+// handleExit records the terminal StateExited and marks the monitor exited so any
+// later SSE frame (the backgrounded `opencode serve` outliving `attach`) is dropped
+// by translateSSE/commitSSE/emit. Fires once — a duplicate AgentExit is ignored.
+func (m *OpencodeMonitor) handleExit(ctx context.Context, ec string) {
+	if !m.markExited() {
+		return // duplicate AgentExit — already terminal
+	}
+	// send directly (not emit) so this terminal frame bypasses the exited guard it
+	// just armed; state was already set to StateExited by markExited.
+	m.send(ctx, Event{Kind: "state", State: StateExited, Err: exitReason(ec)})
+}
+
+// markExited atomically arms the terminal exited guard: under the lock it sets
+// exited and StateExited, and reports whether THIS call armed it (false if it was
+// already set, so handleExit can ignore a duplicate AgentExit). Keeping the arm in
+// one helper means handleExit and the commitSSE/emit re-checks all observe exactly
+// the same atomic transition.
+func (m *OpencodeMonitor) markExited() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.exited {
+		return false
+	}
+	m.exited = true
+	m.state = StateExited
+	return true
 }
 
 // streamOnce opens GET /event and consumes frames until the stream ends or
@@ -337,8 +435,19 @@ func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
 		return
 	}
 	// translateSSE is called serially from the single SSE-reader goroutine, so
-	// reading the prior state here is race-free w.r.t. the write at the end.
+	// reading the prior state here is race-free w.r.t. the write in commitSSE.
 	m.mu.Lock()
+	// exited is terminal: once the exit sentinel has fired, a straggling
+	// session.status frame from the backgrounded `opencode serve` must NOT clobber
+	// StateExited back to running/idle. This is a FAST-PATH check only — the switch
+	// below runs with NO lock held, so handleExit can still land between here and the
+	// state write. commitSSE RE-CHECKS exited under the same lock that writes m.state
+	// to close that check-then-act (TOCTOU) window; this early check merely skips the
+	// switch work in the common already-exited case.
+	if m.exited {
+		m.mu.Unlock()
+		return
+	}
 	prev := m.state
 	m.mu.Unlock()
 
@@ -438,11 +547,34 @@ func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
 	default:
 		return
 	}
-	// Track state (mutex-guarded) BEFORE emitting, so a reader that observes the
-	// event on the channel also observes the updated state. opencode emits no
-	// Approval payload (approvals are owned by its own TUI), so there is no
-	// lastTool to track here — unlike claude, whose card-owned approval path does.
+	m.commitSSE(ctx, ev)
+}
+
+// commitSSE is the post-switch write half of translateSSE (section B), split out so
+// the exited RE-CHECK it performs is directly testable. It records ev.State
+// (mutex-guarded, BEFORE emitting, so a reader that observes the event on the
+// channel also observes the updated state) and sends ev — but ONLY after
+// RE-CHECKING m.exited under the SAME lock that writes m.state.
+//
+// That re-check closes a check-then-act (TOCTOU) race the single section-A check
+// missed: the whole switch runs with no lock held, so handleExit can run ENTIRELY
+// between section A's check (which saw exited==false and let the frame through) and
+// this write. If it does, it has already set exited, m.state=StateExited, and
+// emitted the terminal frame; without this re-check a straggler session.status{busy}
+// would then clobber m.state back to StateRunning and emit a running event AFTER the
+// exited event — the exact stale-"running" symptom F32 exists to eliminate, and
+// permanently stuck (every later frame is dropped once exited is set). Re-checking
+// here keeps StateExited terminal: once exited is set, no SSE frame changes m.state
+// away from StateExited or emits a non-exited state event. The send happens after
+// the lock is released so a full events channel can never block a critical section
+// (mirroring emit). opencode emits no Approval payload (approvals are owned by its
+// own TUI), so there is no lastTool to track here — unlike claude.
+func (m *OpencodeMonitor) commitSSE(ctx context.Context, ev Event) {
 	m.mu.Lock()
+	if m.exited {
+		m.mu.Unlock()
+		return
+	}
 	if ev.State != "" {
 		m.state = ev.State
 	}
@@ -479,6 +611,12 @@ func errMessage(raw json.RawMessage) string {
 // (e.g. the connect-failure StateErrored) that do not come from an SSE frame.
 func (m *OpencodeMonitor) emit(ctx context.Context, ev Event) {
 	m.mu.Lock()
+	// Once exited is set, StateExited is terminal — a late connect-failure
+	// StateErrored (or any other monitor-originated event) must not override it.
+	if m.exited {
+		m.mu.Unlock()
+		return
+	}
 	if ev.State != "" {
 		m.state = ev.State
 	}

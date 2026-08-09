@@ -125,8 +125,14 @@ in the worktree. The pty captures raw output and forwards it to the frontend as
 Wails events, where a Svelte component feeds the bytes to an xterm.js terminal.
 Keystrokes return through `WriteToPty` and resizes through `ResizePty`. The
 agent's launch command, produced by the Monitor's `Prepare`, is written into the
-shell so the agent starts in the same pty. Closing the bridge kills the whole
-process group, so the shell's children die with it.
+shell so the agent starts in the same pty. Because the agent runs inside the
+shell rather than as the pane process, its exit returns control to the still-alive
+shell and fires no `pty:exit`. So the launch line carries an exit sentinel: after
+the agent command the shell captures `$?` and pings a loopback listener, which the
+Monitor translates into the `exited` state. The listener's token and URL reach the
+shell through its process environment (`Monitor.PaneEnv`, injected at spawn) rather
+than the typed line, which the interactive shell would echo. Closing the bridge
+kills the whole process group, so the shell's children die with it.
 
 ### The agent Monitor seam
 
@@ -134,6 +140,7 @@ Each agent implements `agent.Monitor` (`internal/agent/monitor.go`):
 
 ```go
 Prepare(ctx context.Context, workspaceID, cwd, resumeID string) (launchCmd string, err error)
+PaneEnv() []string                    // exit-sentinel env injected at pty spawn
 Start(ctx context.Context)            // launch the event pump bound to ctx
 Events() <-chan Event
 Approve(reqID string, d Decision) error
@@ -288,7 +295,10 @@ claude agent
 opencode, the same lifecycle events arrive over the `opencode serve` SSE stream:
 `session.status` carries busy and idle and the session id used for resume, and
 `session.error` becomes errored. opencode's experimental step frames sit behind
-an environment flag perch never sets, so they never fire.
+an environment flag perch never sets, so they never fire. For both agents the exit
+sentinel's `AgentExit` ping becomes the `exited` state, distinct from `errored` so
+a graceful `/exit` never reads as a failure; for opencode a terminal guard makes it
+final, so a straggling status frame from the backgrounded `serve` cannot revive it.
 
 The approval loop above is Claude's alone. opencode's `attach` terminal is an
 independent interactive client that runs its own permission prompt in the pane,
@@ -307,7 +317,7 @@ opencode reports natively over its SSE stream.
 ### States and the attention model
 
 A unified `agent.Event` carries a `Kind` of `state`, `approval`, or `question`,
-and for state events a `State`. The six states:
+and for state events a `State`. The seven states:
 
 | State | Meaning |
 |-------|---------|
@@ -317,6 +327,7 @@ and for state events a `State`. The six states:
 | `awaiting-input` | The agent is asking you a question, distinct from an approval |
 | `done` | A turn completed; drives the ambient completion toast |
 | `errored` | The agent reported a failure |
+| `exited` | The agent process is gone (graceful `/exit` or crash) while its shell lives; reopen from the in-pane overlay |
 
 For Claude, an approval is a request to act that perch gates behind the approval
 card until you decide, because Claude's blocking `PreToolUse` hook lets perch own

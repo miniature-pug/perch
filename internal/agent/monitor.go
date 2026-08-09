@@ -21,6 +21,12 @@ const (
 	StateAwaitingInput State = "awaiting-input"
 	StateDone          State = "done"
 	StateErrored       State = "errored"
+	// StateExited: the agent PROCESS is gone (graceful /exit, or SIGKILL/OOM/
+	// segfault) while the pane's login shell is still alive — so no pty:exit fires.
+	// The shell exit sentinel (see exit_sentinel.go) reports it. DISTINCT from
+	// StateErrored: a graceful /exit must not read as a red error. It is terminal;
+	// the session is reopened via the existing "session ended / Reopen" affordance.
+	StateExited State = "exited"
 )
 
 type Caps struct {
@@ -65,6 +71,13 @@ type Event struct {
 
 type Monitor interface {
 	Prepare(ctx context.Context, workspaceID, cwd, resumeID string) (launchCmd string, err error)
+	// PaneEnv returns extra KEY=VALUE entries to inject into the pane shell's
+	// PROCESS environment at pty spawn (merged onto os.Environ() by OpenWorkspace).
+	// It carries the exit sentinel's PERCH_EXIT_TOKEN/PERCH_EXIT_URL so the launch
+	// line can reference them by name instead of inlining the token (which the
+	// interactive shell would echo). Empty when the monitor has no exit listener.
+	// Must be called AFTER Prepare (which creates the listener).
+	PaneEnv() []string
 	// Start launches the monitor's event pump (hook-event translation for claude,
 	// SSE consumption for opencode) bound to ctx. The pump runs until ctx is
 	// cancelled. Must be called after Prepare or no events ever flow.

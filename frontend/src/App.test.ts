@@ -2014,6 +2014,49 @@ describe("App.svelte session:close command", () => {
     // Overlay gone once the session is back in the open set.
     await waitFor(() => expect(screen.queryByTestId("pane-ended")).not.toBeInTheDocument());
   });
+
+  it("F32: onAgentEvent state:'exited' ends the session — Reopen overlay shown, openIds dropped, approvals pruned, sidebar shows 'exited'", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: "ws-1", title: "Alpha", branch: "main", state: "running" as const,
+        worktreePath: "/tmp/alpha", repoPath: "/repo/repo-alpha", agent: "claude", paneId: "p1", lastActive: "",
+        caps: { approvals: true, attention: false },
+      },
+    ]);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    // Open Alpha so it is live (in openIds) and the agent view is mounted.
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
+    await fireEvent.click(alphaBtn);
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    await tick();
+
+    // Give it a pending approval card (must be pruned when the agent exits).
+    const cb = captured.agent.at(-1)!;
+    cb({ workspaceId: "ws-1", kind: "approval", state: "awaiting-approval",
+         approval: { reqId: "req-1", tool: "bash", summary: "Run migration" } });
+    await tick();
+    await waitFor(() => expect(screen.getByText("Run migration")).toBeInTheDocument());
+
+    // The agent PROCESS exits (crash/OOM) while its login shell survives → F32 emits
+    // an agent-event "exited" (there is NO pty:exit).
+    cb({ workspaceId: "ws-1", kind: "state", state: "exited", err: "exited (code 137)" });
+    await tick();
+
+    // Session ended: the existing "session ended / Reopen" overlay shows (openIds dropped).
+    await waitFor(() => expect(screen.getByTestId("pane-ended")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Reopen" })).toBeInTheDocument();
+    // The dead session's approval card is pruned.
+    expect(screen.queryByText("Run migration")).not.toBeInTheDocument();
+    // The sidebar surfaces the distinct terminal state — "exited", NOT a red "error".
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Alpha\b/ })).toHaveTextContent("exited")
+    );
+    expect(screen.getByRole("button", { name: /^Alpha\b/ })).not.toHaveTextContent("error");
+  });
 });
 
 // ---------------------------------------------------------------------------

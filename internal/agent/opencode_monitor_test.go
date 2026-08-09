@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Miniature-Pug/perch/internal/agent"
+	"github.com/Miniature-Pug/perch/internal/hooklistener"
 	"github.com/Miniature-Pug/perch/internal/pty"
 )
 
@@ -161,6 +162,7 @@ func TestOpencodeMonitorPermissionAsked_PassiveSignalNoReply(t *testing.T) {
 // (attach does not retry); and --session appended only when resuming.
 func TestOpencodeMonitorPrepare_Resume(t *testing.T) {
 	om := agent.NewOpencodeMonitorWithServer(agent.NewOpencode(), "http://localhost:1234", "pw")
+	defer func() { _ = om.Teardown() }() // Prepare now stands up an exit listener; close it.
 	ctx := context.Background()
 
 	fresh, err := om.Prepare(ctx, "ws-1", "/some/dir", "")
@@ -201,6 +203,7 @@ func TestOpencodeMonitorPrepare_SelfAssignsPortAndPassword(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewMonitor: %v", err)
 	}
+	defer func() { _ = mon.Teardown() }() // Prepare now stands up an exit listener; close it.
 	cmd, err := mon.Prepare(context.Background(), "ws", "/dir", "")
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
@@ -249,6 +252,7 @@ func TestOpencodeMonitorPrepare_LaunchIncantationRunsInShell(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewMonitor: %v", err)
 	}
+	defer func() { _ = mon.Teardown() }() // Prepare now stands up an exit listener; close it.
 	cwd := t.TempDir()
 	cmd, err := mon.Prepare(context.Background(), "ws", cwd, "")
 	if err != nil {
@@ -272,7 +276,7 @@ func TestOpencodeMonitorPrepare_LaunchIncantationRunsInShell(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	br, err := pty.Spawn(ctx, cwd, []string{"/bin/sh"}, "data", "exit", emit, 80, 24)
+	br, err := pty.Spawn(ctx, cwd, []string{"/bin/sh"}, nil, "data", "exit", emit, 80, 24)
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -562,5 +566,157 @@ func TestOpencodeMonitorSSE_SessionError(t *testing.T) {
 	}
 	if ev.Err != "boom" {
 		t.Errorf("Err = %q, want boom", ev.Err)
+	}
+}
+
+// TestOpencodeMonitorPrepare_ExitSentinelUsesEnvNotLiteralToken proves opencode's
+// launch line carries the exit sentinel referencing PERCH_EXIT_TOKEN/PERCH_EXIT_URL
+// by name and NOT the literal exit-listener token (the interactive shell echoes the
+// typed line). The token/URL travel via PaneEnv (the process environment).
+func TestOpencodeMonitorPrepare_ExitSentinelUsesEnvNotLiteralToken(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	mon := agent.NewOpencodeMonitorWithServer(agent.NewOpencode(), "http://127.0.0.1:4599", "pw")
+	defer func() { _ = mon.Teardown() }()
+
+	cmd, err := mon.Prepare(context.Background(), "ws", t.TempDir(), "")
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	for _, want := range []string{"; ec=$?", "$PERCH_EXIT_TOKEN", "$PERCH_EXIT_URL", "AgentExit"} {
+		if !strings.Contains(cmd, want) {
+			t.Errorf("launch cmd missing %q; got %q", want, cmd)
+		}
+	}
+	// The sentinel must run in the LOGIN shell, after the ( … attach ) subshell.
+	if !strings.Contains(cmd, ")") || strings.Index(cmd, "$PERCH_EXIT_TOKEN") < strings.LastIndex(cmd, ")") {
+		t.Errorf("exit sentinel must follow the attach subshell's closing ) : %q", cmd)
+	}
+	var token string
+	for _, e := range mon.PaneEnv() {
+		if strings.HasPrefix(e, "PERCH_EXIT_TOKEN=") {
+			token = strings.TrimPrefix(e, "PERCH_EXIT_TOKEN=")
+		}
+	}
+	if token == "" {
+		t.Fatalf("PaneEnv missing PERCH_EXIT_TOKEN; got %v", mon.PaneEnv())
+	}
+	if strings.Contains(cmd, token) {
+		t.Errorf("launch cmd LEAKS the literal exit-listener token: %q", cmd)
+	}
+}
+
+// TestOpencodeMonitorAgentExit_EmitsStateExitedAndGuardsLaterSSE is the F32 core for
+// opencode: (1) the shell exit sentinel POSTs AgentExit to the monitor's dedicated
+// exit listener → terminal StateExited; (2) the backgrounded `opencode serve` can
+// outlive `attach` and keep pushing session.status frames, which the exited guard
+// MUST drop so StateExited never flips back to running/idle.
+func TestOpencodeMonitorAgentExit_EmitsStateExitedAndGuardsLaterSSE(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	// The SSE server holds a busy frame until the test releases it, so AgentExit is
+	// guaranteed processed (exited set) before the frame is delivered — proving the
+	// guard drops it rather than racing the SSE goroutine.
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/event" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fl, _ := w.(http.Flusher)
+		if fl != nil {
+			fl.Flush()
+		}
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			return
+		}
+		_, _ = w.Write([]byte(`data: {"type":"session.status","properties":{"sessionID":"s","status":{"type":"busy"}}}` + "\n\n"))
+		if fl != nil {
+			fl.Flush()
+		}
+		<-r.Context().Done() // hold the connection so it is not reconnected
+	}))
+	defer srv.Close()
+
+	exitLn, err := hooklistener.New()
+	if err != nil {
+		t.Fatalf("exit listener: %v", err)
+	}
+	defer func() { _ = exitLn.Close() }()
+
+	om := agent.NewOpencodeMonitorWithServerAndExitListener(agent.NewOpencode(), srv.URL, "pw", exitLn)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	om.Start(ctx)
+
+	// (1) AgentExit via the exit listener → StateExited.
+	_ = postHook(t, exitLn, `{"hook_event_name":"AgentExit","error_type":"137"}`)
+	ev := nextEvent(t, om)
+	if ev.Kind != "state" || ev.State != agent.StateExited {
+		t.Fatalf("AgentExit must emit state/StateExited; got %+v", ev)
+	}
+	if ev.Err != "exited (code 137)" {
+		t.Errorf("Err = %q, want %q", ev.Err, "exited (code 137)")
+	}
+	if om.CurrentState() != agent.StateExited {
+		t.Fatalf("CurrentState = %q, want exited", om.CurrentState())
+	}
+
+	// (2) Release the straggler busy SSE frame — the exited guard must DROP it.
+	close(release)
+	select {
+	case ev := <-om.Events():
+		t.Fatalf("exited guard failed: a post-exit SSE frame was emitted: %+v", ev)
+	case <-time.After(300 * time.Millisecond):
+		// good — no event
+	}
+	if om.CurrentState() != agent.StateExited {
+		t.Errorf("StateExited was clobbered by a straggler SSE frame: %q", om.CurrentState())
+	}
+}
+
+// TestOpencodeMonitorExitedGuard_SectionBReChecksTOCTOU is the discriminator for the
+// check-then-act (TOCTOU) fix: it proves translateSSE's WRITE half (section B,
+// commitSSE) RE-CHECKS m.exited under the same lock that writes m.state — a guarantee
+// the single section-A check cannot give.
+//
+// The whole event switch runs with no lock held, so handleExit can run ENTIRELY
+// between section A's check (which saw exited==false and let a session.status{busy}
+// frame through, computing StateRunning) and section B's state write. This test
+// reproduces exactly that interleaving deterministically: arm exited as handleExit
+// does (MarkExitedForTest), THEN drive the post-check write path with the running ev
+// section A already let through (CommitSSEForTest). commitSSE must drop it — no
+// running event on the channel, and CurrentState stays StateExited.
+//
+// Against the un-fixed guard (section B's `if m.exited { return }` reverted) this
+// FAILS: commitSSE writes StateRunning and sends the running event, reproducing the
+// stale-"running" symptom (sidebar flips back to running under the Reopen overlay).
+func TestOpencodeMonitorExitedGuard_SectionBReChecksTOCTOU(t *testing.T) {
+	om := agent.NewOpencodeMonitorWithServer(agent.NewOpencode(), "http://127.0.0.1:1", "pw")
+	ctx := context.Background()
+
+	// Arm the terminal exited guard exactly as handleExit does — this stands in for
+	// the exit sentinel firing in the TOCTOU window, after section A's check passed.
+	if !om.MarkExitedForTest() {
+		t.Fatal("MarkExitedForTest: monitor was already exited")
+	}
+	if om.CurrentState() != agent.StateExited {
+		t.Fatalf("pre-condition: CurrentState = %q, want exited", om.CurrentState())
+	}
+
+	// Drive section B directly with the running ev section A let through pre-exit.
+	om.CommitSSEForTest(ctx, agent.Event{Kind: "state", State: agent.StateRunning, SessionID: "s"})
+
+	// The re-check must have dropped it: no event emitted, state still terminal.
+	select {
+	case ev := <-om.Events():
+		t.Fatalf("section B failed to re-check exited: emitted a post-exit event: %+v", ev)
+	default:
+		// good — commitSSE dropped the frame, nothing was sent
+	}
+	if om.CurrentState() != agent.StateExited {
+		t.Errorf("section B clobbered StateExited: CurrentState = %q, want exited", om.CurrentState())
 	}
 }

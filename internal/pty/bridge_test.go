@@ -144,7 +144,7 @@ func TestSpawn_RoundTrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	br, err := Spawn(ctx, t.TempDir(), []string{"sh", "-c", "printf hi"}, "test-event", "pty:exit:t1", emit, 80, 24)
+	br, err := Spawn(ctx, t.TempDir(), []string{"sh", "-c", "printf hi"}, nil, "test-event", "pty:exit:t1", emit, 80, 24)
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestSpawn_EmitsExitEvent(t *testing.T) {
 	emit := func(name string, data ...any) { got <- ev{name, data} }
 	// `sh -c 'exit 7'` exits fast and reads no -l profile.
 	b, err := Spawn(context.Background(), t.TempDir(),
-		[]string{"/bin/sh", "-c", "exit 7"}, "pty:data:t1", "pty:exit:t1", emit, 80, 24)
+		[]string{"/bin/sh", "-c", "exit 7"}, nil, "pty:data:t1", "pty:exit:t1", emit, 80, 24)
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -235,7 +235,7 @@ func TestSpawn_CloseKillsProcessGroup(t *testing.T) {
 	// Only a SIGKILL to the whole process group will work, which is what
 	// Close sends via syscall.Kill(-pgid, SIGKILL).
 	script := "nohup sleep 30 >/dev/null 2>&1 & echo PGTESTPID=$!; sleep 5"
-	br, err := Spawn(ctx, t.TempDir(), []string{"sh", "-c", script}, "pg", "pty:exit:pg", emit, 80, 24)
+	br, err := Spawn(ctx, t.TempDir(), []string{"sh", "-c", script}, nil, "pg", "pty:exit:pg", emit, 80, 24)
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -311,7 +311,7 @@ func TestSpawn_ReaderPanicDoesNotCrashAndStillReapsChild(t *testing.T) {
 	}
 	// `printf hi` writes output (triggering the panicking data emit) then exits 0.
 	b, err := Spawn(context.Background(), t.TempDir(),
-		[]string{"/bin/sh", "-c", "printf hi"}, "panic-data", "panic-exit", emit, 80, 24)
+		[]string{"/bin/sh", "-c", "printf hi"}, nil, "panic-data", "panic-exit", emit, 80, 24)
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}

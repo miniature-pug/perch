@@ -22,6 +22,7 @@ type FakeMonitor struct {
 	lastTool     string
 	tornDown     bool
 	launchCmd    string
+	paneEnv      []string
 	// capturedResumeID holds the last resumeID arg passed to Prepare.
 	// Test-only: read via CapturedResumeID().
 	capturedResumeID string
@@ -122,6 +123,20 @@ func (f *FakeMonitor) SetLaunchCmd(cmd string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.launchCmd = cmd
+}
+
+// PaneEnv returns the pane environment set via SetPaneEnv (nil by default).
+func (f *FakeMonitor) PaneEnv() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.paneEnv
+}
+
+// SetPaneEnv overrides the pane environment PaneEnv returns. Test-only.
+func (f *FakeMonitor) SetPaneEnv(env []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.paneEnv = env
 }
 
 // Replay pushes ev onto the events channel so app-level pump tests can observe

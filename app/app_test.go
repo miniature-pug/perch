@@ -17,6 +17,7 @@ import (
 	"github.com/Miniature-Pug/perch/internal/agent"
 	fspkg "github.com/Miniature-Pug/perch/internal/fs"
 	git "github.com/Miniature-Pug/perch/internal/git"
+	"github.com/Miniature-Pug/perch/internal/hooklistener"
 	"github.com/Miniature-Pug/perch/internal/notify"
 	"github.com/Miniature-Pug/perch/internal/proc"
 	internalpty "github.com/Miniature-Pug/perch/internal/pty"
@@ -106,7 +107,7 @@ func TestApp_OpenShell_RejectsColonPaneID(t *testing.T) {
 		roots:    []string{shellCwd},
 		bridges:  map[string]*internalpty.Bridge{},
 		monitors: map[string]agent.Monitor{},
-		spawnPty: func(_ context.Context, _ string, _ []string, _, _ string,
+		spawnPty: func(_ context.Context, _ string, _ []string, _ []string, _, _ string,
 			_ internalpty.EmitFunc, _, _ uint16) (*internalpty.Bridge, error) {
 			spawnCalled = true
 			return internalpty.NewBridgeForTest(func() error { return nil }), nil
@@ -1153,7 +1154,7 @@ func TestApp_OpenWorkspace_WritesLaunchCmdAndEmitsEvents(t *testing.T) {
 		bridges:  map[string]*internalpty.Bridge{},
 		monitors: map[string]agent.Monitor{},
 		cancels:  map[string]context.CancelFunc{},
-		spawnPty: func(ctx context.Context, cwd string, argv []string, dataEvent, exitEvent string,
+		spawnPty: func(ctx context.Context, cwd string, argv []string, _ []string, dataEvent, exitEvent string,
 			ef internalpty.EmitFunc, cols, rows uint16) (*internalpty.Bridge, error) {
 			b := internalpty.NewBridgeForTest(func() error { return nil })
 			b.OverrideWriteForTest(func(p []byte) (int, error) {
@@ -1248,7 +1249,7 @@ func TestApp_OpenWorkspace_AgentMissing_SkipsLaunchAndNotifies(t *testing.T) {
 		bridges:  map[string]*internalpty.Bridge{},
 		monitors: map[string]agent.Monitor{},
 		cancels:  map[string]context.CancelFunc{},
-		spawnPty: func(_ context.Context, _ string, _ []string, _, _ string,
+		spawnPty: func(_ context.Context, _ string, _ []string, _ []string, _, _ string,
 			_ internalpty.EmitFunc, _, _ uint16) (*internalpty.Bridge, error) {
 			b := internalpty.NewBridgeForTest(func() error { return nil })
 			b.OverrideWriteForTest(func(p []byte) (int, error) {
@@ -1370,7 +1371,7 @@ func TestApp_OpenWorkspace_AdvancesLastActive(t *testing.T) {
 		bridges:  map[string]*internalpty.Bridge{},
 		monitors: map[string]agent.Monitor{},
 		cancels:  map[string]context.CancelFunc{},
-		spawnPty: func(ctx context.Context, cwd string, argv []string, dataEvent, exitEvent string,
+		spawnPty: func(ctx context.Context, cwd string, argv []string, _ []string, dataEvent, exitEvent string,
 			ef internalpty.EmitFunc, cols, rows uint16) (*internalpty.Bridge, error) {
 			return internalpty.NewBridgeForTest(func() error { return nil }), nil
 		},
@@ -1600,7 +1601,7 @@ func TestApp_OpenShell_HomeShellPaneID_NotRequiresRoot(t *testing.T) {
 		emit:     func(string, ...any) {},
 		bridges:  map[string]*internalpty.Bridge{},
 		monitors: map[string]agent.Monitor{},
-		spawnPty: func(_ context.Context, cwd string, argv []string, dataEvent, exitEvent string,
+		spawnPty: func(_ context.Context, cwd string, argv []string, _ []string, dataEvent, exitEvent string,
 			emit internalpty.EmitFunc, cols, rows uint16) (*internalpty.Bridge, error) {
 			spawned = true
 			if cwd != homeCwd {
@@ -1626,7 +1627,7 @@ func TestApp_OpenShell_NonHomePane_StillRequiresRoot(t *testing.T) {
 		store: store, roots: []string{"/some/project/root"},
 		emit: func(string, ...any) {}, bridges: map[string]*internalpty.Bridge{},
 		monitors: map[string]agent.Monitor{},
-		spawnPty: func(_ context.Context, _ string, _ []string, _, _ string, _ internalpty.EmitFunc, _, _ uint16) (*internalpty.Bridge, error) {
+		spawnPty: func(_ context.Context, _ string, _ []string, _ []string, _, _ string, _ internalpty.EmitFunc, _, _ uint16) (*internalpty.Bridge, error) {
 			return internalpty.NewBridgeForTest(func() error { return nil }), nil
 		},
 	}
@@ -1656,7 +1657,7 @@ func TestApp_OpenShell_SpawnsAndEmits(t *testing.T) {
 		roots:    []string{shellCwd},
 		bridges:  map[string]*internalpty.Bridge{},
 		monitors: map[string]agent.Monitor{},
-		spawnPty: func(_ context.Context, cwd string, argv []string, dataEvent, exitEvent string,
+		spawnPty: func(_ context.Context, cwd string, argv []string, _ []string, dataEvent, exitEvent string,
 			ef internalpty.EmitFunc, _, _ uint16) (*internalpty.Bridge, error) {
 			spawnCalled = true
 			if dataEvent != "pty:data:shell-1" {
@@ -2553,7 +2554,7 @@ func newWatcherTestApp(t *testing.T, wt string, capturedOnChange *func(string)) 
 		monitors: map[string]agent.Monitor{},
 		cancels:  map[string]context.CancelFunc{},
 		debounce: time.Millisecond,
-		spawnPty: func(_ context.Context, _ string, _ []string, _, _ string,
+		spawnPty: func(_ context.Context, _ string, _ []string, _ []string, _, _ string,
 			_ internalpty.EmitFunc, _, _ uint16) (*internalpty.Bridge, error) {
 			return internalpty.NewBridgeForTest(func() error { return nil }), nil
 		},
@@ -2682,7 +2683,7 @@ func TestApp_OpenWorkspace_SessionIDPersistedOnSessionStart(t *testing.T) {
 		bridges:  map[string]*internalpty.Bridge{},
 		monitors: map[string]agent.Monitor{},
 		cancels:  map[string]context.CancelFunc{},
-		spawnPty: func(_ context.Context, _ string, _ []string, _, _ string,
+		spawnPty: func(_ context.Context, _ string, _ []string, _ []string, _, _ string,
 			_ internalpty.EmitFunc, _, _ uint16) (*internalpty.Bridge, error) {
 			return internalpty.NewBridgeForTest(func() error { return nil }), nil
 		},
@@ -2737,7 +2738,7 @@ func TestApp_OpenWorkspace_ResumeUsesLastSessionID(t *testing.T) {
 		bridges:  map[string]*internalpty.Bridge{},
 		monitors: map[string]agent.Monitor{},
 		cancels:  map[string]context.CancelFunc{},
-		spawnPty: func(_ context.Context, _ string, _ []string, _, _ string,
+		spawnPty: func(_ context.Context, _ string, _ []string, _ []string, _, _ string,
 			_ internalpty.EmitFunc, _, _ uint16) (*internalpty.Bridge, error) {
 			return internalpty.NewBridgeForTest(func() error { return nil }), nil
 		},
@@ -3700,5 +3701,350 @@ func TestApp_ListStaleSessions_EmptyStore_ReturnsNonNilEmptySlice(t *testing.T) 
 	}
 	if len(out) != 0 {
 		t.Errorf("expected empty slice, got %d entries", len(out))
+	}
+}
+
+// emitRec captures one Wails emit call for test assertions.
+type emitRec struct {
+	event string
+	data  []any
+}
+
+// findAgentEventState scans captured emits for an "agent:event" carrying the given
+// workspace/state.
+func findAgentEventState(recs []emitRec, wsID string, state agent.State) bool {
+	for _, r := range recs {
+		if r.event != "agent:event" || len(r.data) == 0 {
+			continue
+		}
+		ev, ok := r.data[0].(agent.Event)
+		if ok && ev.WorkspaceID == wsID && ev.State == state {
+			return true
+		}
+	}
+	return false
+}
+
+// findNotify scans captured emits for a "notify" with the given tier+title.
+func findNotify(recs []emitRec, tier, title string) (map[string]any, bool) {
+	for _, r := range recs {
+		if r.event != "notify" || len(r.data) == 0 {
+			continue
+		}
+		m, ok := r.data[0].(map[string]any)
+		if ok && m["tier"] == tier && m["title"] == title {
+			return m, true
+		}
+	}
+	return nil, false
+}
+
+// TestApp_OpenWorkspace_InjectsExitEnvAndWritesSentinel is the F32 wiring proof at
+// the app layer: OpenWorkspace must (a) write a launch line carrying the exit
+// sentinel that references PERCH_EXIT_TOKEN/PERCH_EXIT_URL BY NAME (never the literal
+// token — the interactive shell echoes the typed line), and (b) inject those vars
+// into the pty spawn ENV, merged onto os.Environ() (not clobbered). Uses a REAL
+// ClaudeMonitor + listener so the sentinel/env under test are production values.
+func TestApp_OpenWorkspace_InjectsExitEnvAndWritesSentinel(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	wt := t.TempDir()
+	_ = store.Upsert(registry.Workspace{ID: "ws-exitenv", WorktreePath: wt, Agent: "claude", Title: "t"})
+
+	ln, err := hooklistener.New()
+	if err != nil {
+		t.Fatalf("listener: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	mon := agent.NewClaudeMonitorWithListener(agent.NewClaude(), ln)
+
+	var mu sync.Mutex
+	var written []byte
+	var capturedEnv []string
+	a := &App{
+		store:    store,
+		roots:    []string{wt},
+		emit:     func(string, ...any) {},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+		cancels:  map[string]context.CancelFunc{},
+		spawnPty: func(_ context.Context, _ string, _ []string, env []string, _, _ string,
+			_ internalpty.EmitFunc, _, _ uint16) (*internalpty.Bridge, error) {
+			mu.Lock()
+			capturedEnv = env
+			mu.Unlock()
+			b := internalpty.NewBridgeForTest(func() error { return nil })
+			b.OverrideWriteForTest(func(p []byte) (int, error) {
+				mu.Lock()
+				written = append(written, p...)
+				mu.Unlock()
+				return len(p), nil
+			})
+			return b, nil
+		},
+		newMonitor: func(_ string, _ agent.Adapter) (agent.Monitor, error) { return mon, nil },
+		newAdapter: fakeAdapterSeam(&fakeAdapter{name: "claude", detect: true}),
+	}
+	if err := a.OpenWorkspace("ws-exitenv"); err != nil {
+		t.Fatalf("OpenWorkspace: %v", err)
+	}
+	defer func() { _ = a.CloseWorkspace("ws-exitenv") }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		done := strings.Contains(string(written), "claude")
+		mu.Unlock()
+		if done {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	mu.Lock()
+	gotWritten := string(written)
+	gotEnv := append([]string(nil), capturedEnv...)
+	mu.Unlock()
+
+	// (a) launch line: sentinel present, referencing env var NAMES, no literal token.
+	for _, want := range []string{"claude", "; ec=$?", "$PERCH_EXIT_TOKEN", "$PERCH_EXIT_URL"} {
+		if !strings.Contains(gotWritten, want) {
+			t.Errorf("launch line missing %q; got %q", want, gotWritten)
+		}
+	}
+	if strings.Contains(gotWritten, ln.Token()) {
+		t.Errorf("launch line LEAKS the literal bearer token (would be echoed): %q", gotWritten)
+	}
+
+	// (b) spawn env: exit vars injected, os.Environ() preserved (merged, not clobbered).
+	if !envSliceHasApp(gotEnv, "PERCH_EXIT_TOKEN="+ln.Token()) {
+		t.Errorf("spawn env missing PERCH_EXIT_TOKEN=<token>")
+	}
+	if !envSliceHasApp(gotEnv, "PERCH_EXIT_URL=http://"+ln.Addr()+"/hook") {
+		t.Errorf("spawn env missing PERCH_EXIT_URL")
+	}
+	if !envSliceHasPrefix(gotEnv, "HOME=") {
+		t.Errorf("spawn env clobbered os.Environ() — no HOME present: %v", gotEnv)
+	}
+}
+
+func envSliceHasApp(env []string, want string) bool {
+	for _, e := range env {
+		if e == want {
+			return true
+		}
+	}
+	return false
+}
+
+func envSliceHasPrefix(env []string, prefix string) bool {
+	for _, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// openExitTestApp opens a workspace backed by a FakeMonitor and captures emits +
+// OS notifications. Returns the app, the fake monitor, an accessor for the captured
+// emits, and the fake notifier. The window is left UNFOCUSED so a blocking event
+// also drives the OS notification path.
+func openExitTestApp(t *testing.T, wsID string) (*App, *agent.FakeMonitor, func() []emitRec, *notify.FakeNotifier) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	wt := t.TempDir()
+	_ = store.Upsert(registry.Workspace{ID: wsID, WorktreePath: wt, Agent: "claude", Title: "t"})
+
+	fm := agent.NewFakeMonitor(nil)
+	var mu sync.Mutex
+	var recs []emitRec
+	fn := &notify.FakeNotifier{}
+	a := &App{
+		store:    store,
+		roots:    []string{wt},
+		bridges:  map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{},
+		pending:  map[string]agent.ApprovalReq{},
+		cancels:  map[string]context.CancelFunc{},
+		notifier: fn,
+		focused:  false,
+		emit: func(event string, data ...any) {
+			mu.Lock()
+			recs = append(recs, emitRec{event, data})
+			mu.Unlock()
+		},
+		spawnPty: func(_ context.Context, _ string, _ []string, _ []string, _, _ string,
+			_ internalpty.EmitFunc, _, _ uint16) (*internalpty.Bridge, error) {
+			return internalpty.NewBridgeForTest(func() error { return nil }), nil
+		},
+		newMonitor: func(_ string, _ agent.Adapter) (agent.Monitor, error) { return fm, nil },
+		newAdapter: fakeAdapterSeam(&fakeAdapter{name: "claude", detect: true}),
+	}
+	if err := a.OpenWorkspace(wsID); err != nil {
+		t.Fatalf("OpenWorkspace: %v", err)
+	}
+	snapshot := func() []emitRec {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]emitRec(nil), recs...)
+	}
+	return a, fm, snapshot, fn
+}
+
+// TestApp_ExitedEvent_ForwardsNotifiesAndPrunesPending is the F32 app-forward proof:
+// an exited event from the monitor must (1) re-emit as agent:event(state:exited),
+// (2) fire a BLOCKING "Agent exited" notify (in-app + OS while unfocused), and
+// (3) prune the workspace's pending approval so a PreToolUse-time crash cannot
+// false-resolve to a live card on a webview reload.
+func TestApp_ExitedEvent_ForwardsNotifiesAndPrunesPending(t *testing.T) {
+	// OS-notify (FakeNotifier) is asserted synchronously in
+	// TestApp_DispatchNotify_Exited_LiveGuard; here the notifier is unread to avoid
+	// racing the pump goroutine on the unsynchronized FakeNotifier.Calls slice.
+	a, fm, snapshot, _ := openExitTestApp(t, "ws-exit")
+
+	// Seed a pending approval as a PreToolUse-time crash would leave behind.
+	a.mu.Lock()
+	a.pending["req1:ws-exit"] = agent.ApprovalReq{ReqID: "req1:ws-exit", Tool: "Bash"}
+	a.mu.Unlock()
+
+	fm.Replay(agent.Event{Kind: "state", State: agent.StateExited, Err: "exited (code 137)"})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, ok := findNotify(snapshot(), "blocking", "Agent exited"); ok {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	recs := snapshot()
+
+	if !findAgentEventState(recs, "ws-exit", agent.StateExited) {
+		t.Errorf("no agent:event(state:exited) forwarded; got %+v", recs)
+	}
+	m, ok := findNotify(recs, "blocking", "Agent exited")
+	if !ok {
+		t.Fatalf("no blocking 'Agent exited' notify; got %+v", recs)
+	}
+	if m["body"] != "exited (code 137)" {
+		t.Errorf("notify body = %v, want 'exited (code 137)'", m["body"])
+	}
+	// Pending pruned.
+	a.mu.Lock()
+	_, stillPending := a.pending["req1:ws-exit"]
+	a.mu.Unlock()
+	if stillPending {
+		t.Errorf("pending approval for exited workspace was not pruned")
+	}
+}
+
+// TestApp_CloseWorkspace_NoExitedNotification is the critical teardown guard: an
+// INTENTIONAL CloseWorkspace deregisters the monitor before the pane is torn down,
+// so a late exit sentinel (the shell dies as part of teardown) must NOT surface a
+// spurious "Agent exited" notification.
+func TestApp_CloseWorkspace_NoExitedNotification(t *testing.T) {
+	a, fm, snapshot, fn := openExitTestApp(t, "ws-close")
+
+	// Close intentionally. This deletes a.monitors["ws-close"] (live-guard) and
+	// cancels the pump before any late exit event can be dispatched.
+	if err := a.CloseWorkspace("ws-close"); err != nil {
+		t.Fatalf("CloseWorkspace: %v", err)
+	}
+
+	// Simulate the shell's exit sentinel firing during/after teardown.
+	fm.Replay(agent.Event{Kind: "state", State: agent.StateExited, Err: "exited"})
+
+	time.Sleep(100 * time.Millisecond)
+
+	if _, ok := findNotify(snapshot(), "blocking", "Agent exited"); ok {
+		t.Errorf("intentional CloseWorkspace surfaced a spurious 'Agent exited' notify")
+	}
+	if len(fn.Calls) != 0 {
+		t.Errorf("intentional CloseWorkspace fired an OS notification: %+v", fn.Calls)
+	}
+}
+
+// newDispatchTestApp builds an App with an emit capture + FakeNotifier for
+// synchronous dispatchNotify assertions. The window is left UNFOCUSED so blocking
+// events drive the OS-notify path. Register a monitor in a.monitors to make a
+// workspace "live".
+func newDispatchTestApp(t *testing.T) (*App, func() []emitRec, *notify.FakeNotifier) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	var mu sync.Mutex
+	var recs []emitRec
+	fn := &notify.FakeNotifier{}
+	a := &App{
+		store:        store,
+		roots:        []string{t.TempDir()},
+		bridges:      map[string]*internalpty.Bridge{},
+		monitors:     map[string]agent.Monitor{},
+		pending:      map[string]agent.ApprovalReq{},
+		notifier:     fn,
+		focused:      false,
+		settingsPath: filepath.Join(cfgDir, "settings.json"),
+		emit: func(event string, data ...any) {
+			mu.Lock()
+			recs = append(recs, emitRec{event, data})
+			mu.Unlock()
+		},
+	}
+	return a, func() []emitRec {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]emitRec(nil), recs...)
+	}, fn
+}
+
+// TestApp_DispatchNotify_Exited_LiveGuard asserts the exited notification fires for a
+// LIVE workspace (genuine crash: monitor still registered, only the agent process
+// died) and is SUPPRESSED for a deregistered one (intentional teardown removed the
+// monitor before a late sentinel could land) — the guard against a spurious "Agent
+// exited" on CloseWorkspace/displacement/shutdown.
+func TestApp_DispatchNotify_Exited_LiveGuard(t *testing.T) {
+	// (1) LIVE: monitor still registered → blocking in-app + OS notify fire.
+	a, snap, fn := newDispatchTestApp(t)
+	a.monitors["ws-live"] = agent.NewFakeMonitor(nil)
+	a.dispatchNotify(agent.Event{Kind: "state", State: agent.StateExited, Err: "exited (code 137)", WorkspaceID: "ws-live"})
+
+	if m, ok := findNotify(snap(), "blocking", "Agent exited"); !ok || m["body"] != "exited (code 137)" {
+		t.Errorf("live exited must emit a blocking 'Agent exited' notify; got %+v", snap())
+	}
+	if len(fn.Calls) != 1 || fn.Calls[0].Title != "Agent exited" || fn.Calls[0].Body != "exited (code 137)" {
+		t.Errorf("live exited must fire OS notify 'Agent exited'; got %+v", fn.Calls)
+	}
+
+	// (2) NOT LIVE: no monitor registered → fully suppressed (no in-app, no OS).
+	b, snapB, fnB := newDispatchTestApp(t)
+	b.dispatchNotify(agent.Event{Kind: "state", State: agent.StateExited, Err: "exited", WorkspaceID: "ws-gone"})
+
+	if _, ok := findNotify(snapB(), "blocking", "Agent exited"); ok {
+		t.Errorf("exited for a deregistered workspace must not emit an in-app notify")
+	}
+	if len(fnB.Calls) != 0 {
+		t.Errorf("exited for a deregistered workspace must not OS-notify; got %+v", fnB.Calls)
+	}
+}
+
+// TestApp_DispatchNotify_Exited_PrunesPendingEvenWhenNotLive asserts the pending
+// prune runs regardless of the live guard: a PreToolUse-time crash on a workspace
+// that is then being torn down must still have its dead approval pruned so it cannot
+// resurface on a reload.
+func TestApp_DispatchNotify_Exited_PrunesPendingEvenWhenNotLive(t *testing.T) {
+	a, _, _ := newDispatchTestApp(t)
+	a.pending["r1:ws-x"] = agent.ApprovalReq{ReqID: "r1:ws-x", Tool: "Bash"}
+	a.pending["r2:ws-other"] = agent.ApprovalReq{ReqID: "r2:ws-other", Tool: "Bash"}
+
+	a.dispatchNotify(agent.Event{Kind: "state", State: agent.StateExited, WorkspaceID: "ws-x"})
+
+	if _, ok := a.pending["r1:ws-x"]; ok {
+		t.Errorf("pending for exited ws-x not pruned")
+	}
+	if _, ok := a.pending["r2:ws-other"]; !ok {
+		t.Errorf("pending for an unrelated workspace was wrongly pruned")
 	}
 }

@@ -23,6 +23,11 @@ sequenceDiagram
     HL->>App: agent:event (state: running / idle / done / errored)
     App->>FE: agent:event → re-render state glyph
 
+    Note over Agent,HL: the agent runs INSIDE the pane shell, so its exit fires no pty:exit. The launch line's exit sentinel captures $? and POSTs AgentExit (token via the pane env, not the echoed line)
+    Agent->>HL: POST AgentExit (error_type=$?) on agent exit
+    HL->>App: agent:event (state: exited), distinct from errored; a graceful /exit is not a failure
+    App->>FE: agent:event → "exited" glyph + "session ended / Reopen" overlay + blocking "Agent exited" notification
+
     Note over Agent,User: AskUserQuestion (opencode question.asked) is an attention SIGNAL, not an approval
     Agent->>HL: POST PreToolUse AskUserQuestion
     HL->>HL: auto-allow immediately, never blocks. ExitPlanMode stays on the approval path

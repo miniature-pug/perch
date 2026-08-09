@@ -29,7 +29,7 @@
   import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead, markAllRead, dropForWorkspace } from "./lib/stores/notifications.svelte";
   import CleanupPanel from "./lib/CleanupPanel.svelte";
   import { listWorkspaces, createWorkspace, setWorkspaceTitle, workspaceForBranch, removeWorkspace, openWorkspace, closeWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, onWorkspaceAttach, approve, pendingApprovals, branches, readFile, setWindowFocus, writeToPty, discoverRepos, diffStat, listStaleSessions, forceRemoveWorkspace, homeShellCwd as fetchHomeShellCwd } from "./lib/wails";
-  import type { WorkspaceVM, ApprovalReq, StaleSessionVM } from "./lib/wails";
+  import type { WorkspaceVM, ApprovalReq, StaleSessionVM, AgentState } from "./lib/wails";
   import { UNDO_REMOVE_DELAY_MS, GCHORD_TIMEOUT_MS, SIDEBAR_MIN_W, SIDEBAR_MAX_W, SHELL_MIN_H, SHELL_MAX_H, RESIZE_STEP_PX, THEMES, MIME_SESSION, MENTION_PREFIX, AGENT_CLAUDE, AGENT_OPENCODE } from "./lib/constants";
 
   let workspaces      = $state<WorkspaceVM[]>([]);
@@ -347,6 +347,16 @@
       if (!ws) return;
       const prev = ws.state;
       if (ev.state) ws.state = ev.state;
+      // The AGENT process exited (graceful /exit or crash/OOM) while its login shell
+      // is still alive, so there is no pty:exit (F32). Route through the same session-
+      // ended path as pty:exit — prune approvals, drop from openIds, surface the
+      // existing "session ended / Reopen" overlay — but keep ws.state = "exited" so the
+      // sidebar shows the distinct terminal state. Return early: none of the
+      // running/idle/done edge handling below applies to a terminal exit.
+      if (ev.state === "exited") {
+        handleAgentExit(ev.workspaceId, "exited");
+        return;
+      }
       // A state transition that RESOLVES a blocking condition (question answered
       // in the agent's own TUI → perch auto-allows with no decideOne; or an error
       // that cleared) leaves its blocking notification lit forever. Drop this
@@ -526,11 +536,19 @@
     }
   }
 
-  // The primary agent pty exited: leave keyboard mode, drop the session from the
-  // open set (so the reopen overlay shows and the row dims), and reset its state
-  // so no stale attention lingers. activeId is KEPT so the overlay is reachable.
-  function handleAgentExit(id: string) {
-    mode.leaveTerminal();
+  // The agent session ended: drop it from the open set (so the reopen overlay shows
+  // and the row dims), clear stale attention, and set its final sidebar state.
+  // activeId is KEPT so the "session ended / Reopen" overlay is reachable.
+  //
+  // Two triggers, one path (F32): the pty:exit callback passes finalState "idle" (the
+  // shell itself closed); the agent-event "exited" path passes "exited" so the
+  // sidebar shows a distinct terminal state for a crashed/exited AGENT while its
+  // login shell is still alive. Only surrender keyboard/terminal mode when the
+  // exiting session is the one being actively driven — a BACKGROUND session's exit
+  // (e.g. a crashed agent in another pane) must never yank the ACTIVE pane out of
+  // terminal mode.
+  function handleAgentExit(id: string, finalState: AgentState = "idle") {
+    if (id === activeId) mode.leaveTerminal();
     openIds.delete(id);
     attnAck.delete(id);
     // Prune any pending approval for the now-dead session: its ApprovalCard points
@@ -538,7 +556,7 @@
     // would be undismissable. Drop the whole queue for this session (F19).
     if (approvals[id]) { const { [id]: _drop, ...rest } = approvals; approvals = rest; }
     const ws = workspaces.find(w => w.id === id);
-    if (ws) ws.state = "idle";
+    if (ws) ws.state = finalState;
   }
 
   // Assign a session to the secondary split pane. Rejects the same session already
