@@ -1,0 +1,87 @@
+# Release — minimal, linux/amd64 only.
+#
+# Deliberately the smallest correct path per the maintainer's decision: one
+# production GUI binary for linux/amd64, a SHA256SUMS file, and a GitHub Release.
+# No arm64, no other OS, no signing, no AppImage.
+#
+# Triggered by pushing a tag matching v* (e.g. `git tag v1.0.0 && git push
+# --tags`). The binary's version is stamped by the Makefile LDFLAGS from
+# `git describe --tags`, so the tag itself drives `perch version` — which is why
+# the checkout below fetches full history and tags.
+#
+# The production GUI binary needs Node (frontend build), the WebKitGTK 4.1 + GTK3
+# dev libraries, and a C toolchain (cgo). `make gui-build` is not a containerized
+# DZ target, so it runs natively here, on the same pinned toolchain versions the
+# perch-dev image uses (read from .tool-versions) with the same GUI libraries the
+# image installs.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# Creating the release and uploading assets needs write access to contents.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # Full history + tags so the Makefile's `git describe --tags` resolves
+          # the pushed tag into main.version.
+          fetch-depth: 0
+
+      # Pinned Go + Node come from .tool-versions, the same source the image reads.
+      - name: Resolve pinned toolchain versions
+        id: tools
+        run: |
+          echo "go=$(awk '$1=="golang"{print $2}' .tool-versions)" >> "$GITHUB_OUTPUT"
+          echo "node=$(awk '$1=="nodejs"{print $2}' .tool-versions)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ steps.tools.outputs.go }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ steps.tools.outputs.node }}
+
+      # The same GUI build libraries the perch-dev image installs, minus xvfb
+      # (only needed for a headless GUI smoke, not to compile). Noble ships the
+      # WebKit2GTK 4.1 dev package; libwebkit2gtk-4.1-dev pulls libsoup-3.0-dev
+      # transitively. Production builds link 4.1 via -tags "production webkit2_41".
+      - name: Install GUI build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      # Frontend build + cgo GUI binary -> bin/perch, version stamped from the tag.
+      - name: Build production GUI binary (linux/amd64)
+        run: make gui-build
+
+      - name: Package binary and checksums
+        run: |
+          install -m 0755 bin/perch perch-linux-amd64
+          sha256sum perch-linux-amd64 > SHA256SUMS
+          # Sanity check that the tag flowed into the binary's version string.
+          ./perch-linux-amd64 version
+
+      # Third-party action pinned to a full commit SHA (supply-chain hardening);
+      # the trailing comment records the human-readable version.
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          files: |
+            perch-linux-amd64
+            SHA256SUMS
+          fail_on_unmatched_files: true
+          generate_release_notes: true

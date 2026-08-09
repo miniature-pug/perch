@@ -1,0 +1,112 @@
+name: Bug report
+description: Report something in perch that is broken or behaves wrongly.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. perch is a native GTK/WebKit
+        desktop app, so the environment details below matter as much as the
+        steps. Please do not report security vulnerabilities here — use private
+        reporting at
+        https://github.com/miniature-pug/perch/security/advisories/new instead.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug and what you expected instead.
+      placeholder: When I ..., perch ...; I expected ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The exact sequence that triggers it.
+      placeholder: |
+        1. Open perch on ...
+        2. Create a workspace from ...
+        3. Approve ...
+        4. See the error
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: perch version
+      description: Output of `perch version` (or the commit you built from).
+      placeholder: v1.0.0 / 9c11278
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `perch doctor`
+      description: >
+        Run `perch doctor` and paste the full output. It reports perch's own
+        dependency and environment checks and is the fastest way to spot a
+        misconfigured host. This will be rendered as a code block automatically.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Distro and WebKitGTK version
+      description: >
+        perch links WebKitGTK 4.1, so the exact library and distro versions
+        matter for rendering and crash bugs. Paste the output of:
+        `lsb_release -d` (or `cat /etc/os-release`) and
+        `dpkg -l | grep -E 'libwebkit2gtk|libgtk-3|libsoup'`
+        (on non-Debian systems, the equivalent package query).
+      render: shell
+    validations:
+      required: true
+
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Agent in use
+      description: Which coding agent was running when the bug occurred?
+      options:
+        - claude
+        - opencode
+        - not agent-specific / no agent running
+        - other
+    validations:
+      required: true
+
+  - type: input
+    id: agent-version
+    attributes:
+      label: Agent version
+      description: Version of the agent above, if relevant (e.g. `claude --version`).
+      placeholder: claude 2.1.158 / opencode 1.15.12
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or screenshots
+      description: >
+        Console output, a stack trace, or a screenshot of the window. Redact
+        anything sensitive from your repositories first.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: This is not a security vulnerability (those go through private reporting).
+          required: true

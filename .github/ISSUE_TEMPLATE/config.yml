@@ -1,0 +1,10 @@
+# Force every new issue through a template; questions and security reports have
+# their own channels below.
+blank_issues_enabled: false
+contact_links:
+  - name: Question or idea (Discussions)
+    url: https://github.com/miniature-pug/perch/discussions
+    about: Ask usage questions and float ideas here rather than opening an issue.
+  - name: Report a security vulnerability
+    url: https://github.com/miniature-pug/perch/security/advisories/new
+    about: Report vulnerabilities privately. Never open a public issue for a security flaw.

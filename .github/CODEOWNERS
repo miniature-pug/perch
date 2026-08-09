@@ -1,0 +1,7 @@
+# Code owners for perch. The maintainer is the default reviewer for every path;
+# GitHub requests their review automatically on any pull request.
+#
+# For this to enforce review, enable "Require review from Code Owners" in the
+# branch protection rule for `main` (Settings -> Branches).
+
+* @miniature-pug
