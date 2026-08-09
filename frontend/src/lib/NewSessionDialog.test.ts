@@ -252,6 +252,48 @@ test("changing repo triggers loadBranches with the new repo", async () => {
   expect(loadBranches).toHaveBeenCalledWith("/home/user/projB");
 });
 
+// ── 7b. F#5 — friendly repo names in the Repo select ─────────────────────────
+
+test("repo option shows the friendly name and branch from repoInfo, keeping the path as the value", async () => {
+  const { default: D } = await import("./NewSessionDialog.svelte");
+  render(D, {
+    props: defaultProps({
+      repos: ["/home/user/proj"],
+      repoInfo: {
+        "/home/user/proj": { path: "/home/user/proj", name: "proj", branch: "main", worktrees: [] },
+      },
+    }),
+  });
+  await waitFor(() => screen.getByRole("dialog", { name: /new session/i }));
+  const repoSelect = screen.getByLabelText(/^repo$/i) as HTMLSelectElement;
+  const option = repoSelect.options[0];
+  expect(option.value).toBe("/home/user/proj");
+  expect(option.textContent).toBe("proj · main");
+});
+
+test("repo option falls back to the raw path when no repoInfo entry exists for it (union entry)", async () => {
+  const { default: D } = await import("./NewSessionDialog.svelte");
+  render(D, {
+    props: defaultProps({
+      repos: ["/home/user/proj"],
+      repoInfo: {}, // no entry — e.g. a workspace-derived worktree path
+    }),
+  });
+  await waitFor(() => screen.getByRole("dialog", { name: /new session/i }));
+  const repoSelect = screen.getByLabelText(/^repo$/i) as HTMLSelectElement;
+  const option = repoSelect.options[0];
+  expect(option.value).toBe("/home/user/proj");
+  expect(option.textContent).toBe("/home/user/proj");
+});
+
+test("repo select renders correctly when repoInfo prop is omitted entirely", async () => {
+  const { default: D } = await import("./NewSessionDialog.svelte");
+  render(D, { props: defaultProps() }); // no repoInfo prop at all
+  await waitFor(() => screen.getByRole("dialog", { name: /new session/i }));
+  const repoSelect = screen.getByLabelText(/^repo$/i) as HTMLSelectElement;
+  expect(repoSelect.options[0].textContent).toBe("/home/user/proj");
+});
+
 // ── 8. Escape closes dialog ───────────────────────────────────────────────────
 
 test("Escape key calls onClose", async () => {

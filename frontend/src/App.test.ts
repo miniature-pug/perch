@@ -268,6 +268,57 @@ describe("App.svelte workspace wiring", () => {
     expect(openWorkspace).not.toHaveBeenCalled();
   });
 
+  it("resume preview shows 'Continues the previous conversation' when willResume is true", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { ...fakeWorkspaces[0], willResume: true },
+    ]);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await fireEvent.click(await screen.findByRole("button", { name: /^Alpha\b/ }));
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    expect(screen.getByText("Continues the previous conversation")).toBeInTheDocument();
+    expect(screen.queryByText("Starts fresh")).not.toBeInTheDocument();
+  });
+
+  it("resume preview shows 'Starts fresh' when willResume is false", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { ...fakeWorkspaces[0], willResume: false },
+    ]);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await fireEvent.click(await screen.findByRole("button", { name: /^Alpha\b/ }));
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    expect(screen.getByText("Starts fresh")).toBeInTheDocument();
+    expect(screen.queryByText("Continues the previous conversation")).not.toBeInTheDocument();
+  });
+
+  it("resume preview shows the fork point when baseRef is present", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { ...fakeWorkspaces[0], baseRef: "develop" },
+    ]);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await fireEvent.click(await screen.findByRole("button", { name: /^Alpha\b/ }));
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    expect(screen.getByText("Forked from")).toBeInTheDocument();
+    expect(screen.getByText("develop")).toBeInTheDocument();
+  });
+
+  it("resume preview hides the fork point entirely when baseRef is empty", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { ...fakeWorkspaces[0], baseRef: "" },
+    ]);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await fireEvent.click(await screen.findByRole("button", { name: /^Alpha\b/ }));
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    expect(screen.queryByText("Forked from")).not.toBeInTheDocument();
+  });
+
   it("clicking the ALREADY-ACTIVE session is a no-op: no second openWorkspace, no resume-preview", async () => {
     const { listWorkspaces, openWorkspace } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
@@ -1431,6 +1482,33 @@ describe("App.svelte NewSessionDialog", () => {
     await waitFor(() =>
       expect(screen.getByRole("dialog", { name: "new session" })).toBeInTheDocument()
     );
+  });
+
+  it("repo dropdown shows a friendly name for discovered repos and falls back to the raw path for workspace-derived entries", async () => {
+    // fakeWorkspaces[0].worktreePath ("/tmp/alpha") has no matching RepoInfo — it
+    // only enters `repos` via the workspace-derived union, so it must fall back to
+    // its raw path. discoverRepos() (mocked module-wide) resolves "/discovered/repo-a"
+    // with name "repo-a" / branch "main", which must render as a friendly label.
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([fakeWorkspaces[0]]);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await screen.findByRole("button", { name: /^Alpha\b/ });
+    await fireEvent.click(screen.getByRole("button", { name: "New session" }));
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "new session" })).toBeInTheDocument()
+    );
+
+    const repoSelect = screen.getByLabelText(/^repo$/i) as HTMLSelectElement;
+    await waitFor(() => {
+      const values = Array.from(repoSelect.options).map((o) => o.value);
+      expect(values).toContain("/discovered/repo-a");
+    });
+    const options = Array.from(repoSelect.options);
+    const discovered = options.find((o) => o.value === "/discovered/repo-a");
+    const fallback   = options.find((o) => o.value === "/tmp/alpha");
+    expect(discovered?.textContent).toBe("repo-a · main");
+    expect(fallback?.textContent).toBe("/tmp/alpha");
   });
 
   it("handleCreate calls onSelect with existing session id when WorkspaceForBranch returns found=true", async () => {

@@ -30,7 +30,7 @@
   import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead, markAllRead, dropForWorkspace } from "./lib/stores/notifications.svelte";
   import CleanupPanel from "./lib/CleanupPanel.svelte";
   import { listWorkspaces, createWorkspace, setWorkspaceTitle, workspaceForBranch, removeWorkspace, openWorkspace, closeWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, onWorkspaceAttach, approve, pendingApprovals, branches, readFile, setWindowFocus, writeToPty, discoverRepos, diffStat, listStaleSessions, forceRemoveWorkspace, homeShellCwd as fetchHomeShellCwd } from "./lib/wails";
-  import type { WorkspaceVM, ApprovalReq, StaleSessionVM, AgentState } from "./lib/wails";
+  import type { WorkspaceVM, ApprovalReq, StaleSessionVM, AgentState, RepoInfo } from "./lib/wails";
   import { UNDO_REMOVE_DELAY_MS, GCHORD_TIMEOUT_MS, SIDEBAR_MIN_W, SIDEBAR_MAX_W, SHELL_MIN_H, SHELL_MAX_H, RESIZE_STEP_PX, THEMES, MIME_SESSION, MENTION_PREFIX, AGENT_CLAUDE, AGENT_OPENCODE } from "./lib/constants";
 
   let workspaces      = $state<WorkspaceVM[]>([]);
@@ -102,7 +102,9 @@
   // Repo discovery — populated lazily the FIRST time the New Session dialog opens.
   // discoverRepos walks the filesystem, so it must not re-run on every open (F21);
   // the flag guards it, and is reset on failure so a later open can retry.
-  let discoveredRepoPaths = $state<string[]>([]);
+  // Kept as full RepoInfo records (not just paths) so the New Session repo picker
+  // can show friendly names — see repoInfoByPath below.
+  let discoveredRepos = $state<RepoInfo[]>([]);
   let discoveredReposScanned = false;
 
   // Pending removals — each entry is an optimistically-hidden workspace with a
@@ -266,8 +268,15 @@
   // any paths returned by discoverRepos() (populated lazily on dialog open).
   const repos = $derived([...new Set([
     ...workspaces.map(w => w.worktreePath),
-    ...discoveredRepoPaths,
+    ...discoveredRepos.map(r => r.path),
   ])]);
+
+  // Path → RepoInfo lookup for the New Session repo picker's friendly-name labels
+  // (F#5). Workspace-derived worktree paths have no discoverRepos() entry — the
+  // dialog falls back to the raw path for those.
+  const repoInfoByPath = $derived<Record<string, RepoInfo>>(
+    Object.fromEntries(discoveredRepos.map(r => [r.path, r]))
+  );
 
   // Visible workspaces — excludes any that are pending an optimistic removal.
   const pendingRemovalIds = $derived(new Set(pendingRemovals.map(p => p.ws.id)));
@@ -633,7 +642,7 @@
     if (!discoveredReposScanned) {
       discoveredReposScanned = true;
       discoverRepos()
-        .then((list) => { discoveredRepoPaths = list.map(r => r.path); })
+        .then((list) => { discoveredRepos = list; })
         .catch(() => { discoveredReposScanned = false; }); // non-fatal — retry on next open
     }
     // Guard: only accept a genuine string (Sidebar passes this as onclick which
@@ -1534,6 +1543,7 @@
     <NewSessionDialog
       open={newSessionOpen}
       {repos}
+      repoInfo={repoInfoByPath}
       loadBranches={(repo) => branches(repo)}
       onCreate={handleCreate}
       onClose={() => { newSessionOpen = false; newSessionInitialAgent = null; createError = null; }}
@@ -1568,8 +1578,12 @@
           <h2 class="resume-preview-title">Resume: {previewWs.title}</h2>
           <dl class="resume-preview-meta">
             <dt>Branch</dt><dd>{previewWs.branch}</dd>
+            {#if previewWs.baseRef}
+              <dt>Forked from</dt><dd>{previewWs.baseRef}</dd>
+            {/if}
             <dt>Agent</dt><dd>{previewWs.agent}</dd>
             <dt>Last active</dt><dd>{previewWs.lastActive ? new Date(previewWs.lastActive).toLocaleString() : "—"}</dd>
+            <dt>Resume</dt><dd>{previewWs.willResume ? "Continues the previous conversation" : "Starts fresh"}</dd>
             {#if wsDiffStats[previewWs.id] && ((wsDiffStats[previewWs.id]?.added ?? 0) > 0 || (wsDiffStats[previewWs.id]?.removed ?? 0) > 0)}
               <dt>Changes</dt><dd class="diff-inline">+{wsDiffStats[previewWs.id].added} &minus;{wsDiffStats[previewWs.id].removed}</dd>
             {/if}

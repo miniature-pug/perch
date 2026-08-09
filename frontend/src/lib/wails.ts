@@ -16,6 +16,12 @@ export interface StaleSessionVM {
 export interface WorkspaceVM {
   id: string; worktreePath: string; repoPath: string; agent: string; title: string; branch: string;
   state: AgentState; caps: AgentCaps; paneId: string; lastActive: string;
+  // Whether reopening this session resumes the prior agent conversation (true) or
+  // starts a fresh one (false). Surfaced in the resume-preview modal.
+  willResume?: boolean;
+  // The branch/ref this worktree was forked from, when known. Empty/omitted for
+  // old or in-repo (non-worktree) records, which have no fork point to show.
+  baseRef?: string;
 }
 export type AgentState = "running"|"idle"|"awaiting-approval"|"awaiting-input"|"done"|"errored"|"exited";
 export interface AgentCaps { approvals: boolean; attention: boolean; }

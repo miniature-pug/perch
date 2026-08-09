@@ -3,6 +3,15 @@
   import { untrack } from "svelte";
   import { DEFAULT_AGENT, AGENT_CLAUDE, AGENT_OPENCODE } from "./constants";
   import { trapFocus } from "./actions";
+  import type { RepoInfo } from "./wails";
+
+  // Friendly label for a repo option: "name · branch" when a RepoInfo is known
+  // for this path, otherwise the raw path (e.g. a workspace-derived worktree
+  // path with no discoverRepos() match). The option VALUE always stays the path.
+  function repoLabel(path: string, info: Record<string, RepoInfo> | undefined): string {
+    const r = info?.[path];
+    return r ? `${r.name} · ${r.branch}` : path;
+  }
 
   const SLUG_RE = /^[A-Za-z0-9._\/-]+$/;
 
@@ -63,10 +72,14 @@
   }
 
   let {
-    open, repos, loadBranches, onCreate, onClose, initialAgent = null, error = null,
+    open, repos, repoInfo = {}, loadBranches, onCreate, onClose, initialAgent = null, error = null,
   }: {
     open: boolean;
     repos: string[];
+    // Path → RepoInfo lookup for friendly repo labels (F#5). Entries are optional —
+    // paths with no match (e.g. workspace-derived worktree paths) fall back to
+    // showing the raw path.
+    repoInfo?: Record<string, RepoInfo>;
     loadBranches: (repo: string) => Promise<string[]>;
     onCreate: (agent: string, repo: string, baseRef: string, branch: string, title: string, worktree: boolean) => void;
     onClose: () => void;
@@ -215,7 +228,7 @@
       <label class="setting-row">
         <span class="setting-label">Repo</span>
         <select class="field-select" aria-label="repo" bind:value={repo}>
-          {#each repos as r}<option value={r}>{r}</option>{/each}
+          {#each repos as r}<option value={r}>{repoLabel(r, repoInfo)}</option>{/each}
         </select>
       </label>
 
