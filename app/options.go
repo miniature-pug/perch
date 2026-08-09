@@ -16,12 +16,25 @@ import (
 //go:embed appicon.png
 var appIcon []byte
 
-// disableWebViewDropForSpike4 mitigates WebKitGTK hijacking OS file-drop events
-// before OnFileDrop fires (Wails issue #3686). This flag, combined with frontend
-// preventDefault on dragover/drop, prevents the UI being replaced by the dropped
-// file. If a future Wails release resolves #3686, set to false and remove the
-// corresponding frontend listeners.
-const disableWebViewDropForSpike4 = true
+// fileDropOptions configures Wails native file drop. EnableFileDrop registers
+// the GTK drag-data-received / drag-drop handlers (see
+// vendor/.../linux/window.c onDragDataReceived) that resolve each dropped file's
+// ABSOLUTE path via g_filename_from_uri and deliver it to the frontend through
+// the runtime OnFileDrop event ("wails:file-drop"). This is the only way to get
+// a real path on WebKitGTK — the DOM drop event's File objects expose no path,
+// so the frontend must consume the OnFileDrop paths (see lib/osFileDrop.ts).
+//
+// DisableWebViewDrop is deliberately left false. On Linux it calls
+// gtk_drag_dest_unset, which removes the webview's drag destination and would
+// stop the drag-data-received / drag-drop signals from ever firing — the two
+// options are mutually exclusive for the file-drop-with-paths use case. WebKit
+// navigating to a dropped file (Wails issue #3686) is instead prevented by the
+// Wails runtime's own window-level preventDefault on dragover/drop, which it
+// installs the moment the frontend registers OnFileDrop, backed by the
+// drop-zone's own preventDefault handlers.
+func fileDropOptions() *options.DragAndDrop {
+	return &options.DragAndDrop{EnableFileDrop: true}
+}
 
 const (
 	appTitle            = "perch"
@@ -53,6 +66,12 @@ var defaultWindowBg = options.RGBA{R: 40, G: 40, B: 40, A: 255}
 // in ONLY under `-tags dev` (Wails injects it behind its own build tag), so
 // release builds have no network surface.
 func Run(assets embed.FS, roots []string) error {
+	// Fail fast with an actionable message if the binary embeds the placeholder
+	// frontend stub (e.g. from `make install` / `go install`, which do not
+	// rebuild the frontend) rather than opening a blank window.
+	if err := checkFrontendIndex(assets); err != nil {
+		return err
+	}
 	store, err := registry.Load(registry.DefaultConfigDir())
 	if err != nil {
 		return err
@@ -78,9 +97,7 @@ func Run(assets embed.FS, roots []string) error {
 		Bind: []interface{}{
 			app,
 		},
-		DragAndDrop: &options.DragAndDrop{
-			DisableWebViewDrop: disableWebViewDropForSpike4,
-		},
+		DragAndDrop: fileDropOptions(),
 		SingleInstanceLock: &options.SingleInstanceLock{
 			UniqueId:               singleInstanceID,
 			OnSecondInstanceLaunch: app.onSecondInstance,

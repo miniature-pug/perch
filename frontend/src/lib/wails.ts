@@ -78,7 +78,16 @@ interface App {
 
 declare global {
   interface Window {
-    runtime: { EventsOn(event: string, cb: (...data: any[]) => void): () => void };
+    runtime: {
+      EventsOn(event: string, cb: (...data: any[]) => void): () => void;
+      // Native OS file drop. Delivers each dropped file's ABSOLUTE path (the DOM
+      // drop event carries none on WebKitGTK). useDropTarget=false makes the
+      // callback fire for every file drop; we hit-test the coordinates ourselves
+      // against [data-drop-pane] in lib/osFileDrop.ts. Only one registration is
+      // honored process-wide, so it is registered once in App.svelte.
+      OnFileDrop(cb: (x: number, y: number, paths: string[]) => void, useDropTarget: boolean): void;
+      OnFileDropOff(): void;
+    };
     go: { app: { App: App } };
   }
 }

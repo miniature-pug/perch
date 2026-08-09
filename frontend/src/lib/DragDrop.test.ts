@@ -31,15 +31,49 @@ function fakeDataTransfer(overrides: { textData?: string; files?: File[] } = {})
   };
 }
 
-test("file drop fires writeToPty with @mention when fileDrop cap is true", async () => {
+// OS file drops do NOT arrive through the DOM drop event: on WebKitGTK the
+// dropped File objects carry no real path (the old `File.path ?? f.name` read a
+// non-standard field that is undefined there, silently degrading to a basename).
+// The absolute paths arrive out-of-band via Wails' native OnFileDrop, and
+// lib/osFileDrop.ts routes them to the pane under the drop point. This test
+// exercises that real path by mocking the Wails OnFileDrop callback. The true
+// end-to-end — dragging a file from the OS file manager — needs a real WebKitGTK
+// window and is a manual smoke item (see docs/smoke-checklist.md).
+test("OS file drop routes ABSOLUTE paths to the pty via the Wails OnFileDrop callback", async () => {
   const { default: DragDrop } = await import("./DragDrop.svelte");
+  const { registerOsFileDrop } = await import("./osFileDrop");
   const w = await import("./wails");
+  vi.mocked(w.writeToPty).mockClear();
+
+  // A fileDrop-enabled pane tags its drop-zone with data-drop-pane so the drop
+  // can be routed by hit-testing the coordinates.
   render(DragDrop, { props: { paneId: "p1", fileDrop: true } });
   const zone = screen.getByRole("region", { name: /drop zone/i });
-  // Simulate a file with a path property (Electron/Wails drop model)
-  const file = Object.assign(new File(["x"], "main.go"), { path: "/wt/src/main.go" });
-  await fireEvent.drop(zone, { dataTransfer: fakeDataTransfer({ files: [file] }) });
-  await waitFor(() => expect(w.writeToPty).toHaveBeenCalledWith("p1", expect.any(Array)));
+  expect(zone.getAttribute("data-drop-pane")).toBe("p1");
+
+  // Capture the callback Wails would invoke with (x, y, absolutePaths).
+  let dropCb: ((x: number, y: number, paths: string[]) => void) | null = null;
+  (globalThis as any).runtime = {
+    OnFileDrop: (cb: (x: number, y: number, paths: string[]) => void) => { dropCb = cb; },
+    OnFileDropOff: () => {},
+  };
+  const off = registerOsFileDrop();
+  expect(typeof dropCb).toBe("function");
+
+  // The drop point resolves (via elementFromPoint) to our pane's drop-zone.
+  const origEFP = document.elementFromPoint;
+  document.elementFromPoint = () => zone;
+  try {
+    dropCb!(10, 20, ["/wt/src/main.go"]);
+    await waitFor(() => expect(w.writeToPty).toHaveBeenCalledWith("p1", expect.any(Array)));
+    const [, bytes] = vi.mocked(w.writeToPty).mock.calls[0];
+    const decoded = new TextDecoder().decode(new Uint8Array(bytes as number[]));
+    expect(decoded).toBe("@'/wt/src/main.go' ");
+  } finally {
+    document.elementFromPoint = origEFP;
+    off();
+    delete (globalThis as any).runtime;
+  }
 });
 
 test("renders paste-path hint and no buttons when fileDrop cap is false", async () => {
@@ -129,7 +163,7 @@ test("dragleave into a child does NOT clear drag-active", async () => {
   expect(zone.classList.contains("drag-active")).toBe(true);
 });
 
-test("real file drop still writes to the pty AND clears drag-active", async () => {
+test("a DOM OS-file drop clears drag-active and does NOT itself write to the pty (paths come from Wails, not the DOM)", async () => {
   const { default: DragDrop } = await import("./DragDrop.svelte");
   const w = await import("./wails");
   vi.mocked(w.writeToPty).mockClear();
@@ -139,9 +173,13 @@ test("real file drop still writes to the pty AND clears drag-active", async () =
   await fireEvent.dragEnter(zone, { dataTransfer: fakeDataTransfer({ files: [] }) });
   expect(zone.classList.contains("drag-active")).toBe(true);
 
-  const file = Object.assign(new File(["x"], "main.go"), { path: "/wt/src/main.go" });
+  // A real OS file drop: the DOM event's File carries no usable path, so the DOM
+  // handler must ignore it — the absolute path is delivered via Wails OnFileDrop
+  // — while still clearing the drag-active overlay.
+  const file = new File(["x"], "main.go");
   await fireEvent.drop(zone, { dataTransfer: fakeDataTransfer({ files: [file] }) });
 
-  await waitFor(() => expect(w.writeToPty).toHaveBeenCalledWith("p-drop", expect.any(Array)));
   expect(zone.classList.contains("drag-active")).toBe(false);
+  await new Promise(r => setTimeout(r, 30));
+  expect(w.writeToPty).not.toHaveBeenCalled();
 });

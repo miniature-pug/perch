@@ -20,6 +20,7 @@
   import HelpDialog         from "./lib/HelpDialog.svelte";
   import SettingsPanel      from "./lib/SettingsPanel.svelte";
   import DragDrop           from "./lib/DragDrop.svelte";
+  import { registerOsFileDrop } from "./lib/osFileDrop";
   import { SvelteSet }      from "svelte/reactivity";
   import { layout }         from "./lib/stores/layout.svelte";
   import { mode }           from "./lib/stores/mode.svelte";
@@ -277,6 +278,7 @@
   let offNotify:            (() => void) | null = null;
   let offFsChanged:         (() => void) | null = null;
   let offWorkspaceAttach:   (() => void) | null = null;
+  let offOsFileDrop:        (() => void) | null = null;
 
   // Window focus/blur handlers — report focus state to the backend so it can gate
   // OS desktop notifications (only fire when the window is unfocused).
@@ -327,6 +329,11 @@
     setWindowFocus(document.hasFocus()).catch(() => {});
     window.addEventListener("focus", onWindowFocus);
     window.addEventListener("blur",  onWindowBlur);
+
+    // Register the single global OS file-drop handler. It routes absolute paths
+    // from Wails' native OnFileDrop to the pane under the drop point (see
+    // lib/osFileDrop.ts). No-op when the Wails runtime is absent (tests).
+    offOsFileDrop = registerOsFileDrop();
 
     // Subscribe synchronously BEFORE any await so off-fns are always captured.
     offAgentEvent = onAgentEvent((ev) => {
@@ -454,6 +461,7 @@
     offNotify?.();
     offFsChanged?.();
     offWorkspaceAttach?.();
+    offOsFileDrop?.();
     window.removeEventListener("focus", onWindowFocus);
     window.removeEventListener("blur",  onWindowBlur);
     // Cancel any pending deferred removals to avoid use-after-unmount calls.
@@ -1361,6 +1369,21 @@
                           Opencode session
                         </button>
                       </div>
+                      <div class="empty-state-note">
+                        <p>
+                          A session needs a git repository and either
+                          <code>claude</code> or <code>opencode</code> on your PATH.
+                        </p>
+                        <p>
+                          Each session opens in its own worktree, a separate checkout
+                          of the repository on its own branch, so several agents can
+                          work at once without treading on each other's files.
+                        </p>
+                        <p>
+                          If something looks missing, run <code>perch doctor</code>.
+                          The usage guide at <code>docs/usage.md</code> covers the rest.
+                        </p>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1744,6 +1767,25 @@
     margin: 0;
     font-size: var(--perch-fs-caption);
     color: var(--perch-text-dim);
+  }
+  /* First-run guidance: calm, secondary copy under the CTAs. */
+  .empty-state-note {
+    display: flex;
+    flex-direction: column;
+    gap: var(--perch-sp-2);
+    width: 100%;
+    margin-top: var(--perch-sp-1);
+    padding-top: var(--perch-sp-3);
+    border-top: 1px solid var(--perch-border);
+    text-align: left;
+    font-size: var(--perch-fs-caption);
+    line-height: 1.5;
+    color: var(--perch-text-dim);
+  }
+  .empty-state-note p { margin: 0; }
+  .empty-state-note code {
+    font-family: var(--perch-font-mono);
+    color: var(--perch-text);
   }
   .empty-state-btn {
     display: inline-flex; align-items: center; justify-content: center;

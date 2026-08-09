@@ -37,35 +37,22 @@
 
   onDestroy(detachBackstop);
 
-  // Shell-quote a path so an @mention survives paths containing spaces (or other
-  // shell metacharacters). Wrap in single quotes and escape any embedded single
-  // quote via the '\'' idiom, e.g. it's → 'it'\''s'.
-  function shellQuote(p: string): string {
-    return `'${p.replace(/'/g, "'\\''")}'`;
-  }
-
   async function handleDrop(e: DragEvent) {
     e.preventDefault();
     resetDragActive();
     if (!fileDrop || !e.dataTransfer) return;
-    const files = Array.from(e.dataTransfer.files) as (File & { path?: string })[];
-    if (files.length > 0) {
-      // OS file drop — encode each file path as a shell-quoted @mention so a
-      // path with spaces is not split into multiple tokens.
-      for (const f of files) {
-        const p = (f as any).path ?? f.name;
-        const bytes = Array.from(new TextEncoder().encode(`@${shellQuote(p)} `));
-        await writeToPty(paneId, bytes);
-      }
-    } else {
-      // In-app text drop (behavior a/b/c) — send raw text to the pty
-      const text = e.dataTransfer.getData(MIME_TEXT);
-      if (text) {
-        const bytes = Array.from(new TextEncoder().encode(text));
-        await writeToPty(paneId, bytes);
-      }
-      // MIME_SESSION drops are intentionally ignored here (handled at Stage level)
+    // OS file drops are NOT handled here. On WebKitGTK the DOM drop event's File
+    // objects carry no real path (the non-standard File.path is undefined), so
+    // the absolute paths arrive out-of-band via Wails' native OnFileDrop and are
+    // routed to this pane by lib/osFileDrop.ts (matched on this drop-zone's
+    // data-drop-pane). This handler only carries the in-app text drop — a
+    // file-tree/editor @mention drag, which is a custom MIME payload, not a file.
+    const text = e.dataTransfer.getData(MIME_TEXT);
+    if (text) {
+      const bytes = Array.from(new TextEncoder().encode(text));
+      await writeToPty(paneId, bytes);
     }
+    // MIME_SESSION drops are intentionally ignored here (handled at Stage level)
   }
 
   function prevent(e: DragEvent) { e.preventDefault(); e.stopPropagation(); }
@@ -90,6 +77,7 @@
   aria-label="drop zone"
   class="drop-zone"
   class:drag-active={dragActive}
+  data-drop-pane={fileDrop ? paneId : null}
   ondragover={prevent}
   ondragenter={handleDragEnter}
   ondragleave={handleDragLeave}

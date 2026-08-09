@@ -1546,7 +1546,7 @@ describe("App.svelte ConfirmDialog (workspace remove)", () => {
 });
 
 describe("App.svelte DragDrop", () => {
-  it("dropping a file onto the agent terminal writes @path bytes via writeToPty", async () => {
+  it("an OS file drop onto the agent terminal routes @path bytes to that pane via writeToPty", async () => {
     const { listWorkspaces, writeToPty } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([
       {
@@ -1557,6 +1557,10 @@ describe("App.svelte DragDrop", () => {
       },
     ]);
     const { layout } = await import("./lib/stores/layout.svelte");
+    // routeOsFileDrop is what App's registered Wails OnFileDrop handler calls
+    // with the ABSOLUTE paths WebKitGTK delivers out-of-band. The DOM drop event
+    // itself carries no path, so we drive the real routing path here.
+    const { routeOsFileDrop } = await import("./lib/osFileDrop");
     const { default: App } = await import("./App.svelte");
     render(App);
 
@@ -1569,22 +1573,22 @@ describe("App.svelte DragDrop", () => {
     layout.setView("agent");
     await tick();
 
-    // Get the DragDrop drop-zone
+    // The DragDrop drop-zone wrapping the terminal tags itself with the pane id.
     const dropZone = await screen.findByRole("region", { name: "drop zone" });
-    expect(dropZone).toBeInTheDocument();
+    expect(dropZone.getAttribute("data-drop-pane")).toBe("p1");
 
-    // Create a File with a .path property (Wails/Electron-style)
-    const file = Object.assign(new File(["content"], "foo.ts"), { path: "/tmp/alpha/foo.ts" });
+    // The drop point resolves to that drop-zone; route the native absolute path.
+    const origEFP = document.elementFromPoint;
+    document.elementFromPoint = () => dropZone;
+    try {
+      await routeOsFileDrop(10, 20, ["/tmp/alpha/foo.ts"]);
+    } finally {
+      document.elementFromPoint = origEFP;
+    }
 
-    // Fire the drop event
-    await fireEvent.drop(dropZone, {
-      dataTransfer: { files: [file] },
-    });
-    await tick();
-
-    // writeToPty should have been called with the paneId and bytes encoding the
-    // shell-quoted @mention "@'/tmp/alpha/foo.ts' " (single-quoted so a path with
-    // spaces survives as one token).
+    // writeToPty is called with the paneId and bytes encoding the shell-quoted
+    // @mention "@'/tmp/alpha/foo.ts' " (single-quoted so a path with spaces
+    // survives as one token).
     await waitFor(() => {
       expect(writeToPty).toHaveBeenCalled();
       const [calledPaneId, calledBytes] = (writeToPty as ReturnType<typeof vi.fn>).mock.calls[0];
