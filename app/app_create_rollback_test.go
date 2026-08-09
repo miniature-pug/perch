@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	gitpkg "github.com/Miniature-Pug/perch/internal/git"
-	"github.com/Miniature-Pug/perch/internal/registry"
+	gitpkg "github.com/miniature-pug/perch/internal/git"
+	"github.com/miniature-pug/perch/internal/registry"
 )
 
 // TestCreateWorkspace_RollsBackWorktreeOnPersistFailure is the regression guard for

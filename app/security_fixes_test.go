@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Miniature-Pug/perch/internal/agent"
-	internalpty "github.com/Miniature-Pug/perch/internal/pty"
-	"github.com/Miniature-Pug/perch/internal/registry"
+	"github.com/miniature-pug/perch/internal/agent"
+	internalpty "github.com/miniature-pug/perch/internal/pty"
+	"github.com/miniature-pug/perch/internal/registry"
 )
 
 // ---------------------------------------------------------------------------

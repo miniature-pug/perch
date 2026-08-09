@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Miniature-Pug/perch/internal/discover"
-	"github.com/Miniature-Pug/perch/internal/model"
+	"github.com/miniature-pug/perch/internal/discover"
+	"github.com/miniature-pug/perch/internal/model"
 )
 
 // helper executes run and returns stdout, stderr, and the exit code.

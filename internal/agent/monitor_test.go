@@ -2,7 +2,7 @@
 package agent_test
 
 import (
-	"github.com/Miniature-Pug/perch/internal/agent"
+	"github.com/miniature-pug/perch/internal/agent"
 	"testing"
 )
 

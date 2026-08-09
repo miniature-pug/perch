@@ -6,8 +6,8 @@ import (
 	"os/exec"
 	"testing"
 
-	"github.com/Miniature-Pug/perch/internal/git"
-	"github.com/Miniature-Pug/perch/internal/proc"
+	"github.com/miniature-pug/perch/internal/git"
+	"github.com/miniature-pug/perch/internal/proc"
 )
 
 func TestBranches(t *testing.T) {

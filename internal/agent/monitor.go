@@ -5,7 +5,7 @@ import (
 	"context"
 	"fmt"
 
-	modelpkg "github.com/Miniature-Pug/perch/internal/model"
+	modelpkg "github.com/miniature-pug/perch/internal/model"
 )
 
 type State string

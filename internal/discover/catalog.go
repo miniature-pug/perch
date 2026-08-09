@@ -4,9 +4,9 @@ import (
 	"context"
 	"path/filepath"
 
-	"github.com/Miniature-Pug/perch/internal/git"
-	"github.com/Miniature-Pug/perch/internal/model"
-	"github.com/Miniature-Pug/perch/internal/proc"
+	"github.com/miniature-pug/perch/internal/git"
+	"github.com/miniature-pug/perch/internal/model"
+	"github.com/miniature-pug/perch/internal/proc"
 )
 
 // ProjectTrees bundles a discovered git project with its working trees.

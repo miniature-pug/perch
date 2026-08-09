@@ -10,8 +10,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/Miniature-Pug/perch/internal/git"
-	"github.com/Miniature-Pug/perch/internal/proc"
+	"github.com/miniature-pug/perch/internal/git"
+	"github.com/miniature-pug/perch/internal/proc"
 )
 
 // ── AddWorktreeExisting ───────────────────────────────────────────────────────

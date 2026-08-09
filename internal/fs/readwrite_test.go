@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/Miniature-Pug/perch/internal/fs"
+	"github.com/miniature-pug/perch/internal/fs"
 )
 
 func TestReadWriteRoundTrip(t *testing.T) {

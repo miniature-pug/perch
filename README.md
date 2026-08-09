@@ -62,7 +62,7 @@ life, so perch links 4.1.
 ## Install and run
 
 ```sh
-git clone https://github.com/Miniature-Pug/perch
+git clone https://github.com/miniature-pug/perch
 cd perch
 make gui-build
 ./bin/perch
@@ -93,7 +93,7 @@ make install
 
 Building from source needs the Go toolchain (`go1.26.5`) and Node.js
 (`22.22.3`). The exact pins live in `.tool-versions`. Module path:
-`github.com/Miniature-Pug/perch`.
+`github.com/miniature-pug/perch`.
 
 ## Quick start
 

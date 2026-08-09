@@ -15,8 +15,8 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	perch "github.com/Miniature-Pug/perch"
-	"github.com/Miniature-Pug/perch/internal/model"
+	perch "github.com/miniature-pug/perch"
+	"github.com/miniature-pug/perch/internal/model"
 )
 
 // ── OS boundary ───────────────────────────────────────────────────────────────

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Miniature-Pug/perch/internal/fs"
+	"github.com/miniature-pug/perch/internal/fs"
 )
 
 func TestWatcher_FileCreateFiresOnChange(t *testing.T) {

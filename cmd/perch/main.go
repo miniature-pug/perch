@@ -15,9 +15,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Miniature-Pug/perch/internal/discover"
-	"github.com/Miniature-Pug/perch/internal/doctor"
-	"github.com/Miniature-Pug/perch/internal/proc"
+	"github.com/miniature-pug/perch/internal/discover"
+	"github.com/miniature-pug/perch/internal/doctor"
+	"github.com/miniature-pug/perch/internal/proc"
 )
 
 // version is injected at build time via ldflags:

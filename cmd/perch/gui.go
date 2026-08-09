@@ -1,9 +1,9 @@
 package main
 
 import (
-	perch "github.com/Miniature-Pug/perch"
-	"github.com/Miniature-Pug/perch/app"
-	"github.com/Miniature-Pug/perch/internal/config"
+	perch "github.com/miniature-pug/perch"
+	"github.com/miniature-pug/perch/app"
+	"github.com/miniature-pug/perch/internal/config"
 )
 
 // launchGUI is the seam tests replace so `go test` never opens a webview.

@@ -29,10 +29,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Miniature-Pug/perch/internal/agent"
-	git "github.com/Miniature-Pug/perch/internal/git"
-	internalpty "github.com/Miniature-Pug/perch/internal/pty"
-	"github.com/Miniature-Pug/perch/internal/registry"
+	"github.com/miniature-pug/perch/internal/agent"
+	git "github.com/miniature-pug/perch/internal/git"
+	internalpty "github.com/miniature-pug/perch/internal/pty"
+	"github.com/miniature-pug/perch/internal/registry"
 )
 
 // pollEvent scans the captured emit slice and returns the first entry matching
@@ -70,7 +70,7 @@ func TestE2E_HeadlessFullLoop(t *testing.T) {
 	// ── build fake-agent binary ──────────────────────────────────────────────
 	fakeAgentBin := filepath.Join(t.TempDir(), "fake-agent")
 	buildCmd := exec.CommandContext(ctx, "go", "build", "-o", fakeAgentBin,
-		"github.com/Miniature-Pug/perch/cmd/fake-agent")
+		"github.com/miniature-pug/perch/cmd/fake-agent")
 	if out, err := buildCmd.CombinedOutput(); err != nil {
 		t.Fatalf("build fake-agent: %v: %s", err, out)
 	}

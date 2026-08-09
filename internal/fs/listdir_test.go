@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/Miniature-Pug/perch/internal/fs"
+	"github.com/miniature-pug/perch/internal/fs"
 )
 
 func TestListDir_DirsFirstNameAsc(t *testing.T) {

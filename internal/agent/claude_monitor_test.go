@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Miniature-Pug/perch/internal/agent"
-	"github.com/Miniature-Pug/perch/internal/hooklistener"
-	"github.com/Miniature-Pug/perch/internal/pty"
+	"github.com/miniature-pug/perch/internal/agent"
+	"github.com/miniature-pug/perch/internal/hooklistener"
+	"github.com/miniature-pug/perch/internal/pty"
 )
 
 // newMonitorWithTestListener creates a ClaudeMonitor backed by a real in-process

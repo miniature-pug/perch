@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Miniature-Pug/perch/internal/fs"
+	"github.com/miniature-pug/perch/internal/fs"
 )
 
 func mkfifo(t *testing.T, path string) error {

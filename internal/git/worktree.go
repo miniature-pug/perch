@@ -12,7 +12,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/Miniature-Pug/perch/internal/proc"
+	"github.com/miniature-pug/perch/internal/proc"
 )
 
 // worktreeDirSuffix is appended to the project name to form the sibling

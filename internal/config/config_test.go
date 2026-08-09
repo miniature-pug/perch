@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Miniature-Pug/perch/internal/config"
+	"github.com/miniature-pug/perch/internal/config"
 )
 
 // writeFile is a test helper that writes content to a file path, creating dirs as needed.

@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/Miniature-Pug/perch/internal/model"
-	"github.com/Miniature-Pug/perch/internal/proc"
+	"github.com/miniature-pug/perch/internal/model"
+	"github.com/miniature-pug/perch/internal/proc"
 )
 
 // porcelainForPath returns a minimal git worktree porcelain blob for a single

@@ -3,7 +3,7 @@ package agent
 import (
 	"os/exec"
 
-	"github.com/Miniature-Pug/perch/internal/model"
+	"github.com/miniature-pug/perch/internal/model"
 )
 
 // Opencode is the Adapter for the opencode CLI.

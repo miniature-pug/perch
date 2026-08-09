@@ -14,8 +14,8 @@ import (
 	"sync"
 	"unicode/utf8"
 
-	"github.com/Miniature-Pug/perch/internal/hooklistener"
-	"github.com/Miniature-Pug/perch/internal/safe"
+	"github.com/miniature-pug/perch/internal/hooklistener"
+	"github.com/miniature-pug/perch/internal/safe"
 )
 
 type ClaudeMonitor struct {

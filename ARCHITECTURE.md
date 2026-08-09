@@ -29,7 +29,7 @@ The shape of the system:
 
 Facts of record:
 
-- Module: `github.com/Miniature-Pug/perch`
+- Module: `github.com/miniature-pug/perch`
 - Go toolchain: `go1.26.5` (language floor `go 1.25.0`)
 - Frontend: Svelte 5 runes built by Vite, in `frontend/`
 - Key dependencies: `creack/pty` (the pty bridge), `bmatcuk/doublestar/v4`

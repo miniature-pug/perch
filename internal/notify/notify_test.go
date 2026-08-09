@@ -2,7 +2,7 @@
 package notify_test
 
 import (
-	"github.com/Miniature-Pug/perch/internal/notify"
+	"github.com/miniature-pug/perch/internal/notify"
 	"testing"
 )
 

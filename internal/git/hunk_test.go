@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/Miniature-Pug/perch/internal/git"
-	"github.com/Miniature-Pug/perch/internal/proc"
+	"github.com/miniature-pug/perch/internal/git"
+	"github.com/miniature-pug/perch/internal/proc"
 )
 
 // initRepo creates a temp git repo with an initial commit and returns its path.

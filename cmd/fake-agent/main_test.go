@@ -21,7 +21,7 @@ func TestFakeAgent_PostsHooksAndPrintsLines(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	binDir := t.TempDir()
 	bin := filepath.Join(binDir, "fake-agent")
-	if out, err := exec.Command("go", "build", "-o", bin, "github.com/Miniature-Pug/perch/cmd/fake-agent").CombinedOutput(); err != nil {
+	if out, err := exec.Command("go", "build", "-o", bin, "github.com/miniature-pug/perch/cmd/fake-agent").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
 

@@ -18,7 +18,7 @@ import (
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/fsnotify/fsnotify"
 
-	"github.com/Miniature-Pug/perch/internal/safe"
+	"github.com/miniature-pug/perch/internal/safe"
 )
 
 const (

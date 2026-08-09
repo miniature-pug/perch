@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Miniature-Pug/perch/internal/git"
-	"github.com/Miniature-Pug/perch/internal/proc"
+	"github.com/miniature-pug/perch/internal/git"
+	"github.com/miniature-pug/perch/internal/proc"
 )
 
 // lockContendingRunner delegates every call to a real ExecRunner except the

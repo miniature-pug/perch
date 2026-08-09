@@ -14,14 +14,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Miniature-Pug/perch/internal/agent"
-	fspkg "github.com/Miniature-Pug/perch/internal/fs"
-	git "github.com/Miniature-Pug/perch/internal/git"
-	"github.com/Miniature-Pug/perch/internal/hooklistener"
-	"github.com/Miniature-Pug/perch/internal/notify"
-	"github.com/Miniature-Pug/perch/internal/proc"
-	internalpty "github.com/Miniature-Pug/perch/internal/pty"
-	"github.com/Miniature-Pug/perch/internal/registry"
+	"github.com/miniature-pug/perch/internal/agent"
+	fspkg "github.com/miniature-pug/perch/internal/fs"
+	git "github.com/miniature-pug/perch/internal/git"
+	"github.com/miniature-pug/perch/internal/hooklistener"
+	"github.com/miniature-pug/perch/internal/notify"
+	"github.com/miniature-pug/perch/internal/proc"
+	internalpty "github.com/miniature-pug/perch/internal/pty"
+	"github.com/miniature-pug/perch/internal/registry"
 )
 
 func TestValidateSessionID_AllowlistCharset(t *testing.T) {

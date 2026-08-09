@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Miniature-Pug/perch/internal/model"
-	"github.com/Miniature-Pug/perch/internal/proc"
+	"github.com/miniature-pug/perch/internal/model"
+	"github.com/miniature-pug/perch/internal/proc"
 )
 
 // ValidRef validates a git ref name using the essentials of git check-ref-format

@@ -4,7 +4,7 @@ package hooklistener_test
 import (
 	"context"
 	"fmt"
-	"github.com/Miniature-Pug/perch/internal/hooklistener"
+	"github.com/miniature-pug/perch/internal/hooklistener"
 	"io"
 	"net/http"
 	"strings"

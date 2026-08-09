@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Miniature-Pug/perch/internal/proc"
+	"github.com/miniature-pug/perch/internal/proc"
 )
 
 // WorktreeInfo is a summary of one git worktree from `git worktree list --porcelain`.

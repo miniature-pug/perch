@@ -1,7 +1,7 @@
 // internal/agent/exit_sentinel.go
 package agent
 
-import "github.com/Miniature-Pug/perch/internal/hooklistener"
+import "github.com/miniature-pug/perch/internal/hooklistener"
 
 // The agent runs INSIDE an interactive login shell — perch types the launch line
 // into the shell's stdin (see app.OpenWorkspace → br.Write); it never execs the

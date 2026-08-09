@@ -4,7 +4,7 @@ package fs_test
 import (
 	"testing"
 
-	"github.com/Miniature-Pug/perch/internal/fs"
+	"github.com/miniature-pug/perch/internal/fs"
 )
 
 // fakeRevealRunner records the command passed to it without executing anything.

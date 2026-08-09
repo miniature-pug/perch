@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Miniature-Pug/perch/internal/git"
-	"github.com/Miniature-Pug/perch/internal/proc"
+	"github.com/miniature-pug/perch/internal/git"
+	"github.com/miniature-pug/perch/internal/proc"
 )
 
 // TestUnstageHunk_GoesToRunnerSeam is the FakeRunner argv guard: unstaging must

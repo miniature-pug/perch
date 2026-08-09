@@ -3,7 +3,7 @@ package agent
 import (
 	"os/exec"
 
-	"github.com/Miniature-Pug/perch/internal/model"
+	"github.com/miniature-pug/perch/internal/model"
 )
 
 // Claude is the Adapter for Anthropic's claude-code CLI.

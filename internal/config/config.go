@@ -12,7 +12,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/Miniature-Pug/perch/internal/registry"
+	"github.com/miniature-pug/perch/internal/registry"
 )
 
 // configFileName is the name of the global configuration file.

@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Miniature-Pug/perch/internal/proc"
+	"github.com/miniature-pug/perch/internal/proc"
 )
 
 // ErrWorktreeDirty is returned (or wrapped) when an operation requires a clean

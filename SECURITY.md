@@ -19,7 +19,7 @@ suspected vulnerability.
 Open the repository's **Security** tab and choose **Report a vulnerability**, or
 go straight to:
 
-https://github.com/Miniature-Pug/perch/security/advisories/new
+https://github.com/miniature-pug/perch/security/advisories/new
 
 That opens a private advisory visible only to you and the maintainers. Tell us
 what you need to reproduce the issue: the affected version or commit, the agent

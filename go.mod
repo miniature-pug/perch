@@ -1,4 +1,4 @@
-module github.com/Miniature-Pug/perch
+module github.com/miniature-pug/perch
 
 go 1.25.0
 

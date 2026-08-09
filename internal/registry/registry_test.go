@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Miniature-Pug/perch/internal/registry"
+	"github.com/miniature-pug/perch/internal/registry"
 )
 
 func TestRoundTrip(t *testing.T) {

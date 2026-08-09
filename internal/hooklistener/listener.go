@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Miniature-Pug/perch/internal/safe"
+	"github.com/miniature-pug/perch/internal/safe"
 )
 
 const (
