@@ -53,6 +53,18 @@ This is the one path no automated test covers.
 - [ ] `i` enters TERMINAL mode and keystrokes reach the agent.
 - [ ] `Ctrl-\` then `Ctrl-n` returns to NORMAL mode.
 - [ ] Clicking outside the terminal returns to NORMAL mode.
+- [ ] Select text in the terminal, then copy with ctrl-shift-c or right-click
+      Copy, and paste it elsewhere. Paste into the terminal with ctrl-shift-v or
+      right-click Paste. Bare ctrl-c still sends SIGINT to the agent, it does not
+      copy.
+- [ ] ctrl-shift-c also copies a selection in the diff view, a dialog, and the
+      editor, through the host clipboard (WebKit's own is unreliable).
+- [ ] Use the terminal heavily, switch between the agent, code, and diff views,
+      and resize the window and the shell drawer. The cursor stays in view and
+      typing `clear` fully clears to an empty prompt, with no grey band and no
+      lost cursor.
+- [ ] After a session ends, click Reopen: the "session has ended" overlay clears
+      and stays gone, even if a late or stale exit arrives right after the reopen.
 
 ## The shell drawer
 
@@ -75,6 +87,9 @@ real-agent territory the mock gate cannot exercise.
       new variable.
 - [ ] Repeat by running `perch reload` by hand in the session terminal instead
       of clicking the button. Confirm the same outcome.
+- [ ] Neither the reload button nor a typed `perch reload` prints "command not
+      found": the drawer's PATH includes the running binary, and `$PERCH_BIN
+      reload` works too.
 - [ ] After the relaunch, confirm the session terminal is left in a clean state,
       not mid-command or showing stray output from the reload.
 - [ ] The reload button is absent from the home shell drawer.
