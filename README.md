@@ -19,6 +19,21 @@ active Claude session, covered under [Security](#security).
 Perch runs on Linux. It depends on WebKit2GTK and GTK3, which are Linux
 libraries, so macOS and Windows are out of scope for now.
 
+![The perch cockpit: a glanceable sidebar of session states beside the active stage](docs/images/cockpit-sidebar-states.png)
+
+![An inline tool-call approval, with its keyboard shortcuts and the notification hub](docs/images/approval-notification-hub.png)
+
+![The diff view with per-hunk stage, discard, and send-to-agent](docs/images/diff-view.png)
+
+<!--
+Maintainer note: the three images above are captured by the end-to-end
+screenshot sweep, which renders the real Svelte UI but without a live pty, so
+the terminal panes read as empty. They sell the chrome (sidebar states,
+approval card, diff) honestly but not a working agent. Before the public
+launch, capture a hero screenshot from a real `make gui-build` run with an
+agent mid-task in the terminal, and place it first. Do not fabricate one.
+-->
+
 ## What you get
 
 - **A worktree per session.** Every session is a `git worktree` on its own
@@ -46,7 +61,7 @@ stay the intelligence and your editor stays your editor.
 | Need | Detail |
 |------|--------|
 | Operating system | Linux |
-| System libraries | WebKit2GTK 4.1 and GTK3 |
+| System libraries | WebKit2GTK 4.1 (WebKitGTK 2.40 or newer) and GTK3 |
 | git | any recent version |
 | An agent | `claude` or `opencode` on your `PATH` (at least one) |
 
@@ -57,9 +72,38 @@ sudo apt install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-de
 ```
 
 `libwebkit2gtk-4.1-dev` pulls in `libsoup-3.0-dev`. WebKit2GTK 4.0 is end of
-life, so perch links 4.1.
+life, so perch links 4.1. The 4.1 API arrived in WebKitGTK 2.40, so that is the
+minimum release; anything newer on the 4.1 line works.
 
 ## Install and run
+
+### Download a release
+
+Once perch tags `v0.1.0`, each
+[GitHub Release](https://github.com/miniature-pug/perch/releases) attaches a
+prebuilt `perch-linux-amd64` binary and a `SHA256SUMS` file. Download both,
+verify the checksum, mark the binary executable, and run it:
+
+```sh
+curl -LO https://github.com/miniature-pug/perch/releases/latest/download/perch-linux-amd64
+curl -LO https://github.com/miniature-pug/perch/releases/latest/download/SHA256SUMS
+sha256sum --check --ignore-missing SHA256SUMS
+chmod +x perch-linux-amd64
+./perch-linux-amd64
+```
+
+The binary links WebKit2GTK and GTK3 dynamically, so the
+[Requirements](#requirements) above still hold: those libraries must be present
+to run it. To learn about a new version, watch the repository on GitHub and pick
+Releases under the Custom watch options, or check the
+[releases page](https://github.com/miniature-pug/perch/releases); `perch
+version` prints the build you are running.
+
+### Build from source
+
+Building from source is the contributor path. It needs the Go and Node
+toolchains pinned in `.tool-versions`, alongside the system libraries in
+[Requirements](#requirements).
 
 ```sh
 git clone https://github.com/miniature-pug/perch
@@ -75,8 +119,12 @@ falls back to 4.0, which is end of life. The `production` tag selects the Wails
 production runtime, which omits the dev reload server. The frontend is embedded
 from `frontend/dist/`, so `make gui-build` rebuilds it first. A plain `make
 build` skips that rebuild and embeds the committed placeholder, so prefer `make
-gui-build` for a binary you mean to run. The `wails` CLI is not used; see
-[CONTRIBUTING.md](CONTRIBUTING.md).
+gui-build` for a binary you mean to run. A binary built without the frontend,
+whether by `make build`, `make install`, or a bare `go install`, refuses to
+launch and prints
+`perch: this binary was built without the frontend. Run 'make gui-build' (or
+'make gui-install') and reinstall`, rather than opening a blank window. The
+`wails` CLI is not used; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 `make gui-build` does not install the launcher icon. The GNOME and Wayland dock
 reads the icon from a `.desktop` entry, which `make desktop` writes. To build and
@@ -88,8 +136,13 @@ launches the binary for you.
 To install into your `GOBIN`:
 
 ```sh
+make gui-build   # build the frontend first
 make install
 ```
+
+`make install` runs `go install` and does not rebuild the frontend, so run `make
+gui-build` beforehand; otherwise it embeds the placeholder and the guard above
+stops it at launch.
 
 Building from source needs the Go toolchain (`go1.26.5`) and Node.js
 (`22.22.3`). The exact pins live in `.tool-versions`. Module path:
@@ -203,6 +256,17 @@ before you open a session in it.
 To report a vulnerability privately, see [SECURITY.md](SECURITY.md). The full
 system-level treatment is in [ARCHITECTURE.md](ARCHITECTURE.md).
 
+## Privacy
+
+Perch sends nothing of its own. There is no telemetry, no analytics, no update
+ping, and no account. Its state lives on your machine under `~/.config/perch`
+(or `$XDG_CONFIG_HOME/perch`) and never leaves it. The only network traffic
+perch itself makes is the short-lived loopback listener for a Claude session,
+described under [Security](#security), which never departs `127.0.0.1`. Any
+traffic that reaches the internet is the work of the agent you chose to run,
+`claude` or `opencode`, exactly as it would were you running that agent yourself
+in a terminal.
+
 ## Documentation
 
 | Document | For |
@@ -211,6 +275,7 @@ system-level treatment is in [ARCHITECTURE.md](ARCHITECTURE.md).
 | [Architecture](ARCHITECTURE.md) | How perch is built |
 | [Security policy](SECURITY.md) | Reporting a vulnerability privately |
 | [Contributing](CONTRIBUTING.md) | Toolchain, build, and the test workflow |
+| [Code of Conduct](CODE_OF_CONDUCT.md) | The standard we hold contributors to |
 | [Container framework](containers/README.md) | The one image every check runs in |
 | [Backend packages](internal/README.md) | A map of `internal/` |
 | [Frontend](frontend/README.md) | A map of the Svelte SPA |

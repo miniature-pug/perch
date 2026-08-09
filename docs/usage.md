@@ -36,8 +36,13 @@ quick-start buttons on the empty screen. You choose:
 - **Worktree or in-repo.** A worktree (the default) isolates the work on its own
   branch in its own directory. Turn it off to run the agent in the repository
   itself, on the current branch.
-- **New branch or existing branch.** A new branch starts from a base ref you
-  pick. An existing branch checks out a branch you already have.
+- **New branch or existing branch.** A new branch starts from a base ref that
+  defaults to the repository's own branch rather than a fixed `main`. perch
+  suggests the branch name too, drawn from the agent and the session name (a
+  `feature` session on `claude` becomes `claude/feature`) and made unique against
+  the branches you already hold, so a second session never collides with the
+  first. Edit the suggestion if it does not suit. An existing branch checks out a
+  branch you already have.
 
 Branch names must match `A-Z a-z 0-9 . _ / -`. If you ask for a branch that a
 perch session already owns, perch opens that session instead of creating a
@@ -53,13 +58,23 @@ Clicking a session in the sidebar focuses it. If it is not open yet, whether new
 or closed earlier, perch first shows a preview of its branch, agent, last active
 time, and change count; choose **Open** to start it or **Cancel** to leave it
 closed. A session that is already open switches to it without reopening, so its
-terminal keeps running. Pressing **Enter** opens the selected session. When
+terminal keeps running. Pressing **Enter** opens the selected session; on one
+that is already live it only focuses the pane and never restarts the agent. When
 perch opens a session, it passes the last session id back to the agent so the
 conversation continues rather than starting fresh.
 
 To bring back a session you closed, click its row again. A closed row is dimmed
-until you reopen it. When a session's agent finishes and its terminal ends, the
-pane shows a **Reopen** button that starts it again.
+until you reopen it. If a session's agent exits or crashes while its terminal
+stays alive, the pane reads **exited** and shows a **Reopen** button that starts
+it again; the sidebar row goes dim rather than red, since an ended agent is not
+an error. See [Reading the sidebar](#reading-the-sidebar).
+
+Moving around never costs you your place. Switching views or sessions keeps every
+pane alive: the agent terminal and its scrollback, the shell drawer, the diff and
+its opened hunks, and the editor with its cursor and unsaved edits all stay
+mounted and return exactly as you left them. Nothing is torn down and rebuilt
+behind your back, and toggling the split stage keeps each pane's terminal rather
+than spawning a blank one.
 
 ### Removing a session
 
@@ -89,14 +104,19 @@ agents hand perch different reins.
 
 For **Claude**, perch owns the decision. When Claude wants to run a tool, its
 hook blocks the call and perch shows an approval card docked at the bottom of the
-active session. The card names the tool and summarizes its input. You have three
-choices:
+active session. The card names the tool and shows its input, scrollable when it
+runs long, so a large or many-lined request is legible rather than reduced to a
+blind summary. You have three choices:
 
 - **Allow** runs this one call.
 - **Deny** refuses it.
 - **Always** runs it and remembers the decision. perch stores a rule keyed on
   the agent, the tool, and a hash of the exact input. A later call auto-approves
   only when all three match. A different input to the same tool still asks.
+
+From the keyboard the card takes `a` to allow, `d` to deny, and `Shift+A` to
+always-allow. The Allow button holds focus the moment the card opens, so `Enter`
+allows.
 
 **Approve all** and **Deny all** act on every pending request for the active
 session. You manage and revoke stored rules in Settings.
@@ -144,8 +164,11 @@ Switch to the diff view to see what a session changed. The file list shows
 changed files with their counts. Open a file to see its hunks. For each hunk you
 can:
 
-- **Stage** it with `git apply --cached`.
-- **Discard** it with a reverse apply.
+- **Stage** it with `git apply --cached`. A staged hunk then offers **Unstage**,
+  which lifts it back out of the index with `git apply --reverse --cached`.
+- **Discard** it with a reverse apply. Discard is reversible: perch shows an undo
+  toast for a moment before it commits the removal, so a hunk sent away by mistake
+  is a click from coming back.
 - **Send** it to the agent.
 
 Staging touches the index, so the file leaves the list once its last hunk is
@@ -166,7 +189,10 @@ The file tree lists the session's worktree, respecting `.gitignore`. Right-click
 a file to open it, reveal it in your file manager, copy its path, or send it to
 the agent. The editor is CodeMirror with a git gutter and search. Save with
 `Ctrl-S` or `Cmd-S`. Markdown, Mermaid, and images open in a read-only preview.
-You can also drop files or text onto a terminal to write them into the pty.
+You can also drop files or text onto a terminal to write them into the pty. A
+file dragged in from your desktop file manager lands in the pane under the
+cursor as its absolute path, so the agent receives a path it can open rather
+than a bare filename.
 
 ## Settings
 
@@ -213,9 +239,12 @@ accelerates it. The current mode shows in the status line.
 | `` Ctrl-` `` | Toggle the shell drawer |
 | `Ctrl-b` | Toggle the sidebar |
 | `/` | Filter sessions |
+| `n` | New session |
+| `x` | Remove the selected session, through the confirm dialog |
 | `Enter` | Open the selected session |
-| `i` | Enter TERMINAL mode |
+| `i` | Enter TERMINAL mode, focusing the agent terminal |
 | `:` or `Ctrl-K` / `Cmd-K` | Open the command palette |
+| `?` or `F1` | Open the shortcuts and help panel |
 
 ### TERMINAL mode
 

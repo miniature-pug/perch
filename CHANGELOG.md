@@ -36,8 +36,8 @@ tagged a release yet, so everything to date sits under Unreleased.
   in the agent's own pane.
 - A notification hub and OS desktop notifications in tiers, with do-not-disturb
   that silences the quieter tiers while still recording them.
-- A diff view with per-hunk staging and discarding, and sending a hunk to the
-  agent as context.
+- A diff view with per-hunk staging, unstaging, and discarding, a reversible
+  discard with an undo toast, and sending a hunk to the agent as context.
 - A CodeMirror editor with a git gutter, search, and save, a gitignore-aware
   file tree with reveal and copy-path, and a read-only preview for markdown,
   Mermaid, and images.
@@ -56,6 +56,14 @@ tagged a release yet, so everything to date sits under Unreleased.
   in, toggled by `CONTAINERIZE`, leaving the working tree untouched.
 - A window and taskbar icon embedded in the binary, and a `.desktop` entry
   installed on Linux so the app switcher shows it too.
+- One-key session actions in NORMAL mode: `n` for a new session, `x` to remove
+  the selected one through its confirm, `?` or `F1` for help, and `i` to focus
+  the agent terminal. The approval card takes `a` to allow, `d` to deny,
+  `Shift+A` to always-allow, and `Enter` to allow.
+- An `exited` session state with a Reopen button for an agent that ends or
+  crashes, distinct from a running or errored one.
+- First-run guidance on the empty screen: what a session needs, a plain-word
+  note on worktrees, and a pointer to `perch doctor` and the usage guide.
 
 ### Changed
 
@@ -65,6 +73,13 @@ tagged a release yet, so everything to date sits under Unreleased.
   controls match.
 - Creating a session spawns its terminal immediately, rather than waiting for a
   second click.
+- The approval card shows the tool's input, scrollable when it runs long, rather
+  than a blind summary that truncated a large input.
+- Creating a session suggests a unique branch name from the session name and
+  defaults the base ref to the repository's own branch, not a fixed `main`.
+- Renamed the Go module path to lowercase `github.com/miniature-pug/perch`.
+  GitHub's case redirect broke `go install` on the capitalized path, and the
+  change is cheap before the first tag.
 
 ### Removed
 
@@ -92,17 +107,32 @@ tagged a release yet, so everything to date sits under Unreleased.
 - Staging or discarding a hunk that left the file list and change counts stale.
 - `install.sh` building without the WebKit2GTK 4.1 build tag, which failed to
   link on a host set up by the script itself.
-- Terminal and editor panes lost their content on a view switch; they now stay
-  mounted and hidden, and the editor keeps unsaved edits across an external file
-  change.
-- Clicking a session that was already open reopened it and garbled the terminal.
-  Clicking an open session now just focuses it; only a new or closed session
-  opens. A closed session reopens when you click its dimmed row.
+- Terminal, editor, diff, and file-tree panes lost their content on a view or
+  session switch; they now stay mounted and hidden, the editor keeps unsaved
+  edits across an external file change, and toggling the split stage keeps each
+  pane's terminal rather than spawning a blank one.
+- Clicking or pressing Enter on a session that was already open reopened it and
+  garbled the terminal. It now just focuses the session and never respawns or
+  kills the running agent; only a new or closed session opens, and a closed
+  session reopens when you click its dimmed row.
 - The sidebar attention indicator stayed lit after an approval was resolved. The
   agent monitors now emit a state event on a decision, so it clears on its own.
 - Clicking a notification did nothing. It now navigates to the session it belongs
   to, and opening the hub marks its notifications read so the badge clears.
 - Notifications for a removed session are now pruned.
+- A crashed or exited agent kept a stale `running` look. It now flips to a
+  distinct `exited` state with a Reopen button, while a perch-initiated close
+  stays silent and fires no exited notification.
+- A file dropped from the OS file manager reached the agent as a bare basename
+  instead of a path it could open; it now arrives as an absolute path, routed to
+  the pane under the cursor.
+- A binary built without the frontend opened a blank window; it now refuses to
+  launch and prints how to rebuild it.
+- A shell bridge leaked until shutdown; it now closes with its session. A failed
+  session persist left an orphaned worktree and branch that blocked a retry; it
+  now rolls them back. A slow `opencode serve` bind could kill the pane before
+  its deadline; the readiness poll now derives its budget from the connect
+  deadline.
 
 ### Security
 
@@ -119,3 +149,16 @@ tagged a release yet, so everything to date sits under Unreleased.
   through a shell.
 - Pinned the Go toolchain to `go1.26.5`, which carries the fix for the
   `crypto/tls` advisory GO-2026-5856.
+- Bumped dompurify (3.4.7 to 3.4.13), clearing an mXSS advisory in the sole
+  sanitizer for untrusted repository markdown, and mermaid (11.15.0 to 11.16.1),
+  clearing five advisories in the renderer that draws untrusted `.mmd`. Both stay
+  within their current major.
+- Added `npm audit --omit=dev --audit-level=high` to the frontend gate, so a
+  runtime-dependency advisory fails the build the way govulncheck guards the Go
+  side.
+- Added [SECURITY.md](SECURITY.md) with a private GitHub advisory reporting path
+  and the in-scope threat surface.
+- Corrected the trust boundary in the README and ARCHITECTURE: a cloned
+  repository does carry committed agent-config hooks (`.claude/settings.json`, an
+  opencode config) whose entries the agent runtime executes ungated on session
+  start, distinct from `.git/hooks`, which clone and fetch do not carry.

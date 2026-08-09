@@ -210,6 +210,53 @@ WebKit and cannot be checked headlessly.
       output is still in the scrollback. The home shell stays mounted.
 - [ ] The home shell and a session shell are independent ptys.
 
+## Real-WebKit and real-agent smoke
+
+These prove the finalization campaign's newest behavior, which the mock gate
+cannot reach: a native drag off the desktop, solid glass over a live pty, split
+keep-alive, an agent that dies on its own, and the stubbed-binary guard.
+
+- [ ] **Native file drop.** Drag a file from your desktop file manager onto an
+      agent pane. The pane receives the file's absolute path, not a bare basename,
+      and dropping on a specific pane routes it there rather than to whichever pane
+      was last active. The agent can open the path.
+- [ ] **Solid overlays over the terminal.** Discard a hunk and read the undo
+      toast, then reopen a closed session and read its resume preview. Both render
+      as solid surfaces over the composited terminal, with no terminal text
+      bleeding through them.
+- [ ] **Split keep-alive.** Assign a session to the split pane and scroll its
+      terminal back a few screens. Toggle the split off with `\` and on again. The
+      scrollback is intact; the pane was not rebuilt as a blank xterm.
+- [ ] **Exited agent, and the silent close.** Let an agent exit or crash on its
+      own (quit it from inside, or kill its process). The session flips to `exited`
+      with the "session has ended" overlay and a Reopen button, and the sidebar row
+      goes dim, not red. With the window backgrounded, confirm the OS fires an
+      "Agent exited" notification for that self-death. Then, separately, close a
+      session through perch (Remove or Close): the teardown is silent and fires no
+      exited notification.
+- [ ] **Opening a live session never restarts it.** With a session running, select
+      it and press `Enter`, then also open it from the Session menu. Both only focus
+      the pane; the running agent is never killed or respawned, and its scrollback
+      and conversation are unbroken.
+- [ ] **`i` reaches the agent.** With the agent view active, press `i`. The agent
+      terminal takes focus and your typing goes to the agent, not the shell drawer
+      or the app.
+- [ ] **Splitter drag with a live agent.** With an agent mid-task, drag the pane
+      splitter. The TUI reflows cleanly, with no garbling or repaint splutter.
+- [ ] **Keep-alive across views and sessions.** Scroll an agent terminal, expand a
+      diff hunk, and place the editor cursor mid-file. Switch to another view and
+      another session, then switch back. The terminal scrollback, the expanded hunk,
+      and the editor cursor and any unsaved edits are exactly as you left them.
+      Nothing was torn down and rebuilt.
+- [ ] **Stubbed-binary guard.** Build without the frontend (`make build`, `make
+      install`, or a bare `go install`) and run the result. It refuses to launch and
+      prints `perch: this binary was built without the frontend. Run 'make gui-build'
+      (or 'make gui-install') and reinstall`. No blank window opens.
+- [ ] **First-run empty state.** Launch with no active session. The empty screen
+      shows the welcome guidance: what a session needs (a git repo and `claude` or
+      `opencode` on `PATH`), a plain-word note on worktrees, and the pointer to
+      `perch doctor` and `docs/usage.md`.
+
 ## Shutdown
 
 - [ ] Remove a session through the command palette and confirm it leaves the
