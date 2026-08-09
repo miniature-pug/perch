@@ -1,11 +1,17 @@
 // frontend/src/lib/Terminal.test.ts
-import { render, cleanup } from "@testing-library/svelte";
+import { render, cleanup, screen, fireEvent, waitFor } from "@testing-library/svelte";
 import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 
 const writeSpy   = vi.fn();
 const disposeSpy = vi.fn();
 const focusSpy   = vi.fn();
+const pasteSpy   = vi.fn();
+const fitSpy     = vi.fn();
 const onDataCbs: Array<(d: string) => void> = [];
+// Captured attachCustomKeyEventHandler callback + a controllable selection so the
+// copy/paste chord and context-menu tests can drive the real handler directly.
+let keyHandler: ((e: KeyboardEvent) => boolean) | null = null;
+let selectionText = "";
 
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
@@ -14,12 +20,16 @@ vi.mock("@xterm/xterm", () => ({
     onData(cb: (d: string) => void) { onDataCbs.push(cb); return { dispose() {} }; }
     loadAddon() {}
     focus() { focusSpy(); }
+    attachCustomKeyEventHandler(fn: (e: KeyboardEvent) => boolean) { keyHandler = fn; }
+    hasSelection() { return selectionText.length > 0; }
+    getSelection() { return selectionText; }
+    paste(t: string) { pasteSpy(t); }
     get cols() { return 80; }
     get rows() { return 24; }
     dispose() { disposeSpy(); }
   },
 }));
-vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} } }));
+vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() { fitSpy(); } } }));
 
 beforeEach(() => {
   (globalThis as any).ResizeObserver = class {
@@ -37,15 +47,29 @@ vi.mock("./wails", () => ({
   onPtyExit:  vi.fn((_id: string, cb: (code: number) => void) => { exitCbs.push(cb); return () => {}; }),
   writeToPty: vi.fn(async () => {}),
   resizePty:  vi.fn(async () => {}),
+  clipboardSetText: vi.fn(async () => {}),
+  clipboardText:    vi.fn(async () => ""),
 }));
 
 const realRAF = globalThis.requestAnimationFrame;
+const realCAF = globalThis.cancelAnimationFrame;
 
-afterEach(() => {
-  cleanup(); writeSpy.mockClear(); disposeSpy.mockClear(); focusSpy.mockClear();
-  ptyCbs.length = 0; onDataCbs.length = 0; exitCbs.length = 0;
-  globalThis.requestAnimationFrame = realRAF;
+afterEach(async () => {
+  cleanup();
+  // Restore vi's fakes FIRST, then force the known-good jsdom rAF/CAF back so the
+  // next test's mount effect (which schedules a frame) always has a working global.
   vi.useRealTimers();
+  globalThis.requestAnimationFrame = realRAF;
+  globalThis.cancelAnimationFrame = realCAF;
+  writeSpy.mockClear(); disposeSpy.mockClear(); focusSpy.mockClear();
+  pasteSpy.mockClear(); fitSpy.mockClear();
+  ptyCbs.length = 0; onDataCbs.length = 0; exitCbs.length = 0;
+  keyHandler = null; selectionText = "";
+  const w = await import("./wails");
+  vi.mocked(w.clipboardSetText).mockClear();
+  vi.mocked(w.clipboardText).mockClear();
+  vi.mocked(w.writeToPty).mockClear();
+  vi.mocked(w.resizePty).mockClear();
 });
 
 describe("Terminal.svelte", () => {
@@ -151,5 +175,120 @@ describe("Terminal.svelte", () => {
     const { component } = render(Terminal, { props: { paneId: "pane9", cwd: "/repo" } });
     (component as unknown as { focus: () => void }).focus();
     expect(focusSpy).toHaveBeenCalled();
+  });
+
+  // ── Copy/paste chords (attachCustomKeyEventHandler) ─────────────────────────
+  it("ctrl+shift+c with a selection copies it host-side and swallows the chord", async () => {
+    selectionText = "hello world";
+    const { default: Terminal } = await import("./Terminal.svelte");
+    const w = await import("./wails");
+    render(Terminal, { props: { paneId: "paneC", cwd: "/repo" } });
+    const ret = keyHandler!({ type: "keydown", ctrlKey: true, shiftKey: true, key: "C" } as unknown as KeyboardEvent);
+    expect(ret).toBe(false);
+    expect(w.clipboardSetText).toHaveBeenCalledWith("hello world");
+  });
+
+  it("ctrl+shift+v pastes the host clipboard text and swallows the chord", async () => {
+    const { default: Terminal } = await import("./Terminal.svelte");
+    const w = await import("./wails");
+    vi.mocked(w.clipboardText).mockResolvedValueOnce("pasted!");
+    render(Terminal, { props: { paneId: "paneV", cwd: "/repo" } });
+    const ret = keyHandler!({ type: "keydown", ctrlKey: true, shiftKey: true, key: "v" } as unknown as KeyboardEvent);
+    expect(ret).toBe(false);
+    await waitFor(() => expect(pasteSpy).toHaveBeenCalledWith("pasted!"));
+  });
+
+  it("passes ordinary keys and bare ctrl-c through to the pty (handler returns true)", async () => {
+    const { default: Terminal } = await import("./Terminal.svelte");
+    render(Terminal, { props: { paneId: "paneK", cwd: "/repo" } });
+    // A plain key must reach the pty.
+    expect(keyHandler!({ type: "keydown", ctrlKey: false, shiftKey: false, key: "a" } as unknown as KeyboardEvent)).toBe(true);
+    // Bare ctrl-c (SIGINT/cancel) must NOT be swallowed by the copy chord.
+    expect(keyHandler!({ type: "keydown", ctrlKey: true, shiftKey: false, key: "c" } as unknown as KeyboardEvent)).toBe(true);
+    // ctrl+shift+c with NO selection is not a copy — pass through.
+    selectionText = "";
+    expect(keyHandler!({ type: "keydown", ctrlKey: true, shiftKey: true, key: "c" } as unknown as KeyboardEvent)).toBe(true);
+  });
+
+  // ── Right-click context menu ────────────────────────────────────────────────
+  it("right-click opens the Copy/Paste menu; Copy is disabled without a selection", async () => {
+    selectionText = "";
+    const { default: Terminal } = await import("./Terminal.svelte");
+    const { container } = render(Terminal, { props: { paneId: "paneM", cwd: "/repo" } });
+    await fireEvent.contextMenu(container.querySelector(".terminal")!);
+    expect(container.querySelector('[role="menu"]')).not.toBeNull();
+    const copy = screen.getByRole("menuitem", { name: /copy/i });
+    expect(copy.getAttribute("aria-disabled")).toBe("true");
+    // The disabled Copy is inert.
+    const w = await import("./wails");
+    await fireEvent.click(copy);
+    expect(w.clipboardSetText).not.toHaveBeenCalled();
+  });
+
+  it("context-menu Copy is enabled with a selection and copies it host-side", async () => {
+    selectionText = "selected text";
+    const { default: Terminal } = await import("./Terminal.svelte");
+    const w = await import("./wails");
+    const { container } = render(Terminal, { props: { paneId: "paneM2", cwd: "/repo" } });
+    await fireEvent.contextMenu(container.querySelector(".terminal")!);
+    const copy = screen.getByRole("menuitem", { name: /copy/i });
+    expect(copy.getAttribute("aria-disabled")).not.toBe("true");
+    await fireEvent.click(copy);
+    expect(w.clipboardSetText).toHaveBeenCalledWith("selected text");
+    // Menu closes after the action.
+    expect(container.querySelector('[role="menu"]')).toBeNull();
+  });
+
+  it("context-menu Paste pastes the host clipboard text", async () => {
+    const { default: Terminal } = await import("./Terminal.svelte");
+    const w = await import("./wails");
+    vi.mocked(w.clipboardText).mockResolvedValueOnce("clip");
+    const { container } = render(Terminal, { props: { paneId: "paneM3", cwd: "/repo" } });
+    await fireEvent.contextMenu(container.querySelector(".terminal")!);
+    await fireEvent.click(screen.getByRole("menuitem", { name: /paste/i }));
+    await waitFor(() => expect(pasteSpy).toHaveBeenCalledWith("clip"));
+  });
+
+  // ── Re-fit when the pane becomes visible (A2) ───────────────────────────────
+  it("re-fits when it becomes visible again (double-rAF -> fit + resizePty)", async () => {
+    // Fake timers first: vi.useFakeTimers() installs its OWN fake requestAnimationFrame,
+    // so we override rAF with our manual queue AFTER it to keep control of the frames.
+    vi.useFakeTimers();
+    const rafQueue: FrameRequestCallback[] = [];
+    globalThis.requestAnimationFrame = ((fn: FrameRequestCallback) => rafQueue.push(fn)) as any;
+    const flushRaf = () => { rafQueue.splice(0).forEach((fn) => fn(0)); };
+
+    const { default: Terminal } = await import("./Terminal.svelte");
+    const w = await import("./wails");
+    const { rerender } = render(Terminal, { props: { paneId: "paneVis", cwd: "/repo", visible: false } });
+    // Ignore any fit()/resize scheduled during mount; we only care about the show transition.
+    fitSpy.mockClear();
+    vi.mocked(w.resizePty).mockClear();
+
+    // Flip hidden -> visible: the effect schedules a double rAF, then a debounced resize.
+    await rerender({ props: { paneId: "paneVis", cwd: "/repo", visible: true } });
+    flushRaf(); // outer rAF -> schedules inner
+    flushRaf(); // inner rAF -> refit()
+    expect(fitSpy).toHaveBeenCalled();
+
+    vi.advanceTimersByTime(200);
+    expect(w.resizePty).toHaveBeenCalledWith("paneVis", 80, 24);
+  });
+
+  it("does not re-fit while it stays hidden (visible=false is a no-op)", async () => {
+    vi.useFakeTimers();
+    const rafQueue: FrameRequestCallback[] = [];
+    globalThis.requestAnimationFrame = ((fn: FrameRequestCallback) => rafQueue.push(fn)) as any;
+    const flushRaf = () => { rafQueue.splice(0).forEach((fn) => fn(0)); };
+
+    const { default: Terminal } = await import("./Terminal.svelte");
+    const w = await import("./wails");
+    render(Terminal, { props: { paneId: "paneHidden", cwd: "/repo", visible: false } });
+    fitSpy.mockClear();
+    vi.mocked(w.resizePty).mockClear();
+
+    flushRaf();
+    vi.advanceTimersByTime(200);
+    expect(w.resizePty).not.toHaveBeenCalled();
   });
 });

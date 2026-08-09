@@ -7,6 +7,8 @@ vi.mock("./wails", () => ({
   readFile: vi.fn(async () => "initial content"),
   writeFile: vi.fn(async () => {}),
   hunks: vi.fn(async () => []),
+  clipboardSetText: vi.fn(async () => {}),
+  clipboardText: vi.fn(async () => ""),
 }));
 
 test("loads file content on mount", async () => {
@@ -386,4 +388,75 @@ test("readFile(A) resolving after readFile(B) leaves the editor showing B", asyn
   await new Promise((r) => setTimeout(r, 30));
   const v = EditorView.findFromDOM(document.querySelector(".cm-editor") as HTMLElement)!;
   expect(v.state.doc.toString()).toBe("B-content");
+});
+
+// --- B4: WebKit2GTK clipboard keymap (Ctrl-Shift-C copy / Ctrl-Shift-V paste) ---
+// CodeMirror leaves copy/cut/paste to the browser's native clipboard, which is
+// unreliable under WebKit2GTK; the keymap routes both through the host binding.
+
+test("B4: Ctrl-Shift-C copies the CM selection via clipboardSetText", async () => {
+  const { default: Editor } = await import("./Editor.svelte");
+  const { EditorView } = await import("@codemirror/view");
+  const { EditorSelection } = await import("@codemirror/state");
+  const w = await import("./wails");
+  vi.mocked(w.readFile).mockResolvedValueOnce("hello world\n");
+  vi.mocked(w.hunks).mockResolvedValueOnce([]);
+  vi.mocked(w.clipboardSetText).mockClear();
+
+  render(Editor, { props: { path: "/wt/src/main.go", worktree: "/wt" } });
+  await waitFor(() => expect(document.querySelector(".cm-editor")).not.toBeNull());
+  const view = EditorView.findFromDOM(document.querySelector(".cm-editor") as HTMLElement)!;
+
+  // Select "hello world" (chars 0-11).
+  view.dispatch({ selection: EditorSelection.single(0, 11) });
+
+  // Ctrl-Shift-C on the editor content routes the selection to the host clipboard.
+  await fireEvent.keyDown(view.contentDOM, {
+    key: "c", code: "KeyC", keyCode: 67, ctrlKey: true, shiftKey: true,
+  });
+  await waitFor(() => expect(w.clipboardSetText).toHaveBeenCalledWith("hello world"));
+});
+
+test("B4: Ctrl-Shift-C with an empty selection does not copy (falls through)", async () => {
+  const { default: Editor } = await import("./Editor.svelte");
+  const { EditorView } = await import("@codemirror/view");
+  const { EditorSelection } = await import("@codemirror/state");
+  const w = await import("./wails");
+  vi.mocked(w.readFile).mockResolvedValueOnce("hello world\n");
+  vi.mocked(w.hunks).mockResolvedValueOnce([]);
+  vi.mocked(w.clipboardSetText).mockClear();
+
+  render(Editor, { props: { path: "/wt/src/main.go", worktree: "/wt" } });
+  await waitFor(() => expect(document.querySelector(".cm-editor")).not.toBeNull());
+  const view = EditorView.findFromDOM(document.querySelector(".cm-editor") as HTMLElement)!;
+  // Collapse the selection to a bare caret (from === to).
+  view.dispatch({ selection: EditorSelection.single(3) });
+
+  await fireEvent.keyDown(view.contentDOM, {
+    key: "c", code: "KeyC", keyCode: 67, ctrlKey: true, shiftKey: true,
+  });
+  await new Promise((r) => setTimeout(r, 20));
+  expect(w.clipboardSetText).not.toHaveBeenCalled();
+});
+
+test("B4: Ctrl-Shift-V pastes clipboardText() over the selection via a CM transaction", async () => {
+  const { default: Editor } = await import("./Editor.svelte");
+  const { EditorView } = await import("@codemirror/view");
+  const { EditorSelection } = await import("@codemirror/state");
+  const w = await import("./wails");
+  vi.mocked(w.readFile).mockResolvedValueOnce("AB\n");
+  vi.mocked(w.hunks).mockResolvedValueOnce([]);
+  vi.mocked(w.clipboardText).mockResolvedValue("PASTED");
+
+  render(Editor, { props: { path: "/wt/src/main.go", worktree: "/wt" } });
+  await waitFor(() => expect(document.querySelector(".cm-editor")).not.toBeNull());
+  const view = EditorView.findFromDOM(document.querySelector(".cm-editor") as HTMLElement)!;
+  // Caret between A and B (offset 1).
+  view.dispatch({ selection: EditorSelection.single(1) });
+
+  await fireEvent.keyDown(view.contentDOM, {
+    key: "v", code: "KeyV", keyCode: 86, ctrlKey: true, shiftKey: true,
+  });
+  // The paste dispatch runs after the async clipboardText() resolves.
+  await waitFor(() => expect(view.state.doc.toString()).toBe("APASTEDB\n"));
 });

@@ -51,7 +51,9 @@
        xterm buffer and its pty subscription survive; unmounting rebuilt a blank xterm
        that stayed empty until the next pty output. -->
   <section aria-label="shell" class="shell-body" style:display={collapsed ? "none" : undefined}>
-    <Terminal {paneId} {cwd} />
+    <!-- visible drives the Terminal's re-fit on un-collapse: the drawer hides it via
+         an ancestor display:none, which never fires the terminal's own ResizeObserver. -->
+    <Terminal {paneId} {cwd} visible={!collapsed} />
   </section>
 </div>
 

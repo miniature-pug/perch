@@ -112,6 +112,8 @@ vi.mock("./lib/wails", () => ({
   cleanupSessions:       vi.fn(async () => {}),
   homeShellCwd:          vi.fn(async () => "/home/user"),
   pendingApprovals:      vi.fn(async () => []),
+  clipboardSetText:      vi.fn(async () => {}),
+  clipboardText:         vi.fn(async () => ""),
 }));
 
 // NOTE: layout and mode stores are NOT mocked — we use the real $state runes stores.
@@ -2138,6 +2140,120 @@ describe("App.svelte session:close command", () => {
       expect(screen.getByRole("button", { name: /^Alpha\b/ })).toHaveTextContent("exited")
     );
     expect(screen.getByRole("button", { name: /^Alpha\b/ })).not.toHaveTextContent("error");
+  });
+
+  it("B1: a live agent event self-heals the openIds latch after a stale 'exited' re-latches the ended overlay", async () => {
+    const { listWorkspaces, openWorkspace } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: "ws-1", title: "Alpha", branch: "main", state: "running" as const,
+        worktreePath: "/tmp/alpha", repoPath: "/repo/repo-alpha", agent: "claude", paneId: "p1", lastActive: "",
+        caps: { approvals: false, attention: false },
+      },
+    ]);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    // Open Alpha so it is live (in openIds) and the agent view is mounted.
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
+    await fireEvent.click(alphaBtn);
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    await tick();
+
+    const cb = captured.agent.at(-1)!;
+
+    // The agent process exits → the "session ended / Reopen" overlay latches on.
+    cb({ workspaceId: "ws-1", kind: "state", state: "exited", err: "exited (code 137)" });
+    await waitFor(() => expect(screen.getByTestId("pane-ended")).toBeInTheDocument());
+
+    // Click Reopen → openSession respawns the pty and re-adds ws-1 to openIds.
+    await fireEvent.click(screen.getByRole("button", { name: "Reopen" }));
+    await waitFor(() => expect(openWorkspace).toHaveBeenCalledWith("ws-1"));
+    // A live "running" event arrives after the reopen.
+    cb({ workspaceId: "ws-1", kind: "state", state: "running" });
+    await waitFor(() => expect(screen.queryByTestId("pane-ended")).not.toBeInTheDocument());
+
+    // A SECOND, STALE "exited" (an old shell's exit sentinel firing during the reopen
+    // teardown) re-latches the overlay — openIds has no self-heal of its own. This
+    // documents the one-way latch.
+    cb({ workspaceId: "ws-1", kind: "state", state: "exited", err: "stale exit" });
+    await waitFor(() => expect(screen.getByTestId("pane-ended")).toBeInTheDocument());
+
+    // The next live agent event proves the pty exists and HEALS the latch: the
+    // overlay clears with NO further Reopen click. Without the B1 heal this stays lit.
+    cb({ workspaceId: "ws-1", kind: "state", state: "running" });
+    await waitFor(() => expect(screen.queryByTestId("pane-ended")).not.toBeInTheDocument());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B3: general Ctrl-Shift-C copy on non-terminal surfaces (WebKit2GTK-native clipboard)
+// ---------------------------------------------------------------------------
+describe("App.svelte general Ctrl-Shift-C copy for non-terminal surfaces", () => {
+  it("copies a non-terminal page selection through clipboardSetText", async () => {
+    const { listWorkspaces, clipboardSetText } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
+        worktreePath: "/tmp/alpha", repoPath: "/repo/repo-alpha", agent: "claude", paneId: "p1", lastActive: "",
+        caps: { approvals: false, attention: false },
+      },
+    ]);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await screen.findByRole("button", { name: /^Alpha\b/ });
+
+    // A non-empty selection somewhere on the page (diff view / dialog / general text).
+    const getSel = vi.spyOn(window, "getSelection").mockReturnValue({
+      toString: () => "selected page text",
+    } as unknown as Selection);
+    try {
+      // Target is NOT inside a terminal zone → the copy route fires.
+      await fireEvent.keyDown(document.body, { key: "c", ctrlKey: true, shiftKey: true });
+      await waitFor(() =>
+        expect(clipboardSetText).toHaveBeenCalledWith("selected page text")
+      );
+    } finally {
+      getSel.mockRestore();
+    }
+  });
+
+  it("does NOT copy when the keydown originates inside a [data-terminal-zone]", async () => {
+    const { listWorkspaces, clipboardSetText } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
+        worktreePath: "/tmp/alpha", repoPath: "/repo/repo-alpha", agent: "claude", paneId: "p1", lastActive: "",
+        caps: { approvals: false, attention: false },
+      },
+    ]);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    // Open Alpha so its agent terminal zone (data-terminal-zone) is mounted.
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
+    await fireEvent.click(alphaBtn);
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    await tick();
+
+    const zone = document.querySelector("[data-terminal-zone]") as HTMLElement;
+    expect(zone).not.toBeNull();
+
+    const getSel = vi.spyOn(window, "getSelection").mockReturnValue({
+      toString: () => "selected terminal text",
+    } as unknown as Selection);
+    try {
+      vi.mocked(clipboardSetText).mockClear();
+      // Target IS inside a terminal zone → the terminal owns copy; the app-level
+      // route must skip (never double-handle the terminal's own selection).
+      await fireEvent.keyDown(zone, { key: "c", ctrlKey: true, shiftKey: true });
+      await tick();
+      expect(clipboardSetText).not.toHaveBeenCalled();
+    } finally {
+      getSel.mockRestore();
+    }
   });
 });
 

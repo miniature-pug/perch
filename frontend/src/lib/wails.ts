@@ -73,6 +73,8 @@ interface App {
   WriteFile(absPath: string, content: string): Promise<void>;
   RevealInFiles(absPath: string): Promise<void>;
   CopyPath(absPath: string): Promise<void>;
+  ClipboardSetText(s: string): Promise<void>;
+  ClipboardText(): Promise<string>;
   Branches(repo: string): Promise<string[]>;
   DiscoverRepos(): Promise<RepoInfo[]>;
   GetLayout(): Promise<string>;
@@ -139,6 +141,8 @@ export const readFile     = (absPath: string)                                   
 export const writeFile    = (absPath: string, content: string)                    => app().WriteFile(absPath, content);
 export const revealInFiles = (absPath: string)                                    => app().RevealInFiles(absPath);
 export const copyPath      = (absPath: string)                                    => app().CopyPath(absPath);
+export const clipboardSetText = (s: string)                                       => app().ClipboardSetText(s);
+export const clipboardText    = ()                                                => app().ClipboardText();
 // Layout & Settings
 export const getLayout       = ()                                                    => app().GetLayout();
 export const saveLayout      = (layoutJSON: string)                                  => app().SaveLayout(layoutJSON);

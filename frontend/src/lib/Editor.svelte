@@ -14,7 +14,7 @@
   import { markdown }   from "@codemirror/lang-markdown";
   import { python }     from "@codemirror/lang-python";
   import { go }         from "@codemirror/lang-go";
-  import { readFile, writeFile, hunks as fetchHunks, type Hunk } from "./wails";
+  import { readFile, writeFile, hunks as fetchHunks, clipboardSetText, clipboardText, type Hunk } from "./wails";
   import { gutterChangesFromHunks } from "./gutter";
   import { MIME_TEXT } from "./constants";
   import { addBlocking } from "./stores/notifications.svelte";
@@ -164,6 +164,33 @@
   // state, caret reset to the top).
   let renderedPath: string | null = null;
 
+  // Clipboard keymap (B4). CodeMirror leaves copy/cut/paste to the browser's native
+  // clipboard, which is unreliable under WebKit2GTK, so bind Ctrl-Shift-C / Ctrl-Shift-V
+  // to the host clipboard binding (the same route used elsewhere in the app).
+  // Ctrl-Shift-C copies the main selection — it returns false on an empty selection so
+  // the shortcut is never swallowed when there is nothing to copy. Ctrl-Shift-V pastes
+  // the host clipboard text over the current selection via an ordinary CM transaction.
+  const clipboardKeymap = keymap.of([
+    {
+      key: "Ctrl-Shift-c",
+      run: (v) => {
+        const { from, to } = v.state.selection.main;
+        if (from === to) return false;
+        clipboardSetText(v.state.sliceDoc(from, to)).catch(() => {});
+        return true;
+      },
+    },
+    {
+      key: "Ctrl-Shift-v",
+      run: (v) => {
+        clipboardText()
+          .then((text) => { if (text) v.dispatch(v.state.replaceSelection(text)); })
+          .catch(() => {});
+        return true;
+      },
+    },
+  ]);
+
   // Build a fresh EditorState for a file. Used on first mount and on a file switch,
   // where resetting selection and scroll to the top is the intended behavior.
   function buildState(p: string, content: string): EditorState {
@@ -174,6 +201,7 @@
         changedGutter,
         search({ top: true }),
         highlightSelectionMatches(),
+        clipboardKeymap,
         keymap.of([...searchKeymap, ...defaultKeymap, indentWithTab]),
         bracketMatching(),
         // syntax highlighting via perch CSS-variable-mapped HighlightStyle

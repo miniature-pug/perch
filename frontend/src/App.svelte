@@ -29,7 +29,7 @@
   import NotificationHub    from "./lib/NotificationHub.svelte";
   import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead, markAllRead, dropForWorkspace } from "./lib/stores/notifications.svelte";
   import CleanupPanel from "./lib/CleanupPanel.svelte";
-  import { listWorkspaces, createWorkspace, setWorkspaceTitle, workspaceForBranch, removeWorkspace, openWorkspace, closeWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, onWorkspaceAttach, approve, pendingApprovals, branches, readFile, setWindowFocus, writeToPty, discoverRepos, diffStat, listStaleSessions, forceRemoveWorkspace, homeShellCwd as fetchHomeShellCwd } from "./lib/wails";
+  import { listWorkspaces, createWorkspace, setWorkspaceTitle, workspaceForBranch, removeWorkspace, openWorkspace, closeWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, onWorkspaceAttach, approve, pendingApprovals, branches, readFile, setWindowFocus, writeToPty, discoverRepos, diffStat, listStaleSessions, forceRemoveWorkspace, clipboardSetText, homeShellCwd as fetchHomeShellCwd } from "./lib/wails";
   import type { WorkspaceVM, ApprovalReq, StaleSessionVM, AgentState, RepoInfo } from "./lib/wails";
   import { UNDO_REMOVE_DELAY_MS, GCHORD_TIMEOUT_MS, SIDEBAR_MIN_W, SIDEBAR_MAX_W, SHELL_MIN_H, SHELL_MAX_H, RESIZE_STEP_PX, THEMES, MIME_SESSION, MENTION_PREFIX, AGENT_CLAUDE, AGENT_OPENCODE } from "./lib/constants";
 
@@ -333,11 +333,29 @@
     mode.leaveTerminal();
   }
 
+  // General copy on non-terminal surfaces (B3). WebKit2GTK's navigator.clipboard
+  // is unreliable, so the DiffView, dialogs, and general page text have no
+  // dependable copy route even though their text IS selectable. The terminal owns
+  // Ctrl-Shift-C for its own copy (xterm / the terminal context menu), so skip when
+  // the event originates inside a [data-terminal-zone]. Otherwise, on Ctrl-Shift-C
+  // with a non-empty document selection, route the selection through the host
+  // clipboard binding (WebKit2GTK-native, not navigator.clipboard).
+  function onCopyKeydown(e: KeyboardEvent) {
+    if (!(e.ctrlKey && e.shiftKey) || (e.key !== "c" && e.key !== "C")) return;
+    if ((e.target as HTMLElement)?.closest?.("[data-terminal-zone]")) return;
+    const sel = window.getSelection()?.toString() ?? "";
+    if (!sel) return;
+    clipboardSetText(sel).catch(() => {});
+    e.preventDefault();
+  }
+
   onMount(async () => {
     // Report initial focus state and register focus/blur listeners.
     setWindowFocus(document.hasFocus()).catch(() => {});
     window.addEventListener("focus", onWindowFocus);
     window.addEventListener("blur",  onWindowBlur);
+    // General Ctrl-Shift-C copy for non-terminal surfaces (B3).
+    document.addEventListener("keydown", onCopyKeydown);
 
     // Register the single global OS file-drop handler. It routes absolute paths
     // from Wails' native OnFileDrop to the pane under the drop point (see
@@ -381,6 +399,16 @@
       // approval notifs — the decideOne queue-empty clear already covers those.
       if (ev.state && prev !== ev.state &&
           (ev.state === "running" || ev.state === "idle" || ev.state === "done")) {
+        // Heal the openIds latch (B1). A live agent event on this edge proves the
+        // pane's pty exists. openIds is a one-way latch — added only in openSession,
+        // deleted on close/exit/open-reject — so a late or stale "exited" (an old
+        // shell's exit firing during a reopen teardown, or an openWorkspace reject)
+        // re-latches the "session ended / Reopen" overlay with no self-heal. Re-add
+        // it here so a live event heals the latch. Idempotent when already present.
+        // Scoped to the running/idle/done edge (never awaiting-approval/-input) so a
+        // pre-open approval or question event for a COLD session never marks it open
+        // and suppresses its resume-preview. The overlay stays gated on openIds.
+        openIds.add(ev.workspaceId);
         dropForWorkspace(ev.workspaceId);
       }
       // A FRESH question un-acknowledges the session so its left-pane "asking
@@ -473,6 +501,7 @@
     offOsFileDrop?.();
     window.removeEventListener("focus", onWindowFocus);
     window.removeEventListener("blur",  onWindowBlur);
+    document.removeEventListener("keydown", onCopyKeydown);
     // Cancel any pending deferred removals to avoid use-after-unmount calls.
     for (const p of pendingRemovals) clearTimeout(p.timer);
     clearTimeout(pendingGTimer);
@@ -1269,11 +1298,12 @@
               {#each mountedWorkspaces as ws (ws.id + ":" + (termEpoch[ws.id] ?? 0))}
                 {@const ended = !openIds.has(ws.id)}
                 {@const isSplit = layout.split && layout.splitId === ws.id}
+                {@const vis = isSplit || (ws.id === activeId && layout.view === "agent")}
                 <div class="terminal-zone" class:input-emphasis={ws.id === activeId && emphasizeInput}
                      bind:this={termZoneEls[ws.id]}
                      use:keepHome
                      data-terminal-zone role="group" aria-label="agent terminal"
-                     style:display={isSplit || (ws.id === activeId && layout.view === "agent") ? "" : "none"}
+                     style:display={vis ? "" : "none"}
                      onanimationend={(e) => { if (e.animationName === "perch-emphasis") emphasizeInput = false; }}
                      onpointerdown={() => { if (mode.current === "normal") mode.enterTerminal(); }}>
                   {#if ended}
@@ -1283,7 +1313,7 @@
                     </div>
                   {/if}
                   <DragDrop paneId={ws.paneId} fileDrop={true}>
-                    <Terminal bind:this={termRefs[ws.id]} paneId={ws.paneId} cwd={ws.worktreePath} onExit={() => handleAgentExit(ws.id)} />
+                    <Terminal bind:this={termRefs[ws.id]} paneId={ws.paneId} cwd={ws.worktreePath} visible={vis} onExit={() => handleAgentExit(ws.id)} />
                   </DragDrop>
                 </div>
               {/each}
