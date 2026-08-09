@@ -52,6 +52,33 @@ describe("HelpDialog — F46 complete keymap", () => {
   });
 });
 
+describe("HelpDialog — global keymap parity with App.svelte", () => {
+  it("lists the n / x / ? / F1 bindings implemented in App.svelte onKeyDown", () => {
+    render(HelpDialog, { props: { open: true, onClose: vi.fn() } });
+    expect(screen.getByText("n")).toBeInTheDocument();  // new session
+    expect(screen.getByText("x")).toBeInTheDocument();  // remove selected session
+    expect(screen.getByText("?")).toBeInTheDocument();  // open help
+    expect(screen.getByText("F1")).toBeInTheDocument(); // open help
+    expect(screen.getByText("New session")).toBeInTheDocument();
+    expect(screen.getByText(/Remove the selected session/i)).toBeInTheDocument();
+  });
+
+  it("labels j/k in the code's real direction — j = next, k = previous", () => {
+    render(HelpDialog, { props: { open: true, onClose: vi.fn() } });
+    // Chips render j then k, so the paired action must read next-then-previous.
+    expect(screen.getByText("Next / previous session")).toBeInTheDocument();
+    // The old reversed label must be gone, so a future flip fails this test.
+    expect(screen.queryByText("Previous / next session")).not.toBeInTheDocument();
+  });
+
+  it("documents the approval-card accelerators (a / d / ⇧A) from ApprovalCard.svelte", () => {
+    render(HelpDialog, { props: { open: true, onClose: vi.fn() } });
+    expect(screen.getByText("a")).toBeInTheDocument();  // allow
+    expect(screen.getByText("d")).toBeInTheDocument();  // deny
+    expect(screen.getByText("⇧A")).toBeInTheDocument(); // always allow
+  });
+});
+
 describe("HelpDialog — F53 section views", () => {
   it("section='about' shows the About blurb but not the shortcuts table", () => {
     render(HelpDialog, { props: { open: true, onClose: vi.fn(), section: "about" } });

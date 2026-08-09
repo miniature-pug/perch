@@ -12,26 +12,53 @@
     section?: "shortcuts" | "about" | "all";
   } = $props();
 
-  // Single source of truth for the shortcut table. Each row lists one or more
-  // key chips (each rendered as its own <kbd>) joined by `joiner`, plus the
-  // action it triggers. Mirrors the bindings in App.svelte's onKeyDown handler
-  // and Editor.svelte's Ctrl-S save so the table never drifts from reality.
+  // Single source of truth for the shortcut table, grouped by function. Each row
+  // lists one or more key chips (each rendered as its own <kbd>) joined by
+  // `joiner`, plus the action it triggers. Mirrors the bindings in App.svelte's
+  // onKeyDown handler (global keys), Editor.svelte's Ctrl-S save, and
+  // ApprovalCard.svelte's in-card accelerators, so the table never drifts from
+  // reality. NB: there is NO shared keymap constant — these strings are kept in
+  // sync with App.svelte by hand and guarded by HelpDialog.test.ts, so any
+  // binding changed there must be mirrored here or a test fails.
   type Shortcut = { combos: string[]; joiner?: string; action: string };
-  const shortcuts: Shortcut[] = [
-    { combos: ["j", "k"], joiner: " / ", action: "Previous / next session" },
-    { combos: ["Enter"], action: "Open the selected session" },
-    { combos: ["1", "2", "3"], joiner: " / ", action: "Agent / Code / Diff view" },
-    { combos: ["g d"], action: "Diff view" },
-    { combos: ["g e"], action: "Code view" },
-    { combos: ["g t", "g T"], joiner: " / ", action: "Next / previous view" },
-    { combos: ["\\"], action: "Toggle split" },
-    { combos: ["Ctrl-b"], action: "Toggle sidebar" },
-    { combos: ["Ctrl-` (backtick)"], action: "Toggle shell drawer" },
-    { combos: ["/"], action: "Filter sessions" },
-    { combos: ["Ctrl-K", ":"], joiner: " / ", action: "Command palette" },
-    { combos: ["Ctrl-S"], action: "Save file" },
-    { combos: ["i"], action: "Enter TERMINAL mode (keys go to the agent)" },
-    { combos: ["Ctrl-\\", "Ctrl-n"], joiner: " then ", action: "Leave TERMINAL mode" },
+  type ShortcutGroup = { heading: string; rows: Shortcut[] };
+  const groups: ShortcutGroup[] = [
+    { heading: "Navigation", rows: [
+      // App.svelte onKeyDown: j → next (idx + 1), k → previous (idx - 1).
+      { combos: ["j", "k"], joiner: " / ", action: "Next / previous session" },
+      { combos: ["Enter"], action: "Open the selected session" },
+      { combos: ["/"], action: "Filter sessions" },
+    ]},
+    { heading: "Sessions", rows: [
+      { combos: ["n"], action: "New session" },
+      { combos: ["x"], action: "Remove the selected session" },
+    ]},
+    { heading: "Views & layout", rows: [
+      { combos: ["1", "2", "3"], joiner: " / ", action: "Agent / Code / Diff view" },
+      { combos: ["g d"], action: "Diff view" },
+      { combos: ["g e"], action: "Code view" },
+      { combos: ["g t", "g T"], joiner: " / ", action: "Next / previous view" },
+      { combos: ["\\"], action: "Toggle split" },
+      { combos: ["Ctrl-b"], action: "Toggle sidebar" },
+      { combos: ["Ctrl-` (backtick)"], action: "Toggle shell drawer" },
+    ]},
+    { heading: "Command palette & files", rows: [
+      { combos: ["Ctrl-K", ":"], joiner: " / ", action: "Command palette" },
+      { combos: ["Ctrl-S"], action: "Save file" },
+    ]},
+    { heading: "Terminal mode", rows: [
+      { combos: ["i"], action: "Enter TERMINAL mode (keys go to the agent)" },
+      { combos: ["Ctrl-\\", "Ctrl-n"], joiner: " then ", action: "Leave TERMINAL mode" },
+    ]},
+    { heading: "Approvals", rows: [
+      // ApprovalCard.svelte accelerators — active while a request card is focused.
+      { combos: ["a"], action: "Allow the pending request" },
+      { combos: ["d"], action: "Deny the pending request" },
+      { combos: ["⇧A"], action: "Always allow this tool" },
+    ]},
+    { heading: "Help", rows: [
+      { combos: ["?", "F1"], joiner: " / ", action: "Open this help" },
+    ]},
   ];
 
   function handleKey(e: KeyboardEvent) {
@@ -51,14 +78,17 @@
           <thead>
             <tr><th>Key</th><th>Action</th></tr>
           </thead>
-          <tbody>
-            {#each shortcuts as s}
-              <tr>
-                <td>{#each s.combos as c, i}{#if i > 0}{s.joiner ?? " / "}{/if}<kbd>{c}</kbd>{/each}</td>
-                <td>{s.action}</td>
-              </tr>
-            {/each}
-          </tbody>
+          {#each groups as g}
+            <tbody>
+              <tr class="group-row"><th colspan="2" scope="colgroup">{g.heading}</th></tr>
+              {#each g.rows as s}
+                <tr>
+                  <td>{#each s.combos as c, i}{#if i > 0}{s.joiner ?? " / "}{/if}<kbd>{c}</kbd>{/each}</td>
+                  <td>{s.action}</td>
+                </tr>
+              {/each}
+            </tbody>
+          {/each}
         </table>
       </section>
       {/if}
@@ -131,6 +161,16 @@
     font-weight: 600;
     color: var(--perch-text);
     border-bottom: 1px solid var(--perch-border);
+  }
+
+  /* Group sub-header row — a dim, uppercase section label spanning both columns. */
+  .shortcuts-table .group-row th {
+    padding-top: var(--perch-sp-2);
+    font-size: var(--perch-fs-caption);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--perch-text-dim);
   }
 
   .shortcuts-table kbd {
