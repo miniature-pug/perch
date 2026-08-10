@@ -1,13 +1,14 @@
 /**
  * settings.spec.ts
  *
- * Open SettingsPanel; toggle theme (assert data-theme changes), density, font;
- * toggle DND; revoke an always-rule; assert SaveSettings called exactly once
- * with expected args. Screenshot panel.
+ * Open the SettingsPanel. Toggle the theme and assert that data-theme changes.
+ * Toggle the density and the font. Toggle DND. Revoke an always-rule.
+ * Assert that SaveSettings is called exactly once, with the expected arguments.
+ * Take a screenshot of the panel.
  *
- * IPC method verified: SaveSettings (from wails.ts → app().SaveSettings(s: AppSettings))
- * Settings store calls: setTheme / setDensity / setFont / setDnd / setAlwaysRules
- * All of which ultimately call saveSettings → app().SaveSettings(snap)
+ * IPC method under test: SaveSettings (from wails.ts, app().SaveSettings(s: AppSettings))
+ * Settings store calls: setTheme, setDensity, setFont, setDnd, and setAlwaysRules.
+ * Each of these calls saveSettings, which calls app().SaveSettings(snap).
  */
 
 import { test, expect } from "@playwright/test";
@@ -29,9 +30,9 @@ const INITIAL_SETTINGS = {
 };
 
 async function openSettings(page: import("@playwright/test").Page) {
-  // Click Session in menubar then Settings... via the menu
-  // The easiest way: press ":" for palette then type "settings".
-  // Dismiss any stray welcome-screen dialog first so ":" reaches the app.
+  // One way to open Settings: click Session, then Settings, in the menubar.
+  // The easiest way: press ":" for the palette, then type "settings".
+  // First, dismiss any stray welcome-screen dialog, so ":" reaches the app.
   await page.keyboard.press("Escape");
   await page.keyboard.press(":");
   await page.waitForTimeout(300);

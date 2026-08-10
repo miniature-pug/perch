@@ -22,20 +22,21 @@ import (
 )
 
 const (
-	// gitStatusTimeout is the deadline for git subprocess calls (rev-parse + status --porcelain).
+	// gitStatusTimeout sets the deadline for git subprocess calls: rev-parse and status --porcelain.
 	gitStatusTimeout = 5 * time.Second
 	// gitPorcelainMinLen is the minimum valid line length in git status --porcelain output.
 	gitPorcelainMinLen = 4
-	// defaultFileMode is the permission bits applied to new files written by WriteFile.
+	// defaultFileMode is the permission bits that WriteFile applies to new files.
 	defaultFileMode = 0o644
-	// MaxReadFileBytes caps how much ReadFile will load into memory. It guards
-	// against unbounded reads: a special file like /dev/zero would otherwise
-	// exhaust memory, and a huge regular file would balloon the editor.
+	// MaxReadFileBytes caps how much data ReadFile loads into memory.
+	// MaxReadFileBytes guards against unbounded reads. A special file such as
+	// /dev/zero would otherwise exhaust memory. A huge regular file would
+	// overload the editor.
 	MaxReadFileBytes = 10 << 20 // 10 MiB
 )
 
 // Node is one entry in a directory listing.
-// JSON tags are frozen — do not rename.
+// JSON tags are frozen. Do not rename them.
 type Node struct {
 	Name      string `json:"name"`
 	Path      string `json:"path"` // absolute
@@ -44,10 +45,11 @@ type Node struct {
 	Untracked bool   `json:"untracked"`
 }
 
-// ListDir returns the immediate children of absDir sorted dirs-first, then
-// files ascending by name. When gitignoreAware is true, entries matching
-// any pattern in absDir/.gitignore are excluded (single-level patterns only;
-// no recursive gitignore walk).
+// ListDir returns the immediate children of absDir, sorted with directories
+// first and then files, both in ascending name order. When gitignoreAware is
+// true, ListDir excludes entries that match a pattern in absDir/.gitignore.
+// This filter covers single-level patterns only; ListDir does not walk
+// nested .gitignore files.
 func ListDir(absDir string, gitignoreAware bool) ([]Node, error) {
 	entries, err := os.ReadDir(absDir)
 	if err != nil {
@@ -84,9 +86,10 @@ func ListDir(absDir string, gitignoreAware bool) ([]Node, error) {
 	return result, nil
 }
 
-// enrichGitStatus queries git status for absDir and marks each node's Modified
-// and Untracked fields accordingly. It is best-effort: any git failure leaves
-// both flags false and the listing is returned normally.
+// enrichGitStatus queries git status for absDir. It marks each node's
+// Modified and Untracked fields from the result. enrichGitStatus is
+// best-effort: if git fails, both flags stay false and ListDir still
+// returns the listing.
 func enrichGitStatus(absDir string, nodes []Node) {
 	ctx, cancel := context.WithTimeout(context.Background(), gitStatusTimeout)
 	defer cancel()
@@ -138,7 +141,7 @@ func enrichGitStatus(absDir string, nodes []Node) {
 			nodes[i].Untracked = e.untracked
 			continue
 		}
-		// Untracked directories are emitted with a trailing slash in porcelain.
+		// git emits untracked directories with a trailing slash in porcelain output.
 		if nodes[i].IsDir {
 			if e, ok := entries[rel+"/"]; ok {
 				nodes[i].Modified = e.modified
@@ -149,7 +152,7 @@ func enrichGitStatus(absDir string, nodes []Node) {
 }
 
 // loadGitignorePatterns reads pattern lines from a .gitignore file.
-// Blank lines and comments (#) are ignored.
+// loadGitignorePatterns ignores blank lines and comment lines (#).
 func loadGitignorePatterns(path string) []string {
 	f, err := os.Open(path)
 	if err != nil {
@@ -199,11 +202,11 @@ type Watcher struct {
 	done     chan struct{}
 }
 
-// Watch creates a Watcher for absRoot. onChange is called with the absolute
-// path of any changed file or directory. Watch returns an error if fsnotify
-// cannot be initialised or the root cannot be added.
-// The watcher is recursive: all subdirectories are watched, excluding .git and
-// any directory matching a pattern in absRoot/.gitignore.
+// Watch creates a Watcher for absRoot. Watch calls onChange with the
+// absolute path of any changed file or directory. Watch returns an error if
+// fsnotify fails to start, or if Watch cannot add the root.
+// The watcher is recursive: it watches all subdirectories, except .git and
+// any directory that matches a pattern in absRoot/.gitignore.
 func Watch(absRoot string, onChange func(absPath string)) (*Watcher, error) {
 	fw, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -215,7 +218,7 @@ func Watch(absRoot string, onChange func(absPath string)) (*Watcher, error) {
 		return nil, err
 	}
 	patterns := loadGitignorePatterns(filepath.Join(absRoot, ".gitignore"))
-	// Walk subdirectories and add them (best-effort; errors on individual subdirs are skipped).
+	// Walk the subdirectories and add them. Best-effort: skip any error on a single subdirectory.
 	_ = filepath.WalkDir(absRoot, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -226,7 +229,7 @@ func Watch(absRoot string, onChange func(absPath string)) (*Watcher, error) {
 		if ShouldExclude(d.Name(), patterns) {
 			return filepath.SkipDir
 		}
-		// Root is already added; re-adding is idempotent.
+		// The root is already added. Adding it again is safe.
 		_ = fw.Add(path)
 		return nil
 	})
@@ -262,7 +265,7 @@ func (w *Watcher) loop() {
 	}
 }
 
-// Close stops the watcher. Idempotent.
+// Close stops the watcher. Close is safe to call more than once.
 func (w *Watcher) Close() error {
 	var err error
 	w.once.Do(func() {
@@ -272,16 +275,19 @@ func (w *Watcher) Close() error {
 	return err
 }
 
-// ReadFile reads and returns the contents of absPath. It rejects anything that
-// is not a regular file (device, FIFO, socket, char device — a FIFO or socket
-// would otherwise block forever, a device like /dev/zero would read without
-// end) and enforces MaxReadFileBytes. The Lstat guard on the final component
-// rejects a symlink whose target is a special file; io.LimitReader is a belt to
-// the size cap's suspenders in case the file grows between stat and read.
+// ReadFile reads and returns the contents of absPath. ReadFile rejects any
+// file that is not a regular file: a device, FIFO, socket, or character
+// device. A FIFO or socket would otherwise block forever, and a device such
+// as /dev/zero would read without end. ReadFile also enforces
+// MaxReadFileBytes.
+//
+// The Lstat guard on the final path component rejects a symlink whose
+// target is a special file. io.LimitReader gives a second size check in
+// case the file grows between the stat call and the read.
 func ReadFile(absPath string) ([]byte, error) {
-	// Lstat so a symlink to a special file is caught by the mode check rather
-	// than followed. A symlink to a regular file falls through to os.Open below,
-	// which resolves it normally.
+	// Use Lstat so the mode check catches a symlink to a special file instead
+	// of following it. A symlink to a regular file falls through to os.Open
+	// below, which resolves it normally.
 	li, err := os.Lstat(absPath)
 	if err != nil {
 		return nil, err
@@ -306,14 +312,16 @@ func ReadFile(absPath string) ([]byte, error) {
 	}
 	defer func() { _ = f.Close() }()
 
-	// Re-check the opened file's type: guards against a race where the path was
-	// swapped for a special file between Stat and Open.
+	// Re-check the opened file's type. This guards against a race: something
+	// could replace the path with a special file between the Stat call and
+	// the Open call.
 	if fi, statErr := f.Stat(); statErr == nil && !fi.Mode().IsRegular() {
 		return nil, fmt.Errorf("ReadFile: %q is not a regular file", absPath)
 	}
 
-	// Read at most MaxReadFileBytes+1 so a file that grew past the cap after the
-	// size check is still rejected rather than silently truncated.
+	// Read at most MaxReadFileBytes+1 bytes. This way, ReadFile still rejects
+	// a file that grows past the cap after the size check, instead of
+	// silently truncating it.
 	data, err := io.ReadAll(io.LimitReader(f, MaxReadFileBytes+1))
 	if err != nil {
 		return nil, err
@@ -338,11 +346,13 @@ func (execRevealRunner) Run(name string, args ...string) error {
 	return cmd.Run()
 }
 
-// revealRunner is the active runner; nil means use the default exec runner.
+// revealRunner is the active runner. A nil value means RevealInFiles uses
+// the default exec runner.
 var revealRunner RevealRunner
 
-// SetRevealRunner replaces the runner used by RevealInFiles. Pass nil to
-// restore the default (xdg-open via os/exec). For tests only.
+// SetRevealRunner replaces the runner that RevealInFiles uses. Pass nil to
+// restore the default runner, xdg-open via os/exec. Use SetRevealRunner in
+// tests only.
 func SetRevealRunner(r RevealRunner) {
 	revealRunner = r
 }
@@ -359,9 +369,9 @@ func RevealInFiles(absPath string) error {
 	return r.Run("xdg-open", dir)
 }
 
-// WriteFile writes data to absPath atomically using a temp file + rename.
-// If absPath already exists its permission bits are preserved; new files
-// get mode 0o644.
+// WriteFile writes data to absPath atomically, using a temporary file and a
+// rename. If absPath already exists, WriteFile preserves its permission
+// bits. A new file gets mode 0o644.
 func WriteFile(absPath string, data []byte) error {
 	mode := os.FileMode(defaultFileMode)
 	if info, err := os.Stat(absPath); err == nil {

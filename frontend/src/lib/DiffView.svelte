@@ -5,13 +5,15 @@
   import { MIME_TEXT, UNDO_REMOVE_DELAY_MS } from "./constants";
   import { addBlocking } from "./stores/notifications.svelte";
 
-  // Torn-down guard: a stage/discard promise resolving after the component is
-  // destroyed must not write into freed reactive state.
+  // Torn-down guard. A stage or discard promise can resolve after the
+  // component is destroyed. The promise must not then write into freed
+  // reactive state.
   let mounted = true;
   onDestroy(() => { mounted = false; });
 
-  // Delay before the "Loading…" placeholder appears, so a fast diffStat never
-  // flashes it (F5). Kept local — visual tuning value, not a cross-boundary limit.
+  // Delay before the "Loading…" placeholder appears. A fast diffStat call
+  // never flashes the placeholder (F5). This value stays local. It is a
+  // visual tuning value, not a cross-boundary limit.
   const DIFF_LOADING_DELAY_MS = 150;
 
   function handleHunkDragStart(e: DragEvent, h: Hunk) {
@@ -27,9 +29,10 @@
     onDiffChanged,
   }: {
     worktree: string;
-    // A monotonic signal (the workspace fs version) bumped by the parent when
-    // files change on disk. It re-fetches the file list IN PLACE — expanded hunks
-    // and scroll survive — instead of the parent remounting the whole view (F4).
+    // A monotonic signal (the session's file-system version). The parent
+    // bumps it when files change on disk. The signal re-fetches the file
+    // list in place. Expanded hunks and the scroll position survive. The
+    // parent does not remount the whole view (F4).
     refresh?: number;
     onSendToAgent?: (text: string) => void;
     onDiffChanged?: () => void;
@@ -50,11 +53,13 @@
   let error     = $state(false);
   let flashFile = $state<string | null>(null);
 
-  // Deferred-discard queue (F1). Discard is the one irreversible working-tree
-  // action (no reflog, no re-apply binding), so instead of reverting immediately
-  // it is HELD: the hunk is optimistically hidden, an Undo toast shows for
-  // UNDO_REMOVE_DELAY_MS, and only when that elapses unopposed does the real
-  // git revert run. Undo cancels it outright — nothing is ever lost. Mirrors the
+  // Deferred-discard queue (F1). Discard is the only irreversible
+  // working-tree action: git keeps no reflog entry and gives no re-apply
+  // binding for it. So the code does not revert the change right away. It
+  // holds the discard instead. The hunk disappears from view immediately.
+  // An Undo toast shows for UNDO_REMOVE_DELAY_MS. The git revert runs only
+  // after that delay passes with no Undo. Undo cancels the discard
+  // completely, so the code never loses the change. This matches the
   // session-remove undo pattern in App.svelte.
   type PendingDiscard = {
     id: string; worktree: string; file: string; index: number;
@@ -62,16 +67,17 @@
   };
   let pendingDiscards = $state<PendingDiscard[]>([]);
   let discardSeq = 0;
-  // Files with a discard in flight: their remaining hunk actions are frozen so a
-  // concurrent stage/unstage/discard on the same file can't shift the pending
-  // hunk's index out from under the deferred revert.
+  // Files with a discard in flight. Their remaining hunk actions stay
+  // frozen. This stops a concurrent stage, unstage, or discard on the same
+  // file from shifting the pending hunk's index during the deferred revert.
   const pendingDiscardFiles = $derived(new Set(pendingDiscards.map((p) => p.file)));
 
-  // Cancellation guard: if `worktree` changes before an in-flight diffStat resolves,
-  // the stale resolve must not clobber the newer worktree's files / loading flag.
-  // The "Loading…" placeholder is armed on a delay (F5) so a fast resolve — the
-  // common case — never flashes it; the previous file list stays visible until
-  // the new one arrives.
+  // Cancellation guard. If `worktree` changes before an in-flight diffStat
+  // call resolves, the stale result must not overwrite the newer worktree's
+  // files or loading flag. The "Loading…" placeholder appears only after a
+  // delay (F5). A fast resolve is the common case, and it never flashes the
+  // placeholder. The previous file list stays visible until the new list
+  // arrives.
   $effect(() => {
     const wt = worktree;
     refresh; // track: an fs change re-fetches the file list in place (F4)
@@ -85,10 +91,12 @@
     return () => { cancelled = true; clearTimeout(loadingTimer); };
   });
 
-  // Commit any discard still pending when we navigate away from a worktree (or the
-  // component is destroyed): the user asked to discard and did not Undo, so honor
-  // it. Runs in the effect cleanup, which fires on both worktree change and
-  // destroy. Timers are cleared so the commit never double-fires.
+  // Commit any pending discard when the user navigates away from a
+  // worktree, or when the component is destroyed. The user asked to
+  // discard and did not press Undo, so the code honors that request. This
+  // code runs in the effect cleanup. The cleanup fires on both a worktree
+  // change and a component destroy. The code clears timers so the commit
+  // never runs twice.
   $effect(() => {
     const wt = worktree;
     return () => {
@@ -114,17 +122,18 @@
       const r = await diffStat(worktree);
       if (mounted) files = r;
     } catch {
-      // Refresh failure must not break staging — leave stale counts.
+      // A refresh failure must not break staging. The stale counts stay as they are.
     }
   }
 
-  // Re-fetch the hunk list for a file (used in finally to keep indices fresh).
+  // Re-fetch the hunk list for a file. A `finally` block calls this function
+  // to keep the indices current.
   async function refreshHunks(file: string) {
     try {
       const hs = await fetchHunks(worktree, file);
       if (mounted) expanded = { ...expanded, [file]: hs };
     } catch {
-      // Hunk refresh failure is non-fatal — the file list refresh still runs.
+      // A hunk refresh failure is not fatal. The file list refresh still runs.
     }
   }
 
@@ -136,7 +145,8 @@
       const msg = e instanceof Error ? e.message : String(e);
       addBlocking(worktree, "Stage failed", `Could not stage hunk in ${h.file}: ${msg}`);
     } finally {
-      // ALWAYS re-fetch so stale hunk indices never persist after a partial op.
+      // Always re-fetch. This stops stale hunk indices from persisting
+      // after a partial operation.
       await refreshHunks(h.file);
       await refreshFiles();
       if (mounted) onDiffChanged?.();
@@ -157,13 +167,14 @@
     }
   }
 
-  // F1: schedule a discard instead of running it now. The hunk is hidden right
-  // away (it reads as discarded) and an Undo toast is shown; the working tree is
-  // untouched until the timer fires.
+  // F1: schedule a discard instead of running it now. The hunk hides right
+  // away, so it reads as discarded, and an Undo toast appears. The working
+  // tree stays untouched until the timer fires.
   function requestDiscard(h: Hunk) {
     if (pendingDiscardFiles.has(h.file)) return; // one deferred discard per file
-    // Optimistically hide the hunk. No re-fetch, so every other hunk keeps the
-    // index the deferred revert was captured against.
+    // Hide the hunk immediately, without waiting for the discard to
+    // finish. The code does not re-fetch, so every other hunk keeps the
+    // index the deferred revert uses.
     const current = expanded[h.file];
     if (current) {
       expanded = { ...expanded, [h.file]: current.filter((x) => x.index !== h.index) };
@@ -181,7 +192,7 @@
     if (!p) return;
     clearTimeout(p.timer);
     pendingDiscards = pendingDiscards.filter((x) => x.id !== id);
-    // Nothing was reverted in git — re-derive the file's hunks to bring the row back.
+    // Git reverted nothing. Re-derive the file's hunks to bring the row back.
     if (p.worktree === worktree) void refreshHunks(p.file);
   }
 
@@ -218,8 +229,9 @@
   {:else if error}
     <p class="diff-empty">Could not load diff</p>
   {:else if !hasLoaded}
-    <!-- Initial fetch in flight and still under the loading-delay threshold:
-         render nothing so neither "Loading…" nor "No changes" flashes (F5). -->
+    <!-- The initial fetch is in flight and still under the loading-delay
+         threshold. Render nothing, so neither "Loading…" nor "No changes"
+         flashes (F5). -->
   {:else if files.length === 0}
     <p class="diff-empty">No changes</p>
   {:else}
@@ -499,8 +511,9 @@
   .btn-danger:focus-visible { outline-color: var(--perch-err); }
   .btn-danger:disabled:hover { border-color: var(--perch-err); color: var(--perch-err); background: var(--perch-bg); }
 
-  /* F6: keep the irreversible Discard out of fat-finger range of the safe Stage.
-     A clear gap plus a divider so the two are not coplanar tap targets. */
+  /* F6: keep the irreversible Discard button far from the safe Stage
+     button, so users do not tap Discard by mistake. A gap and a divider
+     line separate the two buttons clearly. */
   .btn-discard {
     margin-left: var(--perch-sp-2);
     position: relative;
@@ -533,8 +546,9 @@
   }
 
   /* ---------- Discard undo toast (F1) ---------- */
-  /* Solid background (not translucent glass) so it never bleeds through onto the
-     content behind it — the same lesson as the WebKit glass fix elsewhere. */
+  /* The background is solid, not translucent glass. This stops the toast
+     from bleeding through onto the content behind it, the same fix used
+     for the WebKit glass issue elsewhere. */
   .undo-toast-stack {
     position: fixed;
     bottom: var(--perch-sp-3);

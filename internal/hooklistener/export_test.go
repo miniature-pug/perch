@@ -4,9 +4,9 @@ package hooklistener
 
 import "time"
 
-// FillEventsBuffer directly writes n filler HookEvent values into the
-// events channel, saturating it. Panics if n exceeds the channel capacity.
-// For use by TestStopEventNotDroppedUnderBackpressure only.
+// FillEventsBuffer writes n filler HookEvent values directly into the events
+// channel, until the channel is full. FillEventsBuffer panics if n exceeds the
+// channel capacity. Use it only in TestStopEventNotDroppedUnderBackpressure.
 func (l *Listener) FillEventsBuffer(n int) {
 	for i := 0; i < n; i++ {
 		l.events <- HookEvent{Type: "SessionStart", SessionID: "filler"}
@@ -16,10 +16,10 @@ func (l *Listener) FillEventsBuffer(n int) {
 // EventsCap returns the capacity of the events channel.
 func (l *Listener) EventsCap() int { return cap(l.events) }
 
-// ServerTimeouts exposes the http.Server's configured timeouts so a test can
-// assert the slowloris-hardening deadlines are set. WriteTimeout is included so
-// a test can verify it stays 0 (unbounded) — a finite WriteTimeout would abort a
-// blocking PreToolUse approval.
+// ServerTimeouts exposes the http.Server's configured timeouts. A test can
+// then assert that the slowloris-hardening deadlines are set. ServerTimeouts
+// also includes WriteTimeout, so a test can verify it stays 0 (unbounded). A
+// finite WriteTimeout would abort a blocking PreToolUse approval.
 func (l *Listener) ServerTimeouts() (readHeader, read, write, idle time.Duration) {
 	return l.srv.ReadHeaderTimeout, l.srv.ReadTimeout, l.srv.WriteTimeout, l.srv.IdleTimeout
 }

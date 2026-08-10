@@ -11,7 +11,7 @@ import (
 	"github.com/miniature-pug/perch/internal/proc"
 )
 
-// ErrWorktreeDirty is returned (or wrapped) when an operation requires a clean
+// ErrWorktreeDirty is returned (or wrapped) when an operation needs a clean
 // worktree but the working tree has uncommitted changes.
 var ErrWorktreeDirty = errors.New("worktree has uncommitted changes")
 
@@ -25,9 +25,10 @@ var ErrNoCommits = errors.New("git: repository has no commits yet")
 
 // HasCommits reports whether repoRoot has at least one commit (a born HEAD).
 // It runs `git -C <repoRoot> rev-parse --verify --quiet HEAD`. On an unborn
-// HEAD git exits non-zero with empty stdout AND empty stderr — that is the
-// canonical unborn signal and yields (false, nil). A non-empty stderr (e.g.
-// "fatal: not a git repository") is a real error and is returned wrapped.
+// HEAD, git exits non-zero with empty stdout AND empty stderr. That is the
+// canonical unborn signal, and HasCommits yields (false, nil). A non-empty
+// stderr (e.g. "fatal: not a git repository") is a real error. HasCommits
+// wraps and returns it.
 func HasCommits(ctx context.Context, r proc.Runner, repoRoot string) (bool, error) {
 	stdout, stderr, err := r.Run(ctx, "git", "-C", repoRoot, "rev-parse", "--verify", "--quiet", "HEAD")
 	if err != nil {
@@ -45,8 +46,8 @@ func HasCommits(ctx context.Context, r proc.Runner, repoRoot string) (bool, erro
 
 // AddWorktreeExisting runs `git -C <repoRoot> worktree add <treePath> <branch>`.
 // It checks out an existing branch into a new linked worktree (no -b; the branch
-// must already exist). branch is validated with ValidRef for flag-injection
-// parity with AddWorktree.
+// must already exist). AddWorktreeExisting validates branch with ValidRef for
+// flag-injection parity with AddWorktree.
 func AddWorktreeExisting(ctx context.Context, r proc.Runner, repoRoot, branch, treePath string) error {
 	if err := ValidRef(branch); err != nil {
 		return fmt.Errorf("git: AddWorktreeExisting: invalid branch: %w: %w", ErrInvalidRef, err)
@@ -83,7 +84,7 @@ func RemoveWorktree(ctx context.Context, r proc.Runner, repoRoot, treePath strin
 }
 
 // WorktreeDirty reports whether the working tree at treePath has any uncommitted
-// changes. It runs `git -C <treePath> status --porcelain`; non-empty output means dirty.
+// changes. It runs `git -C <treePath> status --porcelain`. Non-empty output means dirty.
 func WorktreeDirty(ctx context.Context, r proc.Runner, treePath string) (bool, error) {
 	stdout, stderr, err := r.Run(ctx, "git", "-C", treePath, "status", "--porcelain")
 	if err != nil {
@@ -100,8 +101,8 @@ func WorktreeDirty(ctx context.Context, r proc.Runner, treePath string) (bool, e
 // `git -C <repoRoot> branch --merged <base> --format=%(refname:short)` and
 // checking whether branch appears in the output. Using --format avoids the
 // leading "* " marker on the current branch that `git branch --merged` emits
-// in default format. Both branch and base are validated with ValidRef for
-// flag-injection parity.
+// in default format. BranchMerged validates both branch and base with
+// ValidRef for flag-injection parity.
 func BranchMerged(ctx context.Context, r proc.Runner, repoRoot, branch, base string) (bool, error) {
 	if err := ValidRef(branch); err != nil {
 		return false, fmt.Errorf("git: BranchMerged: invalid branch: %w: %w", ErrInvalidRef, err)
@@ -127,8 +128,9 @@ func BranchMerged(ctx context.Context, r proc.Runner, repoRoot, branch, base str
 }
 
 // DeleteBranch runs `git -C <repoRoot> branch -d|-D <branch>`. When force is
-// false, git -d is used (git refuses to delete an unmerged branch). When force
-// is true, git -D is used. branch is validated with ValidRef for flag-injection parity.
+// false, DeleteBranch uses git -d (git refuses to delete an unmerged
+// branch). When force is true, DeleteBranch uses git -D. DeleteBranch
+// validates branch with ValidRef for flag-injection parity.
 func DeleteBranch(ctx context.Context, r proc.Runner, repoRoot, branch string, force bool) error {
 	if err := ValidRef(branch); err != nil {
 		return fmt.Errorf("git: DeleteBranch: invalid branch: %w: %w", ErrInvalidRef, err)
@@ -148,7 +150,7 @@ func DeleteBranch(ctx context.Context, r proc.Runner, repoRoot, branch string, f
 	return nil
 }
 
-// CurrentBranch returns the short name of the currently checked-out branch in the
+// CurrentBranch returns the short name of the branch checked out now in the
 // repo at repoRoot. Returns the literal "HEAD" if detached. It runs
 // `git -C <repoRoot> rev-parse --abbrev-ref HEAD`.
 func CurrentBranch(ctx context.Context, r proc.Runner, repoRoot string) (string, error) {
@@ -165,7 +167,8 @@ func CurrentBranch(ctx context.Context, r proc.Runner, repoRoot string) (string,
 
 // CheckoutBranch runs `git -C <repoRoot> checkout <branch>`. git fails (and
 // returns a non-zero exit) if the current working tree has changes that conflict
-// with the target branch. branch is validated with ValidRef for flag-injection parity.
+// with the target branch. CheckoutBranch validates branch with ValidRef for
+// flag-injection parity.
 func CheckoutBranch(ctx context.Context, r proc.Runner, repoRoot, branch string) error {
 	if err := ValidRef(branch); err != nil {
 		return fmt.Errorf("git: CheckoutBranch: invalid branch: %w: %w", ErrInvalidRef, err)

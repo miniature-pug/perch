@@ -3,7 +3,7 @@ package discover
 import "sort"
 
 // ProjectStat holds the two fields that drive frecency ranking.
-// Inlined from internal/state after that package's deletion.
+// This type was moved here from internal/state when that package was removed.
 type ProjectStat struct {
 	Rank         float64 `json:"rank"`
 	LastAccessed int64   `json:"last_accessed"`
@@ -34,7 +34,8 @@ func frecencyScore(rank float64, lastAccessed, now int64) float64 {
 }
 
 // SortedPaths returns project paths sorted by descending frecency score.
-// Ties break alphabetically. Matches the contract of the deleted state.SortedPaths.
+// SortedPaths breaks ties alphabetically. It matches the contract of the
+// removed state.SortedPaths function.
 func SortedPaths(projects map[string]ProjectStat, now int64) []string {
 	paths := make([]string, 0, len(projects))
 	for k := range projects {

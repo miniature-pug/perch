@@ -1,11 +1,11 @@
 /**
  * approval.spec.ts
  *
- * Trigger an approval request via window.__emit("agent:event", payload):
- * - ApprovalCard renders when caps.approvals=true and an approval is in state
- * - Click Allow → Approve IPC called with (reqId, "allow")
- * - Click Deny → Approve IPC called with (reqId, "deny")
- * - Click Always → Approve IPC called with (reqId, "always")
+ * Trigger an approval request with window.__emit("agent:event", payload).
+ * - The ApprovalCard renders when caps.approvals=true and an approval is in state.
+ * - Click Allow: this calls the Approve IPC method with (reqId, "allow").
+ * - Click Deny: this calls the Approve IPC method with (reqId, "deny").
+ * - Click Always: this calls the Approve IPC method with (reqId, "always").
  *
  * IPC method: Approve(reqId, decision) from wails.ts
  * Event channel: "agent:event" (onAgentEvent)
@@ -26,7 +26,7 @@ const APPROVAL_REQ = {
 };
 
 async function triggerApproval(page: import("@playwright/test").Page) {
-  // Emit an agent:event with kind=approval and the workspace's id
+  // Emit an agent:event with kind=approval, using the session's ID.
   await page.evaluate(
     ({ wsId, req }) => {
       (window as any).__emit("agent:event", {
@@ -52,12 +52,12 @@ test.beforeEach(async ({ page }) => {
   await page.waitForSelector("#app", { timeout: 10000 });
   await page.waitForTimeout(1500);
 
-  // Activate the workspace
+  // Activate the session
   const sidebarItem = page.locator("text=test session").first();
   if (await sidebarItem.isVisible()) {
     await sidebarItem.click();
     await page.waitForTimeout(500);
-    // Resume preview now gates session open — click "Open" to confirm.
+    // The resume preview now gates opening a session. Click "Open" to confirm.
     const resumeOpenBtn = page.locator('[data-testid="resume-preview"] button.btn-primary');
     await resumeOpenBtn.waitFor({ state: "visible", timeout: 5000 });
     await resumeOpenBtn.click();
@@ -75,7 +75,7 @@ test("ApprovalCard renders after agent:event with kind=approval", async ({ page 
   await expect(card.locator(".tool-name")).toContainText("bash");
   await expect(card.locator(".approval-summary")).toContainText("npm install");
 
-  // All three action buttons present (exact "Allow" avoids matching "Always allow")
+  // All three action buttons are present. The exact match on "Allow" avoids matching "Always allow".
   await expect(card.getByRole("button", { name: "Allow", exact: true })).toBeVisible();
   await expect(card.locator("button", { hasText: "Deny" })).toBeVisible();
   await expect(card.getByRole("button", { name: "Always allow" })).toBeVisible();

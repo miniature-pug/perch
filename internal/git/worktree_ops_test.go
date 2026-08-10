@@ -38,8 +38,9 @@ func TestAddWorktreeExisting_CallArgs(t *testing.T) {
 	}
 }
 
-// TestAddWorktreeExisting_FlagInjection verifies a leading-dash branch is
-// rejected before any git call (flag-injection parity with AddWorktree).
+// TestAddWorktreeExisting_FlagInjection verifies that AddWorktreeExisting
+// rejects a leading-dash branch before any git call (flag-injection parity
+// with AddWorktree).
 func TestAddWorktreeExisting_FlagInjection(t *testing.T) {
 	r := proc.NewFakeRunner()
 	err := git.AddWorktreeExisting(context.Background(), r,
@@ -91,7 +92,7 @@ func TestRemoveWorktree_CallArgs_NoForce(t *testing.T) {
 	}
 }
 
-// TestRemoveWorktree_CallArgs_Force verifies "--force" is appended when force=true.
+// TestRemoveWorktree_CallArgs_Force verifies that RemoveWorktree appends "--force" when force=true.
 func TestRemoveWorktree_CallArgs_Force(t *testing.T) {
 	r := proc.NewFakeRunner()
 	wantArgs := []string{"-C", "/repos/proj", "worktree", "remove", "--force",
@@ -134,7 +135,7 @@ func TestRemoveWorktree_Real(t *testing.T) {
 
 // ── WorktreeDirty ─────────────────────────────────────────────────────────────
 
-// TestWorktreeDirty_CallArgs verifies "status --porcelain" argv emitted against treePath.
+// TestWorktreeDirty_CallArgs verifies that WorktreeDirty emits the "status --porcelain" argv against treePath.
 func TestWorktreeDirty_CallArgs(t *testing.T) {
 	r := proc.NewFakeRunner()
 	wantArgs := []string{"-C", "/wt/feat-x", "status", "--porcelain"}
@@ -278,8 +279,8 @@ func TestBranchMerged_Real(t *testing.T) {
 	}
 }
 
-// TestBranchMerged_FlagInjection verifies that a leading-dash base (and a
-// leading-dash branch) is rejected before any git call.
+// TestBranchMerged_FlagInjection verifies that BranchMerged rejects a
+// leading-dash base (and a leading-dash branch) before any git call.
 func TestBranchMerged_FlagInjection(t *testing.T) {
 	t.Run("leading-dash base", func(t *testing.T) {
 		r := proc.NewFakeRunner()
@@ -311,7 +312,7 @@ func TestBranchMerged_FlagInjection(t *testing.T) {
 
 // ── DeleteBranch ─────────────────────────────────────────────────────────────
 
-// TestDeleteBranch_CallArgs_Safe verifies "-d" is used when force=false.
+// TestDeleteBranch_CallArgs_Safe verifies that DeleteBranch uses "-d" when force=false.
 func TestDeleteBranch_CallArgs_Safe(t *testing.T) {
 	r := proc.NewFakeRunner()
 	wantArgs := []string{"-C", "/repos/proj", "branch", "-d", "feat-x"}
@@ -327,7 +328,7 @@ func TestDeleteBranch_CallArgs_Safe(t *testing.T) {
 	}
 }
 
-// TestDeleteBranch_CallArgs_Force verifies "-D" is used when force=true.
+// TestDeleteBranch_CallArgs_Force verifies that DeleteBranch uses "-D" when force=true.
 func TestDeleteBranch_CallArgs_Force(t *testing.T) {
 	r := proc.NewFakeRunner()
 	wantArgs := []string{"-C", "/repos/proj", "branch", "-D", "feat-x"}
@@ -343,7 +344,7 @@ func TestDeleteBranch_CallArgs_Force(t *testing.T) {
 	}
 }
 
-// TestDeleteBranch_FlagInjection verifies a leading-dash branch is rejected.
+// TestDeleteBranch_FlagInjection verifies that DeleteBranch rejects a leading-dash branch.
 func TestDeleteBranch_FlagInjection(t *testing.T) {
 	r := proc.NewFakeRunner()
 	err := git.DeleteBranch(context.Background(), r, "/repos/proj", "--evil", false)
@@ -404,7 +405,7 @@ func TestCheckoutBranch_CallArgs(t *testing.T) {
 	}
 }
 
-// TestCheckoutBranch_FlagInjection verifies a leading-dash branch is rejected.
+// TestCheckoutBranch_FlagInjection verifies that CheckoutBranch rejects a leading-dash branch.
 func TestCheckoutBranch_FlagInjection(t *testing.T) {
 	r := proc.NewFakeRunner()
 	err := git.CheckoutBranch(context.Background(), r, "/repos/proj", "--evil")
@@ -556,12 +557,12 @@ func TestErrBranchInUse_IsSentinel(t *testing.T) {
 
 // ── HasCommits ────────────────────────────────────────────────────────────────
 
-// TestHasCommits verifies (false, nil) on an unborn HEAD and (true, nil) after
-// the first commit is made.
+// TestHasCommits verifies (false, nil) on an unborn HEAD, and (true, nil)
+// after the repo gets its first commit.
 func TestHasCommits(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	// Create a bare git init (no commits yet — unborn HEAD).
+	// Create a bare git init (no commits yet, so HEAD is unborn).
 	dir := t.TempDir()
 	for _, args := range [][]string{
 		{"init", "-b", "main"},

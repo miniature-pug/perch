@@ -1,10 +1,11 @@
 /**
  * views.spec.ts
  *
- * With a mocked SELECTED workspace:
- * - agent / code / diff views via the segmented control; assert aria-pressed toggles
- * - Enter split mode via Split button; assert both data-pane panes present
- * - Screenshot each view + split
+ * With a mocked, selected session:
+ * - Use the segmented control to switch between agent, code, and diff views.
+ *   Assert that aria-pressed toggles correctly.
+ * - Enter split mode with the Split button. Assert that both data-pane panes are present.
+ * - Take a screenshot of each view, and of the split.
  */
 
 import { test, expect } from "@playwright/test";
@@ -29,13 +30,13 @@ test.beforeEach(async ({ page }) => {
   await page.waitForSelector("#app", { timeout: 10000 });
   await page.waitForTimeout(1500);
 
-  // Select the workspace so views render (click sidebar item or simulate the select)
-  // The workspace title is "test session" — click it to make it active
+  // Select the session so the views render. Click the sidebar item, or simulate the select.
+  // The session title is "test session". Click it to make the session active.
   const sidebarItem = page.locator("text=test session").first();
   if (await sidebarItem.isVisible()) {
     await sidebarItem.click();
     await page.waitForTimeout(500);
-    // Resume preview now gates session open — click "Open" to confirm.
+    // The resume preview now gates opening a session. Click "Open" to confirm.
     const resumeOpenBtn = page.locator('[data-testid="resume-preview"] button.btn-primary');
     await resumeOpenBtn.waitFor({ state: "visible", timeout: 5000 });
     await resumeOpenBtn.click();
@@ -44,7 +45,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("agent view: Agent button is aria-pressed and primary pane renders", async ({ page }) => {
-  // Agent view is default — verify aria-pressed="true" on Agent button
+  // Agent view is the default. Verify aria-pressed="true" on the Agent button.
   const agentBtn = page.locator('nav[aria-label="View"] button', { hasText: "Agent" });
   await expect(agentBtn).toHaveAttribute("aria-pressed", "true");
 
@@ -111,7 +112,7 @@ test("split mode: splitting and un-splitting removes secondary pane", async ({ p
 });
 
 test("empty state renders when no workspace is selected", async ({ browser }) => {
-  // Separate browser context to avoid stacking init scripts from beforeEach
+  // Use a separate browser context, to avoid stacking init scripts from beforeEach.
   const context = await browser.newContext({ baseURL: `http://localhost:${PREVIEW_PORT}` });
   await context.addInitScript({ content: buildInitScriptContent({ workspaces: [] }) });
   const page = await context.newPage();
@@ -119,7 +120,7 @@ test("empty state renders when no workspace is selected", async ({ browser }) =>
   await page.waitForSelector("#app", { timeout: 10000 });
   await page.waitForTimeout(1500);
 
-  // First-run empty state: a "New Session" CTA + quick-start templates.
+  // First-run empty state: a "New Session" CTA and quick-start templates.
   await expect(page.locator('[data-testid="empty-state"]')).toBeVisible();
   await expect(page.locator('.empty-state-btn-primary')).toHaveText("New Session");
   await expect(page.locator('text=Claude session')).toBeVisible();

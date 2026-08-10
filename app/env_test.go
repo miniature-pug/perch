@@ -23,7 +23,7 @@ func TestMergeEnv(t *testing.T) {
 		base     []string
 		injected []string
 		overlay  []string
-		want     map[string]string // key → expected value in the result
+		want     map[string]string // maps a key to the expected value in the result
 		absent   []string          // keys that must NOT appear
 	}{
 		{
@@ -48,7 +48,7 @@ func TestMergeEnv(t *testing.T) {
 			name:     "overlay never clobbers a PERCH_ (sentinel + envsync preserved)",
 			base:     nil,
 			injected: []string{"PERCH_EXIT_TOKEN=sentinel", "PERCH_ENVSYNC_TOKEN=synctok"},
-			// A malformed overlay that tries to override plumbing must be ignored.
+			// mergeEnv ignores a malformed overlay that tries to override plumbing.
 			overlay: []string{"PERCH_EXIT_TOKEN=evil", "PERCH_ENVSYNC_TOKEN=evil", "REAL=1"},
 			want: map[string]string{
 				"PERCH_EXIT_TOKEN":    "sentinel",
@@ -133,9 +133,9 @@ func TestReloadAgentEnv_WritesReloadCommand(t *testing.T) {
 	}
 }
 
-// When perchBin is set (the app knows its own absolute path), the reload button
-// must type the shell-quoted absolute path so it resolves even if a login profile
-// clobbers PATH — the binary lives at bin/perch and is not on PATH.
+// perchBin holds the app's own absolute path, when set. The reload button then
+// types the shell-quoted absolute path, so the path resolves even if a login
+// profile clobbers PATH. The binary lives at bin/perch, not on PATH.
 func TestReloadAgentEnv_WritesAbsoluteBinaryPathWhenSet(t *testing.T) {
 	var mu sync.Mutex
 	var written []byte
@@ -212,7 +212,7 @@ func TestReloadAgentEnv_InvalidPaneID(t *testing.T) {
 
 // openShellCapturesEnv builds an App whose spawnPty records the env slice, opens
 // the given drawer pane, and returns the captured env. perchBin seeds a.perchBin
-// so the PATH-prepend / PERCH_BIN injection can be exercised (pass "" for none).
+// so the test can exercise the PATH-prepend or PERCH_BIN injection. Pass "" for none.
 func openShellCapturesEnv(t *testing.T, paneID, cwd string, ls *envsync.Listener, overlay map[string][]string, perchBin string) []string {
 	t.Helper()
 	var mu sync.Mutex
@@ -304,9 +304,10 @@ func envSliceGet(env []string, key string) (string, bool) {
 	return val, ok
 }
 
-// When perchBin is an absolute path, a per-workspace drawer must get PATH
-// prepended with the binary's dir (so a MANUAL `perch reload` resolves) and a
-// PERCH_BIN escape hatch, without dropping the rest of the existing PATH.
+// When perchBin is an absolute path, OpenShell must prepend PATH with the
+// binary's directory for a per-workspace drawer, so a MANUAL `perch reload`
+// resolves. OpenShell must also add a PERCH_BIN escape hatch, and must not
+// drop the rest of the existing PATH.
 func TestOpenShell_InjectsPerchBinPath_WhenAbsolute(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("SHELL", "/bin/sh")
@@ -339,8 +340,8 @@ func TestOpenShell_InjectsPerchBinPath_WhenAbsolute(t *testing.T) {
 	}
 }
 
-// When perchBin is empty or non-absolute, neither a PATH-prepend nor PERCH_BIN
-// may be injected (prepending "." or a bare name would poison PATH).
+// When perchBin is empty or not absolute, OpenShell must not inject a
+// PATH-prepend or PERCH_BIN. Prepending "." or a bare name would poison PATH.
 func TestOpenShell_NoPerchBinInjection_WhenEmptyOrRelative(t *testing.T) {
 	for _, bin := range []string{"", "perch"} {
 		name := "empty"
@@ -461,7 +462,8 @@ func TestOnEnvSync_StoresOverlayAndRelaunchesAsync(t *testing.T) {
 
 	a.onEnvSync("ws-sync", []string{"API_TOKEN=fresh"})
 
-	// The overlay must be stored synchronously (before the async relaunch reads it).
+	// onEnvSync must store the overlay synchronously. The async relaunch reads
+	// the overlay later.
 	if ov := a.overlayFor("ws-sync"); len(ov) != 1 || ov[0] != "API_TOKEN=fresh" {
 		t.Fatalf("overlay not stored synchronously; got %v", ov)
 	}
@@ -481,11 +483,12 @@ func TestOnEnvSync_StoresOverlayAndRelaunchesAsync(t *testing.T) {
 	}
 }
 
-// A reload respawns the agent pty under the same paneID; the frontend must remount
-// a fresh xterm so the new `claude --resume` does not redraw over the stale buffer
-// (the garble seen after a reload). onEnvSync signals that remount by emitting
-// workspace:relaunch with the workspace id, and it must fire SYNCHRONOUSLY — before
-// the async respawn — so the fresh, correctly-sized pane is ready as the agent draws.
+// A reload respawns the agent pty under the same paneID. The frontend must
+// remount a fresh xterm, so the new `claude --resume` command does not redraw
+// over the stale buffer. A stale buffer causes the garble seen after a reload.
+// onEnvSync signals the remount by emitting workspace:relaunch with the
+// workspace id. onEnvSync must emit this event synchronously, before the async
+// respawn, so the fresh, correctly-sized pane is ready when the agent draws.
 func TestOnEnvSync_EmitsWorkspaceRelaunchSynchronously(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	store, _ := registry.Load(t.TempDir())
@@ -533,8 +536,9 @@ func TestOnEnvSync_EmitsWorkspaceRelaunchSynchronously(t *testing.T) {
 
 	a.onEnvSync("ws-relaunch", []string{"API_TOKEN=fresh"})
 
-	// The remount signal must already be recorded the instant onEnvSync returns —
-	// it is emitted before the goroutine, so no waiting is needed for THIS check.
+	// onEnvSync emits the remount signal synchronously, so the signal is already
+	// recorded when onEnvSync returns. onEnvSync emits the signal before the
+	// async goroutine runs, so this check needs no wait.
 	mu.Lock()
 	gotSync := append([]string(nil), relaunchIDs...)
 	mu.Unlock()

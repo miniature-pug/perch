@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Asserts that make gui-build produces a valid ELF binary.
+# Checks that make gui-build produces a valid ELF binary.
 # Usage: ./scripts/verify-build.sh [BIN_PATH]
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"

@@ -14,17 +14,20 @@
   let {
     root,
     onOpen,
-    // A bumped signal (fs version) that asks the tree to re-list its directories
-    // in place. Changing it re-fetches the currently-visible dirs while KEEPING
-    // every open folder open — a file write must not collapse the tree. It never
-    // remounts the component, so scroll and expansion state are preserved.
+    // A bumped signal (fs version) that tells the tree to re-list its
+    // directories in place. When refresh changes, the tree re-fetches the
+    // directories that are visible now. Every open folder stays open,
+    // because a file write must not collapse the tree. Refresh never
+    // remounts the component, so the tree keeps its scroll position and
+    // expansion state.
     refresh = 0,
-    // The currently-open file path, so the matching row can render a selected cue
-    // that persists across refreshes.
+    // The path of the file that is open now. The matching row shows a
+    // selected cue. The cue stays visible across refreshes.
     selectedPath = null,
-    // False when the tree is mounted but off-screen (on the agent/diff views).
-    // Guards the rebuild so no directory listing fires on a hide or on a background
-    // file write while hidden; the effect re-lists when the tree becomes visible.
+    // False when the tree is mounted but hidden, for example on the agent
+    // or diff view. This flag guards the rebuild: no directory listing
+    // runs on a hide, and none runs on a background file write while
+    // hidden. The effect re-lists the tree when visible becomes true again.
     visible = true,
   }: {
     root: string;
@@ -39,26 +42,30 @@
   let nodes = $state<TreeNode[]>([]);
   let menu  = $state<{ node: TreeNode; x: number; y: number } | null>(null);
 
-  // Absolute paths of every currently-expanded directory. This set is the durable
-  // source of truth for expansion — it survives an in-place refresh (the node
-  // objects are rebuilt on each re-list, but this set is not), so open folders
-  // stay open when files change. SvelteSet so membership reads are reactive.
+  // Absolute paths of every directory that is expanded now. This set is
+  // the lasting source of truth for expansion. The set survives an
+  // in-place refresh: the node objects rebuild on each re-list, but the
+  // set does not rebuild. Open folders stay open when files change. The
+  // type is SvelteSet, so membership reads are reactive.
   const expanded = new SvelteSet<string>();
 
-  // Re-list `dir` and rebuild its child nodes, recursively re-expanding any child
-  // dir still in the expanded set. Dirs that no longer exist drop out naturally
-  // (they are absent from the fresh listing) and are pruned from the set.
+  // Re-lists `dir` and rebuilds its child nodes. The function expands any
+  // child directory that is still in the expanded set. A directory that
+  // no longer exists drops out of the list on its own, because it is
+  // absent from the fresh listing. The function then removes that
+  // directory from the set.
   //
-  // `token` is the rebuild generation that owns this call. The prune below mutates
-  // the SHARED `expanded` set, so a stale in-flight rebuild (a slower, losing
-  // overlapping rebuild whose token no longer matches rebuildToken) must NOT prune
-  // — it could drop an entry the winning rebuild still needs. Only the current
-  // rebuild is allowed to mutate `expanded`.
+  // `token` identifies the rebuild that owns this call. The prune below
+  // changes the shared `expanded` set. A stale rebuild still in flight (a
+  // slower, losing rebuild whose token no longer matches `rebuildToken`)
+  // must not prune. A stale rebuild could remove an entry that the
+  // winning rebuild still needs. Only the current rebuild can change
+  // `expanded`.
   async function buildLevel(dir: string, token: number): Promise<TreeNode[]> {
     const listing = await listDir(dir);
     const present = new Set(listing.map((n) => n.path));
-    // Drop expanded paths under this dir that vanished from the listing — but only
-    // when this call still owns the latest rebuild.
+    // Drop expanded paths under this directory that vanished from the
+    // listing. Do this only when this call still owns the latest rebuild.
     if (token === rebuildToken) {
       for (const p of expanded) {
         if (isChildOf(dir, p) && !present.has(p)) expanded.delete(p);
@@ -85,9 +92,10 @@
     return !p.slice(prefix.length).includes("/");
   }
 
-  // Rebuild the whole visible tree from the root, honoring the expanded set. Runs
-  // on mount, on a root change, and on every refresh bump. Guarded so a stale
-  // async rebuild (root/refresh changed mid-flight) cannot clobber newer content.
+  // Rebuilds the whole visible tree from the root. The rebuild keeps the
+  // expanded set. It runs on mount, on a root change, and on every
+  // refresh bump. A guard stops a stale async rebuild (root or refresh
+  // changed mid-flight) from overwriting newer content.
   let rebuildToken = 0;
   async function rebuild() {
     const mine = ++rebuildToken;
@@ -95,22 +103,26 @@
     if (mine === rebuildToken) nodes = next;
   }
 
-  // The root prop identifies the worktree the tree is showing. `expanded` (and the
-  // rendered `nodes`) are keyed to that root, so when `root` changes we must clear
-  // them before rebuilding — otherwise a new session inherits the previous
-  // session's open folders (stale paths that don't exist under the new root).
-  // Today App wraps FileTree in {#key active.id}, which remounts and hides this,
-  // but resetting here makes the component correct on its own so removing that key
-  // can never leak expansion across sessions.
+  // The root prop identifies the worktree that the tree shows. `expanded`
+  // and the rendered `nodes` are keyed to that root. When `root` changes,
+  // the component must clear both before it rebuilds. Otherwise a new
+  // session would inherit the previous session's open folders, paths
+  // that do not exist under the new root.
+  //
+  // Today App wraps FileTree in {#key active.id}. This remounts FileTree
+  // and hides the problem. Resetting here makes the component correct on
+  // its own. Removing that key can then never leak expansion state
+  // across sessions.
   let prevRoot: string | undefined;
   $effect(() => {
     root;      // track: a new session's worktree resets the tree
-    refresh;   // track: a file write re-lists in place, keeping folders open
-    visible;   // track: becoming visible again re-lists any deferred refresh
+    refresh;   // track: a file write re-lists in place and keeps folders open
+    visible;   // track: visible becomes true and re-lists a deferred refresh
     untrack(() => {
-      // Off-screen: don't list on a hide or on a background write while hidden. The
-      // effect re-runs when `visible` flips back to true and rebuilds then, so a
-      // refresh that arrived while hidden is picked up on show.
+      // Off-screen: do not list on a hide, and do not list on a
+      // background write while hidden. The effect re-runs when `visible`
+      // becomes true again, and it rebuilds then. A refresh that arrives
+      // while hidden is picked up when the tree becomes visible again.
       if (!visible) return;
       if (root !== prevRoot) {
         prevRoot = root;
@@ -148,9 +160,10 @@
   function menuReveal() { if (!menu) return; revealInFiles(menu.node.path); closeMenu(); }
   function menuCopy()   {
     if (!menu) return;
-    // copyPath is a Wails IPC call that already writes to the system clipboard.
-    // Do NOT chain navigator.clipboard.writeText — the Promise would be coerced
-    // to the string "[object Promise]" and corrupt the clipboard contents.
+    // copyPath is a Wails IPC call. It already writes to the system
+    // clipboard. Do not chain navigator.clipboard.writeText after it. The
+    // Promise would be coerced to the string "[object Promise]" and
+    // would corrupt the clipboard contents.
     void copyPath(menu.node.path);
     closeMenu();
   }
@@ -303,8 +316,8 @@
     outline-offset: -2px;
   }
 
-  /* Selected file: the currently-open file keeps a persistent highlight so it
-     stays visible across in-place refreshes. */
+  /* Selected file: the open file keeps a highlight. The highlight stays
+     visible across in-place refreshes. */
   .tree-node.is-selected {
     background: color-mix(in srgb, var(--perch-accent) 16%, transparent);
   }
@@ -343,7 +356,7 @@
     white-space: nowrap;
   }
 
-  /* Dirs: folder icon uses accent dim */
+  /* Directories: the folder icon uses a dimmed accent color */
   .is-dir .node-icon { color: var(--perch-accent); opacity: 0.7; }
 
   /* ---------- Context menu (floating card) ---------- */
@@ -352,9 +365,9 @@
     margin: 0;
     padding: var(--perch-sp-1) 0;
     min-width: 160px;
-    /* Solid, never glass: this menu can overlap the agent terminal, where
-       WebKitGTK paints backdrop-filter surfaces transparent over the composited
-       terminal subtree (mirrors the ApprovalCard fix). */
+    /* Solid, not glass. This menu can overlap the agent terminal, where
+       WebKitGTK paints backdrop-filter surfaces as transparent over the
+       composited terminal subtree. This mirrors the ApprovalCard fix. */
     background: var(--perch-glass-bg-solid);
     border: 1px solid var(--perch-glass-border);
     border-radius: var(--perch-radius-md);

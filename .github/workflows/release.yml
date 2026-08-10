@@ -1,19 +1,21 @@
-# Release — minimal, linux/amd64 only.
+# Release: minimal, linux/amd64 only.
 #
-# Deliberately the smallest correct path per the maintainer's decision: one
-# production GUI binary for linux/amd64, a SHA256SUMS file, and a GitHub Release.
-# No arm64, no other OS, no signing, no AppImage.
+# This is deliberately the smallest correct path, per the maintainer's
+# decision: one production GUI binary for linux/amd64, a SHA256SUMS file,
+# and a GitHub Release. No arm64, no other OS, no signing, no AppImage.
 #
-# Triggered by pushing a tag matching v* (e.g. `git tag v1.0.0 && git push
-# --tags`). The binary's version is stamped by the Makefile LDFLAGS from
-# `git describe --tags`, so the tag itself drives `perch version` — which is why
-# the checkout below fetches full history and tags.
+# A push of a tag matching v* triggers this workflow (for example,
+# `git tag v1.0.0 && git push --tags`). The Makefile LDFLAGS stamps the
+# binary's version from `git describe --tags`, so the tag itself drives
+# `perch version`. This is why the checkout below fetches full history and
+# tags.
 #
-# The production GUI binary needs Node (frontend build), the WebKitGTK 4.1 + GTK3
-# dev libraries, and a C toolchain (cgo). `make gui-build` is not a containerized
-# DZ target, so it runs natively here, on the same pinned toolchain versions the
-# perch-dev image uses (read from .tool-versions) with the same GUI libraries the
-# image installs.
+# The production GUI binary needs Node (for the frontend build), the
+# WebKitGTK 4.1 and GTK3 dev libraries, and a C toolchain (cgo).
+# `make gui-build` is not a containerized DZ target, so it runs directly
+# here, on the same pinned toolchain versions the perch-dev image uses
+# (read from .tool-versions), with the same GUI libraries the image
+# installs.
 
 name: Release
 
@@ -22,7 +24,7 @@ on:
     tags:
       - "v*"
 
-# Creating the release and uploading assets needs write access to contents.
+# Creating the release and uploading assets needs write access to the repository contents.
 permissions:
   contents: write
 
@@ -33,11 +35,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          # Full history + tags so the Makefile's `git describe --tags` resolves
-          # the pushed tag into main.version.
+          # Fetch full history and tags, so the Makefile's `git describe --tags`
+          # resolves the pushed tag into main.version.
           fetch-depth: 0
 
-      # Pinned Go + Node come from .tool-versions, the same source the image reads.
+      # The pinned Go and Node versions come from .tool-versions, the same source the image reads.
       - name: Resolve pinned toolchain versions
         id: tools
         run: |
@@ -54,17 +56,18 @@ jobs:
         with:
           node-version: ${{ steps.tools.outputs.node }}
 
-      # The same GUI build libraries the perch-dev image installs, minus xvfb
-      # (only needed for a headless GUI smoke, not to compile). Noble ships the
-      # WebKit2GTK 4.1 dev package; libwebkit2gtk-4.1-dev pulls libsoup-3.0-dev
-      # transitively. Production builds link 4.1 via -tags "production webkit2_41".
+      # These are the same GUI build libraries the perch-dev image installs,
+      # minus xvfb (xvfb is needed only for a headless GUI smoke test, not to
+      # compile). Noble ships the WebKit2GTK 4.1 dev package.
+      # libwebkit2gtk-4.1-dev also pulls in libsoup-3.0-dev. Production
+      # builds link 4.1 through -tags "production webkit2_41".
       - name: Install GUI build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
 
-      # Frontend build + cgo GUI binary -> bin/perch, version stamped from the tag.
+      # Build the frontend and the cgo GUI binary -> bin/perch, version stamped from the tag.
       - name: Build production GUI binary (linux/amd64)
         run: make gui-build
 
@@ -72,11 +75,12 @@ jobs:
         run: |
           install -m 0755 bin/perch perch-linux-amd64
           sha256sum perch-linux-amd64 > SHA256SUMS
-          # Sanity check that the tag flowed into the binary's version string.
+          # Check that the tag flowed into the binary's version string.
           ./perch-linux-amd64 version
 
-      # Third-party action pinned to a full commit SHA (supply-chain hardening);
-      # the trailing comment records the human-readable version.
+      # This third-party action is pinned to a full commit SHA, for
+      # supply-chain hardening. The trailing comment records the
+      # human-readable version.
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:

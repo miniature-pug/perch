@@ -1,24 +1,24 @@
 # perch
 
 Perch gives every coding agent its own branch, its own worktree, and its own
-terminal, then gathers them into one window where you can watch the work and
-step in when it matters.
+terminal. Perch gathers the agents into one window. You can watch the work
+and step in when it matters.
 
-It is a desktop cockpit for the `claude` and `opencode` coding agents. Each
-session is a real git worktree with a live terminal, a diff view with
-hunk-level staging, a file tree, and inline approval of the tool calls an agent
-wants to run. You can drive several agents at once and move between them without
-losing your place.
+Perch is a desktop cockpit for the `claude` and `opencode` coding agents.
+Each session is a real git worktree with a live terminal. Each session also
+has a diff view with hunk-level staging, a file tree, and inline approval for
+the tool calls an agent wants to run. You can drive several agents at once
+and move between them without losing your place.
 
-Perch is a single static binary. There is no tmux, no daemon, and no background
-server. The Svelte frontend talks to the Go backend through Wails bindings and
-events rather than HTTP, so a release build opens no network port of its own.
-The local listeners perch does run, one per active Claude session and one for
-`perch reload`, are loopback-only and token-gated, covered under
+Perch is a single static binary. There is no tmux, no daemon, and no
+background server. The Svelte frontend talks to the Go backend through Wails
+bindings and events, not HTTP, so a release build opens no network port of
+its own. Perch runs two local listeners: one per active Claude session, and
+one for `perch reload`. Both are loopback-only and token-gated. See
 [Security](#security).
 
-Perch runs on Linux. It depends on WebKit2GTK and GTK3, which are Linux
-libraries, so macOS and Windows are out of scope for now.
+Perch runs on Linux. Perch depends on WebKit2GTK and GTK3, two Linux
+libraries. macOS and Windows are out of scope for now.
 
 ![The perch cockpit: a glanceable sidebar of session states beside the active stage](docs/images/cockpit-sidebar-states.png)
 
@@ -27,28 +27,29 @@ libraries, so macOS and Windows are out of scope for now.
 ![The diff view with per-hunk stage, discard, and send-to-agent](docs/images/diff-view.png)
 
 <!--
-Maintainer note: the three images above are captured by the end-to-end
-screenshot sweep, which renders the real Svelte UI but without a live pty, so
-the terminal panes read as empty. They sell the chrome (sidebar states,
-approval card, diff) honestly but not a working agent. Before the public
-launch, capture a hero screenshot from a real `make gui-build` run with an
-agent mid-task in the terminal, and place it first. Do not fabricate one.
+Maintainer note: the end-to-end screenshot sweep captures the three images
+above. The sweep renders the real Svelte UI, but without a live pty, so the
+terminal panes read as empty. The images show the chrome honestly: the
+sidebar states, the approval card, and the diff. They do not show a working
+agent. Before the public launch, capture a hero screenshot from a real
+`make gui-build` run with an agent mid-task in the terminal, and place it
+first. Do not fabricate one.
 -->
 
 ## What you get
 
 - **A worktree per session.** Every session is a `git worktree` on its own
   branch. Agents work in isolation and never disturb your main checkout. You
-  can also run a session in the repo itself when isolation is not what you want.
+  can also run a session in the repository itself, without a separate worktree.
 - **A live terminal per pane.** Each terminal is xterm.js over a direct
   pseudo-terminal the Go backend spawns. The agent runs inside it. No
   multiplexer sits in between.
 - **Glanceable status.** The sidebar tells you, at a glance, which agent is
   working, which is done, which hit an error, and which is waiting on you.
 - **Inline approvals.** When Claude asks to run a tool, perch blocks it and
-  shows you the request. You allow it once, allow it always, or deny it. opencode
-  runs its own approval prompt in its terminal, so for opencode perch stands back
-  and only lights the sidebar to tell you a decision is waiting.
+  shows you the request. You allow it once, allow it always, or deny it.
+  opencode runs its own approval prompt in its terminal. For opencode, perch
+  stands back and only lights the sidebar to tell you a decision is waiting.
 - **A diff you can act on.** Stage or discard individual hunks, or send a hunk
   back to the agent, without leaving the window.
 - **Desktop notifications.** When the window is in the background and an agent
@@ -73,8 +74,8 @@ sudo apt install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-de
 ```
 
 `libwebkit2gtk-4.1-dev` pulls in `libsoup-3.0-dev`. WebKit2GTK 4.0 is end of
-life, so perch links 4.1. The 4.1 API arrived in WebKitGTK 2.40, so that is the
-minimum release; anything newer on the 4.1 line works.
+life, so perch links 4.1. The 4.1 API arrived in WebKitGTK 2.40. That release
+is the minimum. Anything newer on the 4.1 line works.
 
 ## Install and run
 
@@ -82,8 +83,8 @@ minimum release; anything newer on the 4.1 line works.
 
 Once perch tags `v0.1.0`, each
 [GitHub Release](https://github.com/miniature-pug/perch/releases) attaches a
-prebuilt `perch-linux-amd64` binary and a `SHA256SUMS` file. Download both,
-verify the checksum, mark the binary executable, and run it:
+prebuilt `perch-linux-amd64` binary and a `SHA256SUMS` file. Download both
+files, then run:
 
 ```sh
 curl -LO https://github.com/miniature-pug/perch/releases/latest/download/perch-linux-amd64
@@ -95,15 +96,15 @@ chmod +x perch-linux-amd64
 
 The binary links WebKit2GTK and GTK3 dynamically, so the
 [Requirements](#requirements) above still hold: those libraries must be present
-to run it. To learn about a new version, watch the repository on GitHub and pick
-Releases under the Custom watch options, or check the
-[releases page](https://github.com/miniature-pug/perch/releases); `perch
+to run it. To learn about a new version, watch the repository on GitHub and
+pick Releases under the Custom watch options. You can also check the
+[releases page](https://github.com/miniature-pug/perch/releases). `perch
 version` prints the build you are running.
 
 ### Build from source
 
 Building from source is the contributor path. It needs the Go and Node
-toolchains pinned in `.tool-versions`, alongside the system libraries in
+toolchains pinned in `.tool-versions`, and the system libraries in
 [Requirements](#requirements).
 
 ```sh
@@ -115,24 +116,25 @@ make gui-build
 
 `make gui-build` installs the frontend dependencies, builds the Svelte SPA into
 `frontend/dist/`, and compiles the binary with `go build -tags "production
-webkit2_41"`. The `webkit2_41` tag links WebKit2GTK 4.1; without it the build
-falls back to 4.0, which is end of life. The `production` tag selects the Wails
-production runtime, which omits the dev reload server. The frontend is embedded
-from `frontend/dist/`, so `make gui-build` rebuilds it first. A plain `make
-build` skips that rebuild and embeds the committed placeholder, so prefer `make
-gui-build` for a binary you mean to run. A binary built without the frontend,
-whether by `make build`, `make install`, or a bare `go install`, refuses to
-launch and prints
+webkit2_41"`. The `webkit2_41` tag links WebKit2GTK 4.1. Without that tag, the
+build falls back to 4.0. WebKit2GTK 4.0 is end of life. The `production` tag
+selects the Wails production runtime. That runtime omits the dev reload
+server. Go embeds the frontend from `frontend/dist/` into the binary, so
+`make gui-build` rebuilds that directory first. A plain `make build` skips
+that rebuild and embeds the committed placeholder. Prefer `make gui-build`
+for a binary you mean to run. A binary built without the frontend never opens
+a blank window. This happens with `make build`, `make install`, or a bare
+`go install`. Instead, the binary refuses to launch. It prints:
 `perch: this binary was built without the frontend. Run 'make gui-build' (or
-'make gui-install') and reinstall`, rather than opening a blank window. The
-`wails` CLI is not used; see [CONTRIBUTING.md](CONTRIBUTING.md).
+'make gui-install') and reinstall`. Perch does not use the `wails` CLI. See
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
-`make gui-build` does not install the launcher icon. The GNOME and Wayland dock
-reads the icon from a `.desktop` entry, which `make desktop` writes. To build and
-install the icon in one step, then run the binary yourself, use `make
-gui-install` followed by `./bin/perch`. Log out and back in once if the icon does
-not refresh. `make gui-run` does the same build and icon install and then
-launches the binary for you.
+`make gui-build` does not install the launcher icon. The GNOME and Wayland
+dock reads the icon from a `.desktop` entry. `make desktop` writes that
+entry. To build the icon and run the binary yourself, use `make gui-install`
+followed by `./bin/perch`. Log out and back in once if the icon does not
+refresh. `make gui-run` does the same build and icon install, then launches
+the binary for you.
 
 To install into your `GOBIN`:
 
@@ -141,9 +143,9 @@ make gui-build   # build the frontend first
 make install
 ```
 
-`make install` runs `go install` and does not rebuild the frontend, so run `make
-gui-build` beforehand; otherwise it embeds the placeholder and the guard above
-stops it at launch.
+`make install` runs `go install` and does not rebuild the frontend. Run `make
+gui-build` first. Otherwise, `make install` embeds the placeholder, and the
+guard above stops the binary at launch.
 
 Building from source needs the Go toolchain (`go1.26.5`) and Node.js
 (`22.22.3`). The exact pins live in `.tool-versions`. Module path:
@@ -156,8 +158,8 @@ perch                 # open the cockpit; the project root is the current direct
 perch /path/to/code   # open the cockpit with an explicit project root
 ```
 
-Perch opens the desktop window. The sidebar lists the sessions in your registry.
-Create one to spin up a worktree and an agent, then select it to open its
+Perch opens the desktop window. The sidebar lists the sessions in your
+registry. Create one to start a worktree and an agent. Select it to open its
 terminal. For the full walkthrough of sessions, approvals, diffs, themes, and
 keyboard control, read the [usage guide](docs/usage.md).
 
@@ -165,29 +167,29 @@ keyboard control, read the [usage guide](docs/usage.md).
 
 | Command | What it does |
 |---------|--------------|
-| `perch` | Open the cockpit; project root is the current directory |
-| `perch <path>` | Open the cockpit; project root is the given directory |
+| `perch` | Open the cockpit. The project root is the current directory |
+| `perch <path>` | Open the cockpit. The project root is the given directory |
 | `perch attach <query>` | Focus the running window on the session matching the query, or launch the cockpit if none is running |
 | `perch doctor` | Check that dependencies and configuration are in order |
 | `perch version` | Print version and build information |
-| `perch reload` | Run inside a session terminal. Sends its current environment to the running agent and relaunches it, conversation preserved |
+| `perch reload` | Run inside a session terminal. Sends the environment to the agent and relaunches it, and the conversation continues |
 
 `perch attach` relies on a single-instance lock. If perch is already running,
-the query goes to that window, which raises itself and selects the best match
-by worktree path, then by a case-insensitive match on path, title, or branch.
-The forwarding process exits afterward, with a non-zero status on Linux, which
-is expected.
+the query goes to that window. The window raises itself and selects the best
+match: first by worktree path, then by a case-insensitive match on path,
+title, or branch. The forwarding process then exits. On Linux it exits with a
+non-zero status. That exit code is expected.
 
 `perch reload` gives a running agent a variable it did not have at launch. A
-process reads its environment once, at exec, so exporting a new
-`AWS_PROFILE`, an API token, or any other variable in the session terminal
-never reaches the agent on its own. Running `perch reload` there, or clicking
-the reload button in the terminal drawer, captures the drawer's environment
-and relaunches the agent against its saved session, so the conversation continues.
-File-based credentials are the common exception: an `aws sso login` writes a
-new token to `~/.aws/sso/cache`, and the agent's SDK rereads that file on its
-next call, so a reload buys you nothing there. Reach for `perch reload` only
-for a new or changed environment variable.
+process reads its environment once, at exec. If you export a new
+`AWS_PROFILE`, an API token, or another variable in the session terminal, the
+agent never sees it on its own. Run `perch reload` there, or click the reload
+button in the shell drawer. Either action captures the drawer's environment
+and relaunches the agent against its saved session. The conversation
+continues. File-based credentials are the common exception. For example,
+`aws sso login` writes a new token to `~/.aws/sso/cache`. The agent's SDK
+rereads that file on its next call. A reload does not help in that case. Use
+`perch reload` only for a new or changed environment variable.
 
 ## Agents
 
@@ -197,23 +199,24 @@ ship today.
 - **claude** reports through hooks. When you open a Claude session, perch writes
   a hook configuration with a listener URL and a bearer token into the
   worktree's `.claude/settings.json`. Claude then posts tool and lifecycle
-  events back, and a `PreToolUse` event blocks until you approve. Because that
-  hook blocks and perch answers it, perch owns Claude's approval: it shows the
-  approval card and Claude's own prompt never appears.
+  events back, and a `PreToolUse` event blocks until you approve. That hook
+  blocks, and perch answers it, so perch owns Claude's approval. Perch shows
+  the approval card. Claude's own prompt never appears.
 - **opencode** reports through its own loopback HTTP server. Perch launches
   `opencode serve`, then reads the Server-Sent-Events stream to follow
   lifecycle, approval, and question events. opencode's `attach` terminal is an
-  independent client that runs its own approval prompt, and perch cannot silence
-  it, so perch does not answer opencode approvals. It shows no card; it only
-  raises a passive attention signal so the sidebar tells you a decision waits,
-  and you answer in opencode's own prompt.
+  independent client. It runs its own approval prompt, and perch cannot
+  silence it. So perch does not answer opencode approvals. perch shows no
+  card. It only raises an attention signal, so the sidebar tells you a
+  decision waits. You answer in opencode's own prompt.
 
 The cockpit shows only what an agent supports. Each agent advertises a small
-capability set (approvals and attention), and any surface an agent does not
-support stays hidden rather than showing a dead control. Claude advertises
-approvals, so it gets the card; opencode does not, so perch surfaces only the
-attention signal and lets opencode's terminal own the decision. Perch does not
-meter tokens or cost; that surface does not exist.
+capability set: approvals and attention. Any surface an agent does not
+support stays hidden. Perch never shows a dead control. Claude advertises
+approvals, so Claude gets the card. opencode does not advertise approvals.
+Perch then surfaces only the attention signal, and opencode's terminal owns
+the decision. Perch does not meter tokens or cost. That surface does not
+exist.
 
 ## Configuration
 
@@ -236,42 +239,46 @@ open.
 
 - **No IPC port.** The frontend and backend speak over Wails bindings and
   events, not a socket. A release build opens no TCP or Unix socket for IPC.
-  Every argument that crosses the boundary is validated in the backend: session
-  and pane identifiers against a strict charset, and worktree paths against the
+  The backend validates every argument that crosses the boundary: session and
+  pane identifiers against a strict charset, and worktree paths against the
   configured roots.
-- **One small agent listener.** Each Claude session gets its own listener bound
-  to `127.0.0.1` on an ephemeral port, guarded by a random per-listener bearer
-  token compared in constant time. It receives Claude's hook posts and blocks
-  `PreToolUse` until you decide. perch tears it down when the session closes.
+- **One small agent listener.** Each Claude session gets its own listener,
+  bound to `127.0.0.1` on an ephemeral port. A random per-listener bearer
+  token guards it. Perch compares the token in constant time. The listener
+  receives Claude's hook posts and blocks `PreToolUse` until you decide.
+  perch tears it down when the session closes.
 - **One env-sync listener for `perch reload`.** The app binds a single loopback
-  listener on `127.0.0.1` at startup, shared by every session. Each session
-  terminal drawer gets its own bearer token, minted the first time the drawer
-  opens and compared in constant time, so a token minted for one session's
-  drawer is rejected for another's. It accepts only the environment `perch
-  reload` posts, holds it in memory only, and never writes or logs it. perch
-  tears the listener down on exit. Between the two listeners above, this is
-  the entire production network surface.
-- **Exact-match always-allow.** Choosing "Always" on an approval stores a rule
-  keyed on the agent, the tool, and a SHA-256 hash of the full tool input. A
-  later call auto-approves only when all three match, so a rule can never grant
-  more than the exact request you approved. Rules are listed and revocable in
-  Settings.
+  listener on `127.0.0.1` at startup, shared by every session. Each session's
+  shell drawer gets its own bearer token. Perch mints the token the first
+  time the drawer opens, and compares it in constant time. A token minted for
+  one drawer never works for another session's drawer. The listener accepts
+  only the environment `perch reload` posts. It holds that environment in
+  memory only, and never writes or logs it. perch tears the listener down on
+  exit. Together, the two listeners above are the entire production network
+  surface.
+- **Exact-match always-allow.** When you choose Always on an approval, perch
+  stores a rule for the agent, the tool, and a SHA-256 hash of the tool
+  input. A later call auto-approves only when all three match, so a rule can
+  never grant more than the exact request you approved. Settings lists every
+  rule and lets you revoke it.
 
-Two caveats are yours to own, and they are different in kind. The first is git's
-own hooks. perch runs `git worktree add` and `git checkout`, and git may run a
-repository's `.git/hooks` exactly as it would if you ran those commands yourself.
-Those hooks live outside the tree and are not carried by clone, fetch, or push,
-so the exposure there is only from hooks already sitting in your local clone.
+Two caveats remain. You are responsible for both, and they differ in kind.
+The first is git's own hooks. perch runs `git worktree add` and `git
+checkout`, and git may run a repository's `.git/hooks` exactly as it would if
+you ran those commands yourself. Those hooks live outside the worktree.
+Clone, fetch, and push do not carry them. So the only exposure is from hooks
+already sitting in your local clone.
 
 The second does travel with a clone. A repository can commit an agent's own
-configuration into its tree, a `.claude/settings.json` or an opencode config,
-whose `PreToolUse` or command entries the agent runtime executes as shell the
-moment a session opens in that worktree. perch merges its listener into that file
-and leaves any hooks it finds there untouched, and its approval boundary covers
-the tool calls an agent asks to make, not the hooks the agent's configuration
-runs on startup. Committed agent hooks therefore run ungated. Open repositories
-you trust, and give an unfamiliar one's `.claude` and opencode config a read
-before you open a session in it.
+configuration: a `.claude/settings.json` file or an opencode config. That
+file can hold `PreToolUse` or command entries. The agent runtime executes
+those entries as shell, the moment a session opens in that worktree. perch
+merges its listener into that file. perch leaves any hooks it finds there
+untouched. Perch's approval boundary covers only the tool calls an agent
+asks to make. It does not cover the hooks the agent's configuration runs on
+startup. Committed agent hooks therefore run ungated. Open repositories you
+trust. Before you open a session in an unfamiliar repository, read its
+`.claude` and opencode config.
 
 To report a vulnerability privately, see [SECURITY.md](SECURITY.md). The full
 system-level treatment is in [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -281,11 +288,11 @@ system-level treatment is in [ARCHITECTURE.md](ARCHITECTURE.md).
 Perch sends nothing of its own. There is no telemetry, no analytics, no update
 ping, and no account. Its state lives on your machine under `~/.config/perch`
 (or `$XDG_CONFIG_HOME/perch`) and never leaves it. The only network traffic
-perch itself makes is the short-lived loopback listener for a Claude session,
-described under [Security](#security), which never departs `127.0.0.1`. Any
-traffic that reaches the internet is the work of the agent you chose to run,
-`claude` or `opencode`, exactly as it would were you running that agent yourself
-in a terminal.
+perch itself makes is from the short-lived loopback listener for a Claude
+session. See [Security](#security). That traffic never leaves `127.0.0.1`.
+Any traffic that reaches the internet comes from the agent you chose to run,
+`claude` or `opencode`. That traffic is the same as if you ran that agent
+yourself in a terminal.
 
 ## Documentation
 

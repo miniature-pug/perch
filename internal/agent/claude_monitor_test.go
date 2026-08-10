@@ -20,8 +20,8 @@ import (
 	"github.com/miniature-pug/perch/internal/pty"
 )
 
-// newMonitorWithTestListener creates a ClaudeMonitor backed by a real in-process
-// hooklistener. Caller defers cleanup().
+// newMonitorWithTestListener creates a ClaudeMonitor backed by a real
+// in-process hook listener. The caller must defer cleanup().
 func newMonitorWithTestListener(t *testing.T) (*agent.ClaudeMonitor, *hooklistener.Listener, func()) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
@@ -39,7 +39,7 @@ func TestClaudeMonitorPrepare(t *testing.T) {
 	worktree := filepath.Join(os.Getenv("HOME"), "repo")
 	_ = os.MkdirAll(worktree, 0o755)
 
-	// Pre-seed a foreign Stop hook so we can assert it survives.
+	// Pre-seed a foreign Stop hook, so the test can check it survives.
 	claudeDir := filepath.Join(worktree, ".claude")
 	_ = os.MkdirAll(claudeDir, 0o755)
 	foreign := `{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"foreign-tool notify"}]}]}}`
@@ -126,11 +126,11 @@ func TestClaudeMonitorSettingsFileMode(t *testing.T) {
 	}
 }
 
-// TestClaudeMonitorSettingsFileModePreExisting asserts that Prepare forces the
-// settings.json to 0600 even when a pre-existing file is world-readable (0644).
-// The Bearer token is the sole defence against other local users; it must not
-// be leaked via a permissive file mode, regardless of what mode the file had
-// before Prepare ran.
+// TestClaudeMonitorSettingsFileModePreExisting checks that Prepare forces
+// settings.json to 0600, even when a pre-existing file is world-readable
+// (0644). The Bearer token is the only defense against other local users.
+// It must not leak through a permissive file mode, regardless of what mode
+// the file had before Prepare ran.
 func TestClaudeMonitorSettingsFileModePreExisting(t *testing.T) {
 	m, _, cleanup := newMonitorWithTestListener(t)
 	defer cleanup()
@@ -157,7 +157,7 @@ func TestClaudeMonitorSettingsFileModePreExisting(t *testing.T) {
 		t.Fatalf("pre-condition: expected 0644, got %o", fi.Mode().Perm())
 	}
 
-	// Run Prepare — must force the file down to 0600.
+	// Run Prepare. It must force the file down to 0600.
 	if _, err := m.Prepare(context.Background(), "wsMPE", worktree, ""); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -208,17 +208,19 @@ func TestClaudeMonitorEventTranslation(t *testing.T) {
 		t.Errorf("ev[1]: %+v", got[1])
 	}
 
-	// State tracking: after the Stop event drained, CurrentState reflects done.
-	// (translateAndEmit sets m.state BEFORE the channel send, so this is race-free.)
+	// State tracking: after the Stop event drains, CurrentState reflects
+	// done. translateAndEmit sets m.state BEFORE the channel send, so
+	// this check is race-free.
 	if m.CurrentState() != agent.StateDone {
 		t.Errorf("CurrentState after Stop = %q, want %q", m.CurrentState(), agent.StateDone)
 	}
 }
 
-// TestClaudeMonitorStopFailureErrored asserts the StopFailure hook event
-// translates to Event{Kind:"state", State:StateErrored, Err:<error_type>} — the
-// blocking "Agent error" path dispatchNotify keys off. The error_type payload
-// field must surface verbatim in Event.Err.
+// TestClaudeMonitorStopFailureErrored checks that the StopFailure hook
+// event translates to Event{Kind:"state", State:StateErrored,
+// Err:<error_type>}. dispatchNotify keys its blocking "Agent error" path
+// off this event. The error_type payload field must surface verbatim in
+// Event.Err.
 func TestClaudeMonitorStopFailureErrored(t *testing.T) {
 	m, l, cleanup := newMonitorWithTestListener(t)
 	defer cleanup()
@@ -250,9 +252,10 @@ func TestClaudeMonitorStopFailureErrored(t *testing.T) {
 	}
 }
 
-// postHook POSTs a hook payload to the listener's /hook and returns the response
-// body string. PreToolUse blocks in the handler until Decide() is called, so
-// callers that POST a PreToolUse normally run this in a goroutine.
+// postHook POSTs a hook payload to the listener's /hook and returns the
+// response body string. PreToolUse blocks in the handler until the test
+// calls Decide(). So callers that POST a PreToolUse normally run postHook
+// in a goroutine.
 func postHook(t *testing.T, l *hooklistener.Listener, payload string) string {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodPost, "http://"+l.Addr()+"/hook", strings.NewReader(payload))
@@ -273,17 +276,19 @@ func postHook(t *testing.T, l *hooklistener.Listener, payload string) string {
 }
 
 // TestClaudeMonitorAskUserQuestion_AutoAllow is the CRITICAL guard for the
-// question signal: a PreToolUse for AskUserQuestion must NOT raise an approval
-// card and must NOT block the agent. The monitor itself auto-allows the hook
-// (calls Decide internally) BEFORE the test ever touches Approve/Decide, so:
+// question signal. A PreToolUse for AskUserQuestion must NOT raise an
+// approval card, and must NOT block the agent. The monitor itself
+// auto-allows the hook (it calls Decide internally) BEFORE the test ever
+// touches Approve or Decide. So:
 //   - the emitted Event is Kind=="question"/StateAwaitingInput with a NIL Approval
 //   - the /hook POST returns "permissionDecision":"allow" on its own
 //
-// The POST runs in a goroutine guarded by a result channel + timeout: if the
-// source ever stops auto-allowing, the handler hangs on <-p.ch forever and this
-// test FAILS (timeout) rather than passing against a mock. Mocks cannot prove
-// the real binary emits AskUserQuestion's PreToolUse — that is the manual smoke
-// step — but this proves the auto-allow translation contract end to end.
+// The POST runs in a goroutine, guarded by a result channel and a timeout.
+// If the source code ever stops auto-allowing, the handler hangs on
+// <-p.ch forever, and this test FAILS on timeout instead of passing
+// against a mock. A mock cannot prove that the real binary emits
+// AskUserQuestion's PreToolUse; that check is the manual smoke step. But
+// this test proves the auto-allow translation contract end to end.
 func TestClaudeMonitorAskUserQuestion_AutoAllow(t *testing.T) {
 	m, l, cleanup := newMonitorWithTestListener(t)
 	defer cleanup()
@@ -315,9 +320,9 @@ func TestClaudeMonitorAskUserQuestion_AutoAllow(t *testing.T) {
 		t.Errorf("question must carry NO approval (signal, not card), got %+v", ev.Approval)
 	}
 
-	// The POST must complete on its OWN — the test never calls Approve/Decide.
-	// If the source did not auto-allow, the handler is still blocked on <-p.ch and
-	// this select times out.
+	// The POST must complete on its OWN. The test never calls Approve or
+	// Decide. If the source did not auto-allow, the handler is still
+	// blocked on <-p.ch, and this select times out.
 	select {
 	case body := <-respCh:
 		if !strings.Contains(body, `"permissionDecision":"allow"`) {
@@ -329,11 +334,12 @@ func TestClaudeMonitorAskUserQuestion_AutoAllow(t *testing.T) {
 	}
 }
 
-// TestClaudeMonitorPreToolUse_NonQuestionBlocksUntilDecide is the regression
-// counterpart: a NON-question PreToolUse (Write) must take the approval path —
-// Kind=="approval"/StateAwaitingApproval — and BLOCK until Decide supplies a
-// verdict. It must NOT auto-allow. The POST goroutine stays pending until the
-// test calls Approve; we assert it is still pending before, then completes after.
+// TestClaudeMonitorPreToolUse_NonQuestionBlocksUntilDecide is the
+// regression counterpart. A NON-question PreToolUse (Write) must take the
+// approval path, Kind=="approval"/StateAwaitingApproval, and BLOCK until
+// Decide supplies a verdict. It must NOT auto-allow. The POST goroutine
+// stays pending until the test calls Approve. The test checks it is
+// still pending before, then checks it completes after.
 func TestClaudeMonitorPreToolUse_NonQuestionBlocksUntilDecide(t *testing.T) {
 	m, l, cleanup := newMonitorWithTestListener(t)
 	defer cleanup()
@@ -364,7 +370,8 @@ func TestClaudeMonitorPreToolUse_NonQuestionBlocksUntilDecide(t *testing.T) {
 		t.Fatalf("Approval: want Tool=Write, got %+v", ev.Approval)
 	}
 
-	// The handler must STILL be blocked — no auto-allow for a non-question tool.
+	// The handler must STILL be blocked. There is no auto-allow for a
+	// non-question tool.
 	select {
 	case body := <-respCh:
 		t.Fatalf("Write PreToolUse must block until Decide, but the POST returned early: %q", body)
@@ -372,7 +379,7 @@ func TestClaudeMonitorPreToolUse_NonQuestionBlocksUntilDecide(t *testing.T) {
 		// expected: still pending
 	}
 
-	// Now supply the verdict; the POST must complete with allow.
+	// Now supply the verdict. The POST must complete with allow.
 	if err := m.Approve(ev.Approval.ReqID, agent.Decision{Allow: true}); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
@@ -386,11 +393,13 @@ func TestClaudeMonitorPreToolUse_NonQuestionBlocksUntilDecide(t *testing.T) {
 	}
 }
 
-// TestClaudeMonitorApprovalSummary_EllipsizesLongInput is the regression guard for
-// the all-or-nothing summary: a tool input at/above the summary cutoff must be
-// ELLIPSIZED into the approval Summary (tool name + ": " + first bytes + "…"), not
-// dropped, so the card conveys what the agent wants to run rather than showing the
-// bare tool name. The full untruncated input must still ship separately in Input.
+// TestClaudeMonitorApprovalSummary_EllipsizesLongInput is the regression
+// guard for the all-or-nothing summary. A tool input at or above the
+// summary cutoff must be ELLIPSIZED into the approval Summary (tool name,
+// then ": ", then the first bytes, then "…"). It must not be dropped, so
+// the card conveys what the agent wants to run instead of showing only
+// the bare tool name. The full, untruncated input must still ship
+// separately in Input.
 func TestClaudeMonitorApprovalSummary_EllipsizesLongInput(t *testing.T) {
 	m, l, cleanup := newMonitorWithTestListener(t)
 	defer cleanup()
@@ -419,8 +428,8 @@ func TestClaudeMonitorApprovalSummary_EllipsizesLongInput(t *testing.T) {
 	}
 	sum := ev.Approval.Summary
 
-	// Must NOT be the bare tool name (the old drop behavior) and must carry the
-	// "<tool>: " prefix with ellipsized content.
+	// The summary must NOT be the bare tool name (the old drop behavior).
+	// It must carry the "<tool>: " prefix with ellipsized content.
 	if sum == "Bash" {
 		t.Fatalf("summary was dropped to the bare tool name; want an ellipsized input summary")
 	}
@@ -430,7 +439,7 @@ func TestClaudeMonitorApprovalSummary_EllipsizesLongInput(t *testing.T) {
 	if !strings.HasSuffix(sum, "…") {
 		t.Errorf("long input must be ellipsized (end with …); got %q", sum)
 	}
-	// Bounded: the 200-byte input must be truncated, not shipped whole in the summary.
+	// Bounded: the summary must truncate the 200-byte input, not ship it whole.
 	if len(sum) >= len(bigVal) {
 		t.Errorf("summary not truncated (%d bytes); want it bounded near the cutoff: %q", len(sum), sum)
 	}
@@ -450,14 +459,16 @@ func TestClaudeMonitorApprovalSummary_EllipsizesLongInput(t *testing.T) {
 	}
 }
 
-// TestClaudeMonitorApprove_ClearsAttention is the regression guard for the stuck
-// sidebar attention signal: after a non-question PreToolUse raises an approval
-// (StateAwaitingApproval) and the user ALLOWS it via Approve, the monitor MUST
-// emit a Kind=="state"/StateRunning event (the tool proceeds) so the frontend's
-// last-event-wins per-workspace state clears the amber awaiting-approval
-// indicator, AND CurrentState() must report StateRunning. Before the fix, Approve
-// only unblocked the hook handler and emitted nothing, so the indicator stayed
-// stuck forever. (Deny → StateIdle is covered by TestClaudeMonitorApprove_Deny_ClearsToIdle.)
+// TestClaudeMonitorApprove_ClearsAttention is the regression guard for the
+// stuck sidebar attention signal. After a non-question PreToolUse raises
+// an approval (StateAwaitingApproval), and the user ALLOWS it through
+// Approve, the monitor MUST emit a Kind=="state"/StateRunning event (the
+// tool proceeds). This lets the frontend's last-event-wins per-workspace
+// state clear the amber awaiting-approval indicator, and CurrentState()
+// must report StateRunning. Before the fix, Approve only unblocked the
+// hook handler and emitted nothing, so the indicator stayed stuck
+// forever. TestClaudeMonitorApprove_Deny_ClearsToIdle covers the deny
+// path, which clears to StateIdle.
 func TestClaudeMonitorApprove_ClearsAttention(t *testing.T) {
 	m, l, cleanup := newMonitorWithTestListener(t)
 	defer cleanup()
@@ -511,10 +522,10 @@ func TestClaudeMonitorApprove_ClearsAttention(t *testing.T) {
 	}
 }
 
-// TestClaudeMonitorApprove_Deny_ClearsToIdle asserts that a DENY decision clears
-// the awaiting-approval attention signal to StateIdle (the agent may stop) — not
-// StateRunning. Denying a tool does not resume work, so surfacing "running" would
-// be wrong.
+// TestClaudeMonitorApprove_Deny_ClearsToIdle checks that a DENY decision
+// clears the awaiting-approval attention signal to StateIdle (the agent
+// may stop), not StateRunning. Denying a tool does not resume work, so
+// showing "running" would be wrong.
 func TestClaudeMonitorApprove_Deny_ClearsToIdle(t *testing.T) {
 	m, l, cleanup := newMonitorWithTestListener(t)
 	defer cleanup()
@@ -562,11 +573,12 @@ func TestClaudeMonitorApprove_Deny_ClearsToIdle(t *testing.T) {
 	}
 }
 
-// TestClaudeMonitorApprove_DoesNotClobberNewerState guards the race where a newer
-// real state (StateDone: the agent's turn ended) arrives on the hook stream BEFORE
-// the user's decision lands. Approve must NOT clobber Done with running/idle and
-// must NOT emit a clearing event — the amber indicator is already gone (state
-// advanced past awaiting-approval), and forcing "running" would show a stale feel.
+// TestClaudeMonitorApprove_DoesNotClobberNewerState guards the race where
+// a newer real state (StateDone: the agent's turn ended) arrives on the
+// hook stream BEFORE the user's decision lands. Approve must NOT clobber
+// Done with running or idle, and must NOT emit a clearing event. The
+// amber indicator is already gone, because the state has moved past
+// awaiting-approval, and forcing "running" would show a stale feel.
 func TestClaudeMonitorApprove_DoesNotClobberNewerState(t *testing.T) {
 	m, l, cleanup := newMonitorWithTestListener(t)
 	defer cleanup()
@@ -592,8 +604,9 @@ func TestClaudeMonitorApprove_DoesNotClobberNewerState(t *testing.T) {
 		t.Fatalf("want approval event, got %+v", appr)
 	}
 
-	// A Stop arrives FIRST: the agent's turn ended while the approval card sat open.
-	// This advances m.state to StateDone (Stop is a non-blocking hook event).
+	// A Stop arrives FIRST: the agent's turn ended while the approval card
+	// sat open. This advances m.state to StateDone. Stop is a
+	// non-blocking hook event.
 	postHook(t, l, `{"hook_event_name":"Stop","session_id":"s","transcript_path":"/t","cwd":"/p"}`)
 	select {
 	case doneEv := <-m.Events():
@@ -607,7 +620,8 @@ func TestClaudeMonitorApprove_DoesNotClobberNewerState(t *testing.T) {
 		t.Fatalf("pre-condition: CurrentState = %q, want done", m.CurrentState())
 	}
 
-	// Now the user's decision lands. It must NOT emit and must NOT clobber Done.
+	// Now the user's decision lands. It must NOT emit an event, and must
+	// NOT clobber Done.
 	if err := m.Approve(appr.Approval.ReqID, agent.Decision{Allow: true}); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
@@ -615,7 +629,7 @@ func TestClaudeMonitorApprove_DoesNotClobberNewerState(t *testing.T) {
 	case ev := <-m.Events():
 		t.Fatalf("Approve emitted an event after state advanced to Done — clobbered newer state: %+v", ev)
 	case <-time.After(300 * time.Millisecond):
-		// no event — correct
+		// no event, correct
 	}
 	if m.CurrentState() != agent.StateDone {
 		t.Errorf("CurrentState after Approve = %q, want %q (Done must not be clobbered)", m.CurrentState(), agent.StateDone)
@@ -628,16 +642,18 @@ func TestClaudeMonitorApprove_DoesNotClobberNewerState(t *testing.T) {
 	}
 }
 
-// TestClaudeMonitorApprove_NotDroppedUnderBackpressure is the regression guard for
-// the stuck awaiting-approval signal: when the monitor's events channel is
-// momentarily full, Approve must NOT silently drop the state-clearing event. The
-// old code emitted the clearing frame with `select { case ...: default: }`, so a
-// full channel meant the frontend stayed stuck on awaiting-approval forever. The
-// fix blocks (cancellable) until a slot frees, so the clearing event is always
-// delivered. This test fills the channel to capacity, calls Approve on an
-// awaiting-approval monitor, then drains the channel and asserts the StateRunning
-// clearing event eventually arrives. It goes RED against the `default:` version
-// (the clearing frame is lost) and GREEN after.
+// TestClaudeMonitorApprove_NotDroppedUnderBackpressure is the regression
+// guard for the stuck awaiting-approval signal. When the monitor's events
+// channel is momentarily full, Approve must NOT silently drop the
+// state-clearing event. The old code emitted the clearing frame with
+// `select { case ...: default: }`, so a full channel meant the frontend
+// stayed stuck on awaiting-approval forever. The fix blocks (cancellable)
+// until a slot frees, so the clearing event is always delivered. This
+// test fills the channel to capacity, calls Approve on an
+// awaiting-approval monitor, then drains the channel and checks that the
+// StateRunning clearing event eventually arrives. This test goes RED
+// against the `default:` version, because the clearing frame is lost,
+// and GREEN after the fix.
 func TestClaudeMonitorApprove_NotDroppedUnderBackpressure(t *testing.T) {
 	m, l, cleanup := newMonitorWithTestListener(t)
 	defer cleanup()
@@ -669,15 +685,15 @@ func TestClaudeMonitorApprove_NotDroppedUnderBackpressure(t *testing.T) {
 	// Saturate the events channel so any non-blocking send would be dropped.
 	m.FillEvents(m.EventsCap())
 
-	// Approve blocks on the full channel until a slot frees — run it in a goroutine
-	// and record when it returns.
+	// Approve blocks on the full channel until a slot frees. Run it in a
+	// goroutine, and record when it returns.
 	approveDone := make(chan error, 1)
 	go func() {
 		approveDone <- m.Approve(appr.Approval.ReqID, agent.Decision{Allow: true})
 	}()
 
-	// While the channel is full, Approve must not have returned (it is blocked on
-	// the reliable send, not dropping the frame).
+	// While the channel is full, Approve must not have returned. It is
+	// blocked on the reliable send, not dropping the frame.
 	select {
 	case <-approveDone:
 		t.Fatal("Approve returned while channel was full — it dropped the clearing event instead of blocking")
@@ -685,8 +701,8 @@ func TestClaudeMonitorApprove_NotDroppedUnderBackpressure(t *testing.T) {
 		// expected: still blocked on the send.
 	}
 
-	// Drain the channel. The clearing StateRunning frame must appear among the
-	// drained events — it was not silently lost.
+	// Drain the channel. The clearing StateRunning frame must appear
+	// among the drained events. Approve did not silently lose it.
 	deadline := time.After(3 * time.Second)
 	sawClearing := false
 	for !sawClearing {
@@ -720,24 +736,27 @@ func TestClaudeMonitorApprove_NotDroppedUnderBackpressure(t *testing.T) {
 	}
 }
 
-// TestClaudeMonitorPrepare_LaunchCommandSubmitsToShell is the falsifying guard
-// for the core agent-launch loop. The string Prepare() returns is written
-// VERBATIM into the pane's pty (app.OpenWorkspace → pty.Bridge.Write, a raw
-// passthrough), and a shell only runs a line once it is terminated by a
-// newline. Earlier code returned the launch command without a trailing "\n",
-// so the agent never started — a bug invisible to every mock-bounded test
-// because they assert the returned string, not that a shell executes it.
+// TestClaudeMonitorPrepare_LaunchCommandSubmitsToShell is the falsifying
+// guard for the core agent-launch loop. The string Prepare() returns is
+// written VERBATIM into the pane's pty (app.OpenWorkspace calls
+// pty.Bridge.Write, a raw passthrough). A shell only runs a line once a
+// newline terminates it. Earlier code returned the launch command without
+// a trailing "\n", so the agent never started. This bug was invisible to
+// every mock-bounded test, because those tests check the returned string,
+// not that a shell executes it.
 //
-// This test exercises Prepare()'s REAL output through a REAL /bin/sh: a fake
-// `claude` on PATH prints a sentinel, and we assert the command actually runs.
-// It regresses the instant the submitting newline is dropped from Prepare().
+// This test exercises Prepare()'s REAL output through a REAL /bin/sh: a
+// fake `claude` on PATH prints a sentinel, and the test checks that the
+// command actually runs. This test fails the instant Prepare() drops the
+// submitting newline.
 func TestClaudeMonitorPrepare_LaunchCommandSubmitsToShell(t *testing.T) {
 	m, _, cleanup := newMonitorWithTestListener(t)
 	defer cleanup()
 
-	// Fake `claude` on PATH that prints a sentinel. Prepare()'s command name is
-	// the literal "claude" (Adapter.Name()), so a real shell resolving and
-	// running it via PATH is exactly the production path minus the real binary.
+	// A fake `claude` on PATH prints a sentinel. Prepare()'s command name
+	// is the literal "claude" (Adapter.Name()). So a real shell that
+	// resolves and runs it through PATH follows exactly the production
+	// path, minus the real binary.
 	binDir := t.TempDir()
 	const sentinel = "PERCH_SUBMIT_OK"
 	script := "#!/bin/sh\nprintf '" + sentinel + "\\n'\n"
@@ -799,11 +818,12 @@ func TestClaudeMonitorPrepare_LaunchCommandSubmitsToShell(t *testing.T) {
 		"(command written but not submitted — missing trailing newline?)", sentinel, got)
 }
 
-// TestClaudeMonitorAgentExit_EmitsStateExited is the F32 core for claude: the shell
-// exit sentinel POSTs an AgentExit (carrying the captured $?) to the SAME loopback
-// listener as the other lifecycle hooks; the monitor must translate it to a terminal
-// StateExited (distinct from StateErrored) so a dead agent stops reading "running".
-// CurrentState must also flip so the state survives a webview reload.
+// TestClaudeMonitorAgentExit_EmitsStateExited is the F32 core for claude.
+// The shell exit sentinel POSTs an AgentExit event, carrying the captured
+// $?, to the SAME loopback listener as the other lifecycle hooks. The
+// monitor must translate that event to a terminal StateExited, distinct
+// from StateErrored, so a dead agent stops reading as "running".
+// CurrentState must also flip, so the state survives a webview reload.
 func TestClaudeMonitorAgentExit_EmitsStateExited(t *testing.T) {
 	m, l, cleanup := newMonitorWithTestListener(t)
 	defer cleanup()
@@ -831,15 +851,17 @@ func TestClaudeMonitorAgentExit_EmitsStateExited(t *testing.T) {
 	}
 }
 
-// TestClaudeMonitorAgentExit_StateExitedIsTerminal is the symmetric F32 guard for
-// claude: once AgentExit has been translated to StateExited, a straggler hook must
-// NOT clobber it. claude fires no hook after its process is dead, so AgentExit is
-// normally the last event — but the exit sentinel's AgentExit curl and a
-// fire-and-forget Stop curl are two independent loopback POSTs that can be
-// serialized onto the listener out of order. This posts AgentExit, drains the
-// terminal StateExited, THEN posts a Stop and asserts (a) no StateDone/running event
-// follows and (b) CurrentState stays StateExited. Against the un-fixed monitor (no
-// exited field/guard) the Stop translates to StateDone and this FAILS.
+// TestClaudeMonitorAgentExit_StateExitedIsTerminal is the symmetric F32
+// guard for claude. Once AgentExit has translated to StateExited, a
+// straggler hook must NOT clobber it. claude fires no hook after its
+// process is dead, so AgentExit is normally the last event. But the exit
+// sentinel's AgentExit curl and a fire-and-forget Stop curl are two
+// independent loopback POSTs that can land on the listener out of order.
+// This test posts AgentExit, drains the terminal StateExited, THEN posts
+// a Stop, and checks that (a) no StateDone or running event follows and
+// (b) CurrentState stays StateExited. Against the un-fixed monitor, with
+// no exited field or guard, the Stop translates to StateDone, and this
+// test FAILS.
 func TestClaudeMonitorAgentExit_StateExitedIsTerminal(t *testing.T) {
 	m, l, cleanup := newMonitorWithTestListener(t)
 	defer cleanup()
@@ -848,7 +870,8 @@ func TestClaudeMonitorAgentExit_StateExitedIsTerminal(t *testing.T) {
 	defer cancel()
 	m.Start(ctx)
 
-	// AgentExit → terminal StateExited (drain it so exited is armed before the Stop).
+	// AgentExit leads to terminal StateExited. Drain it, so exited is
+	// armed before the Stop.
 	_ = postHook(t, l, `{"hook_event_name":"AgentExit","error_type":"0"}`)
 	select {
 	case ev := <-m.Events():
@@ -862,25 +885,28 @@ func TestClaudeMonitorAgentExit_StateExitedIsTerminal(t *testing.T) {
 		t.Fatalf("pre-condition: CurrentState = %q, want exited", m.CurrentState())
 	}
 
-	// A straggler Stop (a fire-and-forget curl serialized after AgentExit) MUST be
-	// dropped: StateExited is terminal, so no StateDone event may follow.
+	// A straggler Stop, a fire-and-forget curl that lands after AgentExit,
+	// MUST be dropped. StateExited is terminal, so no StateDone event may
+	// follow.
 	_ = postHook(t, l, `{"hook_event_name":"Stop","session_id":"s","transcript_path":"/t","cwd":"/p"}`)
 	select {
 	case ev := <-m.Events():
 		t.Fatalf("exited guard failed: a post-exit Stop was emitted: %+v", ev)
 	case <-time.After(300 * time.Millisecond):
-		// good — no event
+		// good, no event
 	}
 	if m.CurrentState() != agent.StateExited {
 		t.Errorf("StateExited was clobbered by a straggler Stop: %q", m.CurrentState())
 	}
 }
 
-// TestClaudeMonitorPrepare_ExitSentinelUsesEnvNotLiteralToken proves the launch line
-// carries the exit sentinel referencing PERCH_EXIT_TOKEN/PERCH_EXIT_URL BY NAME —
-// and NOT the literal bearer token, which the interactive shell would echo on-screen
-// (a new secret exposure for claude, whose launch line carries no secret today). The
-// token/URL travel via PaneEnv (the process environment), which is never echoed.
+// TestClaudeMonitorPrepare_ExitSentinelUsesEnvNotLiteralToken proves the
+// launch line carries the exit sentinel that references PERCH_EXIT_TOKEN
+// and PERCH_EXIT_URL BY NAME, and NOT the literal bearer token, which the
+// interactive shell would echo on screen. Echoing it would be a new secret
+// exposure for claude, whose launch line carries no secret today. The
+// token and URL travel through PaneEnv (the process environment), which
+// the shell never echoes.
 func TestClaudeMonitorPrepare_ExitSentinelUsesEnvNotLiteralToken(t *testing.T) {
 	m, l, cleanup := newMonitorWithTestListener(t)
 	defer cleanup()
@@ -919,14 +945,16 @@ func envSliceHas(env []string, want string) bool {
 	return false
 }
 
-// TestClaudeMonitor_ExitSentinelFiresEndToEnd is the falsifying guard for the WHOLE
-// F32 mechanism, not just the translate step: it runs Prepare's REAL launch line
-// through a REAL shell with a fake `claude` that exits 42, injects PaneEnv exactly
-// as app.OpenWorkspace does, and asserts the shell's exit sentinel captures $? and
-// curls the listener → StateExited("exited (code 42)"). This proves the crux the bug
-// hinges on — the shell OUTLIVES the agent and the sentinel fires on the agent's exit
-// (no pty:exit needed) — with the token arriving via the process ENV (never the typed
-// line). curl-gated so it skips gracefully where curl is absent.
+// TestClaudeMonitor_ExitSentinelFiresEndToEnd is the falsifying guard for
+// the WHOLE F32 mechanism, not just the translate step. It runs Prepare's
+// REAL launch line through a REAL shell with a fake `claude` that exits
+// 42, injects PaneEnv exactly as app.OpenWorkspace does, and checks that
+// the shell's exit sentinel captures $? and curls the listener, producing
+// StateExited("exited (code 42)"). This proves the crux the bug hinges
+// on: the shell OUTLIVES the agent, and the sentinel fires on the agent's
+// exit with no pty:exit needed, while the token arrives through the
+// process ENV and never through the typed line. This test is gated on
+// curl, so it skips gracefully where curl is absent.
 func TestClaudeMonitor_ExitSentinelFiresEndToEnd(t *testing.T) {
 	if _, err := exec.LookPath("curl"); err != nil {
 		t.Skip("curl not on PATH; the exit sentinel needs it")
@@ -935,7 +963,8 @@ func TestClaudeMonitor_ExitSentinelFiresEndToEnd(t *testing.T) {
 	defer cleanup()
 
 	binDir := t.TempDir()
-	// Fake `claude` that exits 42 (a crash-like nonzero code the shell reports as $?).
+	// A fake `claude` that exits 42, a crash-like nonzero code the shell
+	// reports as $?.
 	if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte("#!/bin/sh\nexit 42\n"), 0o755); err != nil {
 		t.Fatalf("write fake claude: %v", err)
 	}
@@ -946,7 +975,8 @@ func TestClaudeMonitor_ExitSentinelFiresEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	// The launch line must NOT carry the literal token (env-injected, not inlined).
+	// The launch line must NOT carry the literal token. perch injects it
+	// through the environment instead of inlining it.
 	if strings.Contains(launch, l.Token()) {
 		t.Fatalf("launch line leaked the bearer token: %q", launch)
 	}
@@ -955,8 +985,9 @@ func TestClaudeMonitor_ExitSentinelFiresEndToEnd(t *testing.T) {
 	defer cancel()
 	m.Start(ctx)
 
-	// Inject the exit env exactly as app.OpenWorkspace does: PaneEnv merged onto
-	// os.Environ() (so PERCH_EXIT_TOKEN/PERCH_EXIT_URL are in the shell's process env).
+	// Inject the exit env exactly as app.OpenWorkspace does: merge PaneEnv
+	// onto os.Environ(), so PERCH_EXIT_TOKEN and PERCH_EXIT_URL land in
+	// the shell's process env.
 	env := append(os.Environ(), m.PaneEnv()...)
 	br, err := pty.Spawn(ctx, cwd, []string{"/bin/sh"}, env, "data", "exit", func(string, ...any) {}, 80, 24)
 	if err != nil {
@@ -981,7 +1012,8 @@ func TestClaudeMonitor_ExitSentinelFiresEndToEnd(t *testing.T) {
 	}
 }
 
-// TestClaudeNewArgs_NoModel verifies NewArgs returns an empty slice (no --model ever).
+// TestClaudeNewArgs_NoModel verifies that NewArgs returns an empty slice;
+// perch never passes --model.
 func TestClaudeNewArgs_NoModel(t *testing.T) {
 	c := agent.NewClaude()
 	args := c.NewArgs()
@@ -990,7 +1022,7 @@ func TestClaudeNewArgs_NoModel(t *testing.T) {
 	}
 }
 
-// TestOpencodeNewArgs_NoModel verifies NewArgs returns an empty slice.
+// TestOpencodeNewArgs_NoModel verifies that NewArgs returns an empty slice.
 func TestOpencodeNewArgs_NoModel(t *testing.T) {
 	o := agent.NewOpencode()
 	args := o.NewArgs()

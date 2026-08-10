@@ -45,7 +45,7 @@ func TestRoundTrip(t *testing.T) {
 		t.Fatalf("unexpected workspace: %+v", got)
 	}
 
-	// Reload from disk — persistence check
+	// Reload from disk to check persistence
 	s2, err := registry.Load(dir)
 	if err != nil {
 		t.Fatalf("Load after Upsert: %v", err)
@@ -62,7 +62,7 @@ func TestRoundTrip(t *testing.T) {
 func TestMissingFileIsEmpty(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
-	// workspaces.json does not exist — Load must succeed with empty store
+	// workspaces.json does not exist. Load must succeed with an empty store.
 	s, err := registry.Load(dir)
 	if err != nil {
 		t.Fatalf("Load on missing file: %v", err)
@@ -108,18 +108,20 @@ func TestSortOrderLastActiveDesc(t *testing.T) {
 	}
 }
 
-// TestSortStableOnEqualLastActive verifies that records sharing a LastActive
-// timestamp keep a FIXED order across repeated List() calls (deterministic ID
-// tie-breaker), rather than reordering with the random map iteration order. Before
-// the fix List used a non-stable sort.Slice with no tie-breaker, so equal-timestamp
-// records could swap between refreshes and flicker the sidebar.
+// TestSortStableOnEqualLastActive verifies that records that share a
+// LastActive timestamp keep a fixed order across repeated List() calls (a
+// deterministic ID tie-breaker), instead of reordering with the random map
+// iteration order.
+// Before the fix, List used an unstable sort.Slice with no tie-breaker, so
+// equal-timestamp records could swap between refreshes and make the sidebar
+// flicker.
 func TestSortStableOnEqualLastActive(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	s, _ := registry.Load(dir)
 
-	// Same LastActive for both records; IDs chosen so the deterministic tie-break
-	// order (ID ascending) is "ws-aaa" then "ws-bbb".
+	// Both records share the same LastActive. The test picks IDs so the
+	// deterministic tie-break order (ID ascending) is "ws-aaa" then "ws-bbb".
 	ts := time.Now().Truncate(time.Second)
 	for _, id := range []string{"ws-bbb", "ws-aaa"} {
 		_ = s.Upsert(registry.Workspace{
@@ -128,8 +130,8 @@ func TestSortStableOnEqualLastActive(t *testing.T) {
 		})
 	}
 
-	// Repeat List() many times: with a random map order feeding the sort, a
-	// non-stable / tie-breaker-less sort would eventually flip the pair.
+	// Repeat List() many times. With a random map order feeding the sort, an
+	// unstable sort with no tie-breaker would eventually flip the pair.
 	first := s.List()
 	if len(first) != 2 {
 		t.Fatalf("want 2 workspaces, got %d", len(first))
@@ -162,8 +164,8 @@ func TestRemove(t *testing.T) {
 	}
 }
 
-// TestWorkspace_RepoPathWorktreeRoundTrip verifies that RepoPath and Worktree
-// survive an Upsert→Load→Get cycle (JSON round-trip).
+// TestWorkspace_RepoPathWorktreeRoundTrip verifies that RepoPath and
+// Worktree survive an Upsert, Load, and Get cycle (a JSON round-trip).
 func TestWorkspace_RepoPathWorktreeRoundTrip(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
@@ -241,9 +243,9 @@ func TestWorkspace_RepoPathWorktreeRoundTrip(t *testing.T) {
 	}
 }
 
-// TestWorkspace_ModelFieldGone verifies that old JSON containing a "model"
-// field is loaded without error (unknown fields default to zero) and that the
-// Workspace struct has no Model field the call site can set.
+// TestWorkspace_ModelFieldGone verifies that Load accepts old JSON that
+// contains a "model" field without error (unknown fields default to zero),
+// and that the Workspace struct has no Model field for a caller to set.
 func TestWorkspace_ModelFieldGone(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
@@ -263,13 +265,14 @@ func TestWorkspace_ModelFieldGone(t *testing.T) {
 	if !ok {
 		t.Fatal("ws-old not found after load")
 	}
-	// RepoPath defaults to "" (field absent in old JSON) — that is fine,
-	// old records will be enriched by future saves.
+	// RepoPath defaults to "" because the field is absent in the old JSON.
+	// That is fine: future saves will fill in old records.
 	_ = got.RepoPath
 }
 
-// TestWorkspace_BaseRefRoundTrip verifies that BaseRef survives an
-// Upsert→Load→Get JSON round-trip (required by stale-cleanup merge checks).
+// TestWorkspace_BaseRefRoundTrip verifies that BaseRef survives an Upsert,
+// Load, and Get cycle (a JSON round-trip). Stale-cleanup merge checks need
+// this.
 func TestWorkspace_BaseRefRoundTrip(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
@@ -302,7 +305,7 @@ func TestWorkspace_BaseRefRoundTrip(t *testing.T) {
 		t.Errorf("BaseRef = %q, want %q", got.BaseRef, "main")
 	}
 
-	// Reload from disk — persistence check.
+	// Reload from disk to check persistence.
 	s2, err := registry.Load(dir)
 	if err != nil {
 		t.Fatalf("Load after Upsert: %v", err)
@@ -315,7 +318,7 @@ func TestWorkspace_BaseRefRoundTrip(t *testing.T) {
 		t.Errorf("BaseRef after reload = %q, want %q", got2.BaseRef, "main")
 	}
 
-	// Empty BaseRef (non-worktree / legacy record) must survive too.
+	// An empty BaseRef (non-worktree or legacy record) must survive too.
 	w2 := registry.Workspace{
 		ID:           "ws-br2",
 		RepoPath:     "/home/me/proj",
@@ -382,11 +385,11 @@ func TestLoad_CorruptJSON_QuarantinesAndReturnsEmpty(t *testing.T) {
 	if n := len(store.List()); n != 0 {
 		t.Fatalf("expected 0 workspaces, got %d", n)
 	}
-	// original file should be gone (renamed)
+	// Original file should be gone (renamed).
 	if _, err := os.Stat(registryPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected original workspaces.json to be gone, got: %v", err)
 	}
-	// backup should exist with original bytes
+	// Backup should exist with the original bytes.
 	matches, err := filepath.Glob(registryPath + ".corrupt-*")
 	if err != nil {
 		t.Fatal(err)

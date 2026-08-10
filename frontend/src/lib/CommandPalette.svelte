@@ -10,14 +10,16 @@
   let query = $state("");
   let active = $state(0);
 
-  // A fresh open starts blank: clear the query and reset the active index so a
-  // stale query/selection from a previous open never carries over.
+  // A fresh open starts blank. This clears the query and resets the active
+  // index, so a stale query or selection from a previous open never carries
+  // over.
   $effect(() => {
     if (open) { query = ""; active = 0; }
   });
 
-  // Track command invocation recency: id → last-invoked timestamp.
-  // Persisted to localStorage so recency survives palette re-opens within a session.
+  // This map tracks command recency: it maps id to the last-invoked timestamp.
+  // The command palette saves this map to localStorage, so recency survives
+  // when the user reopens the palette within a session.
   function loadRecents(): Map<string, number> {
     try {
       const raw = localStorage.getItem(STORAGE_CMD_RECENTS);
@@ -48,9 +50,10 @@
     return score;
   }
 
-  // Score a command against its label first, then fall back to its group and
-  // keybinding so queries like a group name ("view") or a key ("\\") still find
-  // commands. The label always outranks group/keybinding matches.
+  // This function scores a command against its label first. It then falls back
+  // to the group and keybinding, so a query like a group name ("view") or a key
+  // ("\\") still finds commands. The label score always outranks the group or
+  // keybinding score.
   function commandScore(c: Command, q: string): number {
     const labelScore = fuzzyScore(c.label, q);
     if (labelScore > 0) return labelScore + 100;
@@ -59,26 +62,30 @@
     return fuzzyScore(c.keybinding ?? "", q);
   }
 
-  // When the query is empty, surface recently-used commands first in a "Recent" group,
-  // then show remaining commands in their normal groups below.
+  // When the query is empty, this shows recently used commands first, in a
+  // "Recent" group. It then shows the remaining commands in their normal
+  // groups below.
   let filtered = $derived((() => {
     if (query) {
       return commands.map((c) => ({ c, score: commandScore(c, query) }))
         .filter((x) => x.score > 0).sort((a, b) => b.score - a.score).map((x) => x.c);
     }
-    // No query: sort by recency (most-recent first) for the initial list
+    // If there is no query, sort by recency, most recent first, for the
+    // initial list.
     const recents = loadRecents();
     return [...commands].sort((a, b) => {
       const ta = recents.get(a.id) ?? 0;
       const tb = recents.get(b.id) ?? 0;
-      if (ta !== tb) return tb - ta; // more recent → earlier
-      return 0; // preserve insertion order for equal timestamps
+      if (ta !== tb) return tb - ta; // A more recent command sorts earlier.
+      return 0; // Preserve insertion order for equal timestamps.
     });
   })());
 
-  // Reset active whenever filtered list changes (query change)
+  // This resets `active` whenever the filtered list changes, for example on a
+  // query change.
   $effect(() => {
-    // Access filtered to track it; reset active to 0
+    // This accesses `filtered` so Svelte tracks it as a dependency. This then
+    // resets `active` to 0.
     filtered; // eslint-disable-line @typescript-eslint/no-unused-expressions
     active = 0;
   });
@@ -101,14 +108,15 @@
         return acc;
       }, []);
     }
-    // No query: put recently-used commands first in a "Recent" group, rest below
+    // If there is no query, put recently used commands first, in a "Recent"
+    // group. The remaining commands go below.
     const recents = loadRecents();
     const recentIds = new Set(recents.keys());
     const recentCmds = filtered.filter((c) => recentIds.has(c.id));
     const otherCmds  = filtered.filter((c) => !recentIds.has(c.id));
     const result: { group: string; items: Command[] }[] = [];
     if (recentCmds.length > 0) result.push({ group: "Recent", items: recentCmds });
-    // Group remaining by their normal group
+    // Group the remaining commands by their normal group.
     for (const c of otherCmds) {
       const last = result[result.length - 1];
       if (last && last.group === c.group) last.items.push(c);
@@ -117,7 +125,7 @@
     return result;
   })());
 
-  // Compute active option id for aria-activedescendant
+  // This computes the active option id for aria-activedescendant.
   let activeId = $derived(filtered.length > 0 ? `palette-option-${active}` : undefined);
 
   function handleKey(e: KeyboardEvent) {
@@ -132,16 +140,18 @@
       saveRecent(id);
       onRun(id);
     } else if (e.key === "Escape") {
-      // Stop the bubble to the overlay's handleOverlayKey so Escape closes once.
+      // This stops the event from bubbling to the overlay's handleOverlayKey,
+      // so Escape closes the palette once.
       e.stopPropagation();
       onClose();
     }
   }
 
-  /** Overlay-level handler: only closes on Escape so focus falling off the input
-      (e.g. a list item is focused) still closes the palette. Navigation keys are
-      handled by handleKey on the input — the overlay must NOT re-handle them or
-      events will fire twice via bubbling. */
+  /** This is the overlay-level handler. It closes the palette only on Escape.
+      This design lets the palette close even when focus moves off the input,
+      for example to a list item. The `handleKey` function on the input handles
+      the navigation keys. The overlay must not handle the navigation keys
+      again, or the events would fire twice through bubbling. */
   function handleOverlayKey(e: KeyboardEvent) {
     if (e.key === "Escape") onClose();
   }
@@ -192,11 +202,12 @@
     z-index: var(--perch-z-command-palette);
   }
 
-  /* Floating card — no padding (input/items touch the edges) */
+  /* Floating card. No padding, so the input and items touch the edges. */
   .palette {
-    /* Solid, never glass: this card can overlap the agent terminal, where
-       WebKitGTK paints backdrop-filter surfaces transparent over the composited
-       terminal subtree (mirrors the ApprovalCard fix). */
+    /* This background is solid, never glass. The command palette can overlap
+       the agent terminal, where WebKitGTK paints backdrop-filter surfaces as
+       transparent over the composited terminal subtree. This mirrors the fix
+       in ApprovalCard. */
     background: var(--perch-glass-bg-solid);
     color: var(--perch-text);
     border: 1px solid var(--perch-glass-border);
@@ -210,7 +221,7 @@
     overflow: hidden;
   }
 
-  /* Search input — full width, border-bottom only, no outer radius */
+  /* Search input. Full width, border-bottom only, no outer radius. */
   .palette input[type="text"] {
     display: block;
     width: 100%;
@@ -251,7 +262,7 @@
   .palette-list::-webkit-scrollbar-thumb { background: var(--perch-border); border-radius: var(--perch-scrollbar-radius); }
   .palette-list::-webkit-scrollbar-thumb:hover { background: var(--perch-text-dim); }
 
-  /* Group header row — dim uppercase label, non-interactive */
+  /* Group header row: dim, uppercase label, non-interactive. */
   .group-header {
     padding: 4px calc(var(--perch-sp-2) * var(--perch-density-scale));
     font-size: var(--perch-fs-label);
@@ -318,7 +329,7 @@
     list-style: none;
   }
 
-  /* Keybinding badge — mono, right-aligned */
+  /* Keybinding badge: mono font, right-aligned. */
   .item-kbd {
     font-family: var(--perch-font-mono);
     font-size: var(--perch-fs-code);

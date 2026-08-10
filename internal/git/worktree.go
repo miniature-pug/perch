@@ -1,6 +1,6 @@
-// Package git — worktree.go contains the functions that create and resolve
-// paths for git linked worktrees. All git shell-outs go through proc.Runner so
-// that callers can inject a FakeRunner in unit tests.
+// Package git: worktree.go contains the functions that create and resolve
+// paths for git linked worktrees. All git shell-outs go through proc.Runner,
+// so callers can inject a FakeRunner in unit tests.
 package git
 
 import (
@@ -25,11 +25,13 @@ var ErrBranchExists = errors.New("git: worktree branch already exists")
 
 // SlugifyBranch converts a git branch name into a filesystem-safe handle.
 // Rules: keep [A-Za-z0-9._-], map '/' and any other rune to '-', collapse
-// consecutive '-' runs to one, trim leading/trailing '-', lowercase the result.
-// An empty or fully-stripped result becomes "worktree".
+// consecutive '-' runs to one, trim leading or trailing '-', and lowercase
+// the result. An empty or fully-stripped result becomes "worktree".
 //
-// This slugifier targets git-branch → filesystem constraints. Do not conflate
-// it with any pane-title sanitizer, which has different allowed character sets.
+// SlugifyBranch exists to satisfy filesystem naming constraints when it
+// converts a git branch name. Do not conflate SlugifyBranch with any
+// pane-title sanitizer; a pane-title sanitizer allows a different set of
+// characters.
 func SlugifyBranch(branch string) string {
 	var b strings.Builder
 	prevDash := false
@@ -42,7 +44,7 @@ func SlugifyBranch(branch string) string {
 			b.WriteRune(r)
 			prevDash = false
 		default:
-			// '/' and every other rune become '-'; collapse consecutive runs.
+			// '/' and every other rune become '-'. Collapse consecutive runs.
 			if !prevDash {
 				b.WriteByte('-')
 				prevDash = true
@@ -83,15 +85,16 @@ func WorktreePath(projectRoot, handle, worktreeDir string) (string, error) {
 }
 
 // AddWorktree runs `git -C <repoRoot> worktree add -b <branch> <path> <base>`.
-// The caller supplies base already resolved (e.g. "HEAD" or a branch name) —
-// this function does not default it.
+// The caller supplies base already resolved (e.g. "HEAD" or a branch name).
+// AddWorktree does not default it.
 //
-// Security: branch and base are validated with ValidRef before any argv
-// is built. git worktree add does not support a trailing "--" before the
-// committish positional (unlike "git checkout -- <path>"), so strict validation
-// is the correct mitigation: both values are rejected if they begin with '-',
-// contain "..", or contain other git check-ref-format-forbidden characters that
-// could cause flag injection. path is always absolute (callers use WorktreePath).
+// Security: AddWorktree validates branch and base with ValidRef before it
+// builds any argv. git worktree add does not support a trailing "--" before
+// the committish positional (unlike "git checkout -- <path>"), so strict
+// validation is the correct mitigation. ValidRef rejects both values if they
+// begin with '-', contain "..", or contain another character that git
+// check-ref-format forbids and that could cause flag injection. path is
+// always absolute (callers use WorktreePath).
 //
 // If the command fails and stderr indicates the branch already exists, the
 // returned error wraps ErrBranchExists so callers can use errors.Is. Other

@@ -16,8 +16,8 @@
   } = $props();
 
   // Human-readable display names for the appearance slugs. The <option> value
-  // stays the raw slug (what the backend stores); only the visible label is
-  // prettified. Any slug without an entry falls back to the slug itself.
+  // stays the raw slug, the value the backend stores. Only the visible label is
+  // formatted. Any slug without an entry falls back to the slug itself.
   const THEME_LABELS: Record<string, string> = {
     "gruvbox": "Gruvbox",
     "tokyo-night": "Tokyo Night",
@@ -87,9 +87,9 @@
     try { await settingsStore.setGlass(!next); } catch (err) { addBlocking("", "Failed to save settings", String(err)); }
   }
 
-  // Validate as a non-negative integer. Blank clears the override (backend
-  // falls back to its default of 30 days); anything negative or non-numeric
-  // is ignored — the input keeps its prior committed value.
+  // Validate as a non-negative integer. A blank value clears the override; the
+  // backend then falls back to its default of 30 days. The input ignores
+  // anything negative or non-numeric and keeps its prior committed value.
   async function onStaleThresholdChange(e: Event) {
     const raw = (e.currentTarget as HTMLInputElement).value.trim();
     let v: number | undefined;

@@ -1,5 +1,5 @@
-// security_fixes_test.go: tests pinning the app-boundary security guards
-// (path containment, session-id validation, approval-rule matching, atomic writes).
+// security_fixes_test.go tests the app-boundary security guards: path
+// containment, session-id validation, approval-rule matching, and atomic writes.
 package app
 
 import (
@@ -63,7 +63,7 @@ func TestSecFix_L8_CopyPath_RejectsOutsideRoots(t *testing.T) {
 	a := newSecurityTestApp(t, []string{root})
 
 	// Before fix: CopyPath has no root check, so it returns nil.
-	// After fix: returns a validation error.
+	// After fix: CopyPath returns a validation error.
 	err := a.CopyPath(outsidePath)
 	if err == nil {
 		t.Fatal("CopyPath with path outside roots must return an error")
@@ -78,9 +78,9 @@ func TestSecFix_L8_CopyPath_AllowsInsideRoots(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Set ctx to nil — CopyPath returns nil early if ctx is nil (Wails not started).
-	// The validation must occur BEFORE the ctx guard so inside-root also returns
-	// nil (as a no-op write to clipboard) but does NOT return a validation error.
+	// Set ctx to nil. CopyPath returns nil early when ctx is nil (Wails not started).
+	// The validation must run before the ctx guard. So a path inside root with a
+	// nil ctx also returns nil (a no-op write to clipboard), not a validation error.
 	a := newSecurityTestApp(t, []string{root})
 	a.ctx = nil // headless, no Wails runtime
 
@@ -92,7 +92,7 @@ func TestSecFix_L8_CopyPath_AllowsInsideRoots(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// SessionID from event pump must be validated before persistence.
+// The app must validate the event pump's SessionID before persistence.
 // ---------------------------------------------------------------------------
 
 func TestSecFix_L10_ShellMetacharSessionID_NotPersisted(t *testing.T) {
@@ -147,7 +147,7 @@ func TestSecFix_L10_ShellMetacharSessionID_NotPersisted(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// OpenWorkspace, CloseWorkspace, RemoveWorkspace must validate the id.
+// OpenWorkspace, CloseWorkspace, and RemoveWorkspace must validate the id.
 // ---------------------------------------------------------------------------
 
 func TestSecFix_L11_OpenWorkspace_RejectsMalformedID(t *testing.T) {
@@ -204,7 +204,7 @@ func TestSecFix_L12_CloseWorkspace_ClearsPending(t *testing.T) {
 		// Pre-inject a pending approval belonging to ws-l12.
 		pending: map[string]agent.ApprovalReq{
 			"req-abc:" + wsID: {ReqID: "req-abc", Tool: "Bash", Input: "ls"},
-			// An entry for a different workspace — must NOT be cleared.
+			// An entry for a different workspace must NOT be cleared.
 			"req-xyz:other-ws": {ReqID: "req-xyz", Tool: "Read", Input: "/etc"},
 		},
 	}
@@ -216,11 +216,11 @@ func TestSecFix_L12_CloseWorkspace_ClearsPending(t *testing.T) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	// Entry for ws-l12 must be gone.
+	// CloseWorkspace must clear the entry for ws-l12.
 	if _, found := a.pending["req-abc:"+wsID]; found {
 		t.Error("pending entry for closed workspace was NOT cleared")
 	}
-	// Entry for other workspace must survive.
+	// The entry for the other workspace must survive.
 	if _, found := a.pending["req-xyz:other-ws"]; !found {
 		t.Error("pending entry for OTHER workspace was incorrectly cleared")
 	}
@@ -260,11 +260,12 @@ func TestSecFix_L5_WriteFile_RejectsSymlinkEscape(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
 
-	// Attack: absPath = root/subdir/evil-link where evil-link is a symlink to outside/secret.txt.
-	// Dir(absPath) = root/subdir → resolves inside root (old code passes this check).
-	// absPath itself via EvalSymlinks → outside/secret.txt → outside root (must be rejected).
-	// Before fix: WriteFile validated only Dir → no error.
-	// After fix: detects absPath exists as a symlink → error.
+	// Attack: absPath = root/subdir/evil-link. evil-link is a symlink to outside/secret.txt.
+	// Dir(absPath) resolves to root/subdir, which is inside root. The old check passes.
+	// EvalSymlinks resolves absPath itself to outside/secret.txt, which is outside root.
+	// The check must reject this.
+	// Before fix: WriteFile validated only Dir, so it returned no error.
+	// After fix: WriteFile detects that absPath is a symlink and returns an error.
 	realSubdir := filepath.Join(root, "subdir")
 	if err := os.MkdirAll(realSubdir, 0o755); err != nil {
 		t.Fatal(err)
@@ -293,7 +294,7 @@ func TestSecFix_L5_WriteFile_AllowsNewFileUnderRoot(t *testing.T) {
 
 	a := newSecurityTestApp(t, []string{root})
 
-	// A new (nonexistent) file under root must be allowed.
+	// WriteFile must allow a new (nonexistent) file under root.
 	err := a.WriteFile(newFile, "hello")
 	if err != nil {
 		t.Fatalf("WriteFile for new file inside root should succeed: %v", err)
@@ -305,8 +306,8 @@ func TestSecFix_L5_WriteFile_AllowsNewFileUnderRoot(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSecFix_M12_ConcurrentApproveAlways_BothRulesPersisted(t *testing.T) {
-	// Run many iterations because the bug is a file-backed lost-update (not a
-	// data race that -race detects). Sufficient iterations reliably reproduce loss.
+	// Run many iterations. The bug is a file-backed lost update, not a data
+	// race that -race detects. Enough iterations reliably reproduce the loss.
 	const iterations = 60
 	for i := 0; i < iterations; i++ {
 		t.Run(fmt.Sprintf("iter%d", i), func(t *testing.T) {
@@ -332,7 +333,7 @@ func TestSecFix_M12_ConcurrentApproveAlways_BothRulesPersisted(t *testing.T) {
 				settingsPath: settingsPath,
 			}
 
-			// Two goroutines, each calling Approve with always=true for distinct rules.
+			// Two goroutines call Approve with always=true, each for a distinct rule.
 			var wg sync.WaitGroup
 			wg.Add(2)
 			go func() {
@@ -357,7 +358,7 @@ func TestSecFix_M12_ConcurrentApproveAlways_BothRulesPersisted(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Hash-based match: distinct inputs sharing a 4096-byte prefix must NOT auto-approve.
+// Hash-based match: distinct inputs that share a 4096-byte prefix must NOT auto-approve.
 // ---------------------------------------------------------------------------
 
 func TestSecFix_M13_TruncationCollision_DistinctHashRejects(t *testing.T) {
@@ -407,12 +408,12 @@ func TestSecFix_M13_TruncationCollision_DistinctHashRejects(t *testing.T) {
 	reqB := agent.ApprovalReq{
 		ReqID:     "req-b",
 		Tool:      "Bash",
-		Input:     truncB, // truncated — same as A
-		InputHash: hashB,  // different hash → must NOT match
+		Input:     truncB, // truncated, same as A
+		InputHash: hashB,  // different hash, so it must NOT match
 	}
 
-	// Before fix: match is on truncated Input → returns TRUE (privilege escalation).
-	// After fix:  match is on hash         → returns FALSE.
+	// Before fix: the match uses the truncated Input, so it returns TRUE (privilege escalation).
+	// After fix: the match uses the hash, so it returns FALSE.
 	result := a.maybeAutoApprove("ws-m13", "req-b", reqB, fm)
 	if result {
 		t.Fatal("maybeAutoApprove returned true for input B despite hash mismatch — " +
@@ -424,7 +425,7 @@ func TestSecFix_M13_TruncationCollision_DistinctHashRejects(t *testing.T) {
 		ReqID:     "req-a",
 		Tool:      "Bash",
 		Input:     truncA,
-		InputHash: hashA, // same hash → must match
+		InputHash: hashA, // same hash, so it must match
 	}
 	if !a.maybeAutoApprove("ws-m13", "req-a", reqA, fm) {
 		t.Fatal("maybeAutoApprove returned false for input A with matching hash — false rejection")
@@ -432,7 +433,7 @@ func TestSecFix_M13_TruncationCollision_DistinctHashRejects(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// RevealInFiles and Branches: validateWorktreeUnderRoots guards.
+// RevealInFiles and Branches use the validateWorktreeUnderRoots guard.
 // ---------------------------------------------------------------------------
 
 func TestSecFix_Branches_RejectsOutsideRoots(t *testing.T) {
@@ -498,9 +499,10 @@ func TestSecFix_RevealInFiles_RejectsOutsideRoots(t *testing.T) {
 }
 
 // TestClampPtyDim pins the backend pty-dimension clamp. The frontend already
-// clamps, but ResizePty must not trust it: a 0 dimension is invalid and becomes
-// ptyMinDim, an over-cap value is capped at ptyMaxDim, and in-range values pass
-// through unchanged.
+// clamps pty dimensions, but ResizePty must not trust the frontend.
+// clampPtyDim converts a 0 dimension to ptyMinDim.
+// clampPtyDim caps an over-cap value at ptyMaxDim.
+// In-range values pass through unchanged.
 func TestClampPtyDim(t *testing.T) {
 	for _, tc := range []struct {
 		name string

@@ -53,8 +53,8 @@ func mustScan(t *testing.T, root string, opts Options) []string {
 	return got
 }
 
-// assertPaths fails the test if got and want do not contain the same paths.
-// Both slices are sorted before comparison so ordering is irrelevant.
+// assertPaths fails the test if got and want do not hold the same paths.
+// assertPaths sorts both slices before comparing them, so order does not matter.
 func assertPaths(t *testing.T, got, want []string) {
 	t.Helper()
 	sort.Strings(want)
@@ -97,8 +97,8 @@ func TestMaxDepthBoundary(t *testing.T) {
 	})
 }
 
-// TestPruneNodeModules verifies that a repo nested inside node_modules is never
-// returned because node_modules is in DefaultPrune.
+// TestPruneNodeModules verifies that Scan never returns a repo nested inside
+// node_modules, because node_modules is in DefaultPrune.
 func TestPruneNodeModules(t *testing.T) {
 	root := t.TempDir()
 	nm := makeDir(t, root, "node_modules", "some-pkg")
@@ -108,7 +108,7 @@ func TestPruneNodeModules(t *testing.T) {
 	assertPaths(t, got, nil)
 }
 
-// TestPruneVendor verifies that a repo nested inside vendor is never returned.
+// TestPruneVendor verifies that Scan never returns a repo nested inside vendor.
 func TestPruneVendor(t *testing.T) {
 	root := t.TempDir()
 	v := makeDir(t, root, "vendor", "sub")
@@ -118,8 +118,8 @@ func TestPruneVendor(t *testing.T) {
 	assertPaths(t, got, nil)
 }
 
-// TestGitAsFile verifies that a directory containing a ".git" regular file
-// (linked-worktree / submodule shape) is treated as a repo candidate.
+// TestGitAsFile verifies that Scan treats a directory that contains a ".git"
+// regular file (a linked-worktree or submodule shape) as a repo candidate.
 func TestGitAsFile(t *testing.T) {
 	root := t.TempDir()
 	wt := makeDir(t, root, "worktree")
@@ -129,8 +129,8 @@ func TestGitAsFile(t *testing.T) {
 	assertPaths(t, got, []string{wt})
 }
 
-// TestNonGitTree verifies that a directory tree with no ".git" anywhere
-// produces an empty result without error.
+// TestNonGitTree verifies that Scan returns an empty result without error
+// for a directory tree with no ".git" anywhere.
 func TestNonGitTree(t *testing.T) {
 	root := t.TempDir()
 	makeDir(t, root, "proj", "src")
@@ -140,8 +140,8 @@ func TestNonGitTree(t *testing.T) {
 	assertPaths(t, got, nil)
 }
 
-// TestNestedRepos verifies that both an outer repo and an inner repo nested
-// inside its working tree are both returned.
+// TestNestedRepos verifies that Scan returns both an outer repo and an
+// inner repo nested inside the outer repo's worktree.
 func TestNestedRepos(t *testing.T) {
 	root := t.TempDir()
 	outer := makeDir(t, root, "outer")
@@ -149,14 +149,15 @@ func TestNestedRepos(t *testing.T) {
 	inner := makeDir(t, root, "outer", "sub", "inner")
 	makeGitDir(t, inner)
 
-	// Default MaxDepth (0→8) covers depth 4 easily.
+	// MaxDepth 0 defaults to 8, which easily covers depth 4.
 	got := mustScan(t, root, Options{})
 	assertPaths(t, got, []string{outer, inner})
 }
 
 // TestUnreadableSubdir verifies that a permission error on one subtree does
-// not abort the whole scan and that a findable repo elsewhere is still returned.
-// Skipped when running as root because root bypasses filesystem permissions.
+// not abort the whole scan, and that Scan still returns a findable repo
+// elsewhere. The test skips when running as root, because root bypasses
+// filesystem permissions.
 func TestUnreadableSubdir(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("running as root: chmod-0 does not restrict access, skipping")
@@ -164,9 +165,10 @@ func TestUnreadableSubdir(t *testing.T) {
 
 	root := t.TempDir()
 
-	// A directory we will make unreadable.
+	// A directory that the test makes unreadable.
 	blocked := makeDir(t, root, "blocked")
-	// Put something inside so there would be entries to find if we could read it.
+	// Put something inside, so there would be entries to find if the test
+	// could read the directory.
 	makeDir(t, blocked, "inner")
 
 	// A findable repo in a sibling directory.
@@ -185,26 +187,28 @@ func TestUnreadableSubdir(t *testing.T) {
 	assertPaths(t, got, []string{good})
 }
 
-// TestHiddenDirSkip verifies that hidden (dot-prefixed) directories are never
-// descended into during a scan, so tool/config caches like ~/.pyenv or ~/.npm
-// are never returned as repo candidates.
+// TestHiddenDirSkip verifies that Scan never descends into hidden
+// (dot-prefixed) directories, so it never returns tool and config caches
+// like ~/.pyenv or ~/.npm as repo candidates.
 //
-//   - A normal repo (proj/.git) IS returned.
-//   - A top-level hidden dir containing a .git (.pyenv/.git) is NOT returned.
-//   - A repo nested inside a hidden dir (.cache/inner/.git) is NOT returned
-//     because the walk never descends into the hidden directory.
+//   - Scan returns a normal repo (proj/.git).
+//   - Scan does NOT return a top-level hidden dir containing a .git
+//     (.pyenv/.git).
+//   - Scan does NOT return a repo nested inside a hidden dir
+//     (.cache/inner/.git), because the walk never enters the hidden
+//     directory.
 func TestHiddenDirSkip(t *testing.T) {
 	root := t.TempDir()
 
-	// Normal visible repo — must be found.
+	// Normal visible repo. Scan must find it.
 	proj := makeDir(t, root, "proj")
 	makeGitDir(t, proj)
 
-	// Hidden dir that looks like a pyenv install — must NOT be found.
+	// Hidden dir that looks like a pyenv install. Scan must not find it.
 	pyenv := makeDir(t, root, ".pyenv")
 	makeGitDir(t, pyenv)
 
-	// Repo nested inside a hidden cache dir — must NOT be found.
+	// Repo nested inside a hidden cache dir. Scan must not find it.
 	cacheInner := makeDir(t, root, ".cache", "inner")
 	makeGitDir(t, cacheInner)
 

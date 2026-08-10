@@ -9,24 +9,26 @@ PKG      := ./...
 VERSION  := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS  := -s -w -X main.version=$(VERSION)
 
-# Hermetic, reproducible builds: vendored deps, no network at build time.
+# The build is hermetic and reproducible: it uses vendored dependencies and needs no network access.
 export GOFLAGS := -mod=vendor
-# Pinned dev tools (run via `go run tool@version`, never a floating install).
+# Dev tools use pinned versions. Run them with `go run tool@version`. Never use a floating install.
 GOLANGCI := v2.11.4
 GOVULN   := v1.3.0
 
-# Production GUI builds link webkit2gtk-4.1 (+libsoup-3.0) via the webkit2_41
-# build tag. webkit2gtk-4.0 is EOL and absent from the container base (noble),
-# so this is the single supported link for host and container alike.
+# Production GUI builds link webkit2gtk-4.1 (with libsoup-3.0) through the
+# webkit2_41 build tag. webkit2gtk-4.0 has reached end of life and is not in
+# the container base (noble). This tag is the only supported link for the
+# host and the container.
 TAGS := production webkit2_41
 
 # ── Container framework ────────────────────────────────────────────────────
-# Versions are single-sourced from .tool-versions; the image hardcodes none.
+# All versions come from .tool-versions only. The image hardcodes none of them.
 IMAGE        := perch-dev
 GO_VERSION   := $(shell awk '$$1=="golang"{print $$2}' .tool-versions)
 NODE_VERSION := $(shell awk '$$1=="nodejs"{print $$2}' .tool-versions)
-# Container-first by default. CONTAINERIZE=0 runs the target natively — set when
-# re-entering the image, or in a pipeline that is already containerised.
+# The build runs in a container by default. Set CONTAINERIZE=0 to run the
+# target directly. Use this flag when you re-enter the image, or when a
+# pipeline already runs in a container.
 CONTAINERIZE ?= 1
 
 ifeq (, $(shell command -v go))
@@ -35,30 +37,31 @@ endif
 
 .PHONY: build install run gui-build gui-install gui-run desktop image shell test test-integration test-front test-e2e test-all coverage lint fmt vet tidy vendor verify vulncheck verify-all doctor clean cross
 
-# build: backend binary only — embeds the committed frontend/dist/index.html stub
-# (no frontend rebuild). For a full production artifact, use `make gui-build`.
-build:                ## build the binary into ./bin (vendored, reproducible); -tags '$(TAGS)' for GUI
+# build: only the backend binary. It embeds the committed
+# frontend/dist/index.html stub and does not rebuild the frontend. For a full
+# production artifact, run `make gui-build`.
+build:                ## Build the binary into ./bin. The build is vendored and reproducible. Add -tags '$(TAGS)' for the GUI build.
 	@mkdir -p $(BIN_DIR)
 	@go build -tags '$(TAGS)' -trimpath -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/$(BIN) ./cmd/perch
 
-install:              ## install to GOBIN / ~/go/bin
+install:              ## Install the binary to GOBIN or ~/go/bin.
 	@go install -tags '$(TAGS)' -trimpath -ldflags '$(LDFLAGS)' ./cmd/perch
 
-run: build            ## build then run (needs an X/Wayland display for the GUI)
+run: build            ## Build, then run. This needs an X or Wayland display for the GUI.
 	@$(BIN_DIR)/$(BIN)
 
-gui-build:            ## build the production GUI binary (frontend build + go build -tags '$(TAGS)')
+gui-build:            ## Build the production GUI binary: the frontend build, then go build -tags '$(TAGS)'.
 	npm --prefix frontend ci
 	npm --prefix frontend run build
 	@mkdir -p $(BIN_DIR)
 	@go build -tags '$(TAGS)' -trimpath -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/$(BIN) ./cmd/perch
 
-gui-install: gui-build desktop  ## build the GUI binary + install the launcher icon (no launch; run $(BIN_DIR)/$(BIN) yourself)
+gui-install: gui-build desktop  ## Build the GUI binary and install the launcher icon. This does not launch the app; run $(BIN_DIR)/$(BIN) yourself.
 
-gui-run: gui-build desktop  ## build, install the desktop entry, then launch the GUI
+gui-run: gui-build desktop  ## Build the GUI binary, install the desktop entry, then launch the GUI.
 	@$(BIN_DIR)/$(BIN)
 
-desktop:              ## install a user .desktop entry + icon (GNOME/Wayland shows the app icon via this)
+desktop:              ## Install a user .desktop entry and icon. GNOME on Wayland shows the app icon through this entry.
 	@mkdir -p $(HOME)/.local/share/icons/hicolor/512x512/apps $(HOME)/.local/share/applications
 	@cp app/appicon.png $(HOME)/.local/share/icons/hicolor/512x512/apps/perch.png
 	@printf '[Desktop Entry]\nType=Application\nName=perch\nComment=Cockpit for AI coding agents\nExec=%s\nIcon=perch\nTerminal=false\nCategories=Development;\nStartupWMClass=perch\n' "$(abspath $(BIN_DIR)/$(BIN))" > $(HOME)/.local/share/applications/perch.desktop
@@ -66,7 +69,7 @@ desktop:              ## install a user .desktop entry + icon (GNOME/Wayland sho
 	@command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database $(HOME)/.local/share/applications >/dev/null 2>&1 || true
 	@echo "==> installed perch.desktop (StartupWMClass=perch). Log out/in if the icon does not refresh."
 
-image:                ## build the pinned perch-dev image (versions from .tool-versions / Makefile)
+image:                ## Build the pinned perch-dev image. Versions come from .tool-versions and the Makefile.
 	@podman build \
 	  --build-arg GO_VERSION=$(GO_VERSION) \
 	  --build-arg NODE_VERSION=$(NODE_VERSION) \
@@ -74,13 +77,14 @@ image:                ## build the pinned perch-dev image (versions from .tool-v
 	  --build-arg GOVULN_VERSION=$(GOVULN) \
 	  -t $(IMAGE):latest -f containers/dev/Containerfile .
 
-shell: | image        ## drop into an interactive shell in perch-dev
+shell: | image        ## Open an interactive shell in perch-dev.
 	@bash containers/run.sh dev bash
 
-# Every check runs in perch-dev (container-first). One DRY rule containerises the
-# whole set; re-entering with CONTAINERIZE=0 runs the target natively in-image.
-# test-e2e is the only dispatched target that runs `vite build`, so it alone
-# masks frontend/dist. Go targets keep the committed go:embed stub.
+# Every check runs in perch-dev. One rule containerizes the whole set and
+# avoids duplication. Re-entering with CONTAINERIZE=0 runs the target
+# directly, inside the image. test-e2e is the only dispatched target that
+# runs `vite build`, so it alone masks frontend/dist. The Go targets keep the
+# committed go:embed stub.
 DZ := test test-integration test-front test-e2e lint vet vulncheck
 ifeq ($(CONTAINERIZE),1)
 gui-build: export PERCH_MASK_DIST = 1
@@ -97,32 +101,32 @@ vet:              ; go vet $(PKG)
 vulncheck:        ; govulncheck ./...
 endif
 
-test-all: test test-integration test-front lint vet vulncheck test-e2e ## the everything-gate (each runs in its own container with the right masks)
+test-all: test test-integration test-front lint vet vulncheck test-e2e ## Run every gate. Each one runs in its own container with the right masks.
 	@echo "==> test-all: ALL gates PASSED."
 
-coverage:             ## coverage report for internal/ packages
+coverage:             ## Show a coverage report for the internal/ packages.
 	@go test -coverprofile=coverage.out ./internal/...
 	@go tool cover -func=coverage.out | tail -1
 
-fmt:                  ## gofmt + goimports
+fmt:                  ## Run gofmt and goimports.
 	@gofmt -w . && (command -v goimports >/dev/null && goimports -w . || true)
 
-tidy:                 ## tidy go.mod/go.sum then refresh the vendor tree
+tidy:                 ## Tidy go.mod and go.sum, then refresh the vendor tree.
 	@GOFLAGS= go mod tidy && go mod vendor
 
-vendor:               ## refresh the committed /vendor tree
+vendor:               ## Refresh the committed /vendor tree.
 	@GOFLAGS= go mod vendor
 
-verify:               ## verify every module checksum matches go.sum
+verify:               ## Verify that every module checksum matches go.sum.
 	@GOFLAGS= go mod verify
 
-verify-all: vet lint vulncheck test-front ## quality gates: vet + lint + govulncheck + tsc + frontend unit (all in perch-dev)
+verify-all: vet lint vulncheck test-front ## Run the quality gates: vet, lint, govulncheck, tsc, and the frontend unit tests. All run in perch-dev.
 	@echo "==> All quality gates PASSED."
 
-doctor: build         ## run perch's own dependency check
+doctor: build         ## Run perch's own dependency check.
 	@$(BIN_DIR)/$(BIN) doctor
 
-cross:                ## cross-compile for linux/amd64 (GUI uses cgo+WebKit; Linux-only; per-target toolchain needed for other OS/arch)
+cross:                ## Cross-compile for linux/amd64. The GUI uses cgo and WebKit, so this works only on Linux. Other OS/arch targets need their own toolchain.
 	@mkdir -p $(BIN_DIR)
 	@echo "building linux/amd64"
 	@GOOS=linux GOARCH=amd64 go build -tags '$(TAGS)' -trimpath -ldflags '$(LDFLAGS)' \

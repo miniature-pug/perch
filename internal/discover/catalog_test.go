@@ -19,7 +19,7 @@ func porcelainForPath(path, branch string) []byte {
 
 // porcelainMainPlusLinked returns a porcelain blob with two entries: main at
 // mainPath and a linked worktree at linkedPath on linkedBranch. The main
-// checkout always appears as entry[0], regardless of which path was scanned.
+// checkout always appears as entry[0], no matter which path the caller scans.
 func porcelainMainPlusLinked(mainPath, mainBranch, linkedPath, linkedBranch string) []byte {
 	return []byte(
 		"worktree " + mainPath + "\nHEAD 0000000000000000000000000000000000000001\nbranch refs/heads/" + mainBranch + "\n\n" +
@@ -28,8 +28,8 @@ func porcelainMainPlusLinked(mainPath, mainBranch, linkedPath, linkedBranch stri
 }
 
 // makeFakeRepo creates a directory at path and adds a .git entry so Scan
-// reports it as a candidate. dir=true makes a .git directory (normal repo);
-// dir=false makes a .git file (linked worktree / submodule).
+// reports it as a candidate. gitIsDir=true makes a .git directory (normal
+// repo). gitIsDir=false makes a .git file (linked worktree or submodule).
 func makeFakeRepo(t *testing.T, path string, gitIsDir bool) {
 	t.Helper()
 	if err := os.MkdirAll(path, 0o755); err != nil {
@@ -49,17 +49,18 @@ func makeFakeRepo(t *testing.T, path string, gitIsDir bool) {
 
 // ── Dedup test ────────────────────────────────────────────────────────────────
 
-// TestProjects_Dedup verifies that when both a main repo dir and an in-tree
-// linked-worktree dir are candidates (both FakeRunner responses report the same
-// entry[0] main path), the result contains ONE ProjectTrees for that main path.
+// TestProjects_Dedup verifies a dedup case. A main repo directory and an
+// in-tree linked-worktree directory are both candidates. Both FakeRunner
+// responses report the same entry[0] main path. The result must contain ONE
+// ProjectTrees for that main path.
 //
 // Layout under TempDir:
 //
 //	projA/          <- normal repo (.git dir) → Scan candidate
 //	projA/wt/       <- linked worktree (.git file) → Scan candidate
 //
-// Both porcelain blobs list projA as entry[0]; projA/wt appears as a linked
-// worktree in both. First-writer wins so we get projA's result.
+// Both porcelain blobs list projA as entry[0]. projA/wt appears as a linked
+// worktree in both blobs. First-writer wins, so the test keeps projA's result.
 func TestProjects_Dedup(t *testing.T) {
 	root := t.TempDir()
 	projA := filepath.Join(root, "projA")
@@ -94,7 +95,7 @@ func TestProjects_Dedup(t *testing.T) {
 // ── Cold-start alphabetical ordering ─────────────────────────────────────────
 
 // TestProjects_ColdStartAlphabetical verifies that with an empty stats map,
-// results are returned in alphabetical order by project path.
+// Projects returns results in alphabetical order by project path.
 func TestProjects_ColdStartAlphabetical(t *testing.T) {
 	root := t.TempDir()
 
@@ -130,8 +131,8 @@ func TestProjects_ColdStartAlphabetical(t *testing.T) {
 
 // ── Frecency ordering ─────────────────────────────────────────────────────────
 
-// TestProjects_FrecencyOrdering verifies that a repo with high rank + recent
-// LastAccessed sorts first, with the others in alphabetical order after.
+// TestProjects_FrecencyOrdering verifies that a repo with a high rank and a
+// recent LastAccessed sorts first. The other repos follow in alphabetical order.
 func TestProjects_FrecencyOrdering(t *testing.T) {
 	root := t.TempDir()
 	now := int64(1_000_000)
@@ -150,7 +151,7 @@ func TestProjects_FrecencyOrdering(t *testing.T) {
 			"git", "-C", d, "worktree", "list", "--porcelain")
 	}
 
-	// Give bravo a high rank accessed right now → it scores highest.
+	// Give bravo a high rank, accessed right now, so it scores highest.
 	stats := map[string]ProjectStat{
 		bravo: {Rank: 100, LastAccessed: now},
 	}
@@ -162,7 +163,7 @@ func TestProjects_FrecencyOrdering(t *testing.T) {
 	if len(results) != 3 {
 		t.Fatalf("want 3 results, got %d", len(results))
 	}
-	// bravo first, then alpha, charlie (alphabetical for zero-score entries).
+	// bravo first, then alpha and charlie (alphabetical order for zero-score entries).
 	wantOrder := []string{bravo, alpha, charlie}
 	for i, w := range wantOrder {
 		if results[i].Project.Path != w {
@@ -174,8 +175,8 @@ func TestProjects_FrecencyOrdering(t *testing.T) {
 // ── Trees attached correctly ──────────────────────────────────────────────────
 
 // TestProjects_TreesAttached verifies that:
-//   - Tree.IsMain is set on the main checkout only.
-//   - Tree.Project points to the right Project (matched by path).
+//   - Projects sets Tree.IsMain only on the main checkout.
+//   - Tree.Project points to the correct Project (matched by path).
 //   - A bare entry produces no Tree.
 func TestProjects_TreesAttached(t *testing.T) {
 	root := t.TempDir()
@@ -237,7 +238,7 @@ func TestProjects_TreesAttached(t *testing.T) {
 	}
 
 	// Pointer-identity invariant: every Tree.Project must point at the
-	// element's own Project field — not a stale copy from the build loop.
+	// element's own Project field, not a stale copy from the build loop.
 	if pt.Trees[0].Project != &pt.Project {
 		t.Errorf("Tree.Project must point at the element's own Project (shared identity)")
 	}
@@ -245,12 +246,12 @@ func TestProjects_TreesAttached(t *testing.T) {
 
 // ── Bare-only repository skipped ─────────────────────────────────────────────
 
-// TestProjects_BareOnlyRepoSkipped verifies that a candidate whose
-// `git worktree list --porcelain` output describes a bare-only repo (no working
-// checkout) is silently skipped. git.MainWorktree returns ok=false for bare-only
-// repos, so Projects must skip them. When the bare-only repo is the only
-// candidate, results is empty; when mixed with a normal repo, only the normal
-// repo appears.
+// TestProjects_BareOnlyRepoSkipped verifies that Projects silently skips a
+// candidate whose `git worktree list --porcelain` output describes a
+// bare-only repo (no working checkout). git.MainWorktree returns ok=false for
+// bare-only repos, so Projects must skip them. When the bare-only repo is the
+// only candidate, results is empty. When a normal repo is also present, only
+// the normal repo appears.
 func TestProjects_BareOnlyRepoSkipped(t *testing.T) {
 	root := t.TempDir()
 	bareDir := filepath.Join(root, "barerepo")
@@ -259,7 +260,7 @@ func TestProjects_BareOnlyRepoSkipped(t *testing.T) {
 	makeFakeRepo(t, bareDir, true)
 	makeFakeRepo(t, normalDir, true)
 
-	// A bare-only porcelain record: worktree line + bare, no HEAD/branch.
+	// A bare-only porcelain record: a worktree line and "bare", no HEAD or branch.
 	bareBlob := []byte("worktree " + bareDir + "\nbare\n")
 	normalBlob := porcelainForPath(normalDir, "main")
 
@@ -310,8 +311,8 @@ func TestProjects_BareOnlyRepoSkipped(t *testing.T) {
 // ── Skip-and-continue on runner error ────────────────────────────────────────
 
 // TestProjects_SkipOnRunnerError verifies that when one candidate's
-// ListWorktrees call fails (runner error), that candidate is silently skipped
-// and the function returns the remaining projects without error.
+// ListWorktrees call fails (a runner error), Projects silently skips that
+// candidate and returns the remaining projects without error.
 func TestProjects_SkipOnRunnerError(t *testing.T) {
 	root := t.TempDir()
 	good := filepath.Join(root, "good")

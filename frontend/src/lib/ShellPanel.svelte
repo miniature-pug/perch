@@ -1,12 +1,14 @@
 <!-- frontend/src/lib/ShellPanel.svelte
-     The per-session multi-terminal drawer: a tab strip over N shell terminals, with
-     tab switching, a + to add one, a per-tab × (closing the last spawns a fresh one
-     upstream, so the drawer is never empty), a side-by-side split toggle, an
-     env→agent reload for the active shell, and collapse. Every shell stays MOUNTED
-     (hidden via display) so its xterm buffer and pty survive a tab switch; `visible`
-     drives the shown cell's re-fit. All list/active/split state lives in App
-     (shellPanes.ts); this component is presentational and calls back for every action.
-     The home shell is a single terminal and keeps using ShellDrawer directly. -->
+     The shell drawer: a tab strip over N shell terminals for the session.
+     It supports tab switching, a + button to add a terminal, and a per-tab ×
+     to close one (closing the last tab spawns a fresh terminal upstream, so
+     the drawer is never empty). It also supports a side-by-side split toggle,
+     an env-to-agent reload for the active shell, and collapse. Every shell
+     stays mounted, hidden through display, so its xterm buffer and pty
+     survive a tab switch; `visible` drives the shown cell's re-fit. All list,
+     active, and split state lives in App (shellPanes.ts); this component is
+     presentational and calls back for every action. The home shell is a
+     single terminal and keeps using ShellDrawer directly. -->
 <script lang="ts">
   import ShellDrawer from "./ShellDrawer.svelte";
   import { shellTabTitle, reloadMenuItems, activeShellTitle, type ShellPane } from "./shellPanes";
@@ -41,9 +43,10 @@
   } = $props();
 
   // With more than one shell open, "reload the active tab" is ambiguous, so the
-  // reload control becomes a split-button: the labelled main button reloads the
-  // active shell (its title is shown), and a caret opens a menu that reloads ANY
-  // chosen shell. A single shell keeps the plain, picker-free button.
+  // reload control becomes a split button. The labelled main button reloads
+  // the active shell and shows its title. A caret opens a menu that reloads
+  // any chosen shell. With a single shell, the button stays plain, with no
+  // picker.
   const multi = $derived(panes.length > 1);
   const activeTitle = $derived(activeShellTitle(panes, activeId));
   const reloadItems = $derived(reloadMenuItems(panes, activeId));
@@ -56,18 +59,20 @@
     if (activeId) reloadAgentEnv(activeId).catch(() => {});
   }
 
-  // reloadPane reloads a specific chosen shell (any pane id — the backend resolves it
-  // independently of which tab is focused), then closes the picker. Focus is returned
-  // to the caret (mirrors the Escape path) so keyboard focus doesn't fall to <body>
-  // when the chosen menu item is removed from the DOM.
+  // reloadPane reloads one chosen shell, any pane id, since the backend
+  // resolves it independent of which tab has focus. It then closes the
+  // picker. Focus returns to the caret, mirroring the Escape path, so
+  // keyboard focus does not fall to <body> when the chosen menu item is
+  // removed from the DOM.
   function reloadPane(id: string) {
     reloadAgentEnv(id).catch(() => {});
     menuOpen = false;
     caretEl?.focus();
   }
 
-  // Focus the active item when the picker opens so keyboard users land on the shell a
-  // plain reload would target; arrow keys then rove from there.
+  // Focus the active item when the picker opens, so keyboard users land on the
+  // shell that a plain reload would target. Arrow keys then move focus from
+  // there.
   $effect(() => {
     if (menuOpen && menuEl) {
       const active = menuEl.querySelector<HTMLElement>('[data-active="true"]');
@@ -95,9 +100,10 @@
   }
 </script>
 
-<!-- Close the reload picker on any outside click. The menu container, caret, and
-     menu-item handlers all stopPropagation, so clicks anywhere inside the picker
-     (including its padding chrome) never reach this. -->
+<!-- Closes the reload picker on any outside click. The menu container, caret,
+     and menu-item handlers all call stopPropagation, so clicks anywhere
+     inside the picker, including its padding chrome, never reach this
+     handler. -->
 <svelte:window onclick={() => (menuOpen = false)} />
 
 <div class="shell-panel" class:collapsed>
@@ -133,9 +139,9 @@
       >⊟ Split</button>
 
       {#if multi}
-        <!-- Multiple shells: a split-button. The main button reloads the active shell
-             (named so the target is unambiguous); the caret opens a picker to reload
-             any shell. -->
+        <!-- More than one shell: a split button. The main button reloads the
+             active shell and names it so the target is unambiguous. The
+             caret opens a picker to reload any shell. -->
         <div class="reload-group">
           <button
             class="tab-action reload-main"
@@ -154,12 +160,13 @@
             onclick={(e) => { e.stopPropagation(); menuOpen = !menuOpen; }}
           >▾</button>
           {#if menuOpen}
-            <!-- stopPropagation on the container so a click on the menu's own padding
-                 chrome (between/around the item buttons) doesn't bubble to the
-                 svelte:window handler and close the picker. This onclick is a
-                 mouse-only propagation guard, not an interactive surface — focus and
-                 keyboard roving live on the child menuitems (see onMenuKeydown) — so
-                 the interactive-role focus/keydown a11y rules don't apply here. -->
+            <!-- stopPropagation on the container, so a click on the menu's own
+                 padding chrome, between or around the item buttons, does not
+                 bubble to the svelte:window handler and close the picker.
+                 This onclick is a mouse-only propagation guard, not an
+                 interactive surface. Focus and keyboard movement live on the
+                 child menuitems (see onMenuKeydown), so the interactive-role
+                 focus and keydown a11y rules do not apply here. -->
             <!-- svelte-ignore a11y_click_events_have_key_events, a11y_interactive_supports_focus -->
             <div bind:this={menuEl} class="reload-menu" role="menu" aria-label="reload agent from shell"
               onclick={(e) => e.stopPropagation()}>
@@ -194,9 +201,9 @@
     </div>
   </div>
 
-  <!-- Body is hidden (not unmounted) when collapsed so every shell's buffer + pty
-       survive. Each cell shows only when it is the active or split shell; the split
-       cell is ordered to the right. -->
+  <!-- The body is hidden, not unmounted, when collapsed, so every shell's
+       buffer and pty survive. Each cell shows only when it is the active or
+       split shell; the split cell is ordered to the right. -->
   <div class="shell-panel-body" class:split={splitId != null} style:display={collapsed ? "none" : undefined}>
     {#each panes as p (p.id)}
       {@const shown = p.id === activeId || p.id === splitId}
@@ -216,9 +223,10 @@
   .shell-panel {
     display: flex;
     flex-direction: column;
-    /* Fill the zone height (JS-driven shellH); flex:1 + min-height:0 is what makes the
-       body — and each xterm host — resolve to the zone's real height rather than
-       xterm's content default. The parent .shell-drawer-zone is a flex column. */
+    /* Fills the zone height (JS-driven shellH). flex:1 plus min-height:0 makes
+       the body, and each xterm host, resolve to the zone's real height
+       instead of xterm's content default. The parent .shell-drawer-zone is a
+       flex column. */
     flex: 1;
     min-height: 0;
     background: var(--perch-bg);
@@ -230,7 +238,7 @@
     flex: none;
   }
 
-  /* ── Tab strip / header ───────────────────────────────────────── */
+  /* ── Tab strip and header ─────────────────────────────────────── */
   .shell-tabs {
     display: flex;
     align-items: center;
@@ -262,8 +270,8 @@
     border-radius: var(--perch-radius-sm);
   }
 
-  /* The active (primary) tab reads as selected; the split (secondary) tab gets an
-     accent edge so both shown shells are identifiable at a glance. */
+  /* The active (primary) tab reads as selected. The split (secondary) tab gets
+     an accent edge, so both shown shells are identifiable at a glance. */
   .shell-tab.active {
     background: color-mix(in srgb, var(--perch-text) 8%, transparent);
     border-color: var(--perch-border);
@@ -276,9 +284,10 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    /* 22px + 4px icon/label gap matches the old labelled ShellDrawer header chrome
-       (the home shell still renders it via ShellDrawer chrome=true) so the labelled
-       Split / reload / Collapse actions read the same in both drawers. */
+    /* The 22px height plus 4px icon/label gap matches the old labelled
+       ShellDrawer header chrome (the home shell still renders it through
+       ShellDrawer chrome=true), so the labelled Split, reload, and Collapse
+       actions read the same in both drawers. */
     height: 22px;
     gap: 4px;
     padding: 0 var(--perch-sp-1);
@@ -331,15 +340,16 @@
     flex-shrink: 0;
   }
 
-  /* ── Reload split-button + shell picker ───────────────────────── */
+  /* ── Reload split button and shell picker ─────────────────────── */
   .reload-group {
     position: relative;
     display: inline-flex;
     align-items: center;
   }
 
-  /* Join the labelled main button and its caret into one control by squaring the
-     corners where they meet (the two-class selectors clear .shell-tabs button). */
+  /* Joins the labelled main button and its caret into one control, by
+     squaring the corners where they meet. The two-class selectors override
+     .shell-tabs button. */
   .reload-group .reload-main {
     border-top-right-radius: 0;
     border-bottom-right-radius: 0;
@@ -359,9 +369,10 @@
     flex-direction: column;
     padding: var(--perch-sp-1);
     gap: 2px;
-    /* Solid, never glass: this menu overlaps the agent terminal, where WebKitGTK
-       paints backdrop-filter surfaces transparent over the composited terminal
-       subtree (mirrors the MenuBar dropdown + ApprovalCard fix). */
+    /* Solid, never glass. This menu overlaps the agent pane's terminal, where
+       WebKitGTK paints backdrop-filter surfaces transparent over the
+       composited terminal subtree (mirrors the fix in the MenuBar dropdown
+       and ApprovalCard). */
     background: var(--perch-glass-bg-solid);
     border: 1px solid var(--perch-glass-border);
     border-radius: var(--perch-radius-md);
@@ -378,7 +389,7 @@
     color: var(--perch-accent);
   }
 
-  /* ── Body: one row of cells (one shown in tabs mode, two in split) ── */
+  /* ── Body: one row of cells (one shown in tabs mode, two in split mode) ── */
   .shell-panel-body {
     display: flex;
     flex-direction: row;

@@ -9,7 +9,8 @@ import (
 	"github.com/miniature-pug/perch/internal/config"
 )
 
-// writeFile is a test helper that writes content to a file path, creating dirs as needed.
+// writeFile writes content to a file at path for tests.
+// It creates parent directories as needed.
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -28,8 +29,8 @@ func initGitDir(t *testing.T, dir string) {
 	}
 }
 
-// TestRootsFromGlobal verifies that roots in the global config are loaded and
-// returned in Config.Roots.
+// TestRootsFromGlobal verifies that Load reads roots from the global config
+// and returns them in Config.Roots.
 func TestRootsFromGlobal(t *testing.T) {
 	tmp := t.TempDir()
 	initGitDir(t, tmp)
@@ -47,8 +48,8 @@ func TestRootsFromGlobal(t *testing.T) {
 	}
 }
 
-// TestDefaultsRootsToStartDir verifies that when no roots are configured, Load
-// falls back to the projectStartDir argument.
+// TestDefaultsRootsToStartDir verifies that when the global config sets no
+// roots, Load falls back to the projectStartDir argument.
 func TestDefaultsRootsToStartDir(t *testing.T) {
 	tmp := t.TempDir()
 	initGitDir(t, tmp)
@@ -93,7 +94,8 @@ func TestMalformedGlobal(t *testing.T) {
 	}
 }
 
-// TestRootsHomeDirExpansion verifies that roots entries with leading ~/ are expanded.
+// TestRootsHomeDirExpansion verifies that Load expands roots entries with a
+// leading ~/.
 func TestRootsHomeDirExpansion(t *testing.T) {
 	tmp := t.TempDir()
 	initGitDir(t, tmp)
@@ -114,8 +116,9 @@ func TestRootsHomeDirExpansion(t *testing.T) {
 	}
 }
 
-// TestDefaultGlobalPath verifies XDG discovery: XDG_CONFIG_HOME when set,
-// falling back to ~/.config/perch/config.toml when unset.
+// TestDefaultGlobalPath verifies XDG discovery. DefaultGlobalPath uses
+// XDG_CONFIG_HOME when set, and falls back to ~/.config/perch/config.toml
+// when unset.
 func TestDefaultGlobalPath(t *testing.T) {
 	t.Run("XDG_CONFIG_HOME set", func(t *testing.T) {
 		tmp := t.TempDir()
@@ -144,7 +147,7 @@ func TestExpandRootsNoTildeHomeMissing(t *testing.T) {
 	tmp := t.TempDir()
 	initGitDir(t, tmp)
 
-	// Use an absolute root (no tilde) — HOME resolution must not be attempted.
+	// Use an absolute root (no tilde). HOME resolution must not run.
 	globalPath := filepath.Join(tmp, "config.toml")
 	writeFile(t, globalPath, `roots = ["`+tmp+`"]`)
 
@@ -161,8 +164,8 @@ func TestExpandRootsNoTildeHomeMissing(t *testing.T) {
 	}
 }
 
-// TestExpandRootsTildeHomeMissing verifies that when a root needs ~/ expansion but
-// HOME cannot be resolved, Load returns a clear error.
+// TestExpandRootsTildeHomeMissing verifies that when a root needs ~/
+// expansion but os.UserHomeDir fails, Load returns a clear error.
 func TestExpandRootsTildeHomeMissing(t *testing.T) {
 	tmp := t.TempDir()
 	initGitDir(t, tmp)
@@ -183,9 +186,9 @@ func TestExpandRootsTildeHomeMissing(t *testing.T) {
 	}
 }
 
-// TestUnknownKeysIgnored verifies that unknown TOML keys (including removed
-// fields like sort_order, refresh_ms, blacklist, etc.) are silently dropped and
-// Load succeeds.
+// TestUnknownKeysIgnored verifies that Load silently drops unknown TOML
+// keys, including removed fields like sort_order, refresh_ms, and
+// blacklist, and still succeeds.
 func TestUnknownKeysIgnored(t *testing.T) {
 	tmp := t.TempDir()
 	initGitDir(t, tmp)

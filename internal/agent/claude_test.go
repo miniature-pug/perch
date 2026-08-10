@@ -43,12 +43,14 @@ func TestName(t *testing.T) {
 	}
 }
 
-// TestZeroValueDefaults exercises the nil-seam fallback helpers so a
-// zero-value Claude (the var _ Adapter = Claude{} guarantee) never panics.
+// TestZeroValueDefaults exercises the nil-seam fallback helpers, so a
+// zero-value Claude never panics. This backs the var _ Adapter = Claude{}
+// guarantee.
 func TestZeroValueDefaults(t *testing.T) {
 	var c Claude // all seams nil, Bin empty
 
-	// bin() falls back to "claude"; Detect uses default exec.LookPath. We do
-	// not assert the boolean (PATH-dependent) — only that no panic occurs.
+	// bin() falls back to "claude". Detect uses the default exec.LookPath.
+	// This test does not check the boolean result, because it depends on
+	// PATH. This test only checks that no panic occurs.
 	_ = c.Detect()
 }

@@ -1,28 +1,32 @@
 import { COUNTUP_FALLBACK_MS } from "./constants";
 
-/** Focus the node immediately on mount (keyboard a11y for dialogs; avoids the autofocus lint warning). */
+/** Focus the node immediately after mount. This gives keyboard accessibility for dialogs and avoids the autofocus lint warning. */
 export function focusOnMount(node: HTMLElement) { node.focus(); }
 
-/** Selector matching keyboard-focusable descendants of a dialog container. */
+/** This selector matches the keyboard-focusable descendants of a dialog container. */
 const FOCUSABLE_SELECTOR =
   'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
 
 /**
- * Svelte action: traps keyboard focus inside a modal container and restores it
- * to the triggering element when the dialog is destroyed.
+ * Svelte action: traps keyboard focus inside a modal container. It restores
+ * focus to the triggering element when the dialog is destroyed.
  *
- * - On mount: records document.activeElement as the return target, then moves
- *   focus into the node — to the element matching `initialSelector` if given,
- *   otherwise the first focusable descendant (falling back to the node itself).
- * - On Tab / Shift+Tab: keeps focus cycling within the node's focusable
- *   elements, wrapping first<->last (preventDefault so it never escapes).
- * - On destroy: restores focus to the recorded target if still in the document.
+ * - On mount: the action records document.activeElement as the return
+ *   target. It then moves focus into the node. Focus goes to the element
+ *   that matches `initialSelector` if given, or to the first focusable
+ *   descendant, or to the node itself if neither exists.
+ * - On Tab or Shift+Tab: the action keeps focus inside the node's focusable
+ *   elements. It wraps from first to last and last to first, and calls
+ *   preventDefault so focus never escapes.
+ * - On destroy: the action restores focus to the recorded target, if that
+ *   target is still in the document.
  *
- * Nesting: every trap node is tagged with `data-focus-trap`. When traps are
- * nested (e.g. a dialog rendered inside another dialog's scrim), the innermost
- * trap owning the focused element handles the Tab; any ancestor trap sees that
- * focus lives in a more-nested `[data-focus-trap]` and bails, so focus never
- * escapes into the outer trap regardless of DOM order.
+ * Nesting: every trap node carries the `data-focus-trap` attribute. When
+ * traps are nested (for example, a dialog inside another dialog's scrim),
+ * the innermost trap that owns the focused element handles the Tab key. Any
+ * ancestor trap detects that focus lives in a more-nested
+ * `[data-focus-trap]` element, and stops. Focus never escapes into the
+ * outer trap, regardless of DOM order.
  */
 export function trapFocus(node: HTMLElement, initialSelector?: string): { destroy(): void } {
   const returnTo = document.activeElement as HTMLElement | null;
@@ -42,11 +46,12 @@ export function trapFocus(node: HTMLElement, initialSelector?: string): { destro
   function handleKey(e: KeyboardEvent): void {
     if (e.key !== "Tab") return;
 
-    // Nesting guard: if the focused element belongs to a more-nested trap that
-    // is a descendant of this node, let that inner trap own the event. This
-    // fires for outer traps whose scrim contains an inner dialog, so the outer
-    // trap never wraps focus over its whole focusable set (which would leak Tab
-    // out of the inner dialog when a focusable follows it in DOM order).
+    // Nesting guard: if the focused element belongs to a more-nested trap
+    // that is a descendant of this node, let that inner trap own the event.
+    // This guard fires for an outer trap whose scrim contains an inner
+    // dialog. It stops the outer trap from wrapping focus over its whole
+    // focusable set, which would leak Tab out of the inner dialog when a
+    // focusable element follows it in DOM order.
     const active = document.activeElement;
     if (active instanceof Element) {
       const owningTrap = active.closest("[data-focus-trap]");
@@ -55,7 +60,7 @@ export function trapFocus(node: HTMLElement, initialSelector?: string): { destro
 
     const items = focusables();
     if (items.length === 0) {
-      // Nothing focusable inside — keep focus on the container itself.
+      // Nothing is focusable inside. Keep focus on the container itself.
       e.preventDefault();
       node.focus();
       return;
@@ -88,13 +93,14 @@ export function trapFocus(node: HTMLElement, initialSelector?: string): { destro
   };
 }
 
-/** easeOutCubic: decelerating curve for the count-up animation. */
+/** easeOutCubic gives a decelerating curve for the count-up animation. */
 function easeOutCubic(t: number): number {
   return 1 - Math.pow(1 - t, 3);
 }
 
-/** Whether the user prefers reduced motion. Guards matchMedia so it is safe in
-    jsdom / non-browser envs that don't implement it (returns false → animate). */
+/** True when the user prefers reduced motion. Guards the matchMedia call so
+    the function is safe in jsdom and other non-browser environments that do
+    not implement it. Returns false in that case, so the caller animates. */
 function prefersReducedMotion(): boolean {
   return (
     typeof window !== "undefined" &&
@@ -103,34 +109,41 @@ function prefersReducedMotion(): boolean {
   );
 }
 
-/** Read the --perch-dur-countup CSS custom property from :root, parsed as ms integer. Falls back to COUNTUP_FALLBACK_MS. */
+/** Read the --perch-dur-countup CSS custom property from :root, and parse it
+    as an integer in milliseconds. Falls back to COUNTUP_FALLBACK_MS when the
+    value is missing or invalid. */
 function readCountUpDuration(): number {
   try {
     const raw = getComputedStyle(document.documentElement).getPropertyValue("--perch-dur-countup").trim();
     const ms = parseInt(raw, 10);
     if (Number.isFinite(ms) && ms > 0) return ms;
   } catch {
-    // no-op — jsdom or env without CSS custom properties
+    // No-op. This is jsdom, or an environment without CSS custom properties.
   }
   return COUNTUP_FALLBACK_MS;
 }
 
 /**
- * Svelte action: animates a number element's textContent counting from the
- * previous value to the new target value using requestAnimationFrame.
+ * Svelte action: animates a number element's textContent. The action counts
+ * from the previous value to the new target value, using
+ * requestAnimationFrame.
  *
- * - First paint shows the real number immediately (no animate-from-zero).
- * - Subsequent updates animate from the prior value to the new one.
- * - Respects prefers-reduced-motion (sets final value immediately).
- * - Duration is read from CSS custom property --perch-dur-countup (default 380ms).
- * - Falls back to immediate set when rAF is unavailable (e.g. jsdom).
+ * - First paint: the action shows the real number immediately, with no
+ *   count from zero.
+ * - Later updates: the action animates from the prior value to the new one.
+ * - The action honors prefers-reduced-motion. It sets the final value
+ *   immediately in that case.
+ * - Duration comes from the CSS custom property --perch-dur-countup
+ *   (default 380ms).
+ * - The action sets the value immediately when requestAnimationFrame is not
+ *   available, for example in jsdom.
  */
 export function countUp(node: HTMLElement, value: number): { update(value: number): void; destroy(): void } {
   let current = value;
   let rafId: number | undefined;
   let destroyed = false;
 
-  // First paint: show the real number immediately, no animation.
+  // First paint: show the real number immediately. Do not animate.
   node.textContent = String(value);
 
   function cancelInFlight(): void {
@@ -148,7 +161,8 @@ export function countUp(node: HTMLElement, value: number): { update(value: numbe
     const from = current;
     current = next;
 
-    // Guard: no rAF available (some jsdom configs) — set immediately.
+    // Guard: requestAnimationFrame is not available in some jsdom setups.
+    // Set the value immediately.
     if (typeof requestAnimationFrame !== "function") {
       node.textContent = String(next);
       return;
@@ -164,7 +178,8 @@ export function countUp(node: HTMLElement, value: number): { update(value: numbe
     let startTime: number | undefined;
 
     function frame(timestamp: number): void {
-      // Guard against stale callbacks after destroy() or a superseded update().
+      // Guard against a stale callback after destroy(), or after a newer
+      // update() call.
       if (destroyed) return;
 
       if (startTime === undefined) startTime = timestamp;

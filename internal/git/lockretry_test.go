@@ -89,7 +89,7 @@ func TestDiscardHunk_RetriesOnIndexLockContention(t *testing.T) {
 func TestStageHunk_ExhaustsRetriesThenFails(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	repo := twoHunkFile(t)
-	// failUntil larger than the retry budget → every attempt fails.
+	// failUntil is larger than the retry budget, so every attempt fails.
 	r := &lockContendingRunner{inner: proc.ExecRunner{}, failUntil: 1000}
 	ctx := context.Background()
 

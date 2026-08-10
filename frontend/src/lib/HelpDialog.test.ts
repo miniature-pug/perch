@@ -24,7 +24,7 @@ describe("HelpDialog — open", () => {
 
   it("contains the g d / Diff view shortcut row", () => {
     render(HelpDialog, { props: { open: true, onClose: vi.fn() } });
-    // The table has 'g d' and 'Diff view' as separate cells — check both present
+    // The table has 'g d' and 'Diff view' as separate cells. This test checks that both are present.
     expect(screen.getByText("g d")).toBeInTheDocument();
     expect(screen.getAllByText(/Diff view/i).length).toBeGreaterThan(0);
   });

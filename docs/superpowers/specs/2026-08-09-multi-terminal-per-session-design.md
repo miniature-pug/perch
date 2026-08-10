@@ -1,4 +1,4 @@
-# Multi-terminal per session — design
+# Multi-terminal per session: design
 
 Status: Design. Drives implementation on `feat/perch-v1`.
 
@@ -7,11 +7,11 @@ Status: Design. Drives implementation on `feat/perch-v1`.
 A VSCode-like integrated-terminal experience for each session's shell drawer:
 multiple shell terminals per session, arranged as **tabs**, optionally **split
 side-by-side**, **click a tab to switch**, a **+** to add one, and an **×** that
-closes a terminal — closing the last one immediately spawns a fresh replacement so
+closes a terminal. Closing the last one immediately spawns a fresh replacement, so
 the drawer is never empty ("closes the current one and replaces it with a new one").
 
 Scope is the per-session shell drawer (`.shell-drawer-zone`). The home shell
-(`shell-home`) stays a single terminal, unchanged — it is a landing shell with no
+(`shell-home`) stays a single terminal, unchanged. It is a landing shell with no
 session context, and multi-terminal there adds no value.
 
 ## Ground truth this builds on
@@ -38,8 +38,8 @@ session context, and multi-terminal there adds no value.
 
 ## Paneid scheme (backward compatible)
 
-- First/default shell of a session keeps `shell-<uuid>` (unchanged — existing
-  sessions and the three TrimPrefix sites keep working for the default shell).
+- First/default shell of a session keeps `shell-<uuid>`, unchanged. Existing
+  sessions and the three TrimPrefix sites keep working for the default shell.
 - Additional shells: `shell-<uuid>_<n>` (n = 1, 2, …), `_` chosen because the UUID
   never contains `_`, so the workspaceID is recoverable by cutting on the first `_`.
 - Helper `workspaceIDForShellPane(paneID) string`: `strings.TrimPrefix(paneID,
@@ -50,9 +50,10 @@ session context, and multi-terminal there adds no value.
 
 1. `workspaceIDForShellPane(paneID)` helper; route `OpenShell` env-overlay lookup
    and `env.go` ReloadAgentEnv through it.
-2. `CloseShell(paneID string) error` — bound Wails method: `validateSessionID`,
-   look up the bridge, `br.Close()`, delete from `bridges`. Mirrors the shell half
-   of `CloseWorkspace`. Idempotent (unknown paneID is a no-op, not an error).
+2. `CloseShell(paneID string) error`: a bound Wails method. It calls
+   `validateSessionID`, looks up the bridge, calls `br.Close()`, and deletes the
+   entry from `bridges`. It mirrors the shell half of `CloseWorkspace`. It is
+   idempotent: an unknown paneID is a no-op, not an error.
 3. `CloseWorkspace` reaps ALL of a session's shells: close the agent `pane-<id>`
    plus every bridge whose key `== "shell-"+id` or `HasPrefix("shell-"+id+"_")`.
    (UUID fixed format means this never matches another session's shells.)
@@ -67,14 +68,14 @@ Ptys die on app restart, so the shell LIST is in-memory only (like `openIds` /
 
 In `App.svelte`, per-run `$state`:
 - `shellsFor: Record<wsId, ShellPane[]>` where `ShellPane = { id, title }`.
-- `activeShellFor: Record<wsId, string>` — the primary/left shell.
-- `shellSplitFor: Record<wsId, string | null>` — the right shell when split, else
+- `activeShellFor: Record<wsId, string>`: the primary/left shell.
+- `shellSplitFor: Record<wsId, string | null>`: the right shell when split, else
   null (split is ON iff non-null). Invariant `activeShellFor !== shellSplitFor`.
 
 Pure, unit-tested helpers in `lib/shellPanes.ts`:
-- `nextShellId(wsId, existing): string` — `shell-<wsId>` if none, else the smallest
+- `nextShellId(wsId, existing): string`: `shell-<wsId>` if none, else the smallest
   unused `shell-<wsId>_<n>` (n ≥ 1).
-- `defaultTitle(index): string` — e.g. `"shell"`, `"shell 2"`, …
+- `defaultTitle(index): string`: for example `"shell"`, `"shell 2"`, …
 - transition helpers for close-never-empty and the split invariant, so the tricky
   logic is testable without a DOM.
 
@@ -111,9 +112,9 @@ Pure, unit-tested helpers in `lib/shellPanes.ts`:
 ## × behavior
 
 Per-tab ×: closes that shell (backend `closeShell` + list removal). Closing the last
-remaining shell immediately spawns a fresh one, so the drawer is never empty — this
-is the "closes the current one and replaces it with a new one" the request calls for.
-Closing a non-last tab activates an adjacent tab.
+remaining shell immediately spawns a fresh one, so the drawer is never empty. This
+is the "closes the current one and replaces it with a new one" behavior the request
+calls for. Closing a non-last tab activates an adjacent tab.
 
 ## Risks / constraints honored
 
@@ -137,7 +138,7 @@ Closing a non-last tab activates an adjacent tab.
 - Frontend integration (App.test.ts): +, tab click switches visible cell, ×-on-last
   spawns a replacement (`closeShell` then `openShell` both called), split shows two
   cells, closing to below 2 clears split.
-- Manual smoke: real WebKit — tab switch reflows the shown grid to the drawer height;
+- Manual smoke: real WebKit. Tab switch reflows the shown grid to the drawer height;
   split shows two live shells; × never leaves an empty drawer.
 
 ## Out of scope

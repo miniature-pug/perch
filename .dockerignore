@@ -1,5 +1,5 @@
 # Build context = repo root, but the perch-dev image COPYies only the frontend
-# manifest + lockfile (they drive the baked Playwright browser install — spec
+# manifest and lockfile. They drive the baked Playwright browser install (spec
 # §5.1). Everything else is bind-mounted live at run time, so the context is
 # whitelisted down to those two files: no source, no vendor tree, and crucially
 # no secrets (.claude, *.env) can ever enter an image layer (spec §10).

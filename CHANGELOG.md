@@ -41,9 +41,9 @@ tagged a release yet, so everything to date sits under Unreleased.
   left bar and a soft glow across its whole row. A finished or errored row goes
   quiet once you open the session and stays quiet when you switch away, until it
   finishes or errors again. An awaiting-approval or awaiting-answer row is a
-  pending action, so it keeps begging until you act on it. Awaiting and errored
+  pending action, so it keeps signalling until you act on it. Awaiting and errored
   rows pulse; done gives a calmer settle; reduced motion renders a static bar.
-  The active session never begs.
+  The active session never signals this way.
 - A live status board in the sidebar. Every session row shows its status word at
   all times (running, done, idle, needs you, asking you, error, exited), so you
   read all sessions' status from the left pane without switching between them. A
@@ -86,7 +86,7 @@ tagged a release yet, so everything to date sits under Unreleased.
   controls match.
 - Creating a session spawns its terminal immediately, rather than waiting for a
   second click.
-- The shell drawer's tab-strip actions are labelled again (⊟ Split, ↻ env →
+- The shell drawer's tab-strip actions are labeled again (⊟ Split, ↻ env →
   agent, ▼ Collapse), not bare icons. With more than one shell open the reload
   button names the active shell (↻ env → agent · shell N), and a ▾ caret opens a
   picker to reload any chosen shell rather than only the focused tab.
@@ -119,12 +119,12 @@ tagged a release yet, so everything to date sits under Unreleased.
   `session.status{idle}` followed by a deprecated `session.idle` alias (and, on a
   silent reconnect, a repeated status snapshot), and any trailing idle clobbered the
   fresh ✓. The monitor now treats a redundant idle as a no-op, so the done ✓ persists
-  until the next turn, the way claude already holds it.
+  until the next turn, the way Claude already holds it.
 - A "Question" notification lingered on the bell after the agent moved on. When an
   agent asked a question and then its next tool needed approval, the answered
   question still showed as unread beside the fresh "Approval needed". Leaving
   awaiting-input now clears the superseded question, while any pending approval
-  (claude may have several queued at once) is left untouched.
+  (Claude may have several queued at once) is left untouched.
 - Tool-approval notifications that never fired because of an event-kind mismatch.
 - A new-branch session that silently persisted a broken record when the branch
   already existed; the error now surfaces and nothing is saved.
@@ -143,7 +143,7 @@ tagged a release yet, so everything to date sits under Unreleased.
   garbled the terminal. It now just focuses the session and never respawns or
   kills the running agent; only a new or closed session opens, and a closed
   session reopens when you click its dimmed row.
-- The sidebar attention indicator stayed lit after an approval was resolved. The
+- The sidebar attention signal stayed lit after an approval was resolved. The
   agent monitors now emit a state event on a decision, so it clears on its own.
 - Clicking a notification did nothing. It now navigates to the session it belongs
   to, and opening the hub marks its notifications read so the badge clears.

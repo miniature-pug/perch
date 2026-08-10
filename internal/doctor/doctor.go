@@ -1,8 +1,9 @@
 // Package doctor implements the `perch doctor` health check.
 //
 // It is read-only: it never installs, creates, or modifies anything.
-// All OS interactions are injected via the system interface so the package is
-// fully unit-testable without spawning processes or touching the real filesystem.
+// The package injects all OS interactions through the system interface. This
+// makes the package fully unit-testable, without spawning a process or
+// touching the real filesystem.
 package doctor
 
 import (
@@ -21,8 +22,9 @@ import (
 
 // ── OS boundary ───────────────────────────────────────────────────────────────
 
-// system is the injectable OS boundary. All real-system calls go through here
-// so tests can supply a fake without spawning processes or touching the real FS.
+// system is the injectable OS boundary. All calls to the real system go
+// through here, so tests can supply a fake, without spawning a process or
+// touching the real FS.
 type system interface {
 	lookPath(name string) (string, error)
 	output(name string, args ...string) ([]byte, error)
@@ -62,18 +64,20 @@ func (r *realSystem) readFile(path string) ([]byte, error) {
 
 // ── Version utilities ─────────────────────────────────────────────────────────
 
-// versionRe matches the first dotted-numeric version token (e.g. "1.26.3",
-// "3.6", "2.1.158"). It requires at least one dot so bare integers like "2" or
-// a leading "go" word are never matched by themselves.
+// versionRe matches the first dotted numeric version token (for example,
+// "1.26.3", "3.6", "2.1.158"). versionRe requires at least one dot, so it
+// never matches bare integers like "2", or a leading "go" word, by
+// themselves.
 var versionRe = regexp.MustCompile(`\d+(?:\.\d+)+`)
 
-// versionPrefixRe strips a leading "v" immediately before a digit so that
+// versionPrefixRe strips a leading "v" immediately before a digit, so that
 // "v1.2.3" is normalised to "1.2.3" before versionRe runs.
 var versionPrefixRe = regexp.MustCompile(`\bv(\d)`)
 
 // extractVersionToken extracts the first dotted version token from raw output
-// (e.g. "go version go1.26.3 linux/amd64" → "1.26.3"). It strips any leading
-// "v" prefix so "v1.2.3" yields "1.2.3". Returns "" when no token is found.
+// (for example, "go version go1.26.3 linux/amd64" gives "1.26.3").
+// extractVersionToken strips any leading "v" prefix, so "v1.2.3" yields
+// "1.2.3". It returns "" when it finds no token.
 func extractVersionToken(raw string) string {
 	raw = strings.TrimSpace(raw)
 	normalised := versionPrefixRe.ReplaceAllString(raw, "$1")
@@ -81,9 +85,9 @@ func extractVersionToken(raw string) string {
 	return match
 }
 
-// splitVersion converts "1.26.3" into []int{1, 26, 3}. Non-numeric parts
-// within a component are stripped (e.g. "3.6a" → {3, 6}). If a component
-// cannot be parsed at all it is treated as 0.
+// splitVersion converts "1.26.3" into []int{1, 26, 3}. splitVersion strips
+// non-numeric parts within a component (for example, "3.6a" gives {3, 6}). A
+// component that cannot be parsed at all counts as 0.
 func splitVersion(v string) []int {
 	// Strip trailing non-numeric suffix from each component individually.
 	parts := strings.Split(v, ".")
@@ -104,10 +108,10 @@ func splitVersion(v string) []int {
 	return nums
 }
 
-// compareVersions returns -1 if a<b, 0 if a==b, +1 if a>b, comparing dotted
-// numeric components (1.26.3 vs 1.26.2). Non-numeric suffixes are stripped
-// defensively (e.g. "3.6a" → numeric parts only); missing components count as
-// 0 (1.26 == 1.26.0).
+// compareVersions returns -1 if a<b, 0 if a==b, and +1 if a>b, by comparing
+// dotted numeric components (1.26.3 vs 1.26.2). compareVersions strips
+// non-numeric suffixes defensively (for example, "3.6a" gives numeric parts
+// only). Missing components count as 0 (1.26 == 1.26.0).
 func compareVersions(a, b string) int {
 	an := splitVersion(a)
 	bn := splitVersion(b)
@@ -132,8 +136,9 @@ func compareVersions(a, b string) int {
 // ── Tool versions parsing ─────────────────────────────────────────────────────
 
 // ParseToolVersions parses the raw content of a .tool-versions file into a
-// map[name]version. Lines that are blank, start with "#", or lack a space
-// separator are skipped defensively — this function never panics on bad input.
+// map[name]version. ParseToolVersions defensively skips lines that are
+// blank, that start with "#", or that lack a space separator. This function
+// never panics on bad input.
 func ParseToolVersions(raw string) map[string]string {
 	m := make(map[string]string)
 	for _, line := range strings.Split(raw, "\n") {
@@ -157,7 +162,7 @@ func ParseToolVersions(raw string) map[string]string {
 type toolDescriptor struct {
 	// name is the binary name (used for lookPath).
 	name string
-	// pinnedKey is the key in .tool-versions. Empty means no pin (e.g. git).
+	// pinnedKey is the key in .tool-versions. Empty means no pin (for example, git).
 	pinnedKey string
 	// versionArgs are the arguments passed to get the version string.
 	versionArgs []string
@@ -169,9 +174,9 @@ type toolDescriptor struct {
 	agentTool bool
 }
 
-// tools is the ordered descriptor table. Order controls display order.
-// The agent tools (claude, opencode) are handled with special "one-of" logic
-// after iterating this table.
+// tools is the ordered descriptor table. The order controls the display
+// order. Run applies special "one-of" logic to the agent tools (claude,
+// opencode) after it iterates this table.
 var tools = []toolDescriptor{
 	{
 		name:            "go",
@@ -255,9 +260,9 @@ func Run(version string, w io.Writer, sys system) int {
 	}
 
 	// ── One-of-agents rule ────────────────────────────────────────────────────
-	// Neither agent's checkTool sets hardFail; we resolve the combined state here.
-	// Both absent → hard fail with a synthetic row. The synthetic row is not
-	// added to warnings (it is a hard fail, not a warning count contributor).
+	// Neither agent's checkTool sets hardFail. Run resolves the combined state
+	// here. Both absent → hard fail with a synthetic row. The synthetic row
+	// does not count toward warnings. It is a hard fail, not a warning.
 	if agentToolCount > 0 && agentsPresent == 0 {
 		hardFail = true
 		results = append(results, checkResult{
@@ -299,9 +304,10 @@ func Run(version string, w io.Writer, sys system) int {
 	return 0
 }
 
-// siblingAgent returns the name of the other agent tool in the descriptor table.
-// Used to build the absence message so it names the partner rather than itself.
-// Falls back to "the other agent" when the table has fewer than two agent entries.
+// siblingAgent returns the name of the other agent tool in the descriptor
+// table. The absence message uses this name, so the message names the
+// partner rather than itself. siblingAgent falls back to "the other agent"
+// when the table has fewer than two agent entries.
 func siblingAgent(name string) string {
 	for _, t := range tools {
 		if t.agentTool && t.name != name {
@@ -313,10 +319,11 @@ func siblingAgent(name string) string {
 
 // checkTool evaluates a single toolDescriptor and returns a checkResult.
 //
-// Drift rule: warn only when installed < pinned. installed >= pinned → [ok].
-// This differs from install.sh's install-time "warn on any mismatch" check —
-// an ongoing health check should not flag newer-than-pin as a problem, since
-// go toolchains and agent CLIs self-update to newer versions routinely.
+// Drift rule: warn only when installed < pinned. installed >= pinned gives
+// [ok]. This differs from install.sh's install-time "warn on any mismatch"
+// check. An ongoing health check should not flag newer-than-pin as a
+// problem, because go toolchains and agent CLIs self-update to newer
+// versions routinely.
 func checkTool(td toolDescriptor, pinned map[string]string, sys system) checkResult {
 	path, err := sys.lookPath(td.name)
 	if err != nil {
@@ -331,9 +338,10 @@ func checkTool(td toolDescriptor, pinned map[string]string, sys system) checkRes
 		if td.buildOnly {
 			msg = "not found (build-only; not required to run perch)"
 		}
-		// One-of-agents: the absence message names the sibling agent so the row is
-		// self-consistent (e.g. "ok if opencode present" appears on the claude row).
-		// Whether this is a hard fail is resolved at the Run level; here it is just a warn.
+		// One-of-agents: the absence message names the sibling agent, so the row
+		// stays self-consistent (for example, "ok if opencode present" appears
+		// on the claude row). Run resolves whether this is a hard fail. Here it
+		// is just a warn.
 		if td.agentTool {
 			msg = fmt.Sprintf("not found (at least one agent is required — ok if %s present)", siblingAgent(td.name))
 		}
@@ -357,19 +365,21 @@ func checkTool(td toolDescriptor, pinned map[string]string, sys system) checkRes
 		}
 	}
 
-	// Drift check (only when we have a pin and could parse the installed version).
+	// Drift check runs only when there is a pin and the installed version
+	// could be parsed.
 	tag := "[ok]"
 	displayVer := installedVer
 	if td.pinnedKey != "" {
 		if pinnedVer, ok := pinned[td.pinnedKey]; ok {
 			if installedVer != "" && !strings.HasPrefix(installedVer, "unknown") {
-				// Warn only when installed < pinned; newer or equal is fine.
+				// Warn only when installed < pinned. Newer or equal is fine.
 				if compareVersions(installedVer, pinnedVer) < 0 {
 					tag = "[warn]"
 					displayVer = installedVer + " (below pin " + pinnedVer + ")"
 				}
 			}
-			// If installed == "unknown", we can't drift-check; leave as [ok] (no crash).
+			// If installed == "unknown", checkTool cannot drift-check. It
+			// leaves the tag as [ok] (no crash).
 		}
 	}
 

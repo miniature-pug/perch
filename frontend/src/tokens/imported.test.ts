@@ -1,6 +1,6 @@
 // Backstop: assert that main.ts imports both token stylesheets.
-// Catches a future regression where someone removes the imports from main.ts
-// without needing a full browser run.
+// This test catches a future regression if someone removes the imports from main.ts.
+// It needs no full browser run.
 import { readFileSync } from "fs";
 import { resolve } from "path";
 import { describe, it, expect } from "vitest";

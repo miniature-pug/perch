@@ -18,20 +18,21 @@ sudo apt install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-de
 ```
 
 `libwebkit2gtk-4.1-dev` pulls in `libsoup-3.0-dev`. WebKit2GTK 4.0 is end of
-life, so perch links 4.1; the container base and recent Debian and Ubuntu
+life, so perch links 4.1. The container base and recent Debian and Ubuntu
 releases both provide the 4.1 dev package, so the host and the container link
 the same way.
 
-The production GUI binary is built with `go build -tags "production webkit2_41"`.
-The `webkit2_41` tag links WebKit2GTK 4.1, and `production` selects the Wails
-production runtime, which omits the dev reload server. The frontend is embedded
+Build the production GUI binary with `go build -tags "production webkit2_41"`.
+The `webkit2_41` tag links WebKit2GTK 4.1. The `production` tag selects the Wails
+production runtime, which omits the dev reload server. Perch embeds the frontend
 from `frontend/dist/` regardless of tags, so build it first with `make
-gui-build`. The `wails` CLI is not used and will not build this repository,
-because `main` lives at `./cmd/perch` while the root package is a library.
+gui-build`. This repository does not use the `wails` CLI. The CLI cannot build
+this repository, because `main` lives at `./cmd/perch` while the root package is
+a library.
 
-All Go builds are vendored. `GOFLAGS=-mod=vendor` is set in the Makefile and in
-the container, so every `go` command reads the committed `vendor/` tree and
-needs no network after cloning.
+All Go builds use vendored dependencies. The Makefile and the container set
+`GOFLAGS=-mod=vendor`, so every `go` command reads the committed `vendor/` tree
+and needs no network after cloning.
 
 ## Make workflow
 
@@ -68,18 +69,18 @@ Run targets from the repository root.
 
 ### Checks run in the container
 
-The test workflow is container-first. There is one image, `perch-dev`, built
-from `containers/dev/Containerfile` by `make image`. By default every check
-re-enters that image and runs there, so a check produces the same result on any
-host. The image bakes a pinned Playwright and its browser, the pinned
+The test workflow is container-first. There is one image, `perch-dev`.
+`make image` builds it from `containers/dev/Containerfile`. By default every
+check re-enters that image and runs there, so a check produces the same result
+on any host. The image bakes a pinned Playwright and its browser, the pinned
 `golangci-lint`, and `govulncheck`, so checks never fetch tools at runtime.
 
-The `CONTAINERIZE` variable is the toggle, defaulting to `1`. Set
-`CONTAINERIZE=0` to run a target natively, which is what happens inside the image
+The `CONTAINERIZE` variable is the toggle, and it defaults to `1`. Set
+`CONTAINERIZE=0` to run a target natively. This is what happens inside the image
 and in a pipeline, where re-entry would be redundant. A container run never
-mutates your working tree: `frontend/node_modules`, and `frontend/dist` for
-frontend-building targets, are masked with anonymous volumes, so the committed
-`//go:embed frontend/dist` stub is never clobbered. The
+changes your working tree. Anonymous volumes mask `frontend/node_modules`, and
+`frontend/dist` for frontend-building targets, so the committed
+`//go:embed frontend/dist` stub is never overwritten. The
 [container framework](containers/README.md) covers the model in full.
 
 ## GUI dev loop
@@ -94,11 +95,11 @@ make gui-run          # rebuild the frontend and binary, then launch
 `make test-front` runs `npm audit` over the production dependencies, then the
 frontend typecheck and unit tests, in the container. The audit fails the gate on
 any high or critical advisory, so a vulnerable shipped dependency cannot drift in
-unnoticed, the counterpart to `govulncheck` on the Go side.
+unnoticed. This check is the frontend counterpart to `govulncheck` on the Go side.
 With a local Node toolchain, `npm --prefix frontend test` works for quick
 iteration, but `make test-front` is the canonical path. For Go logic without a
-display, `make test` and `make vet` cover the non-GUI code, and the production
-build tags are not needed for unit tests.
+display, `make test` and `make vet` cover the non-GUI code. Unit tests do not
+need the production build tags.
 
 ## The Runner principle
 

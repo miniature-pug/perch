@@ -2,25 +2,27 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-# containers/run.sh <image> <cmd...> — run a command inside a perch container.
+# containers/run.sh <image> <cmd...>: runs a command inside a perch container.
 #
-# The single definition of "how perch runs in a container", reused
-# by every `make` target. <image> is the short name under containers/ (e.g.
-# `dev` → perch-dev:latest). Everything after it is the command to exec.
+# This is the single definition of how perch runs in a container. Every
+# `make` target reuses it. <image> is the short name under containers/, for
+# example `dev` maps to perch-dev:latest. Everything after it is the command
+# to run.
 #
 #   bash containers/run.sh dev make CONTAINERIZE=0 test
 #   bash containers/run.sh dev bash            # interactive shell
 #
-# Masks (anonymous volumes) keep the host tree pristine. An anonymous volume
-# seeds from the IMAGE layer at that path — and the image is toolchain-only — so
-# a masked path is empty unless the run writes it:
-#   - frontend/node_modules : always masked (host copy is built for the host
-#     distro; the container re-runs `npm ci` into the empty volume).
-#   - frontend/dist         : masked ONLY when PERCH_MASK_DIST is set (the
-#     frontend-building targets, which run `vite build`). Go targets must NOT
-#     mask it or `//go:embed frontend/dist` finds an empty dir and fails to
-#     compile. Default: unmasked → committed stub is read, nothing
-#     is written, host stays clean.
+# Masks (anonymous volumes) keep the host tree clean. An anonymous volume
+# seeds from the IMAGE layer at that path. The image holds only the
+# toolchain, so a masked path stays empty unless the run writes to it:
+#   - frontend/node_modules : always masked. The host copy is built for the
+#     host OS, so the container runs `npm ci` again into the empty volume.
+#   - frontend/dist         : masked only when PERCH_MASK_DIST is set, for
+#     the frontend-building targets that run `vite build`. Go targets must
+#     not mask this path, or `//go:embed frontend/dist` finds an empty
+#     directory and the build fails. By default the path stays unmasked: the
+#     build reads the committed stub, writes nothing, and the host stays
+#     clean.
 # ---------------------------------------------------------------------------
 
 if [ "$#" -lt 2 ]; then
@@ -31,7 +33,7 @@ fi
 image="$1"; shift
 ROOT="$(git rev-parse --show-toplevel)"
 
-# Opt-in dist mask (set by test-e2e / gui-build in the Makefile).
+# An opt-in dist mask, set by test-e2e and gui-build in the Makefile.
 mask_dist=${PERCH_MASK_DIST:+-v /work/frontend/dist}
 
 # Allocate a TTY only when attached to one, so pipelines (no TTY) still work.
@@ -40,8 +42,9 @@ if [ -t 0 ] && [ -t 1 ]; then
   tty_flags="-it"
 fi
 
-# :Z requests an SELinux relabel; on this AppArmor host it is a harmless no-op
-# (touches xattrs only, never file content). go-build cache persists for speed.
+# :Z requests an SELinux relabel. On this AppArmor host, the relabel request
+# is a harmless no-op: the request touches xattrs only, never file content.
+# The go-build cache persists between runs for speed.
 exec podman run --rm $tty_flags \
   -v "$ROOT":/work:Z \
   -v /work/frontend/node_modules \

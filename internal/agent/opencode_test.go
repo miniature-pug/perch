@@ -43,13 +43,13 @@ func TestOpencode_Name(t *testing.T) {
 	}
 }
 
-// TestOpencode_ZeroValueDefaults exercises the nil-seam fallbacks so a
+// TestOpencode_ZeroValueDefaults exercises the nil-seam fallbacks, so a
 // zero-value Opencode never panics on the pure paths.
 func TestOpencode_ZeroValueDefaults(t *testing.T) {
 	var o Opencode
 	if o.bin() != "opencode" {
 		t.Errorf("zero-value bin() = %q, want opencode", o.bin())
 	}
-	_ = o.Detect()    // default exec.LookPath; PATH-dependent, just no panic
-	_ = o.NewArgs()   // pure; returns nil
+	_ = o.Detect()  // uses the default exec.LookPath; result depends on PATH, this only checks no panic
+	_ = o.NewArgs() // a pure function; always returns nil
 }

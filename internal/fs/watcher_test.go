@@ -122,7 +122,7 @@ func TestWatcher_GitDirExcluded(t *testing.T) {
 	}
 	defer func() { _ = w.Close() }()
 
-	// Write into .git — should not be watched.
+	// Write into .git. The watcher should not watch this write.
 	if err := os.WriteFile(filepath.Join(gitDir, "x"), []byte("data"), 0o644); err != nil {
 		t.Fatal(err)
 	}

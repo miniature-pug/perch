@@ -90,7 +90,7 @@ func TestDiffStat_ModifiedAddedDeleted(t *testing.T) {
 		byPath[d.Path] = d
 	}
 
-	// a.txt: modified (unstaged) — should show as "M"
+	// a.txt: modified (unstaged). Should show as "M".
 	a, ok := byPath["a.txt"]
 	if !ok {
 		t.Fatal("a.txt missing from DiffStat")
@@ -126,7 +126,7 @@ func TestHunks_StagedFlag(t *testing.T) {
 	}
 
 	// file_staged.txt: create, commit, modify, then stage the modification.
-	// No further working-tree modification — this file has staged-only changes.
+	// No further working-tree modification: this file has staged-only changes.
 	if err := os.WriteFile(filepath.Join(repo, "file_staged.txt"), []byte("original content\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestHunks_StagedFlag(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "file_staged.txt"), []byte("staged content\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Do NOT commit yet — file_staged.txt has a staged-but-uncommitted change.
+	// Do NOT commit yet. file_staged.txt has a staged-but-uncommitted change.
 
 	// file_working.txt: create and commit in its own commit BEFORE staging
 	// file_staged.txt, so that the subsequent commit of file_working.txt does
@@ -151,7 +151,7 @@ func TestHunks_StagedFlag(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "file_staged.txt"), []byte("staged content\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	gitRun("add", "file_staged.txt") // stage the modification — NOT committed
+	gitRun("add", "file_staged.txt") // stage the modification, NOT committed
 
 	if err := os.WriteFile(filepath.Join(repo, "file_working.txt"), []byte("working content\n"), 0o644); err != nil {
 		t.Fatal(err)

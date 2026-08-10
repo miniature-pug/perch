@@ -9,19 +9,20 @@ import (
 )
 
 // TestApp_ListWorkspaces_WillResumeAndBaseRef covers WIN #2 (WillResume) and
-// WIN #3 (BaseRef): both are additive projections of already-persisted registry
-// fields (Workspace.LastSessionID and Workspace.BaseRef) that ListWorkspaces
-// previously dropped. A resume-capable record (LastSessionID set) must project
-// WillResume=true; a record forked off a base ref must project that BaseRef; a
-// fresh/old record (both empty) must project the zero values.
+// WIN #3 (BaseRef). Both are additive projections of already-persisted
+// registry fields, Workspace.LastSessionID and Workspace.BaseRef, that
+// ListWorkspaces previously dropped. A resume-capable record, with
+// LastSessionID set, must project WillResume=true. A record forked from a
+// base ref must project that BaseRef. A fresh or old record, with both
+// fields empty, must project the zero values.
 func TestApp_ListWorkspaces_WillResumeAndBaseRef(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cfgDir := t.TempDir()
 	store, _ := registry.Load(cfgDir)
 
-	// Deterministic ordering: List() sorts by LastActive desc then ID asc. Both
-	// records share the zero LastActive, so they order by ID ascending: the
-	// "resume-*" id sorts before the "fresh-*" id.
+	// Deterministic ordering: List() sorts by LastActive descending, then ID
+	// ascending. Both records share the zero LastActive, so the records
+	// order by ID ascending. The "resume-*" id sorts before the "fresh-*" id.
 	_ = store.Upsert(registry.Workspace{
 		ID:            "resume-ws",
 		WorktreePath:  t.TempDir(),
@@ -37,7 +38,8 @@ func TestApp_ListWorkspaces_WillResumeAndBaseRef(t *testing.T) {
 		Agent:        "claude",
 		Title:        "fresh",
 		Branch:       "feat/y",
-		// LastSessionID empty → WillResume false; BaseRef empty (old/in-repo record).
+		// LastSessionID is empty, so WillResume is false. BaseRef is empty for
+		// an old, in-repo record.
 	})
 
 	a := &App{
@@ -79,9 +81,10 @@ func TestApp_ListWorkspaces_WillResumeAndBaseRef(t *testing.T) {
 	}
 }
 
-// TestWindowTitle covers WIN #6's pure title function: "perch" when nothing needs
-// the user, "perch (N need you)" otherwise. A non-positive count is defensive and
-// must also yield the bare "perch".
+// TestWindowTitle covers WIN #6's pure title function. The function returns
+// "perch" when nothing needs the user, and "perch (N need you)" otherwise. A
+// non-positive count is a defensive case, and must also give the bare
+// "perch".
 func TestWindowTitle(t *testing.T) {
 	cases := []struct {
 		count int
@@ -100,9 +103,10 @@ func TestWindowTitle(t *testing.T) {
 	}
 }
 
-// TestCountNeedsAttention covers the pure need-count helper: only
-// StateAwaitingApproval and StateAwaitingInput count toward the "need you" total;
-// every other lifecycle state (running/idle/done/errored/exited) does not.
+// TestCountNeedsAttention covers the pure need-count helper. Only
+// StateAwaitingApproval and StateAwaitingInput count toward the "need you"
+// total. Every other lifecycle state, running, idle, done, errored, or
+// exited, does not count.
 func TestCountNeedsAttention(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -122,10 +126,11 @@ func TestCountNeedsAttention(t *testing.T) {
 	}
 }
 
-// TestApp_AttentionCount_FromLiveMonitors proves the monitor→count wiring: the
-// count is read from the live monitors' CurrentState(), so only the workspaces
-// whose monitor is in an attention state contribute. Registry records without a
-// live monitor (State defaults to idle) never count.
+// TestApp_AttentionCount_FromLiveMonitors proves the monitor-to-count
+// wiring. attentionCount reads the count from the live monitors'
+// CurrentState(), so only the workspaces whose monitor is in an attention
+// state add to the count. Registry records without a live monitor, where
+// State defaults to idle, never count.
 func TestApp_AttentionCount_FromLiveMonitors(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cfgDir := t.TempDir()
@@ -152,7 +157,8 @@ func TestApp_AttentionCount_FromLiveMonitors(t *testing.T) {
 			"ws-approval": approval,
 			"ws-input":    input,
 			"ws-running":  running,
-			// ws-nomonitor intentionally absent → idle → does not count.
+			// perch omits ws-nomonitor on purpose, so ws-nomonitor defaults to
+			// idle and does not count.
 		},
 	}
 

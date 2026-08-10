@@ -11,24 +11,27 @@ import (
 // ── fakeSystem ────────────────────────────────────────────────────────────────
 
 // fakeSystem implements the system interface for tests. Every field may be
-// set per-test; zero values produce sensible "nothing found" defaults.
+// set per test. Zero values produce sensible "nothing found" defaults.
 type fakeSystem struct {
-	// lookPathFn, if non-nil, is called by lookPath. Defaults to returning "not found".
-	paths map[string]string // tool → absolute path; missing = not found
+	// paths maps a tool name to its absolute path. When a name is missing,
+	// lookPath returns "not found".
+	paths map[string]string
 
 	// outputs maps "name args[0] args[1]..." to (stdout, error).
 	outputs map[string]fakeOutput
 
-	// homeDir value
+	// home and homeErr are the values homeDir returns.
 	home    string
 	homeErr error
 
-	// statPaths: paths that exist (stat returns nil); others return ErrNotExist.
+	// statPaths holds the paths that exist (stat returns nil). Any other
+	// path returns ErrNotExist.
 	statPaths map[string]bool
 
-	// readFiles: maps path → content. Missing key returns ErrNotExist.
+	// readFiles maps a path to its content. A missing key returns ErrNotExist.
 	readFiles map[string][]byte
-	// readFileErr maps path → custom error (overrides readFiles logic).
+	// readFileErr maps a path to a custom error, which overrides the
+	// readFiles logic.
 	readFileErr map[string]error
 }
 
@@ -269,8 +272,9 @@ func TestRunExitCode_OneAgentMissing_IsWarn(t *testing.T) {
 }
 
 func TestRunExitCode_ClaudeMissing_IsWarn(t *testing.T) {
-	// Reverse of the opencode-missing case: opencode present, claude absent.
-	// Must be exit 0 (warn, not fail) and the claude row must name opencode as sibling.
+	// This is the reverse of the opencode-missing case: opencode is present,
+	// and claude is absent. The test must get exit 0 (a warn, not a fail),
+	// and the claude row must name opencode as the sibling.
 	sys := fullSystem("/home/tester")
 	delete(sys.paths, "claude")
 	var out strings.Builder

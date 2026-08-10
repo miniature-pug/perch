@@ -43,7 +43,7 @@ test("paneIdAt resolves the pane under the point, or null when there is none", (
     zone.appendChild(child);
     document.elementFromPoint = () => child;
     expect(paneIdAt(5, 5)).toBe("p1");
-    // No element (drop outside any pane) -> null.
+    // No element (a drop outside any pane) resolves to null.
     document.elementFromPoint = () => null;
     expect(paneIdAt(5, 5)).toBeNull();
   } finally {
@@ -99,7 +99,7 @@ test("registerOsFileDrop wires OnFileDrop and its off-fn calls OnFileDropOff", (
   try {
     const off = registerOsFileDrop();
     expect(typeof cb).toBe("function");
-    // We hit-test coordinates ourselves, so Wails' CSS drop-target is disabled.
+    // The code hit-tests coordinates itself, so it disables Wails' CSS drop-target.
     expect(useDropTarget).toBe(false);
     off();
     expect(onFileDropOff).toHaveBeenCalledTimes(1);

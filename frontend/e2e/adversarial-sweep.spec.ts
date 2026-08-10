@@ -1,18 +1,19 @@
 /**
  * adversarial-sweep.spec.ts
  *
- * ADVERSARIAL non-happy-path sweep. Each test performs a WEIRD interaction
- * sequence, then asserts (softly) that:
- *   - the top-level error boundary / CrashScreen did NOT appear,
- *   - no uncaught page error / console.error fired during the run,
+ * This is an adversarial sweep of non-happy paths. Each test performs an
+ * unusual interaction sequence. Each test then makes soft assertions that:
+ *   - the top-level error boundary, or CrashScreen, did not appear,
+ *   - no uncaught page error or console.error fired during the run,
  *   - the app did not get stuck (the app-root is still interactive).
  *
  * Every step captures a screenshot to e2e/__screenshots__/adversarial/. Soft
- * assertions + per-step try/catch mean ONE run surfaces MANY issues instead of
- * bailing on the first failure.
+ * assertions and a try/catch block around each step let one run surface many
+ * issues, instead of stopping at the first failure.
  *
- * Harness reused from _mock.ts / the other specs: window.go stubs installed via
- * page.addInitScript, workspaces seeded, backend events fired with window.__emit.
+ * The harness reuses _mock.ts and the other specs. It installs window.go
+ * stubs with page.addInitScript, seeds sessions, and fires backend events
+ * with window.__emit.
  */
 
 import { test, expect } from "@playwright/test";
@@ -28,11 +29,12 @@ const DIR = "./e2e/__screenshots__/adversarial";
 type Page = import("@playwright/test").Page;
 
 // ── Console / pageerror capture ──────────────────────────────────────────────
-// One array of {test, msg} per page, wired in beforeEach. We ignore benign
-// resource-load noise but keep genuine console.error and uncaught exceptions.
-// The CSP `frame-ancestors ignored via <meta>` line is a benign Chromium
-// warning emitted on every page load (the SPA ships CSP in a meta tag); it is
-// not an app defect, so we filter it out to avoid drowning real errors.
+// One array of {test, msg} per page, wired in beforeEach. The test ignores
+// benign resource-load noise, but keeps genuine console.error calls and
+// uncaught exceptions. The CSP `frame-ancestors ignored via <meta>` line is
+// a benign Chromium warning on every page load (the SPA ships CSP in a meta
+// tag). It is not an app defect, so the test filters it out to avoid
+// drowning out real errors.
 const IGNORE_RE =
   /favicon|ERR_|net::|Failed to load resource|Download the .* DevTools|frame-ancestors' is ignored/i;
 
@@ -67,10 +69,10 @@ async function assertAlive(page: Page, label: string) {
   expect.soft(alive, `[${label}] .app-root must still be present (app not stuck)`).toBe(true);
 }
 
-// _mock.ts does not stub every IPC method the app can call (e.g.
-// WorkspaceForBranch on the create path, SetWorkspaceTitle on rename,
-// HomeShellCwd on the home shell). Patch the gaps so an adversarial path that
-// exercises them surfaces REAL app behaviour instead of a mock-throw.
+// _mock.ts does not stub every IPC method the app can call. Examples:
+// WorkspaceForBranch on the create path, SetWorkspaceTitle on rename, and
+// HomeShellCwd on the home shell. This patch fills the gaps, so an adversarial
+// path that calls them shows real app behaviour, not a mock throw.
 const MOCK_GAP_PATCH = `
 (function() {
   var A = window.go && window.go.app && window.go.app.App;
@@ -90,7 +92,7 @@ async function boot(page: Page, opts: MockOptions, extra = "") {
   await page.waitForTimeout(1200);
 }
 
-/** Activate a workspace via sidebar click + resume-preview "Open". */
+/** Activate a session. Click it in the sidebar, then click "Open" in the resume preview. */
 async function activate(page: Page, title = "test session") {
   const item = page.locator(`text=${title}`).first();
   if (!(await item.isVisible().catch(() => false))) return;
@@ -104,19 +106,20 @@ async function activate(page: Page, title = "test session") {
 }
 
 async function openPalette(page: Page) {
-  // Dismiss any stray welcome-screen dialog first: with no workspaces, clicking
-  // .app-root center lands on a welcome button and opens a modal that traps the
-  // keyboard, making ":" a no-op. Escape reaches a clean state.
+  // First, dismiss any stray welcome-screen dialog. With no sessions, a click at
+  // the center of .app-root lands on a welcome button. This opens a modal that
+  // traps the keyboard, so ":" does nothing. Escape reaches a clean state.
   await page.keyboard.press("Escape");
   await page.keyboard.press(":");
   await page.waitForTimeout(300);
 }
 
 /**
- * Open a dialog via the menubar (a NON-terminal zone). Reliable even when a
- * session is active — unlike the ":" palette, which the app swallows to the pty
- * while in TERMINAL mode. menuLabel e.g. "Session"/"Settings"/"Help",
- * itemLabel e.g. "New session"/"Settings…"/"Keyboard shortcuts".
+ * Open a dialog through the menubar, a non-terminal zone. This works even when
+ * a session is active. The ":" palette does not work then, because the app
+ * sends ":" to the pty while in terminal mode. Example values: menuLabel is
+ * "Session", "Settings", or "Help". itemLabel is "New session", "Settings…",
+ * or "Keyboard shortcuts".
  */
 async function menuAction(page: Page, menuLabel: string, itemLabel: string) {
   const trigger = page.locator('header[role="menubar"] button[role="menuitem"]', { hasText: menuLabel }).first();
@@ -166,7 +169,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.afterEach(async ({ page }, testInfo) => {
-  // Fold any captured console errors into soft failures so the run continues
+  // Fold any captured console errors into soft failures. The run continues,
   // but the report shows them.
   if (consoleErrors.length) {
     await shot(page, `CONSOLE-ERR-${testInfo.title.replace(/[^a-z0-9]+/gi, "-").slice(0, 40)}`);
@@ -274,16 +277,16 @@ test("A3-resume-preview-escape-reopen", async ({ page }) => {
     await page.waitForTimeout(300);
     const stillOpen = await preview.isVisible().catch(() => false);
     await shot(page, "A3-after-escape");
-    // FINDING: the resume-preview has no Escape / backdrop-click handler, so
-    // Escape does NOT dismiss it and its .modal-overlay keeps intercepting all
-    // pointer events (the world is stuck until "Cancel" is clicked). This soft
-    // assertion documents that gap.
+    // FINDING: the resume-preview has no Escape handler and no backdrop-click
+    // handler. Escape does not dismiss it. Its .modal-overlay keeps intercepting
+    // every pointer event, until the user clicks "Cancel". This soft assertion
+    // records that gap.
     expect.soft(stillOpen, "resume-preview is NOT dismissable by Escape (bug)").toBe(false);
   });
 
   await test.step("dismiss via Cancel (the only working path), then re-click row", async () => {
-    // Use Cancel so the overlay is actually cleared before re-clicking; a raw
-    // row.click() here would hang 30s against the lingering modal-overlay.
+    // Use Cancel to clear the overlay before the next click.
+    // A raw row.click() here would hang for 30 seconds against the lingering overlay.
     const cancel = preview.locator("button", { hasText: "Cancel" });
     if (await cancel.isVisible().catch(() => false)) {
       await cancel.click().catch(() => {});
@@ -324,9 +327,10 @@ test("A4-view-roundtrip-and-shell-drawer", async ({ page }) => {
   });
 
   await test.step("toggle shell drawer via Ctrl+` twice", async () => {
-    // The active session's shell drawer is a `.shell-panel` (its tab strip stays
-    // visible even when collapsed); the hidden home shell is a plain `.shell-drawer`.
-    // Target the panel so the check holds in both the expanded and collapsed states.
+    // The active session's shell drawer uses the CSS class `.shell-panel`. Its tab
+    // strip stays visible even when collapsed. The hidden home shell uses the plain
+    // class `.shell-drawer`. Target `.shell-panel`, so the check holds in both the
+    // expanded and the collapsed state.
     await page.locator(".app-root").click().catch(() => {});
     await page.keyboard.press("Control+`");
     await page.waitForTimeout(400);
@@ -361,7 +365,7 @@ test("A5-background-approval-pulse", async ({ page }) => {
     });
     await page.waitForTimeout(500);
     await shot(page, "A5-sidebar-pulse");
-    // The background row should carry an attention/approval signal class.
+    // The background row should carry an attention signal class for the approval.
     const bgRow = page.locator("text=background one").first();
     expect.soft(await bgRow.isVisible().catch(() => false), "background row still visible").toBe(true);
   });
@@ -387,7 +391,7 @@ test("A5-background-approval-pulse", async ({ page }) => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 6. Notification storm → hub → click item → click item for a removed ws
+// 6. Notification storm → hub → click item → click item for a removed session
 // ═════════════════════════════════════════════════════════════════════════════
 test("A6-notification-storm-and-navigation", async ({ page }) => {
   await boot(page, { workspaces: [WORKSPACE_FIXTURE] });
@@ -427,7 +431,7 @@ test("A6-notification-storm-and-navigation", async ({ page }) => {
       await page.waitForTimeout(500);
     }
     await shot(page, "A6-after-orphan-nav");
-    // Navigating to a nonexistent ws must not crash / freeze.
+    // Navigating to a session that does not exist must not crash or freeze the app.
   });
 
   await assertNoCrash(page, "A6");
@@ -439,9 +443,9 @@ test("A6-notification-storm-and-navigation", async ({ page }) => {
 // ═════════════════════════════════════════════════════════════════════════════
 test("A7-rename-session-dblclick-and-contextmenu", async ({ page }) => {
   await boot(page, { workspaces: [WORKSPACE_FIXTURE] });
-  // Open the session first: on a CLOSED row the first click of a double-click
-  // fires the row-select → resume-preview gate, which shadows rename. Renaming
-  // an OPEN session is the realistic path and avoids that overlay.
+  // Open the session first. On a closed row, the first click of a double-click
+  // fires the row-select and opens the resume-preview gate, which blocks rename.
+  // Renaming an open session is the realistic path, and it avoids that overlay.
   await activate(page);
 
   const title = page.locator("span.workspace-title").filter({ hasText: "test session" }).first();
@@ -462,9 +466,9 @@ test("A7-rename-session-dblclick-and-contextmenu", async ({ page }) => {
   });
 
   await test.step("right-click → context menu (Rename + Remove); Rename opens inline input, Escape cancels", async () => {
-    // F37 redesign: right-click no longer jumps straight into inline rename. It
-    // opens a Rename/Remove context menu (mirrors the FileTree context-menu
-    // pattern); the inline input is reached by choosing Rename from that menu.
+    // F37 redesign: right-click no longer jumps straight into inline rename.
+    // It opens a Rename/Remove context menu, like the FileTree context-menu pattern.
+    // To reach the inline input, choose Rename from that menu.
     const t2 = page.locator("span.workspace-title").first();
     await t2.click({ button: "right", timeout: 4000 }).catch(() => {});
     await page.waitForTimeout(250);
@@ -479,7 +483,7 @@ test("A7-rename-session-dblclick-and-contextmenu", async ({ page }) => {
     expect.soft(await renameItem.isVisible().catch(() => false), "context menu offers Rename").toBe(true);
     expect.soft(await removeItem.isVisible().catch(() => false), "context menu offers Remove").toBe(true);
 
-    // Choosing Rename enters inline-rename mode (the input replaces the title span).
+    // Choosing Rename enters inline-rename mode. The input replaces the title span.
     if (menuShown) {
       await renameItem.click().catch(() => {});
       await page.waitForTimeout(250);
@@ -605,7 +609,7 @@ test("A9-dialog-escape-and-stacking", async ({ page }) => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 9b. Cleanup dialog (seeded stale sessions — requires ListStaleSessions mock)
+// 9b. Cleanup dialog (seeded stale sessions, needs the ListStaleSessions mock)
 // ═════════════════════════════════════════════════════════════════════════════
 test("A9b-cleanup-dialog", async ({ page }) => {
   const stale = JSON.stringify([
@@ -657,12 +661,13 @@ test("A9b-cleanup-dialog", async ({ page }) => {
     const panel = page.locator('[role="dialog"][aria-label="Stale session cleanup"]');
     const closed = !(await panel.isVisible().catch(() => false));
     await shot(page, "A9b-after-escape");
-    // CleanupPanel self-closes on Escape, consistent with every other dialog
-    // (New Session / Settings / Help / Confirm).
+    // CleanupPanel closes itself on Escape, the same as every other dialog:
+    // New Session, Settings, Help, and Confirm.
     expect.soft(closed, "cleanup panel should close on Escape (consistent w/ other dialogs)").toBe(true);
-    // Fallback: if Escape did NOT close it, close via the X so the app is not
-    // left stuck for assertAlive. When Escape already closed it, skip this —
-    // otherwise the ✕ locator matches nothing and polls until the test timeout.
+    // Fallback: if Escape did not close the panel, close it with the X button.
+    // This keeps the app from getting stuck for assertAlive. Skip this step if
+    // Escape already closed the panel. Otherwise the ✕ locator matches nothing
+    // and polls until the test times out.
     if (!closed) {
       await page.locator('[role="dialog"][aria-label="Stale session cleanup"] button', { hasText: "✕" }).first().click().catch(() => {});
       await page.waitForTimeout(200);
@@ -720,7 +725,7 @@ test("A11-theme-density-rapid-switch", async ({ page }) => {
         await page.waitForTimeout(60);
       }
     }
-    // grab a couple of screenshots mid-flight
+    // Take a couple of screenshots mid-flight.
     await shot(page, "A11-theme-last");
     if (await densitySel.isVisible().catch(() => false)) {
       for (const d of ["dense", "comfortable", "ultra", "dense"]) {

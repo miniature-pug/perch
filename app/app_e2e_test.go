@@ -1,20 +1,24 @@
 //go:build integration
 
-// app_e2e_test.go: headless integration test locking backend "seam" contracts.
-// The fake-agent binary drives the real ClaudeMonitor and hooklistener without
-// launching any real claude/opencode binary.
+// app_e2e_test.go: a headless integration test that locks backend "seam"
+// contracts. The fake-agent binary drives the real ClaudeMonitor and hook
+// listener. It does not launch any real claude or opencode binary.
 //
 // Contracts locked:
 //
-//	pty wire: OpenWorkspace passes dataEvent == "pty:data:pane-<id>" so the
-//	   backend emits on exactly the channel WorkspaceVM.PaneID ("pane-<id>") that
-//	   the frontend Terminal subscribes to. The fake spawnPty captures and asserts
-//	   the event name; it also fires the emit callback once to exercise the path.
-//	   NOTE: the true cross-process round-trip (real pty bytes -> WebKit -> xterm)
-//	   is verified by the manual smoke checklist, since this test uses a fake bridge.
-//	ListWorkspaces populates PaneID, LastActive, Branch (covered in seam_bugs_test.go; re-verified here by round-trip through CreateWorkspace).
+//	pty wire: OpenWorkspace passes dataEvent == "pty:data:pane-<id>". This makes
+//	   the backend emit on exactly the channel WorkspaceVM.PaneID ("pane-<id>")
+//	   that the frontend Terminal subscribes to. The fake spawnPty captures the
+//	   event name and asserts it. The fake spawnPty also fires the emit callback
+//	   once to exercise the path.
+//	   NOTE: this test uses a fake bridge. The manual smoke checklist verifies the
+//	   true cross-process round-trip (real pty bytes -> WebKit -> xterm).
+//	ListWorkspaces populates PaneID, LastActive, and Branch. seam_bugs_test.go
+//	   covers this. This test re-verifies the same behavior by round-trip through
+//	   CreateWorkspace.
 //	OpenWorkspace stamps WorkspaceID on every forwarded agent:event.
-//	OpenWorkspace composes Approval.ReqID as "<raw>:<wsID>"; Approve parses it back correctly.
+//	OpenWorkspace composes Approval.ReqID as "<raw>:<wsID>". Approve parses it
+//	   back correctly.
 package app
 
 import (
@@ -35,8 +39,8 @@ import (
 	"github.com/miniature-pug/perch/internal/registry"
 )
 
-// pollEvent scans the captured emit slice and returns the first entry matching
-// pred, using deadline polling with 30 ms sleep intervals.
+// pollEvent scans the captured emit slice. It returns the first entry that
+// matches pred. It polls until the deadline and sleeps 30 ms between checks.
 func pollEvent(t *testing.T, deadline time.Time, mu *sync.Mutex, events *[]capturedEmit, pred func(capturedEmit) bool) (capturedEmit, bool) {
 	t.Helper()
 	for time.Now().Before(deadline) {
@@ -76,12 +80,12 @@ func TestE2E_HeadlessFullLoop(t *testing.T) {
 	}
 
 	// ── set up git repo ──────────────────────────────────────────────────────
-	// root is the configured root; repo lives inside it.
+	// root is the configured root. The repo lives inside root.
 	// WorktreePath (worktreeDir=="") puts the linked worktree at:
 	//   <parent of repo>/<basename>__worktrees/<slug>
 	//   = <root>/<basename>__worktrees/<slug>
-	// So root must be the parent of repo, and root is a valid root for both
-	// the repo (for DiffStat) and the derived worktree (for containedUnderRoots).
+	// So root must be the parent of repo. root is also a valid root for both the
+	// repo (for DiffStat) and the derived worktree (for containedUnderRoots).
 	root := t.TempDir()
 	repo := filepath.Join(root, "proj")
 	if err := os.MkdirAll(repo, 0o755); err != nil {
@@ -131,10 +135,10 @@ func TestE2E_HeadlessFullLoop(t *testing.T) {
 	}
 
 	// ── spawnPty seam (no real shell/agent launch) ────────────────────────────
-	// Capture the event-name args passed by OpenWorkspace so we can assert the
-	// pty data wire: dataEvent must equal "pty:data:" + vm.PaneID.
-	// NOTE: the true cross-process round-trip (real pty bytes → WebKit → xterm)
-	// is smoke-tested via the manual checklist; this test uses a fake bridge.
+	// Capture the event-name args that OpenWorkspace passes. This lets the test
+	// assert the pty data wire: dataEvent must equal "pty:data:" + vm.PaneID.
+	// NOTE: this test uses a fake bridge. The manual checklist smoke-tests the
+	// true cross-process round-trip (real pty bytes → WebKit → xterm).
 	var capturedDataEvent, capturedExitEvent string
 	a.spawnPty = func(_ context.Context, _ string, _ []string, _ []string, dataEvent, exitEvent string,
 		_ internalpty.EmitFunc, _, _ uint16) (*internalpty.Bridge, error) {
@@ -169,7 +173,7 @@ func TestE2E_HeadlessFullLoop(t *testing.T) {
 	//   event    = "pty:data:" + paneID   →  "pty:data:pane-<id>"
 	//   exitEvent = "pty:exit:" + paneID  →  "pty:exit:pane-<id>"
 	//
-	// (a) The VM exposes the pane id the Terminal will subscribe with.
+	// (a) The VM exposes the pane ID that the Terminal subscribes with.
 	if vm.PaneID != "pane-"+wsID {
 		t.Errorf("bug-1: vm.PaneID = %q, want %q", vm.PaneID, "pane-"+wsID)
 	}
@@ -202,8 +206,8 @@ func TestE2E_HeadlessFullLoop(t *testing.T) {
 	if tokMatch == nil {
 		t.Fatalf("could not find Bearer token in settings.json")
 	}
-	// Strip trailing non-hex chars (e.g. the surrounding quote and " # sentinel")
-	// The token is hex, so grab until first non-hex char.
+	// Strip trailing non-hex chars (for example the surrounding quote and " # sentinel").
+	// The token is hex. Grab characters up to the first non-hex character.
 	tokenRaw := string(tokMatch[1])
 	hexRe := regexp.MustCompile(`^[0-9a-fA-F]+`)
 	token := hexRe.FindString(tokenRaw)
@@ -217,14 +221,14 @@ func TestE2E_HeadlessFullLoop(t *testing.T) {
 	if addrMatch == nil {
 		t.Fatalf("could not find hook URL in settings.json")
 	}
-	addr := string(addrMatch[1]) // e.g. "127.0.0.1:PORT"
+	addr := string(addrMatch[1]) // for example "127.0.0.1:PORT"
 
 	hookURL := "http://" + addr + "/hook"
 	t.Logf("hook URL: %s, token: %s", hookURL, token)
 
 	// ── launch fake-agent in background ──────────────────────────────────────
-	// PERCH_SESSION_ID is not filtered by the monitor (translateAndEmit does not
-	// correlate by session_id), so any valid value works.
+	// The monitor does not filter PERCH_SESSION_ID (translateAndEmit does not
+	// correlate by session_id). So any valid value works.
 	agentEnv := append(os.Environ(),
 		"PERCH_HOOK_URL="+hookURL,
 		"PERCH_HOOK_TOKEN="+token,
@@ -238,7 +242,7 @@ func TestE2E_HeadlessFullLoop(t *testing.T) {
 	if err := agentCmd.Start(); err != nil {
 		t.Fatalf("start fake-agent: %v", err)
 	}
-	// Ensure fake-agent is always cleaned up if test exits early.
+	// Always clean up fake-agent if the test exits early.
 	t.Cleanup(func() {
 		if agentCmd.Process != nil {
 			_ = agentCmd.Process.Kill()
@@ -287,7 +291,7 @@ func TestE2E_HeadlessFullLoop(t *testing.T) {
 
 	// ── ASSERTION 4 (round-trip): Approve with composite ReqID succeeds ───────
 	// Capture reqID under lock then release before calling Approve (which may
-	// block on the hooklistener's pending map).
+	// block on the hook listener's pending map).
 	if err := a.Approve(compositeReqID, "allow"); err != nil {
 		t.Errorf("bug-5: Approve(%q, allow): %v", compositeReqID, err)
 	}
@@ -303,9 +307,10 @@ func TestE2E_HeadlessFullLoop(t *testing.T) {
 	}
 
 	// ── ASSERTION 6: wait for terminal StateDone event with WorkspaceID ──────
-	// The claude monitor translates a Stop hook into StateDone: a completed turn is
-	// what drives the ambient "Turn complete" notification in dispatchNotify.
-	// (StateIdle is reserved for steady non-terminal idle, e.g. opencode idle-at-connect.)
+	// The claude monitor translates a Stop hook into StateDone. A completed turn
+	// drives the ambient "Turn complete" notification in dispatchNotify.
+	// (The code reserves StateIdle for steady, non-terminal idle, for example
+	// opencode idle-at-connect.)
 	termDeadline := time.Now().Add(5 * time.Second)
 	termFound := false
 	for time.Now().Before(termDeadline) {
@@ -334,7 +339,7 @@ func TestE2E_HeadlessFullLoop(t *testing.T) {
 
 	// ── ASSERTION 7: DiffStat returns the staged hello.go with correct counts ──
 	// hello.go contains "package main\n" (1 line), staged as a new file (A).
-	// git diff --cached --numstat reports 1 added / 0 removed for it.
+	// git diff --cached --numstat reports 1 added and 0 removed for hello.go.
 	// DiffStat validates against roots, so pass repo (under root).
 	stat, err := a.DiffStat(repo)
 	if err != nil {

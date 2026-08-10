@@ -80,10 +80,11 @@ func TestReadFile_AtCapOK(t *testing.T) {
 	}
 }
 
-// TestReadFile_FIFORejectedWithoutHanging proves ReadFile refuses a named pipe
-// instead of blocking forever on the open/read. The whole test is guarded by a
-// timeout goroutine so a regression (removal of the special-file guard) fails
-// CI rather than wedging it: reading a FIFO with no writer blocks indefinitely.
+// TestReadFile_FIFORejectedWithoutHanging proves ReadFile refuses a named
+// pipe instead of blocking forever on the open or read. A timeout goroutine
+// guards the whole test. If a regression removes the special-file guard, the
+// test fails in CI instead of hanging: reading a FIFO with no writer blocks
+// forever.
 func TestReadFile_FIFORejectedWithoutHanging(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()

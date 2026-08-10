@@ -1,6 +1,6 @@
-// Package config implements global TOML configuration loading for perch.
-// The global config file lives at $XDG_CONFIG_HOME/perch/config.toml
-// (falling back to ~/.config/perch/config.toml).
+// Package config loads the global TOML configuration for perch.
+// The global config file is at $XDG_CONFIG_HOME/perch/config.toml.
+// If XDG_CONFIG_HOME is not set, perch uses ~/.config/perch/config.toml.
 package config
 
 import (
@@ -27,8 +27,8 @@ type globalConfig struct {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-// Config is the merged, public configuration consumed by the rest of perch.
-// Callers should treat it as read-only after Load returns.
+// Config is the merged, public configuration used across perch.
+// After Load returns, callers must treat Config as read-only.
 type Config struct {
 	// Roots is the list of directories perch scans for git repos.
 	Roots []string
@@ -36,20 +36,20 @@ type Config struct {
 
 // ── Loader ────────────────────────────────────────────────────────────────────
 
-// DefaultGlobalPath returns the canonical path for the global config.toml
-// following the XDG Base Directory spec: $XDG_CONFIG_HOME/perch/config.toml,
-// falling back to ~/.config/perch/config.toml when XDG_CONFIG_HOME is unset.
-// The XDG resolution is delegated to registry.DefaultConfigDir so the app-dir
-// name "perch" is defined in exactly one place.
+// DefaultGlobalPath returns the path of the global config.toml file.
+// It follows the XDG Base Directory spec: $XDG_CONFIG_HOME/perch/config.toml.
+// When XDG_CONFIG_HOME is unset, it falls back to ~/.config/perch/config.toml.
+// registry.DefaultConfigDir resolves the XDG path, so the app directory name
+// "perch" stays defined in one place.
 func DefaultGlobalPath() string {
 	return filepath.Join(registry.DefaultConfigDir(), configFileName)
 }
 
-// Load assembles a Config from the global config.toml at globalPath.
-// An empty globalPath or a non-existent file is not an error; defaults fill
-// the gap. projectStartDir is accepted for API compatibility but is no longer
-// used after the worktree package was removed — project config keys are
-// silently ignored.
+// Load builds a Config from the global config.toml file at globalPath.
+// An empty globalPath, or a global config file that does not exist, is not
+// an error. Load fills the gap with defaults.
+// When the global config sets no roots, Load uses projectStartDir as the
+// single default root.
 func Load(globalPath string, projectStartDir string) (*Config, error) {
 	gc, err := loadGlobal(globalPath)
 	if err != nil {
@@ -93,10 +93,10 @@ func loadGlobal(globalPath string) (*globalConfig, error) {
 	return gc, nil
 }
 
-// expandRoots replaces a leading ~/ with the user's home directory.
-// HOME resolution is lazy: os.UserHomeDir is only called when at least one root
-// actually needs expansion. If it fails in that case, an error is returned so
-// the caller knows the path cannot be made usable.
+// expandRoots replaces a leading ~/ in each root with the user's home directory.
+// expandRoots resolves HOME lazily: it calls os.UserHomeDir only when a root
+// needs expansion. If os.UserHomeDir fails, expandRoots returns an error so
+// the caller knows the path is unusable.
 func expandRoots(roots []string) ([]string, error) {
 	out := make([]string, len(roots))
 	var home string

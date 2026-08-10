@@ -1,11 +1,12 @@
 /**
  * themes.spec.ts
  *
- * For each of the 9 themes: boot the app with that theme in settings,
- * assert --perch-bg resolves to the expected value (from themes.css),
- * assert .app-root backgroundColor is non-transparent,
- * take a full-page screenshot.
- * Then assert all 9 --perch-bg values are distinct.
+ * For each of the 9 themes, do this:
+ *   1. Boot the app with that theme in settings.
+ *   2. Assert that --perch-bg resolves to the expected value from themes.css.
+ *   3. Assert that the backgroundColor of .app-root is not transparent.
+ *   4. Take a full-page screenshot.
+ * Then assert that all 9 --perch-bg values are distinct.
  */
 
 import { test, expect } from "@playwright/test";
@@ -17,7 +18,7 @@ import { PREVIEW_PORT } from "../preview-port.mjs";
 // Relative to cwd (frontend/) where playwright runs.
 const SCREENSHOT_DIR = "./e2e/__screenshots__";
 
-// Ground truth extracted directly from frontend/src/tokens/themes.css
+// These values come directly from frontend/src/tokens/themes.css.
 const THEME_BG_MAP: Record<string, string> = {
   "gruvbox":     "#282828",
   "tokyo-night": "#1a1b26",
@@ -41,10 +42,10 @@ for (const theme of THEMES) {
     await page.addInitScript({ content: buildInitScriptContent({ settings: { theme } }) });
     await page.goto("/");
     await page.waitForSelector("#app", { timeout: 10000 });
-    // Wait for onMount async work: settings.load() + layout.restore()
+    // Wait for the async onMount work: settings.load() and layout.restore().
     await page.waitForTimeout(1500);
 
-    // Assertion 1: --perch-bg must match the known value for this theme (NON-VACUOUS)
+    // Assertion 1: --perch-bg must match the known value for this theme. This check is non-vacuous.
     const percbBg = await page.evaluate(() =>
       getComputedStyle(document.documentElement).getPropertyValue("--perch-bg").trim()
     );
@@ -55,7 +56,7 @@ for (const theme of THEMES) {
       `--perch-bg for theme "${theme}": expected "${expected}", got "${percbBg}"`
     ).toBe(expected);
 
-    // Assertion 2: .app-root background-color must NOT be transparent
+    // Assertion 2: the background-color of .app-root must not be transparent.
     const appRootBg = await page.evaluate(() => {
       const el = document.querySelector(".app-root");
       if (!el) return "ELEMENT_MISSING";
@@ -75,7 +76,7 @@ for (const theme of THEMES) {
       `[${theme}] .app-root background-color should not be ELEMENT_MISSING`
     ).not.toBe("ELEMENT_MISSING");
 
-    // Screenshot
+    // Take a screenshot.
     await page.screenshot({
       path: path.join(SCREENSHOT_DIR, `theme-${theme}.png`),
       fullPage: true,
@@ -84,7 +85,7 @@ for (const theme of THEMES) {
 }
 
 test("all 9 --perch-bg values are distinct", async ({ browser }) => {
-  // Each theme needs a fresh browser context (isolated init scripts)
+  // Each theme needs a fresh browser context, for isolated init scripts.
   const bgByTheme: Record<string, string> = {};
 
   for (const theme of THEMES) {
@@ -101,7 +102,7 @@ test("all 9 --perch-bg values are distinct", async ({ browser }) => {
     await context.close();
   }
 
-  // Assert all values match expected map
+  // Assert that all values match the expected map.
   for (const [theme, expectedBg] of Object.entries(THEME_BG_MAP)) {
     expect(
       bgByTheme[theme],
@@ -109,7 +110,7 @@ test("all 9 --perch-bg values are distinct", async ({ browser }) => {
     ).toBe(expectedBg);
   }
 
-  // Assert all 9 values are distinct (no duplicates)
+  // Assert that all 9 values are distinct, with no duplicates.
   const values = Object.values(bgByTheme);
   const unique = new Set(values);
   expect(

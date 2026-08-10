@@ -6,21 +6,23 @@
 
   const HOME_SHELL_PANE_ID = "shell-home";
 
-  // File-based credentials (an AWS SSO token cache, for example) reach a running
-  // agent on its own next call — no reload needed. This button is for the other
-  // case: an exported variable a running process can only pick up via a fresh
-  // exec. Kept in one string so the button's title and the on-page hint never drift.
+  // File-based credentials, for example an AWS SSO token cache, reach a running
+  // agent on its own next call. No reload is needed. This button is for the
+  // other case: an exported variable that a running process can only pick up
+  // through a fresh exec. This text stays in one string, so the button's title
+  // and the on-page hint never drift apart.
   const RELOAD_HINT =
     "File-based credentials (e.g. AWS SSO) refresh on the agent's next call with no reload. " +
     "Use this only for a new or changed environment variable.";
 
-  // collapsed is driven by layout.collapsed['shell'] via App.svelte;
-  // onToggleCollapse lets the in-drawer button call back to the authoritative store.
+  // App.svelte drives `collapsed` through layout.collapsed['shell'].
+  // `onToggleCollapse` lets the in-drawer button call back to that store.
   //
-  // chrome=false turns this into a bare terminal CELL (no header): ShellPanel uses it
-  // for each per-session shell tab and owns the tab strip / split / collapse / reload
-  // chrome itself. The home shell keeps chrome=true (its own header). onExit fires
-  // when the shell pty exits so a panel can auto-close that tab.
+  // chrome=false turns this into a bare terminal cell with no header. ShellPanel
+  // uses this mode for each per-session shell tab, and owns the tab strip,
+  // split, collapse, and reload chrome itself. The home shell keeps chrome=true
+  // for its own header. onExit fires when the shell pty exits, so a panel can
+  // auto-close that tab.
   let {
     paneId,
     cwd,
@@ -39,8 +41,8 @@
     onExit?: () => void;
   } = $props();
 
-  // When a panel drives visibility (cell mode) it passes `visible` explicitly;
-  // otherwise (home shell) visibility follows the collapse state.
+  // When a panel drives visibility (cell mode), it passes `visible` explicitly.
+  // Otherwise, for the home shell, visibility follows the collapse state.
   const termVisible = $derived(visible ?? !collapsed);
 
   onMount(() => { openShell(paneId, cwd); });
@@ -64,13 +66,15 @@
       {/if}
     </div>
   {/if}
-  <!-- Keep the Terminal mounted across collapse/expand (hide, do not unmount) so the
-       xterm buffer and its pty subscription survive; unmounting rebuilt a blank xterm
-       that stayed empty until the next pty output. In cell mode the panel hides us via
-       an ancestor, so the body itself is never display:none-d here. -->
+  <!-- Keep the Terminal mounted across collapse and expand (hide, do not unmount),
+       so the xterm buffer and its pty subscription survive. Unmounting rebuilt a
+       blank xterm that stayed empty until the next pty output. In cell mode the
+       panel hides this drawer through an ancestor, so the body itself is never
+       set to display:none here. -->
   <section aria-label="shell" class="shell-body" style:display={collapsed && chrome ? "none" : undefined}>
-    <!-- visible drives the Terminal's re-fit when it is un-hidden: the drawer/panel
-         hides it via an ancestor display:none, which never fires xterm's ResizeObserver. -->
+    <!-- `visible` drives the Terminal's re-fit when it is shown again. The
+         drawer or panel hides it through an ancestor display:none, which never
+         fires xterm's ResizeObserver. -->
     <Terminal {paneId} {cwd} visible={termVisible} {onExit} />
   </section>
 </div>
@@ -80,14 +84,15 @@
   .shell-drawer {
     display: flex;
     flex-direction: column;
-    /* Fill the height the parent zone gives us (JS-driven shellH, or the home
-       shell's fixed height). flex:1 + min-height:0 is what makes .shell-body —
-       and the xterm host inside it — resolve to the zone's ACTUAL visible height
-       instead of xterm's content-driven default (~24 rows). Without it FitAddon
-       measures the tall content box, keeps too many rows, and the grid's bottom
-       (the cursor) is clipped by the zone's overflow:hidden with no way to scroll
-       to it. The parent zone MUST be a flex column for this to take (see
-       .shell-drawer-zone / .home-shell-zone in App.svelte). */
+    /* Fills the height the parent zone gives it: a JS-driven shellH, or the
+       home shell's fixed height. flex:1 plus min-height:0 makes .shell-body,
+       and the xterm host inside it, resolve to the zone's actual visible
+       height, instead of xterm's content-driven default of about 24 rows.
+       Without this, FitAddon measures the tall content box, keeps too many
+       rows, and the zone's overflow:hidden clips the grid's bottom (the
+       cursor) with no way to scroll to it. The parent zone MUST be a flex
+       column for this rule to take effect (see .shell-drawer-zone and
+       .home-shell-zone in App.svelte). */
     flex: 1;
     min-height: 0;
     background: var(--perch-bg);
@@ -100,7 +105,7 @@
   }
 
   /* Cell mode: the tab strip above already provides the top border, so the bare
-     cell must not add a second line. */
+     cell must not add a second border line. */
   .shell-drawer.no-chrome {
     border-top: none;
   }
@@ -167,6 +172,6 @@
     flex-direction: column;
     flex: 1;
     min-height: 0;
-    overflow: hidden; /* host: hidden OK, never auto — xterm manages its own viewport */
+    overflow: hidden; /* host: hidden is OK, never auto; xterm manages its own viewport */
   }
 </style>

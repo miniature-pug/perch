@@ -1,18 +1,18 @@
 /**
- * styled.spec.ts — Semantic computed-style guards.
+ * styled.spec.ts: semantic computed-style guards.
  *
- * Each assertion is discriminating: it fails on an unstyled (UA-default) element
- * because we check properties with a clear styled vs. unstyled delta.
+ * Each assertion is discriminating. It fails on an unstyled, UA-default element,
+ * because it checks properties with a clear delta between styled and unstyled.
  *
  * Discrimination reference:
- *   background-color unstyled: rgba(0, 0, 0, 0)  → we require alpha > 0
- *   box-shadow       unstyled: "none"             → we require !== 'none'
- *   border-width     unstyled: "0px"              → we require >= 1
- *   border-radius    unstyled: "0px"              → we require > 0
- *   display          unstyled: "block" (div)      → we require "flex"
+ *   background-color unstyled: rgba(0, 0, 0, 0).  The test needs alpha > 0.
+ *   box-shadow       unstyled: "none".             The test needs a value other than 'none'.
+ *   border-width     unstyled: "0px".              The test needs >= 1.
+ *   border-radius    unstyled: "0px".              The test needs > 0.
+ *   display          unstyled: "block" (div).      The test needs "flex".
  *
- * isOpaque() is defined inside each page.evaluate() arrow function so it
- * lives in the browser context where it belongs — not in Node.
+ * Each page.evaluate() arrow function defines its own isOpaque(). This keeps
+ * it in the browser context where it belongs, and not in Node.
  */
 
 import { test, expect } from "@playwright/test";
@@ -26,7 +26,7 @@ test.beforeAll(() => {
 });
 
 // ---------------------------------------------------------------------------
-// 1. MenuBar — display:flex + non-transparent background
+// 1. MenuBar: display:flex and a non-transparent background
 // ---------------------------------------------------------------------------
 test("MenuBar: display is flex and background is non-transparent", async ({ page }) => {
   await page.addInitScript({ content: buildInitScriptContent({ workspaces: [] }) });
@@ -59,7 +59,7 @@ test("MenuBar: display is flex and background is non-transparent", async ({ page
 });
 
 // ---------------------------------------------------------------------------
-// 2. CommandPalette — card has non-transparent bg, visible border, box-shadow
+// 2. CommandPalette: card has a non-transparent bg, a visible border, and a box-shadow
 // ---------------------------------------------------------------------------
 test("CommandPalette (open): card has bg, border, and box-shadow", async ({ page }) => {
   await page.addInitScript({ content: buildInitScriptContent({ workspaces: [] }) });
@@ -67,8 +67,8 @@ test("CommandPalette (open): card has bg, border, and box-shadow", async ({ page
   await page.waitForSelector("#app", { timeout: 10000 });
   await page.waitForTimeout(1000);
 
-  // Open palette via ":" — dismiss any stray welcome dialog first so the
-  // keystroke reaches the app rather than a modal opened by a welcome button.
+  // Open the palette with ":". First, dismiss any stray welcome dialog, so the
+  // keystroke reaches the app and not a modal opened by a welcome button.
   await page.keyboard.press("Escape");
   await page.keyboard.press(":");
   await page.waitForTimeout(300);
@@ -117,8 +117,8 @@ test("CommandPalette (open): card has bg, border, and box-shadow", async ({ page
 });
 
 // ---------------------------------------------------------------------------
-// 3. NotificationHub — blocking tier left-border color differs from routine tier;
-//    blocking borderLeftColor is non-transparent (err color, not transparent)
+// 3. NotificationHub: the blocking tier left-border color differs from the routine tier.
+//    The blocking tier borderLeftColor is non-transparent (an err color, not transparent).
 // ---------------------------------------------------------------------------
 test("NotificationHub: blocking tier left-border is distinct from routine tier", async ({ page }) => {
   await page.addInitScript({ content: buildInitScriptContent({ workspaces: [] }) });
@@ -126,7 +126,7 @@ test("NotificationHub: blocking tier left-border is distinct from routine tier",
   await page.waitForSelector("#app", { timeout: 10000 });
   await page.waitForTimeout(1000);
 
-  // Emit blocking + routine notifications
+  // Emit blocking and routine notifications.
   await page.evaluate(() => {
     (window as any).__emit("notify", { tier: "blocking", title: "Block!", body: "needs you", workspaceId: "ws-test" });
     (window as any).__emit("notify", { tier: "routine",  title: "Routine", body: "log",    workspaceId: "ws-test" });
@@ -174,7 +174,7 @@ test("NotificationHub: blocking tier left-border is distinct from routine tier",
 });
 
 // ---------------------------------------------------------------------------
-// 4. ApprovalCard — card has bg+border+shadow; Allow button bg differs from Deny
+// 4. ApprovalCard: card has bg, border, and shadow. The Allow button bg differs from Deny.
 // ---------------------------------------------------------------------------
 test("ApprovalCard: card chrome is styled; Allow button is accent-colored", async ({ page }) => {
   await page.addInitScript({
@@ -184,12 +184,12 @@ test("ApprovalCard: card chrome is styled; Allow button is accent-colored", asyn
   await page.waitForSelector("#app", { timeout: 10000 });
   await page.waitForTimeout(1500);
 
-  // Activate workspace
+  // Activate the session.
   const sidebarItem = page.locator("text=test session").first();
   if (await sidebarItem.isVisible()) {
     await sidebarItem.click();
     await page.waitForTimeout(500);
-    // Resume preview now gates session open — click "Open" to confirm.
+    // The resume preview now gates opening a session. Click "Open" to confirm.
     const resumeOpenBtn = page.locator('[data-testid="resume-preview"] button.btn-primary');
     await resumeOpenBtn.waitFor({ state: "visible", timeout: 5000 });
     await resumeOpenBtn.click();
@@ -262,7 +262,7 @@ test("ApprovalCard: card chrome is styled; Allow button is accent-colored", asyn
     `Allow button bg (${(result as any).allowBg}) should differ from Deny button bg (${(result as any).denyBg})`
   ).toBe(true);
 
-  // border-radius proves .btn styling applied (UA default is 0px)
+  // border-radius proves the .btn styling applied (the UA default is 0px).
   expect(
     parseFloat((result as any).allowRadius),
     `Allow button border-radius should be > 0, got: ${(result as any).allowRadius}`
@@ -276,7 +276,7 @@ test("ApprovalCard: card chrome is styled; Allow button is accent-colored", asyn
 });
 
 // ---------------------------------------------------------------------------
-// 5. Sidebar — active row bg differs from inactive row bg
+// 5. Sidebar: the active row bg differs from the inactive row bg
 // ---------------------------------------------------------------------------
 test("Sidebar: active workspace row has different background than inactive", async ({ page }) => {
   const ws2 = {
@@ -292,10 +292,10 @@ test("Sidebar: active workspace row has different background than inactive", asy
   await page.waitForSelector("#app", { timeout: 10000 });
   await page.waitForTimeout(1500);
 
-  // Activate the first workspace
+  // Activate the first session.
   await page.locator("text=test session").first().click();
   await page.waitForTimeout(500);
-  // Resume preview now gates session open — click "Open" to confirm.
+  // The resume preview now gates opening a session. Click "Open" to confirm.
   const resumeOpenBtn = page.locator('[data-testid="resume-preview"] button.btn-primary');
   await resumeOpenBtn.waitFor({ state: "visible", timeout: 5000 });
   await resumeOpenBtn.click();
@@ -321,8 +321,8 @@ test("Sidebar: active workspace row has different background than inactive", asy
 });
 
 // ---------------------------------------------------------------------------
-// 6. Terminal — xterm.css guard: .xterm-helper-textarea opacity is "0"
-//    (proves xterm.css is loaded; without it the element is visible)
+// 6. Terminal: the xterm.css guard. .xterm-helper-textarea opacity is "0".
+//    This proves xterm.css is loaded. Without it, the element is visible.
 // ---------------------------------------------------------------------------
 test("Terminal: xterm.css loaded — .xterm-helper-textarea opacity is 0", async ({ page }) => {
   await page.addInitScript({
@@ -332,19 +332,19 @@ test("Terminal: xterm.css loaded — .xterm-helper-textarea opacity is 0", async
   await page.waitForSelector("#app", { timeout: 10000 });
   await page.waitForTimeout(1500);
 
-  // Activate workspace so Terminal mounts
+  // Activate the session so the Terminal mounts.
   const sidebarItem = page.locator("text=test session").first();
   if (await sidebarItem.isVisible()) {
     await sidebarItem.click();
     await page.waitForTimeout(500);
-    // Resume preview now gates session open — click "Open" to confirm.
+    // The resume preview now gates opening a session. Click "Open" to confirm.
     const resumeOpenBtn = page.locator('[data-testid="resume-preview"] button.btn-primary');
     await resumeOpenBtn.waitFor({ state: "visible", timeout: 5000 });
     await resumeOpenBtn.click();
     await page.waitForTimeout(500);
   }
 
-  // Wait for xterm to mount (best-effort — headless may skip mount if zero-size)
+  // Wait for xterm to mount, on a best-effort basis. Headless may skip the mount if it is zero-size.
   await page.waitForSelector(".xterm", { timeout: 5000 }).catch(() => {});
 
   const result = await page.evaluate(() => {
@@ -355,7 +355,7 @@ test("Terminal: xterm.css loaded — .xterm-helper-textarea opacity is 0", async
     return { opacity: getComputedStyle(ta).opacity };
   });
 
-  // If xterm didn't mount at all (headless zero-size), skip — the terminal-container test covers presence
+  // If xterm did not mount at all (headless zero-size), skip. The terminal-container test covers presence.
   if ((result as any).err === ".xterm not present") {
     console.log("xterm did not mount (headless zero-size) — skipping opacity check");
     return;
@@ -371,7 +371,7 @@ test("Terminal: xterm.css loaded — .xterm-helper-textarea opacity is 0", async
 });
 
 // ---------------------------------------------------------------------------
-// 7. Editor (code view) — .cm-editor fills height > 100px, top-aligned
+// 7. Editor (code view): .cm-editor fills height > 100px, and is top-aligned
 // ---------------------------------------------------------------------------
 test("Editor: CodeMirror fills the pane (height > 100px, top-aligned)", async ({ page }) => {
   const MOCK_FILE_PATH = `${WORKSPACE_FIXTURE.worktreePath}/main.js`;
@@ -397,19 +397,19 @@ test("Editor: CodeMirror fills the pane (height > 100px, top-aligned)", async ({
   await page.waitForSelector("#app", { timeout: 10000 });
   await page.waitForTimeout(1500);
 
-  // Activate workspace
+  // Activate the session.
   const sidebarItem = page.locator("text=test session").first();
   if (await sidebarItem.isVisible()) {
     await sidebarItem.click();
     await page.waitForTimeout(500);
-    // Resume preview now gates session open — click "Open" to confirm.
+    // The resume preview now gates opening a session. Click "Open" to confirm.
     const resumeOpenBtn = page.locator('[data-testid="resume-preview"] button.btn-primary');
     await resumeOpenBtn.waitFor({ state: "visible", timeout: 5000 });
     await resumeOpenBtn.click();
     await page.waitForTimeout(500);
   }
 
-  // Switch to code view and open file
+  // Switch to code view and open a file.
   await page.locator('nav[aria-label="View"] button', { hasText: "Code" }).click();
   await page.waitForTimeout(500);
 
@@ -453,8 +453,8 @@ test("Editor: CodeMirror fills the pane (height > 100px, top-aligned)", async ({
 });
 
 // ---------------------------------------------------------------------------
-// 8. Buttons (ApprovalCard): .btn has non-zero border-radius and padding
-//    border-radius > 0 is the discriminating check (UA default is 0px)
+// 8. Buttons (ApprovalCard): .btn has non-zero border-radius and padding.
+//    border-radius > 0 is the discriminating check (the UA default is 0px).
 // ---------------------------------------------------------------------------
 test("Buttons: .btn has border-radius > 0 and non-zero padding", async ({ page }) => {
   await page.addInitScript({
@@ -468,14 +468,14 @@ test("Buttons: .btn has border-radius > 0 and non-zero padding", async ({ page }
   if (await sidebarItem.isVisible()) {
     await sidebarItem.click();
     await page.waitForTimeout(500);
-    // Resume preview now gates session open — click "Open" to confirm.
+    // The resume preview now gates opening a session. Click "Open" to confirm.
     const resumeOpenBtn = page.locator('[data-testid="resume-preview"] button.btn-primary');
     await resumeOpenBtn.waitFor({ state: "visible", timeout: 5000 });
     await resumeOpenBtn.click();
     await page.waitForTimeout(500);
   }
 
-  // Emit approval to surface the ApprovalCard buttons
+  // Emit an approval, to surface the ApprovalCard buttons.
   await page.evaluate(() => {
     (window as any).__emit("agent:event", {
       workspaceId: "ws-1",
@@ -503,7 +503,7 @@ test("Buttons: .btn has border-radius > 0 and non-zero padding", async ({ page }
     parseFloat((result as any).borderRadius),
     `button border-radius should be > 0 (proves .btn styling applied), got: ${(result as any).borderRadius}`
   ).toBeGreaterThan(0);
-  // padding-left on .btn is 12px; UA default is ~6px — assert > 8 to clear UA default
+  // padding-left on .btn is 12px. The UA default is about 6px. The test asserts > 8 to clear the UA default.
   expect(
     parseFloat((result as any).paddingLeft),
     `button padding-left should be > 8px (styled), got: ${(result as any).paddingLeft}`

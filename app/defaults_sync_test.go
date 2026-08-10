@@ -2,17 +2,18 @@ package app
 
 import "testing"
 
-// TestDefaultsSyncedWithFrontend is the Go half of a cross-language sync guard. It
-// PINS the Go-side settings defaults and pty event-name prefixes to their literal
-// values.
+// TestDefaultsSyncedWithFrontend is the Go half of a cross-language sync guard.
+// The test pins the Go-side settings defaults and the pty event-name prefixes
+// to their literal values.
 //
 // MIRROR: frontend/src/lib/constants.ts (DEFAULT_THEME/DEFAULT_DENSITY/DEFAULT_FONT)
-// and frontend/src/lib/wails.ts (EVT_PTY_DATA_PREFIX/EVT_PTY_EXIT_PREFIX) — a
-// frontend test pins the same literals. If you change one side, both tests fail
-// until re-synced. These literals are a wire/UX contract: the pty prefixes form the
-// exact Wails event names the frontend subscribes to (a drift silently breaks pty
-// output/exit delivery), and the defaults must match so a fresh install renders the
-// same theme/density/font on either side.
+// and frontend/src/lib/wails.ts (EVT_PTY_DATA_PREFIX/EVT_PTY_EXIT_PREFIX) pin
+// the same literals in a frontend test. If you change a literal on one side,
+// both tests fail until you re-sync the two sides. These literals form a wire
+// and UX contract. The pty prefixes are the exact Wails event names that the
+// frontend subscribes to, so a drift silently breaks pty output and exit
+// delivery. The defaults must also match, so a fresh install renders the same
+// theme, density, and font on both sides.
 func TestDefaultsSyncedWithFrontend(t *testing.T) {
 	t.Parallel()
 

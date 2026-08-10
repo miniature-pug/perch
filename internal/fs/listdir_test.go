@@ -123,7 +123,7 @@ func TestListDir_GitStatus(t *testing.T) {
 	if err := os.MkdirAll(untrackedDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// Put something inside so the dir is emitted.
+	// Put something inside so git emits the dir.
 	if err := os.WriteFile(filepath.Join(untrackedDir, "x"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestListDir_GitStatus(t *testing.T) {
 		}
 	}
 
-	// newdir: untracked directory — porcelain emits "?? newdir/".
+	// newdir is an untracked directory. Porcelain emits "?? newdir/" for it.
 	if n, ok := byName["newdir"]; !ok {
 		t.Error("newdir missing from listing")
 	} else {

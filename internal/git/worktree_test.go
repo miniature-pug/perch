@@ -13,7 +13,7 @@ import (
 
 // TestValidRef_Rejects verifies that ValidRef rejects all inputs that git
 // check-ref-format would consider invalid or that would be parsed as flags.
-// These tests MUST FAIL on code that lacks ValidRef (compile error / missing func).
+// These tests MUST FAIL on code that lacks ValidRef (compile error or missing function).
 func TestValidRef_Rejects(t *testing.T) {
 	bad := []struct {
 		name  string
@@ -77,9 +77,10 @@ func TestValidRef_Accepts(t *testing.T) {
 // ── AddWorktree flag-injection exploit tests ──────────────────────────────────
 
 // TestAddWorktree_FlagInjection_BaseBranch is the flag-injection exploit test.
-// A base_branch value of "--upload-pack=x" or "--no-checkout" must be rejected
-// BEFORE any git argv is issued. FakeRunner.Calls must be empty on rejection.
-// This test MUST FAIL on un-fixed code (AddWorktree would call git with the bad value).
+// AddWorktree must reject a base_branch value of "--upload-pack=x" or
+// "--no-checkout" BEFORE it issues any git argv. FakeRunner.Calls must be
+// empty on rejection. This test MUST FAIL on un-fixed code (AddWorktree
+// would call git with the bad value).
 func TestAddWorktree_FlagInjection_BaseBranch(t *testing.T) {
 	exploits := []string{
 		"--upload-pack=x",
@@ -88,7 +89,7 @@ func TestAddWorktree_FlagInjection_BaseBranch(t *testing.T) {
 	for _, exploit := range exploits {
 		t.Run(exploit, func(t *testing.T) {
 			r := proc.NewFakeRunner()
-			// No canned response registered — if git is called, it returns an error
+			// No canned response registered. If something calls git, it returns an error
 			// from the FakeRunner. But the guard must fire BEFORE any call.
 			err := AddWorktree(context.Background(), r,
 				"/repos/proj", "perch/feat-x", "/repos/proj__worktrees/feat-x", exploit)
@@ -103,8 +104,8 @@ func TestAddWorktree_FlagInjection_BaseBranch(t *testing.T) {
 	}
 }
 
-// TestAddWorktree_ValidBase_StillWorks verifies that valid base values ("main",
-// "HEAD") are accepted and git worktree add IS called normally.
+// TestAddWorktree_ValidBase_StillWorks verifies that AddWorktree accepts
+// valid base values ("main", "HEAD") and calls git worktree add normally.
 func TestAddWorktree_ValidBase_StillWorks(t *testing.T) {
 	validBases := []string{"main", "HEAD"}
 	for _, base := range validBases {

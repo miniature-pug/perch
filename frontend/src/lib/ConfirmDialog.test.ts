@@ -84,8 +84,8 @@ test("Escape calls onCancel and stops propagation so a parent scrim is not close
   });
   const dialog = await waitFor(() => screen.getByRole("dialog", { name: /confirm/i }));
 
-  // A parent listener registered above the dialog: it must NOT see the Escape,
-  // proving the dialog stopped propagation (the nested-modal leak fix).
+  // A parent listener is registered above the dialog. It must not see the Escape event.
+  // This proves the dialog stopped propagation (the nested-modal leak fix).
   const parentSaw = vi.fn();
   document.body.addEventListener("keydown", parentSaw);
 

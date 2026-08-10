@@ -190,7 +190,8 @@ func TestFakeRunner_UnmatchedNoDefault_ReturnsError(t *testing.T) {
 // ── ExecRunner ────────────────────────────────────────────────────────────────
 
 func TestExecRunner_HappyPath(t *testing.T) {
-	// Use `go env GOOS` — the go binary is guaranteed present on any Go build host.
+	// This test uses `go env GOOS`. The go binary is always present on a Go
+	// build host.
 	var r proc.ExecRunner
 	stdout, _, err := r.Run(context.Background(), "go", "env", "GOOS")
 	if err != nil {
@@ -200,7 +201,7 @@ func TestExecRunner_HappyPath(t *testing.T) {
 	if out == "" {
 		t.Error("expected non-empty stdout from 'go env GOOS'")
 	}
-	// On this host we expect "linux".
+	// This host is expected to report "linux".
 	if out != "linux" {
 		t.Logf("GOOS = %q (not linux, but not necessarily wrong)", out)
 	}
@@ -277,7 +278,7 @@ func TestFakeRunner_Run_RecordsDirEmpty(t *testing.T) {
 }
 
 func TestFakeRunner_RunInDir_CannedLookupIgnoresCwd(t *testing.T) {
-	// The response key is name+args only; cwd does not affect routing.
+	// The response key is name and args only. cwd does not affect routing.
 	r := proc.NewFakeRunner()
 	r.Respond(proc.FakeResult{Stdout: []byte("result\n")}, "git", "log")
 
@@ -300,7 +301,7 @@ func TestFakeRunner_RunInDir_CannedLookupIgnoresCwd(t *testing.T) {
 }
 
 func TestFakeRunner_Run_DelegatesViaRunInDir(t *testing.T) {
-	// Run delegates to RunInDir; the canned lookup must still work.
+	// Run delegates to RunInDir. The canned lookup must still work.
 	r := proc.NewFakeRunner()
 	r.Respond(proc.FakeResult{Stdout: []byte("delegated\n")}, "cat", "file")
 
@@ -340,7 +341,7 @@ func TestFakeRunner_RunStdin_RecordsCallAndStdin(t *testing.T) {
 }
 
 func TestExecRunner_RunStdin_PipesData(t *testing.T) {
-	// Use `cat` to echo stdin back on stdout; verifies the pipe is wired correctly.
+	// Use `cat` to echo stdin back on stdout. This verifies the pipe is wired correctly.
 	var r proc.ExecRunner
 	input := []byte("hello from stdin\n")
 	stdout, _, err := r.RunStdin(context.Background(), "", input, "cat")

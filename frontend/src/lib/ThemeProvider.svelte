@@ -7,9 +7,10 @@
     children,
   }: { theme: string; density?: "dense" | "comfortable" | "ultra"; font?: string; glass?: boolean; children?: any } = $props();
 
-  // Map font keys from settings to CSS font-family stacks.
-  // Setting --perch-font-sans directly on :root lets every component pick it up
-  // without touching tokens.css (which is out of scope for this component).
+  // Maps font keys from settings to CSS font-family stacks.
+  // Setting --perch-font-sans directly on :root lets every component pick it
+  // up without touching tokens.css, which is out of scope for this
+  // component.
   const FONT_FAMILIES: Record<string, string> = {
     "geist":       '"Geist", "IBM Plex Sans", "Inter", system-ui, sans-serif',
     "inter":       '"Inter", system-ui, sans-serif',

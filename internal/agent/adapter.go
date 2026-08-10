@@ -1,33 +1,36 @@
-// Package agent defines the Adapter interface through which perch drives each
-// AI coding tool (claude, opencode). Concrete adapters live in this package
-// alongside this file; the rest of perch depends only on the interface.
+// Package agent defines the Adapter interface. perch uses this interface to
+// drive each AI coding tool (claude, opencode). Concrete adapters live in
+// this package, next to this file. The rest of perch depends only on the
+// interface.
 package agent
 
 // Adapter is the seam between perch's orchestration logic and a specific AI
-// coding tool. Each tool (claude, opencode) provides one Adapter implementation.
+// coding tool. Each tool (claude, opencode) provides one Adapter
+// implementation.
 //
-// ReadyHeuristic and TrustPrompt are intentionally absent from this interface:
-// neither has an honest implementation until the TUI milestones that require
-// those UI surfaces. They will be added to this interface at those milestones.
+// This interface does not yet include ReadyHeuristic or TrustPrompt. Neither
+// method has a working implementation yet. perch will add them at the TUI
+// milestones that need those UI surfaces.
 type Adapter interface {
-	// Name returns the canonical tool identifier — "claude" or "opencode" —
-	// matching the model.Tool constants. Used in log messages, session records,
-	// and window pane labels.
+	// Name returns the canonical tool identifier: "claude" or "opencode".
+	// It matches the model.Tool constants. perch uses it in log messages,
+	// session records, and window pane labels.
 	Name() string
 
-	// Detect reports whether the tool's CLI binary can be resolved on PATH.
-	// A false return means the tool is unavailable; perch skips it rather than
-	// returning an error to the user.
+	// Detect reports whether the tool's CLI binary is on PATH. A false
+	// return means the tool is not available. perch then skips the tool
+	// instead of showing an error to the user.
 	Detect() bool
 
-	// ResumeArgs returns the launch argument slice needed to resume sessionID
-	// in the current working directory. The caller is responsible for setting
-	// the process working directory before exec; this method only builds args.
+	// ResumeArgs returns the launch argument list needed to resume
+	// sessionID in the current working directory. The caller must set the
+	// process working directory before it runs exec. This method only
+	// builds the argument list.
 	ResumeArgs(sessionID string) []string
 
-	// NewArgs returns the launch argument slice for a brand-new interactive
-	// session. perch does not pass a model flag — the harness chooses its own
-	// model. For claude this returns nil; for opencode it also returns nil
-	// (opencode attach accepts no --model).
+	// NewArgs returns the launch argument list for a new interactive
+	// session. perch does not pass a model flag; the harness picks its own
+	// model. For claude, NewArgs returns nil. For opencode, NewArgs also
+	// returns nil, because opencode attach takes no --model flag.
 	NewArgs() []string
 }

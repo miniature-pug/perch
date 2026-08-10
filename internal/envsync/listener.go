@@ -1,14 +1,16 @@
-// Package envsync hosts the app-owned loopback endpoint that receives a perch
-// session terminal's current environment and computes the delta the agent must
-// be relaunched with. It reuses the exact security posture of
-// internal/hooklistener — loopback only on 127.0.0.1, a per-session Bearer token
-// of 32 crypto-random bytes compared in constant time, and a 1 MiB body cap — but
-// it is a small dedicated handler so the environment payload (which may contain
-// secrets) never has to be threaded through agent.Event.
+// Package envsync hosts the app-owned loopback endpoint. The endpoint
+// receives a perch session terminal's current environment, and it computes
+// the delta the agent needs for its relaunch. It reuses the exact security
+// posture of internal/hooklistener: loopback only on 127.0.0.1, a per-session
+// Bearer token of 32 crypto-random bytes compared in constant time, and a
+// 1 MiB body cap. Unlike the hook listener, envsync is a small dedicated
+// handler, so the environment payload (which may hold secrets) never has to
+// pass through agent.Event.
 //
-// The environment payload is held in memory only and is NEVER logged or written
-// to disk: the handler logs nothing about the body, and the captured delta is
-// handed to the caller's SyncFunc, which the app stores in an in-memory overlay.
+// The package holds the environment payload in memory only, and NEVER logs
+// or writes it to disk. The handler logs nothing about the body. It hands the
+// captured delta to the caller's SyncFunc, and the app stores the delta in an
+// in-memory overlay.
 package envsync
 
 import (
@@ -28,64 +30,66 @@ import (
 
 const (
 	// tokenBytes is the number of crypto-random bytes in a per-session token
-	// (hex-encoded → 64 chars). Matches the hook listener's token strength.
+	// (hex-encoded, 64 chars). This matches the hook listener's token strength.
 	tokenBytes = 32
 
-	// maxSyncBodyBytes caps the sync request body (1 MiB) so an over-large POST
-	// cannot exhaust memory. A real environment payload is orders of magnitude
-	// smaller; an over-limit body makes Decode return an error and falls into the
-	// 400 path rather than being buffered whole.
+	// maxSyncBodyBytes caps the sync request body at 1 MiB, so an over-large
+	// POST cannot exhaust memory. A real environment payload is far smaller.
+	// An over-limit body makes Decode return an error and fall into the 400
+	// path, instead of being buffered whole.
 	maxSyncBodyBytes = 1 << 20
 
 	// syncPath is the single endpoint path.
 	syncPath = "/sync"
 
-	// perchPrefix marks perch-internal variables, which are always excluded from a
-	// captured delta (PERCH_ENVSYNC_*, PERCH_EXIT_*, …). They are perch plumbing,
-	// never something the user meant to hand to the agent.
+	// perchPrefix marks perch-internal variables. The package always excludes
+	// these from a captured delta (PERCH_ENVSYNC_*, PERCH_EXIT_*, and so on).
+	// They are perch plumbing, never something the user meant to hand to the
+	// agent.
 	perchPrefix = "PERCH_"
 
-	// Env-sync handle names — the single source of truth for the three variables
-	// the app injects into a per-workspace drawer and `perch reload` reads back.
-	// EnvURL is the endpoint URL, EnvToken the per-session Bearer token, EnvWS the
-	// workspace id.
+	// These are the env-sync handle names, the single source of truth for the
+	// three variables the app injects into each workspace's shell drawer and
+	// `perch reload` reads back. EnvURL is the endpoint URL, EnvToken is the
+	// per-session Bearer token, and EnvWS is the workspace id.
 	EnvURL   = "PERCH_ENVSYNC_URL"
 	EnvToken = "PERCH_ENVSYNC_TOKEN"
 	EnvWS    = "PERCH_ENVSYNC_WS"
 
-	// HTTP server timeouts bound how long a single connection may occupy the
-	// listener, closing the slowloris exposure of an unbounded server. Unlike the
-	// hook listener (whose PreToolUse handler blocks on human decision time and so
-	// omits WriteTimeout), the sync handler always responds immediately, so a
-	// finite WriteTimeout is both safe and appropriate here.
+	// The HTTP server timeouts bound how long one connection can occupy the
+	// listener, and this closes the slowloris risk of an unbounded server.
+	// The hook listener omits WriteTimeout because its PreToolUse handler
+	// blocks on human decision time. The sync handler differs: it always
+	// responds immediately, so a finite WriteTimeout is both safe and
+	// appropriate here.
 	serverReadHeaderTimeout = 5 * time.Second
 	serverReadTimeout       = 10 * time.Second
 	serverWriteTimeout      = 10 * time.Second
 	serverIdleTimeout       = 60 * time.Second
 )
 
-// SyncFunc is invoked with the authenticated workspace id and the computed
-// environment delta (KEY=VALUE entries that are new or changed versus the
-// baseline, PERCH_* excluded) after a valid POST. It must not block: the app's
-// implementation stores the overlay and dispatches the relaunch on its own
-// goroutine.
+// SyncFunc receives the authenticated workspace id and the computed
+// environment delta after a valid POST. The delta holds KEY=VALUE entries
+// that are new or changed compared to the baseline. It excludes PERCH_*
+// entries. SyncFunc must not block: the app's implementation stores the
+// overlay and dispatches the relaunch on its own goroutine.
 type SyncFunc func(workspaceID string, delta []string)
 
-// SyncRequest is the wire format `perch reload` POSTs to the endpoint. It is the
-// single source of truth for the request shape, encoded by cmd/perch and decoded
-// here.
+// SyncRequest is the wire format `perch reload` POSTs to the endpoint.
+// SyncRequest is the single source of truth for the request shape: cmd/perch
+// encodes it, and this file decodes it.
 type SyncRequest struct {
-	// WorkspaceID is the session's workspace id (from PERCH_ENVSYNC_WS). It is
-	// cross-checked against the token's workspace so a token minted for one session
-	// can never request a relaunch of another.
+	// WorkspaceID is the session's workspace id (from PERCH_ENVSYNC_WS). The
+	// handler cross-checks it against the token's workspace, so a token
+	// minted for one session can never request a relaunch of another.
 	WorkspaceID string `json:"workspace_id"`
 	// Env is the full os.Environ() of the session terminal at reload time.
 	Env []string `json:"env"`
 }
 
-// Listener is the loopback env-sync endpoint. One is stood up per app run; it
-// holds a per-session token→workspace map so many workspace drawers share a
-// single server.
+// Listener is the loopback env-sync endpoint. Each app run starts one
+// Listener. It holds a per-session token-to-workspace map, so many shell
+// drawers share a single server.
 type Listener struct {
 	srv      *http.Server
 	ln       net.Listener
@@ -97,9 +101,10 @@ type Listener struct {
 	wsToken map[string]string // workspaceID → token (mint-or-lookup reverse index)
 }
 
-// New binds a loopback listener on an ephemeral port and starts serving. baseline
-// is the app's os.Environ() captured at start, the reference against which every
-// delta is computed. onSync is invoked after each valid POST.
+// New binds a loopback listener on an ephemeral port, and starts serving.
+// baseline is the app's os.Environ(), captured at start. The listener
+// computes every delta against this reference. New invokes onSync after each
+// valid POST.
 func New(baseline []string, onSync SyncFunc) (*Listener, error) {
 	ln, err := net.Listen("tcp", hooklistener.LoopbackHost+":0")
 	if err != nil {
@@ -128,19 +133,19 @@ func New(baseline []string, onSync SyncFunc) (*Listener, error) {
 	return l, nil
 }
 
-// Addr returns the loopback host:port the endpoint is bound to.
+// Addr returns the loopback host:port where the endpoint listens.
 func (l *Listener) Addr() string { return l.ln.Addr().String() }
 
-// URL returns the full sync endpoint URL injected into a drawer as
-// PERCH_ENVSYNC_URL.
+// URL returns the full sync endpoint URL. The app injects this URL into a
+// shell drawer as PERCH_ENVSYNC_URL.
 func (l *Listener) URL() string { return "http://" + l.ln.Addr().String() + syncPath }
 
 // Close shuts the server down.
 func (l *Listener) Close() error { return l.srv.Close() }
 
-// TokenFor returns the env-sync token for workspaceID, minting a fresh 32-byte
-// crypto-random token on first request and returning the same token on every
-// later call for that workspace.
+// TokenFor returns the env-sync token for workspaceID. On the first request
+// for a workspace, TokenFor mints a fresh 32-byte crypto-random token.
+// TokenFor returns that same token on every later call for the workspace.
 func (l *Listener) TokenFor(workspaceID string) (string, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -157,10 +162,11 @@ func (l *Listener) TokenFor(workspaceID string) (string, error) {
 	return tok, nil
 }
 
-// resolve returns the workspace id a presented bearer token authenticates for.
-// It compares against every registered token in constant time (no early exit on
-// match) so response timing never reveals which token — or how much of one —
-// matched. Tokens are unique random values, so at most one can match.
+// resolve returns the workspace id that a presented bearer token
+// authenticates. resolve compares the token against every registered token in
+// constant time, with no early exit on a match, so response timing never
+// reveals which token matched, or how much of one matched. Tokens are unique
+// random values, so at most one token can match.
 func (l *Listener) resolve(presented string) (workspaceID string, ok bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -196,17 +202,20 @@ func (l *Listener) handleSync(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	// Cap the body so a malicious or malfunctioning client cannot exhaust memory;
-	// an over-limit body makes Decode return an error and falls into the 400 path.
+	// Cap the body so a malicious or malfunctioning client cannot exhaust
+	// memory. An over-limit body makes Decode return an error and fall into
+	// the 400 path.
 	r.Body = http.MaxBytesReader(w, r.Body, maxSyncBodyBytes)
 	var req SyncRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		// Deliberately generic: never echo any part of the (secret-bearing) body.
+		// This error is deliberately generic: never echo any part of the
+		// (secret-bearing) body.
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	// Cross-workspace guard: the delta is applied to the token's workspace, and the
-	// body must agree. A token minted for session A can never move session B.
+	// Cross-workspace guard: the handler applies the delta to the token's
+	// workspace, so the body must agree. A token minted for session A can
+	// never move session B.
 	if req.WorkspaceID != tokenWS {
 		http.Error(w, "workspace mismatch", http.StatusForbidden)
 		return
@@ -220,9 +229,9 @@ func (l *Listener) handleSync(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }
 
-// baselineMap indexes a KEY=VALUE environment slice by key for O(1) delta lookup.
-// On duplicate keys the last entry wins, matching how a process resolves its
-// environment.
+// baselineMap indexes a KEY=VALUE environment slice by key, for an O(1) delta
+// lookup. On duplicate keys, the last entry wins. This matches how a process
+// resolves its own environment.
 func baselineMap(env []string) map[string]string {
 	m := make(map[string]string, len(env))
 	for _, e := range env {
@@ -236,9 +245,9 @@ func baselineMap(env []string) map[string]string {
 }
 
 // computeDelta returns the KEY=VALUE entries in env whose key is new or whose
-// value differs from baseline. Keys prefixed PERCH_ are always excluded (perch
-// plumbing, never the user's intent), and malformed entries (no '=' or empty key)
-// are skipped. The result preserves env's order.
+// value differs from baseline. computeDelta always excludes keys prefixed
+// PERCH_ (perch plumbing, never the user's intent). It skips malformed
+// entries too (no '=', or an empty key). The result keeps env's order.
 func computeDelta(baseline map[string]string, env []string) []string {
 	var out []string
 	for _, e := range env {

@@ -2,12 +2,13 @@
  * palette.spec.ts
  *
  * Command palette:
- * - open via ":" keystroke (mode.enterCommand) — the app opens palette when mode === "command"
- * - type to filter (list narrows)
- * - ArrowDown to move selection
- * - Enter runs selected command (assert via __calls or state change)
- * - Escape closes
- * Screenshot: open + filtered states
+ * - Open it with the ":" keystroke (mode.enterCommand). The app opens the palette
+ *   when mode === "command".
+ * - Type to filter. The list narrows.
+ * - Use ArrowDown to move the selection.
+ * - Enter runs the selected command. Assert this with __calls or a state change.
+ * - Escape closes the palette.
+ * Screenshot: the open and filtered states.
  */
 
 import { test, expect } from "@playwright/test";
@@ -33,7 +34,7 @@ test("colon key opens command palette", async ({ page }) => {
   await page.keyboard.press("Escape");
   await page.waitForTimeout(100);
 
-  // The app uses ":" to enterCommand mode which shows the palette
+  // The app uses ":" to enter command mode, which shows the palette.
   await page.keyboard.press(":");
   await page.waitForTimeout(300);
 
@@ -57,7 +58,7 @@ test("typing narrows the list", async ({ page }) => {
   const totalBefore = await page.locator('[role="option"]').count();
   expect(totalBefore, "Should have multiple commands before filtering").toBeGreaterThan(3);
 
-  // Type to filter — "settings" should narrow to a small set
+  // Type to filter. "settings" should narrow the list to a small set.
   await page.keyboard.type("settings");
   await page.waitForTimeout(200);
 
@@ -96,15 +97,15 @@ test("Enter on selected command fires it and closes palette", async ({ page }) =
   await page.keyboard.press(":");
   await page.waitForTimeout(300);
 
-  // Filter to a specific command to get predictable state
-  // "new session" → session:new command
+  // Filter to a specific command, to get a predictable state.
+  // "new session" maps to the session:new command.
   await page.keyboard.type("new session");
   await page.waitForTimeout(200);
 
   // First result should be "New session"
   await expect(page.locator('[role="option"]').first()).toContainText("New session");
 
-  // Enter should run the command → opens NewSessionDialog (or triggers it)
+  // Enter should run the command. This opens NewSessionDialog, or triggers it.
   await page.keyboard.press("Enter");
   await page.waitForTimeout(300);
 
@@ -130,10 +131,9 @@ test("Escape closes palette without running command", async ({ page }) => {
 });
 
 test("view:agent command sets agent view via palette", async ({ page }) => {
-  // First switch to code view
-  // Navigate to code view first with the keyboard.
-  // Dismiss any stray welcome dialog, then focus a neutral (non-interactive)
-  // element so the keybind reaches the app rather than a modal or a button.
+  // First, switch to code view with the keyboard.
+  // Dismiss any stray welcome dialog, then focus a neutral, non-interactive
+  // element, so the keybind reaches the app and not a modal or a button.
   await page.keyboard.press("Escape");
   await page.locator(".status-mode").click();
   await page.keyboard.press("2"); // code view keybind

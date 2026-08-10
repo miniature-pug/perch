@@ -6,25 +6,27 @@
   }: {
     open: boolean;
     onClose: () => void;
-    // Which panel to show. "all" (default) renders both the shortcuts table and
-    // the About blurb. App.svelte can pass "shortcuts" or "about" so the Help
-    // menu's two entries open genuinely distinct views instead of the same dialog.
+    // Which section to show. The default "all" renders both the shortcuts table
+    // and the About text. App.svelte can pass "shortcuts" or "about" so the two
+    // Help menu entries open different views, not the same dialog.
     section?: "shortcuts" | "about" | "all";
   } = $props();
 
-  // Single source of truth for the shortcut table, grouped by function. Each row
-  // lists one or more key chips (each rendered as its own <kbd>) joined by
-  // `joiner`, plus the action it triggers. Mirrors the bindings in App.svelte's
-  // onKeyDown handler (global keys), Editor.svelte's Ctrl-S save, and
-  // ApprovalCard.svelte's in-card accelerators, so the table never drifts from
-  // reality. NB: there is NO shared keymap constant — these strings are kept in
-  // sync with App.svelte by hand and guarded by HelpDialog.test.ts, so any
-  // binding changed there must be mirrored here or a test fails.
+  // This is the single source of truth for the shortcut table, grouped by
+  // function. Each row lists one or more key chips, each rendered as its own
+  // <kbd>, joined by `joiner`, plus the action it triggers. The table mirrors the
+  // bindings in App.svelte's onKeyDown handler for global keys, Editor.svelte's
+  // Ctrl-S save, and ApprovalCard.svelte's in-card accelerators. This way the
+  // table never drifts from the real bindings.
+  //
+  // Note: there is no shared keymap constant. These strings are kept in sync
+  // with App.svelte by hand, and HelpDialog.test.ts guards them. If a binding
+  // changes in App.svelte, someone must also change it here, or a test fails.
   type Shortcut = { combos: string[]; joiner?: string; action: string };
   type ShortcutGroup = { heading: string; rows: Shortcut[] };
   const groups: ShortcutGroup[] = [
     { heading: "Navigation", rows: [
-      // App.svelte onKeyDown: j → next (idx + 1), k → previous (idx - 1).
+      // App.svelte onKeyDown maps j to next (idx + 1) and k to previous (idx - 1).
       { combos: ["j", "k"], joiner: " / ", action: "Next / previous session" },
       { combos: ["Enter"], action: "Open the selected session" },
       { combos: ["/"], action: "Filter sessions" },
@@ -51,7 +53,7 @@
       { combos: ["Ctrl-\\", "Ctrl-n"], joiner: " then ", action: "Leave TERMINAL mode" },
     ]},
     { heading: "Approvals", rows: [
-      // ApprovalCard.svelte accelerators — active while a request card is focused.
+      // ApprovalCard.svelte accelerators. They are active while the approval card has focus.
       { combos: ["a"], action: "Allow the pending request" },
       { combos: ["d"], action: "Deny the pending request" },
       { combos: ["⇧A"], action: "Always allow this tool" },
@@ -163,7 +165,7 @@
     border-bottom: 1px solid var(--perch-border);
   }
 
-  /* Group sub-header row — a dim, uppercase section label spanning both columns. */
+  /* Group sub-header row. A dim, uppercase section label spans both columns. */
   .shortcuts-table .group-row th {
     padding-top: var(--perch-sp-2);
     font-size: var(--perch-fs-caption);

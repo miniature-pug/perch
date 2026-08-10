@@ -8,9 +8,8 @@ vi.mock("./wails", () => ({
 }));
 
 // The mocked module is shared across every test in this file (vi.mock is
-// hoisted once), so call history must be reset between tests — otherwise a
-// "not called" assertion in a later test can see calls left over from an
-// earlier one.
+// hoisted once), so each test must reset the call history. Otherwise a
+// "not called" assertion in a later test can see calls left over from an earlier test.
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -91,8 +90,8 @@ test("Remove selected calls cleanupSessions with checked ids", async () => {
 
 // ---------------------------------------------------------------------------
 // WIN #4: force-remove path for checked unsafe (dirty/unmerged) rows.
-// Remove selected must NEVER force; force-remove is a distinct, separately
-// gated control so a single misclick cannot discard uncommitted changes or
+// Remove selected must NEVER force. Force-remove is a distinct, separately
+// gated control, so a single misclick cannot discard uncommitted changes or
 // unmerged commits.
 // ---------------------------------------------------------------------------
 
@@ -149,7 +148,7 @@ test("Force remove unsafe requires an explicit confirmation before calling clean
   await fireEvent.click(screen.getByTestId("row-check-ws-u"));
   const forceBtn = screen.getByRole("button", { name: /force remove unsafe/i });
   await fireEvent.click(forceBtn);
-  // Clicking the trigger alone must not call the backend — the confirmation
+  // Clicking the trigger alone must not call the backend. The confirmation
   // dialog must appear and require its own click.
   expect(cleanupSessions).not.toHaveBeenCalled();
   const confirmBtn = await screen.findByRole("button", { name: /^force remove$/i });
@@ -193,8 +192,8 @@ test("Open button calls onOpen with the session id", async () => {
 });
 
 // ---------------------------------------------------------------------------
-// F49a: last-active uses the shared formatRelativeAge helper (was a divergent
-// local formatRelative that rendered "yesterday" and lacked the empty guard).
+// F49a: last-active uses the shared formatRelativeAge helper. The old code used a
+// divergent local formatRelative that rendered "yesterday" and lacked the empty guard.
 // ---------------------------------------------------------------------------
 
 test("F49a: last-active renders the shared helper output ('1d ago', not 'yesterday')", async () => {

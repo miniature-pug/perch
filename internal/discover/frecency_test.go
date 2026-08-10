@@ -2,10 +2,11 @@ package discover
 
 import "testing"
 
-// TestFrecencyScore_BucketBoundaries pins the multiplier selected on each side of
-// every time-bucket boundary. The buckets use strict-less-than comparisons
-// (d < frecencyHour ⇒ recent), so the boundary value itself falls into the NEXT
-// (older) bucket. A fixed now is injected so the assertions are exact, not relative.
+// TestFrecencyScore_BucketBoundaries pins the multiplier that frecencyScore
+// selects on each side of every time-bucket boundary. The buckets use
+// strict-less-than comparisons: d < frecencyHour means "recent". So the
+// boundary value itself falls into the next, older bucket. The test injects
+// a fixed now, so the assertions are exact, not relative.
 func TestFrecencyScore_BucketBoundaries(t *testing.T) {
 	const now int64 = 10_000_000 // arbitrary fixed "now"
 	const rank = 10.0
@@ -37,9 +38,10 @@ func TestFrecencyScore_BucketBoundaries(t *testing.T) {
 	}
 }
 
-// TestFrecencyScore_MoreRecentRanksHigher asserts that, with equal rank, a more
-// recently accessed project scores at least as high as a less recent one (and
-// strictly higher when they fall into different buckets).
+// TestFrecencyScore_MoreRecentRanksHigher asserts that, with equal rank, a
+// more recently accessed project scores at least as high as a less recent
+// one. When the two fall into different time buckets, the more recent one
+// scores strictly higher.
 func TestFrecencyScore_MoreRecentRanksHigher(t *testing.T) {
 	const now int64 = 10_000_000
 	const rank = 5.0

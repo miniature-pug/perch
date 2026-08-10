@@ -1,4 +1,4 @@
-// seam_bugs_test.go: tests pinning backend-contract behavior at the agent/app seam.
+// seam_bugs_test.go: tests that pin backend-contract behavior at the seam between the agent and the app.
 package app
 
 import (
@@ -69,7 +69,7 @@ func TestListWorkspaces_PopulatesPaneIDLastActiveBranch(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Event forwarding must stamp WorkspaceID onto the event.
-// We use Replay (not Prepare's sequence) so the event is NOT pre-stamped.
+// This test uses Replay, not Prepare's sequence, so the event is NOT pre-stamped.
 // ---------------------------------------------------------------------------
 
 func TestOpenWorkspace_EventForwarding_StampsWorkspaceID(t *testing.T) {
@@ -147,8 +147,9 @@ func TestOpenWorkspace_EventForwarding_StampsWorkspaceID(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Approval composition: ReqID must be <raw>:<workspaceID> so that Approve() can
-// parse and route it. Also verifies dispatchNotify emits with correct workspaceId.
+// Approval composition: ReqID must be <raw>:<workspaceID> so Approve() can parse
+// it and route it. This test also verifies dispatchNotify emits with the correct
+// workspaceId.
 // ---------------------------------------------------------------------------
 
 func TestOpenWorkspace_ApprovalReqIDComposition(t *testing.T) {
@@ -169,7 +170,7 @@ func TestOpenWorkspace_ApprovalReqIDComposition(t *testing.T) {
 	var mu sync.Mutex
 	var agentEvents []agent.Event
 	var notifyEvents []map[string]any
-	var osNotifyCalls [][]string // records OS desktop notifications fired
+	var osNotifyCalls [][]string // records the OS desktop notifications that fired
 	osNotify := func(_ string, args ...string) error {
 		mu.Lock()
 		osNotifyCalls = append(osNotifyCalls, args)
@@ -204,8 +205,8 @@ func TestOpenWorkspace_ApprovalReqIDComposition(t *testing.T) {
 		monitors:     map[string]agent.Monitor{},
 		cancels:      map[string]context.CancelFunc{},
 		settingsPath: cfgDir + "/settings.json",
-		// focused defaults to false here (unfocused), so a blocking-tier event
-		// must fire the OS notification through this injected runner.
+		// In this test, focused defaults to false (unfocused). So a blocking-tier
+		// event must fire the OS notification through this injected runner.
 		notifier: notify.NewWithRunner(osNotify),
 		spawnPty: func(_ context.Context, _ string, _ []string, _ []string, _, _ string,
 			_ internalpty.EmitFunc, _, _ uint16) (*internalpty.Bridge, error) {
@@ -221,10 +222,10 @@ func TestOpenWorkspace_ApprovalReqIDComposition(t *testing.T) {
 		t.Fatalf("OpenWorkspace: %v", err)
 	}
 
-	// Replay a raw approval event with WorkspaceID empty, ReqID bare. The Kind is
-	// "approval", matching what ClaudeMonitor/OpencodeMonitor actually emit. A prior
-	// version injected Kind:"state", masking the dispatchNotify approval case which
-	// keyed on the wrong Kind and never fired.
+	// Replay a raw approval event. WorkspaceID is empty and ReqID is bare. The Kind
+	// is "approval", matching what ClaudeMonitor and OpencodeMonitor emit. A prior
+	// version injected Kind:"state". This masked the dispatchNotify approval case,
+	// which keyed on the wrong Kind and never fired.
 	fm.Replay(agent.Event{
 		Kind:  "approval",
 		State: agent.StateAwaitingApproval,
@@ -235,10 +236,11 @@ func TestOpenWorkspace_ApprovalReqIDComposition(t *testing.T) {
 		},
 	})
 
-	// Wait for the OS notification — the LAST step dispatchNotify performs for a
-	// blocking event — so observing it under mu establishes happens-before for
-	// the agent:event and notify writes that precede it. If the fix regresses,
-	// this times out and the OS-notify assertion below fails with precise blame.
+	// Wait for the OS notification. This is the last step dispatchNotify performs
+	// for a blocking event, so observing it under mu proves happens-before for the
+	// agent:event and notify writes that come before it. If the fix regresses, this
+	// test times out, and the OS-notify assertion below fails and points to the
+	// exact cause.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		mu.Lock()
@@ -270,7 +272,7 @@ func TestOpenWorkspace_ApprovalReqIDComposition(t *testing.T) {
 		t.Errorf("forwarded Approval.ReqID = %q, want %q", ev.Approval.ReqID, wantReqID)
 	}
 
-	// WorkspaceID stamp verified here too.
+	// This also verifies the WorkspaceID stamp.
 	if ev.WorkspaceID != "ws-appr" {
 		t.Errorf("forwarded event WorkspaceID = %q, want ws-appr", ev.WorkspaceID)
 	}
@@ -299,9 +301,9 @@ func TestOpenWorkspace_ApprovalReqIDComposition(t *testing.T) {
 	if tier := notEvs[0]["tier"]; tier != "blocking" {
 		t.Errorf("notify tier = %v, want blocking", tier)
 	}
-	// and, while unfocused, must fire an OS desktop notification. Pre-fix the
-	// approval case keyed on Kind:"state" while monitors emit Kind:"approval", so
-	// this never fired.
+	// This event must also fire an OS desktop notification while unfocused. Before
+	// the fix, the approval case keyed on Kind:"state", but monitors emit
+	// Kind:"approval". So the notification never fired.
 	if len(osCalls) == 0 {
 		t.Error("approval event fired no OS desktop notification")
 	} else if osCalls[0][0] != "Approval needed" {
@@ -309,14 +311,15 @@ func TestOpenWorkspace_ApprovalReqIDComposition(t *testing.T) {
 	}
 }
 
-// PendingApprovals must expose every still-undecided approval, tagged with the
-// workspace it belongs to (derived from the composed pending-map key), so the
-// frontend can rebuild its queue after a reload or a late open (the agent:event
-// carrying an approval is a one-shot). An always-empty result must be [] not nil.
+// PendingApprovals must return every still-undecided approval. Each approval is
+// tagged with the workspace it belongs to. The workspace ID comes from the
+// composed pending-map key. The frontend uses this list to rebuild its queue
+// after a reload or a late open, because each agent:event that carries an
+// approval fires only once. An always-empty result must be [] and not nil.
 func TestApp_PendingApprovals(t *testing.T) {
 	a := &App{pending: map[string]agent.ApprovalReq{}}
 
-	// Empty: a fresh app has no pending approvals; must be non-nil.
+	// Empty case: a fresh app has no pending approvals. The result must be non-nil.
 	got := a.PendingApprovals()
 	if got == nil {
 		t.Fatal("PendingApprovals returned nil, want empty slice")
@@ -325,8 +328,8 @@ func TestApp_PendingApprovals(t *testing.T) {
 		t.Fatalf("PendingApprovals on empty = %d entries, want 0", len(got))
 	}
 
-	// Seed the pending map exactly as the event pump does: key + stored ApprovalReq
-	// both carry the composed "<raw>:<workspaceID>" ReqID.
+	// Seed the pending map exactly as the event pump does. Both the key and the
+	// stored ApprovalReq carry the composed "<raw>:<workspaceID>" ReqID.
 	a.pending["raw1:ws-a"] = agent.ApprovalReq{ReqID: "raw1:ws-a", Tool: "Bash", Summary: "ls"}
 	a.pending["raw2:ws-b"] = agent.ApprovalReq{ReqID: "raw2:ws-b", Tool: "Edit", Summary: "x"}
 

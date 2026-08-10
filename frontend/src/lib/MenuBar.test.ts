@@ -32,7 +32,7 @@ test("ArrowDown on open menu moves focus, Enter activates focused item", async (
   // Open the Session menu by clicking the top-level button
   await fireEvent.click(screen.getByRole("menuitem", { name: /session/i }));
   await waitFor(() => screen.getByRole("menuitem", { name: /new session/i }));
-  // ArrowDown on the first menuitem should move focus to the next
+  // ArrowDown on the first menuitem should move focus to the next item.
   const newSessionItem = screen.getByRole("menuitem", { name: /new session/i });
   await fireEvent.keyDown(newSessionItem, { key: "ArrowDown" });
   // Now Enter on the focused item (close session) should fire onCommand
@@ -67,7 +67,7 @@ test("ArrowRight / ArrowLeft rove focus between top-level menu buttons", async (
   const sessionBtn = screen.getByRole("menuitem", { name: "Session" });
   sessionBtn.focus();
   await fireEvent.keyDown(sessionBtn, { key: "ArrowRight" });
-  // F51: "Worktree" was folded into "Session", so the menu adjacent to Session
+  // F51: the menu folded "Worktree" into "Session", so the menu adjacent to Session
   // is now "View".
   const viewBtn = screen.getByRole("menuitem", { name: "View" });
   expect(viewBtn).toHaveFocus();
@@ -81,7 +81,7 @@ test("View menu items render keyboard accelerators without polluting the item na
   render(MenuBar, { props: { onCommand: () => {}, unreadCount: 0 } });
   await fireEvent.click(screen.getByRole("menuitem", { name: "View" }));
   await waitFor(() => screen.getByRole("menuitem", { name: "Diff view" }));
-  // Accelerator chips for the view shortcuts are shown
+  // The menu shows accelerator chips for the view shortcuts.
   expect(screen.getByText("1")).toBeInTheDocument();
   expect(screen.getByText("3")).toBeInTheDocument();
   // The chip is aria-hidden so the menuitem's accessible name is still the label

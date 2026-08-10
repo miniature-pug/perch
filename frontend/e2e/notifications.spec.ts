@@ -1,14 +1,15 @@
 /**
  * notifications.spec.ts
  *
- * Trigger blocking / ambient / routine notification tiers via the "notify" event channel.
- * Assert each renders with its tier CSS class and correct structure.
+ * Trigger the blocking, ambient, and routine notification tiers through the
+ * "notify" event channel. Assert that each renders with its tier CSS class
+ * and the correct structure.
  *
  * Event channel: "notify" (onNotify in wails.ts)
  * Payload: { tier: "blocking"|"ambient"|"routine"; title: string; body: string; workspaceId: string }
  *
- * The NotificationHub is shown when notifOpen=true.
- * notifOpen is toggled by runCommand("notifications:open"), which is triggered by the bell button.
+ * The notification hub shows when notifOpen=true.
+ * The bell button triggers runCommand("notifications:open"), which toggles notifOpen.
  */
 
 import { test, expect } from "@playwright/test";
@@ -120,7 +121,7 @@ test("dismissing a notification marks it read (dismiss button present)", async (
 });
 
 test("DND silences ambient/routine (logged as read) but never blocking", async ({ page }) => {
-  // Toggle DND on via the bell → hub → "Do not disturb" button
+  // Toggle DND on: click the bell, then the hub, then the "Do not disturb" button.
   await openNotificationHub(page);
   const dndBtn = page.locator('section[aria-label="notification hub"] button', {
     hasText: "Do not disturb",
@@ -131,9 +132,9 @@ test("DND silences ambient/routine (logged as read) but never blocking", async (
   await page.locator('button[aria-label="notifications"]').click();
   await page.waitForTimeout(200);
 
-  // Emit ambient — under DND it is SILENCED (logged as read), not dropped
+  // Emit an ambient notification. Under DND, the app silences it (logs it as read) but does not drop it.
   await emitNotification(page, "ambient", "Silenced Ambient", "still logged, just read");
-  // Emit blocking — DND never silences blocking
+  // Emit a blocking notification. DND never silences blocking notifications.
   await emitNotification(page, "blocking", "Critical Block", "must show");
 
   // Open hub
@@ -142,8 +143,8 @@ test("DND silences ambient/routine (logged as read) but never blocking", async (
   // Blocking notification present (DND never silences tier 1)
   await expect(page.locator(".notif-item.tier-blocking")).toBeVisible();
 
-  // Ambient notification IS present (silenced, not dropped) but recorded read —
-  // it stays in the away catch-up log without bumping the unread badge.
+  // The ambient notification is present. DND silenced it rather than dropping it, and marked
+  // it read. It stays in the away catch-up log, and does not increase the unread badge count.
   await expect(page.locator(".notif-item.tier-ambient.read")).toBeVisible();
 
   await page.screenshot({ path: path.join(SCREENSHOT_DIR, "notification-dnd-active.png"), fullPage: true });

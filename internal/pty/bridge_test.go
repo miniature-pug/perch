@@ -118,8 +118,9 @@ func TestBridge_CloseIdempotent(t *testing.T) {
 	}
 }
 
-// TestSpawn_RoundTrip spawns `sh -c 'printf hi'` and asserts emitted []int
-// bytes contain "hi". Polls with a deadline before Close so bytes are not lost.
+// TestSpawn_RoundTrip spawns `sh -c 'printf hi'` and asserts that the
+// emitted []int bytes contain "hi". The test polls with a deadline before
+// Close, so bytes are not lost.
 func TestSpawn_RoundTrip(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -206,11 +207,12 @@ func TestSpawn_EmitsExitEvent(t *testing.T) {
 	}
 }
 
-// TestBridge_SuppressExit_DisarmsExitEmit proves the displaced-pane fix: after
-// SuppressExit the reaper reaps the (killed) process but emits NO exitEvent, so a
-// remounted Terminal sharing the exitEvent name cannot re-latch its overlay from a
-// stale exit. Spawns a long-lived process so it never exits on its own within the
-// window — only SuppressExit + Close reaps it.
+// TestBridge_SuppressExit_DisarmsExitEmit proves the displaced-pane fix.
+// After SuppressExit, the reaper reaps the (killed) process, but emits NO
+// exitEvent. This means a remounted Terminal that shares the exitEvent name
+// cannot re-latch its overlay from a stale exit. The test spawns a
+// long-lived process, so it never exits on its own within the window. Only
+// SuppressExit plus Close reaps it.
 func TestBridge_SuppressExit_DisarmsExitEmit(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	fired := make(chan struct{}, 4)
@@ -234,14 +236,15 @@ func TestBridge_SuppressExit_DisarmsExitEmit(t *testing.T) {
 	case <-fired:
 		t.Fatal("pty:exit emitted after SuppressExit — the reaper must stay silent for a displaced pane")
 	case <-time.After(2 * time.Second):
-		// No emit within a generous window (the buggy path emits well under this) —
-		// suppression held.
+		// No emit occurs within a generous window (the buggy path emits well
+		// under this). Suppression held.
 	}
 }
 
-// TestBridge_Close_WithoutSuppress_StillEmits is the positive control for the
-// suppression test: a normal (unsuppressed) forced Close MUST still emit the exit
-// event — a genuine agent/shell exit is exactly what CloseWorkspace relies on.
+// TestBridge_Close_WithoutSuppress_StillEmits is the positive control for
+// the suppression test. A normal (unsuppressed) forced Close MUST still emit
+// the exit event. CloseWorkspace relies on exactly this: a genuine agent or
+// shell exit.
 func TestBridge_Close_WithoutSuppress_StillEmits(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	fired := make(chan int, 4)
@@ -275,9 +278,10 @@ func TestBridge_Close_WithoutSuppress_StillEmits(t *testing.T) {
 	}
 }
 
-// TestSpawn_CloseKillsProcessGroup proves Close reaps children the login
-// shell forks, not just the shell itself. Spawns a shell that backgrounds a
-// long sleep and prints the child PID; after Close, that PID must be gone.
+// TestSpawn_CloseKillsProcessGroup proves that Close reaps the children the
+// login shell forks, not just the shell itself. The test spawns a shell that
+// backgrounds a long sleep and prints the child PID. After Close, that PID
+// must be gone.
 func TestSpawn_CloseKillsProcessGroup(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -356,11 +360,11 @@ func TestSpawn_CloseKillsProcessGroup(t *testing.T) {
 	}
 }
 
-// TestSpawn_ReaderPanicDoesNotCrashAndStillReapsChild proves that a panic
-// inside pumpReader (via a panicking emit on data output) does not crash the
-// process AND that cmd.Wait still runs — the exit event must still fire, which
-// only happens after Wait. Without the reaper's recover this test would abort
-// the whole test binary.
+// TestSpawn_ReaderPanicDoesNotCrashAndStillReapsChild proves two things: a
+// panic inside pumpReader (through a panicking emit on data output) does not
+// crash the process, and cmd.Wait still runs. The exit event must still
+// fire, and that only happens after Wait. Without the reaper's recover, this
+// test would abort the whole test binary.
 func TestSpawn_ReaderPanicDoesNotCrashAndStillReapsChild(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	exitFired := make(chan int, 1)

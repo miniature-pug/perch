@@ -8,11 +8,11 @@
     onConfirm?: () => void; onCancel?: () => void;
   } = $props();
 
-  // In-flight guard: once Confirm is clicked, disable it and ignore further clicks
-  // so a destructive action can never be double-fired.
+  // In-flight guard. When the user clicks Confirm, the dialog disables the button
+  // and ignores more clicks. This stops a destructive action from firing twice.
   let confirming = $state(false);
 
-  // Reset the guard whenever the dialog reopens so a fresh confirmation is possible.
+  // The dialog resets the guard when it reopens. This lets the user confirm again.
   $effect(() => {
     if (open) confirming = false;
   });
@@ -23,13 +23,15 @@
     onConfirm?.();
   }
 
-  // Escape cancels. Enter is intentionally NOT mapped at the overlay level: the
-  // focused Cancel button (the safe default) handles Enter natively, so a stray
-  // keydown from the triggering gesture can never auto-confirm a destructive action.
+  // Escape cancels the dialog. The overlay does not map Enter on purpose. The
+  // focused Cancel button is the safe default and handles Enter on its own. This
+  // stops a stray keydown from the trigger gesture from confirming a destructive
+  // action.
   //
-  // stopPropagation is essential: when this dialog is nested inside another modal
-  // (e.g. CleanupPanel), the parent scrim also listens for Escape. Without it, a
-  // single Escape would close both this confirm and the parent panel.
+  // stopPropagation is necessary. When this dialog nests inside another modal, for
+  // example CleanupPanel, the parent scrim also listens for Escape. Without
+  // stopPropagation, one Escape press would close both this dialog and the parent
+  // panel.
   function handleKey(e: KeyboardEvent) {
     if (e.key === "Escape") {
       e.preventDefault();
@@ -59,7 +61,7 @@
 {/if}
 
 <style>
-  /* Full-screen scrim that also centres the card */
+  /* The full-screen scrim also centers the dialog card. */
   .confirm-overlay {
     position: fixed;
     inset: 0;
@@ -92,7 +94,7 @@
     line-height: 1.5;
   }
 
-  /* Optional note — dim caption */
+  /* Optional note. Dim caption text. */
   .confirm-note {
     margin: 0 0 var(--perch-sp-2) 0;
     color: var(--perch-text-dim);
@@ -100,7 +102,7 @@
     line-height: 1.4;
   }
 
-  /* Action row — right-aligned; destructive btn LEFT of Cancel (flex row direction) */
+  /* Action row, aligned right. The destructive button sits left of Cancel, in the flex row direction. */
   .confirm-actions {
     display: flex;
     align-items: center;

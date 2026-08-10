@@ -15,7 +15,7 @@ async function fireDragLeave(node: Element, relatedTarget: Node | null) {
   await fireEvent(node, ev);
 }
 
-/** Minimal DataTransfer fake — jsdom's built-in doesn't round-trip getData/setData. */
+/** Minimal DataTransfer fake. jsdom's built-in version does not round-trip getData or setData. */
 function fakeDataTransfer(overrides: { textData?: string; files?: File[] } = {}) {
   const store = new Map<string, string>();
   if (overrides.textData !== undefined) {
@@ -31,22 +31,22 @@ function fakeDataTransfer(overrides: { textData?: string; files?: File[] } = {})
   };
 }
 
-// OS file drops do NOT arrive through the DOM drop event: on WebKitGTK the
-// dropped File objects carry no real path (the old `File.path ?? f.name` read a
-// non-standard field that is undefined there, silently degrading to a basename).
+// OS file drops do NOT arrive through the DOM drop event. On WebKitGTK the
+// dropped File objects carry no real path. (The old `File.path ?? f.name` read a
+// non-standard field that is undefined there, and silently degraded to a basename.)
 // The absolute paths arrive out-of-band via Wails' native OnFileDrop, and
 // lib/osFileDrop.ts routes them to the pane under the drop point. This test
 // exercises that real path by mocking the Wails OnFileDrop callback. The true
-// end-to-end — dragging a file from the OS file manager — needs a real WebKitGTK
-// window and is a manual smoke item (see docs/smoke-checklist.md).
+// end-to-end case, dragging a file from the OS file manager, needs a real WebKitGTK
+// window. It is a manual smoke item (see docs/smoke-checklist.md).
 test("OS file drop routes ABSOLUTE paths to the pty via the Wails OnFileDrop callback", async () => {
   const { default: DragDrop } = await import("./DragDrop.svelte");
   const { registerOsFileDrop } = await import("./osFileDrop");
   const w = await import("./wails");
   vi.mocked(w.writeToPty).mockClear();
 
-  // A fileDrop-enabled pane tags its drop-zone with data-drop-pane so the drop
-  // can be routed by hit-testing the coordinates.
+  // A fileDrop-enabled pane tags its drop-zone with data-drop-pane, so the code
+  // can route the drop by hit-testing the coordinates.
   render(DragDrop, { props: { paneId: "p1", fileDrop: true } });
   const zone = screen.getByRole("region", { name: /drop zone/i });
   expect(zone.getAttribute("data-drop-pane")).toBe("p1");
@@ -60,7 +60,7 @@ test("OS file drop routes ABSOLUTE paths to the pty via the Wails OnFileDrop cal
   const off = registerOsFileDrop();
   expect(typeof dropCb).toBe("function");
 
-  // The drop point resolves (via elementFromPoint) to our pane's drop-zone.
+  // The drop point resolves (via elementFromPoint) to the pane's drop-zone.
   const origEFP = document.elementFromPoint;
   document.elementFromPoint = () => zone;
   try {
@@ -79,8 +79,8 @@ test("OS file drop routes ABSOLUTE paths to the pty via the Wails OnFileDrop cal
 test("renders paste-path hint and no buttons when fileDrop cap is false", async () => {
   const { default: DragDrop } = await import("./DragDrop.svelte");
   render(DragDrop, { props: { paneId: "p1", fileDrop: false } });
-  // The old "Open file" / "Copy path" buttons were removed as dead no-ops.
-  // When fileDrop is false the component shows a hint paragraph instead.
+  // The code removed the old "Open file" and "Copy path" buttons as dead no-ops.
+  // When fileDrop is false, the component shows a hint paragraph instead.
   expect(screen.getByText(/paste path/i)).toBeInTheDocument();
   expect(screen.queryByRole("button")).toBeNull();
 });
@@ -114,9 +114,9 @@ test("in-app text drop is ignored when fileDrop is false", async () => {
 });
 
 // --- Stuck-overlay backstop: dragActive must return to false whenever a drag
-// ends anywhere, even when our own handleDrop never runs. The `drag-active`
-// class on the drop-zone gates the overlay (`{#if dragActive}`), so we assert
-// on that class as a proxy for the overlay being visible. ---
+// ends anywhere, even when handleDrop itself never runs. The `drag-active`
+// class on the drop-zone gates the overlay (`{#if dragActive}`), so this test asserts
+// on that class as a proxy for whether the overlay is visible. ---
 
 test("dragend anywhere clears drag-active even when no drop lands on the zone", async () => {
   const { default: DragDrop } = await import("./DragDrop.svelte");
@@ -126,7 +126,7 @@ test("dragend anywhere clears drag-active even when no drop lands on the zone", 
   await fireEvent.dragEnter(zone, { dataTransfer: fakeDataTransfer({ files: [] }) });
   expect(zone.classList.contains("drag-active")).toBe(true);
 
-  // Drag is cancelled / dropped elsewhere: no drop on the zone, only a window dragend.
+  // The drag is cancelled or dropped elsewhere: no drop lands on the zone, only a window dragend.
   await fireEvent(window, new Event("dragend"));
   expect(zone.classList.contains("drag-active")).toBe(false);
 });
@@ -139,7 +139,7 @@ test("dragleave outside the zone clears drag-active", async () => {
   await fireEvent.dragEnter(zone, { dataTransfer: fakeDataTransfer({ files: [] }) });
   expect(zone.classList.contains("drag-active")).toBe(true);
 
-  // relatedTarget is outside the zone (e.g. document.body) → leaving entirely.
+  // relatedTarget is outside the zone (for example, document.body), so the drag leaves entirely.
   const outside = document.createElement("div");
   document.body.appendChild(outside);
   await fireDragLeave(zone, outside);
@@ -174,8 +174,8 @@ test("a DOM OS-file drop clears drag-active and does NOT itself write to the pty
   expect(zone.classList.contains("drag-active")).toBe(true);
 
   // A real OS file drop: the DOM event's File carries no usable path, so the DOM
-  // handler must ignore it — the absolute path is delivered via Wails OnFileDrop
-  // — while still clearing the drag-active overlay.
+  // handler must ignore the file. The absolute path arrives via Wails OnFileDrop instead,
+  // while the handler still clears the drag-active overlay.
   const file = new File(["x"], "main.go");
   await fireEvent.drop(zone, { dataTransfer: fakeDataTransfer({ files: [file] }) });
 

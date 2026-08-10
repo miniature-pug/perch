@@ -5,7 +5,7 @@ sequenceDiagram
     participant FE as Frontend (Svelte)
     participant User as User
 
-    Note over Agent,HL: hook config (URL + Bearer token) written to .claude/settings.json by ClaudeMonitor
+    Note over Agent,HL: ClaudeMonitor writes the hook config (URL + Bearer token) to .claude/settings.json
 
     Agent->>HL: POST PreToolUse (Bearer token), blocks until a verdict
     HL->>App: agent:event (approval, reqID)
@@ -34,5 +34,5 @@ sequenceDiagram
     HL->>App: agent:event (kind question, state awaiting-input)
     App->>FE: agent:event → sidebar "asking you" feel, cyan pulse. User answers in the agent's own pane TUI
 
-    Note over App,FE: opencode lifecycle events arrive over the opencode serve SSE /event stream. The approval loop above is Claude's ALONE
+    Note over App,FE: opencode lifecycle events arrive over the opencode serve SSE /event stream. Only claude uses the approval loop above
     Note over App,User: opencode permission.asked is a passive SIGNAL like a question: caps.approvals=false, no card, no Approval payload, no reply. opencode's attach TUI owns the prompt; perch only lights the sidebar awaiting-approval feel + blocking notification

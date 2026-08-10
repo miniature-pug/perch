@@ -2,13 +2,13 @@
 //
 // Cross-language sync guard for the values perch mirrors across the Wails IPC seam.
 //
-// MIRROR: app/app.go defaultTheme/Density/Font + ptyDataEventPrefix/ptyExitEventPrefix
-// — Go's defaults_sync_test pins the same values; if you change one side, both
-// tests fail until re-synced.
+// MIRROR: app/app.go defaultTheme, Density, Font, and ptyDataEventPrefix, ptyExitEventPrefix.
+// Go's defaults_sync_test pins the same values. If you change one side, both
+// tests fail until you re-sync them.
 //
-// There is no shared module across the IPC boundary, so these literals are
-// duplicated by necessity. This test freezes the frontend half against the exact
-// strings the Go side freezes, so a one-sided edit can never silently drift.
+// No shared module exists across the IPC boundary, so the code duplicates these literals
+// by necessity. This test freezes the frontend half against the exact strings the Go side
+// freezes, so a one-sided edit can never silently drift.
 
 import { describe, it, expect } from "vitest";
 import { DEFAULT_THEME, DEFAULT_DENSITY, DEFAULT_FONT } from "./constants";

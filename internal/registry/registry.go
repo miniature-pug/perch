@@ -12,20 +12,21 @@ import (
 )
 
 const (
-	// appName is the application subdirectory name used under XDG config dirs.
+	// appName is the application subdirectory name that perch uses under XDG config dirs.
 	appName = "perch"
 	// workspacesFile is the filename of the persistent workspace registry.
 	workspacesFile = "workspaces.json"
-	// ConfigDirMode is the permission bits used when creating the perch config
-	// directory. Exported so callers (e.g. app) can use the same value without
-	// duplicating it.
+	// ConfigDirMode is the permission bits that Load uses when it creates the
+	// perch config directory. ConfigDirMode is exported so callers (for
+	// example, app) can reuse the same value instead of duplicating it.
 	ConfigDirMode = 0o700
 )
 
 // Workspace is the persistent record for one perch workspace.
-// JSON tags are frozen — do not rename. New fields may be added.
-// Missing fields in stored JSON default to the Go zero value on load
-// (e.g. RepoPath=="" for records written before RepoPath was added).
+// The JSON tags are frozen. Do not rename them. This struct may gain new
+// fields over time.
+// A missing field in stored JSON defaults to the Go zero value on load. For
+// example, RepoPath is "" for records written before perch added RepoPath.
 type Workspace struct {
 	ID            string    `json:"id"`
 	RepoPath      string    `json:"repoPath"`      // source repo root
@@ -46,8 +47,9 @@ type Store struct {
 	items map[string]Workspace
 }
 
-// DefaultConfigDir returns the perch config directory following the XDG Base
-// Directory spec: $XDG_CONFIG_HOME/perch, falling back to ~/.config/perch.
+// DefaultConfigDir returns the perch config directory. It follows the XDG
+// Base Directory spec: $XDG_CONFIG_HOME/perch, or ~/.config/perch if
+// XDG_CONFIG_HOME is unset.
 func DefaultConfigDir() string {
 	base := os.Getenv("XDG_CONFIG_HOME")
 	if base == "" {
@@ -60,8 +62,9 @@ func DefaultConfigDir() string {
 	return filepath.Join(base, appName)
 }
 
-// Load reads workspaces.json from configDir. A missing file is not an error
-// and returns an empty store. configDir is created if it does not exist.
+// Load reads workspaces.json from configDir. A missing file is not an
+// error. Load returns an empty store instead. Load creates configDir if it
+// does not exist.
 func Load(configDir string) (*Store, error) {
 	if err := os.MkdirAll(configDir, ConfigDirMode); err != nil {
 		return nil, fmt.Errorf("registry: mkdir %s: %w", configDir, err)
@@ -91,11 +94,13 @@ func Load(configDir string) (*Store, error) {
 	return s, nil
 }
 
-// List returns all workspaces sorted by LastActive descending, with the workspace
-// ID as a stable tie-breaker. items is a map, so its iteration order is random;
-// without the ID tie-breaker two records sharing a LastActive timestamp would
-// reorder arbitrarily between refreshes, making the sidebar flicker. SliceStable +
-// the explicit ID comparison pins a single deterministic order for equal timestamps.
+// List returns all workspaces sorted by LastActive descending, with the
+// workspace ID as a stable tie-breaker.
+// items is a map, so its iteration order is random. Without the ID
+// tie-breaker, two records that share a LastActive timestamp would reorder
+// at random between refreshes, and the sidebar would flicker.
+// SliceStable and the explicit ID comparison together pin one deterministic
+// order for equal timestamps.
 func (s *Store) List() []Workspace {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -137,15 +142,16 @@ func (s *Store) Remove(id string) error {
 	return s.flush()
 }
 
-// quarantine renames path to a timestamped .corrupt-* backup and returns the
-// backup path. The caller logs the outcome; quarantine itself is silent.
+// quarantine renames path to a timestamped .corrupt-* backup and returns
+// the backup path. The caller logs the outcome. quarantine itself stays
+// silent.
 func quarantine(path string) (string, error) {
 	backupPath := path + ".corrupt-" + time.Now().UTC().Format("20060102T150405Z")
 	return backupPath, os.Rename(path, backupPath)
 }
 
-// flush writes all items to disk atomically (temp file + rename).
-// Must be called with s.mu held.
+// flush writes all items to disk atomically (temp file, then rename).
+// The caller must hold s.mu before calling flush.
 func (s *Store) flush() error {
 	list := make([]Workspace, 0, len(s.items))
 	for _, w := range s.items {

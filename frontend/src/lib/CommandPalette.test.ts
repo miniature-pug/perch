@@ -3,7 +3,7 @@ import { render, screen, waitFor } from "@testing-library/svelte";
 import { fireEvent } from "@testing-library/svelte";
 import { vi, beforeEach } from "vitest";
 
-// Isolate recency storage between tests so insertion order doesn't affect results.
+// This isolates recency storage between tests. Insertion order then does not change the test results.
 beforeEach(() => {
   localStorage.removeItem("perch:cmd-recents");
 });
@@ -61,7 +61,7 @@ test("ArrowDown then Enter runs the SECOND command (active-descendant navigation
   const onRun = vi.fn();
   render(CommandPalette, { props: { open: true, commands, onRun, onClose: () => {} } });
   const input = screen.getByRole("combobox");
-  // Without a query all commands are shown; ArrowDown moves active from 0 to 1
+  // With no query, the palette shows all commands. ArrowDown moves the active index from 0 to 1.
   await fireEvent.keyDown(input, { key: "ArrowDown" });
   await fireEvent.keyDown(input, { key: "Enter" });
   // The second command in the unfiltered list is agent:kill
@@ -73,7 +73,7 @@ test("active index resets to 0 when query changes", async () => {
   const onRun = vi.fn();
   render(CommandPalette, { props: { open: true, commands, onRun, onClose: () => {} } });
   const input = screen.getByRole("combobox");
-  // Move down twice, then change query — active must reset so Enter hits filtered[0]
+  // Move the selection down twice. Then change the query. The active index resets, so Enter selects filtered[0].
   await fireEvent.keyDown(input, { key: "ArrowDown" });
   await fireEvent.keyDown(input, { key: "ArrowDown" });
   await fireEvent.input(input, { target: { value: "kil" } });
@@ -100,19 +100,19 @@ test("aria-activedescendant on input points to active option id", async () => {
   render(CommandPalette, { props: { open: true, commands, onRun: () => {}, onClose: () => {} } });
   const input = screen.getByRole("combobox");
   const options = screen.getAllByRole("option");
-  // Initially points to first option
+  // The attribute initially points to the first option.
   expect(input.getAttribute("aria-activedescendant")).toBe(options[0].id);
-  // After ArrowDown, points to second option
+  // After ArrowDown, the attribute points to the second option.
   await fireEvent.keyDown(input, { key: "ArrowDown" });
   expect(input.getAttribute("aria-activedescendant")).toBe(screen.getAllByRole("option")[1].id);
 });
 
-// recency tracking (beforeEach clears "perch:cmd-recents" for each test)
+// Recency tracking: beforeEach clears the "perch:cmd-recents" key before each test.
 test("invoking a command via Enter saves it; re-opening with no query surfaces it in 'Recent' group first", async () => {
   const { default: CommandPalette } = await import("./CommandPalette.svelte");
   const onRun = vi.fn();
 
-  // First render: search for "open" and run "file:open"
+  // The first render searches for "open" and runs "file:open".
   const { unmount } = render(CommandPalette, { props: { open: true, commands, onRun, onClose: () => {} } });
   const input = screen.getByRole("combobox");
   await fireEvent.input(input, { target: { value: "open" } });
@@ -120,7 +120,7 @@ test("invoking a command via Enter saves it; re-opening with no query surfaces i
   expect(onRun).toHaveBeenCalledWith("file:open");
   unmount();
 
-  // Second render with empty query — "file:open" should appear under a "Recent" group header
+  // The second render uses an empty query. "file:open" should appear under a "Recent" group header.
   render(CommandPalette, { props: { open: true, commands, onRun: () => {}, onClose: () => {} } });
   // The "Recent:" group header must be present
   expect(screen.getByText("Recent:")).toBeInTheDocument();
@@ -132,17 +132,17 @@ test("clicking a command saves it to recents; next open without query shows 'Rec
   const { default: CommandPalette } = await import("./CommandPalette.svelte");
   const onRun = vi.fn();
 
-  // First render: click "Split pane" (view:split)
+  // The first render clicks "Split pane" (view:split).
   const { unmount } = render(CommandPalette, { props: { open: true, commands, onRun, onClose: () => {} } });
   const splitItem = screen.getAllByRole("option").find(el => el.textContent?.includes("Split pane"))!;
   await fireEvent.click(splitItem);
   expect(onRun).toHaveBeenCalledWith("view:split");
   unmount();
 
-  // Re-render with empty query
+  // Re-render with an empty query.
   render(CommandPalette, { props: { open: true, commands, onRun: () => {}, onClose: () => {} } });
   expect(screen.getByText("Recent:")).toBeInTheDocument();
-  // "Split pane" is the only recent → it must be the first option
+  // "Split pane" is the only recent command, so it must be the first option.
   const options = screen.getAllByRole("option");
   expect(options[0].textContent).toMatch(/split pane/i);
 });

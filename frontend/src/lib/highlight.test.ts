@@ -1,8 +1,8 @@
 // frontend/src/lib/highlight.test.ts
 //
 // Unit tests for the perch HighlightStyle.
-// We use highlightingFor() from @codemirror/language to probe which CSS class
-// the style assigns to given tags — without needing a rendered DOM or CM layout.
+// These tests use highlightingFor() from @codemirror/language to probe which CSS class
+// the style assigns to given tags. They need no rendered DOM or CM layout.
 import { describe, it, expect } from "vitest";
 import { tags } from "@lezer/highlight";
 import { highlightingFor } from "@codemirror/language";
@@ -20,7 +20,7 @@ function stateWithHighlighting(): EditorState {
 
 describe("perchHighlightStyle — tag coverage", () => {
   // highlightingFor returns a space-separated class string or null when the
-  // style has no mapping for that tag. Non-null means a CSS class was emitted.
+  // style has no mapping for that tag. Non-null means the style emitted a CSS class.
 
   it("assigns a class to keyword tags", () => {
     const state = stateWithHighlighting();
@@ -66,7 +66,7 @@ describe("perchHighlightStyle — tag coverage", () => {
     const state = stateWithHighlighting();
     const kw  = highlightingFor(state, [tags.keyword]);
     const str = highlightingFor(state, [tags.string]);
-    // Must both be present and must differ — proves they're mapped to different CSS classes
+    // Both values must be present and must differ. This proves the style maps them to different CSS classes.
     expect(kw).not.toBeNull();
     expect(str).not.toBeNull();
     expect(kw).not.toBe(str);
@@ -81,8 +81,8 @@ describe("perchHighlightStyle — tag coverage", () => {
 
 describe("perchHighlightStyle — CSS variable references", () => {
   it("style spec entries reference var(--perch-*) colors", () => {
-    // Introspect the HighlightStyle's specs array to confirm CSS-variable tokens
-    // are used — this guards against accidental hard-coded hex replacements.
+    // Introspect the HighlightStyle's specs array to confirm it uses CSS-variable tokens.
+    // This guards against accidental hard-coded hex replacements.
     const specs = (perchHighlightStyle as any).specs as Array<{ color?: string }>;
     const hasVarColor = specs.some(
       (s) => typeof s.color === "string" && s.color.startsWith("var(--perch-")

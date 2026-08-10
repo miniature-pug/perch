@@ -1,10 +1,10 @@
 /**
  * Shared mock helper for Wails boundary (window.go / window.runtime).
  *
- * Install BEFORE navigation via page.addInitScript(() => installMocks(opts)).
- * Because addInitScript serialises the function body to a string and evaluates
- * it in the page, the helper must be a plain function — no imports or closures
- * over Node module scope.
+ * Install this before navigation, with page.addInitScript(() => installMocks(opts)).
+ * addInitScript serialises the function body to a string and runs it in the page.
+ * So the helper must be a plain function, with no imports and no closures over
+ * Node module scope.
  *
  * Exposes on window:
  *   window.__calls   – spy log: { method, args }[]
@@ -34,19 +34,19 @@ export interface MockWorkspace {
 
 export interface MockOptions {
   settings?: MockSettings;
-  /** Empty array → "No session selected" state; provide a workspace to activate views. */
+  /** An empty array shows the "No session selected" state. Provide one session to activate the views. */
   workspaces?: MockWorkspace[];
-  /** Override raw JSON returned by GetLayout (empty string = keep defaults) */
+  /** Overrides the raw JSON that GetLayout returns (an empty string keeps the defaults). */
   layoutJSON?: string;
-  /** If provided, override ReadFile mock to return this content */
+  /** If provided, this overrides the ReadFile mock to return this content. */
   readFileContent?: string;
-  /** If provided, override Hunks mock to return these hunks */
+  /** If provided, this overrides the Hunks mock to return these hunks. */
   hunks?: unknown[];
 }
 
 /**
- * Default selected workspace shape used by most specs that need an active session.
- * Tests can spread-override individual fields.
+ * This is the default MockWorkspace shape for most specs that need an active session.
+ * Tests can override individual fields by spreading this object.
  */
 export const WORKSPACE_FIXTURE: MockWorkspace = {
   id: "ws-1",
@@ -61,9 +61,10 @@ export const WORKSPACE_FIXTURE: MockWorkspace = {
 };
 
 /**
- * Workspace fixture representing a workspace with no active monitor (zero-value caps).
- * Production ListWorkspaces returns all-false caps when no monitor is running; this
- * fixture exercises the caps-disabled UI path (approval badge hidden, etc.).
+ * This fixture represents a MockWorkspace with no active monitor (zero-value caps).
+ * In production, ListWorkspaces returns all-false caps when no monitor is running.
+ * This fixture exercises the caps-disabled UI path (for example, it hides the
+ * approval attention signal).
  */
 export const WORKSPACE_FIXTURE_NO_CAPS: MockWorkspace = {
   id: "ws-2",
@@ -78,14 +79,14 @@ export const WORKSPACE_FIXTURE_NO_CAPS: MockWorkspace = {
 };
 
 /**
- * Produce the init-script function source.
+ * This produces the init-script function source.
  *
- * addInitScript requires either a path-to-file or a plain function with NO
- * external captures. We therefore serialise opts into the string and embed them.
+ * addInitScript needs either a path to a file, or a plain function with no
+ * external captures. So this function serialises opts into the string and embeds them.
  */
 /**
- * Returns a string of JS to be passed to page.addInitScript({ content: ... }).
- * This avoids the serialisation problem with closures entirely.
+ * This returns a string of JS, to pass to page.addInitScript({ content: ... }).
+ * This avoids the serialisation problem with closures.
  */
 export function buildInitScriptContent(opts: MockOptions = {}): string {
   const settings: Required<MockSettings> = {
@@ -103,13 +104,13 @@ export function buildInitScriptContent(opts: MockOptions = {}): string {
 
   return `
 (function() {
-  // Spy log — all IPC calls recorded here
+  // Spy log: all IPC calls recorded here
   window.__calls = [];
 
-  // EventsOn handler registry — channel → callback
+  // EventsOn handler registry: channel to callback
   window.__evtHandlers = {};
 
-  // Emit helper — lets tests fire backend events into the app
+  // Emit helper: lets tests fire backend events into the app
   window.__emit = function(channel) {
     var args = Array.prototype.slice.call(arguments, 1);
     var handler = window.__evtHandlers[channel];
@@ -121,7 +122,7 @@ export function buildInitScriptContent(opts: MockOptions = {}): string {
     window.__calls.push({ method: method, args: args });
   }
 
-  // window.runtime — EventsOn must return an unsubscribe function
+  // window.runtime: EventsOn must return an unsubscribe function
   window.runtime = {
     EventsOn: function(event, cb) {
       window.__evtHandlers[event] = cb;

@@ -1,10 +1,11 @@
 // Package model defines the shared domain vocabulary for perch.
-// All types are plain data structs; no I/O or shell-outs occur here.
+// All types are plain data structs. This package does no I/O and runs no
+// external commands.
 package model
 
 // Tool identifies which AI coding agent runs in a pane.
-// Using a named type (not a bare string) means "claude"/"opencode" are defined
-// in exactly one place, preventing drift across the rest of perch.
+// Tool is a named type, not a bare string, so "claude" and "opencode" stay
+// defined in exactly one place. This stops drift across the rest of perch.
 type Tool string
 
 const (
@@ -18,8 +19,8 @@ func (t Tool) Valid() bool {
 }
 
 // Project is a git repository discovered under the scan root.
-// Frecency rank and last-accessed timestamp are not stored here; they are
-// tracked separately, keyed by Path.
+// Project does not store frecency rank or the last-accessed timestamp.
+// perch tracks those separately, keyed by Path.
 type Project struct {
 	// Path is the absolute path to the repository root.
 	Path string
@@ -27,9 +28,9 @@ type Project struct {
 	Name string
 }
 
-// Tree is a working directory that perch can run a session in.
-// For a git project this is the main checkout or one of its linked worktrees;
-// for a non-git path it is just that directory.
+// Tree is a working directory where perch can run a session.
+// For a git project, Tree is the main checkout or one of its linked
+// worktrees. For a non-git path, Tree is just that directory.
 type Tree struct {
 	// Path is the absolute path to this working directory.
 	Path string
@@ -37,8 +38,8 @@ type Tree struct {
 	Branch string
 	// IsMain is true for the project's primary checkout.
 	// Linked worktrees have IsMain == false.
-	// Distinguishing these two is safety-critical: perch never removes the main
-	// checkout (hard-error guardrail).
+	// This distinction is safety-critical. perch never removes the main
+	// checkout (a hard-error guardrail).
 	IsMain bool
 	// Project is the owning repository. Nil for non-git trees.
 	Project *Project

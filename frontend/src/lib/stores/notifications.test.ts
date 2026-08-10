@@ -20,13 +20,13 @@ describe("notification store", () => {
     addAmbient("ws_b", "Done", "quiet");
     addRoutine("ws_c", "File", "bg");
     const items = getItems();
-    // All three are still logged to the hub — DND silences, it does not drop —
-    // so the away catch-up stays complete.
+    // All three are still logged to the hub. DND silences notifications, but does not
+    // drop them, so the away catch-up stays complete.
     expect(items.filter((i) => i.tier === "blocking")).toHaveLength(1);
     expect(items.filter((i) => i.tier === "ambient")).toHaveLength(1);
     expect(items.filter((i) => i.tier === "routine")).toHaveLength(1);
-    // Silenced tiers 2-3 are recorded already-read (no unread-badge bump);
-    // blocking stays unread (always surfaces).
+    // The code records silenced tiers 2-3 as already-read (no unread-badge bump).
+    // Blocking stays unread (it always surfaces).
     expect(items.find((i) => i.tier === "blocking")!.read).toBe(false);
     expect(items.find((i) => i.tier === "ambient")!.read).toBe(true);
     expect(items.find((i) => i.tier === "routine")!.read).toBe(true);
@@ -60,12 +60,12 @@ describe("notification store", () => {
   it("caps retained notifications at MAX, keeping the newest", async () => {
     const { addAmbient, getItems, MAX_NOTIFICATIONS } =
       await import("./notifications.svelte");
-    // Push well past the cap; the oldest are dropped, the newest are kept.
+    // This pushes well past the cap. The code drops the oldest and keeps the newest.
     const total = MAX_NOTIFICATIONS + 50;
     for (let i = 0; i < total; i++) addAmbient("ws_a", `A${i}`, "b");
 
     const items = getItems();
-    // Array is bounded to the cap (oldest dropped, newest kept).
+    // The array is bounded to the cap (it drops the oldest and keeps the newest).
     expect(items).toHaveLength(MAX_NOTIFICATIONS);
     // Newest-first: the most recent push sits at the front.
     expect(items[0].title).toBe(`A${total - 1}`);
@@ -85,7 +85,7 @@ describe("notification store", () => {
   });
 
   // -----------------------------------------------------------------------
-  // F41 — every notification is tagged with an explicit kind at creation.
+  // F41: every notification gets an explicit kind at creation.
   // -----------------------------------------------------------------------
 
   it("F41: addBlocking tags an error title as kind 'error', not 'approval'", async () => {
@@ -109,9 +109,9 @@ describe("notification store", () => {
   });
 
   // -----------------------------------------------------------------------
-  // F42b — ambient/routine stay unread until the hub is opened (no auto-dismiss
-  // timer): the docked hub is not a transient toast, so an unseen event must not
-  // silently tick the unread badge down while the hub is closed.
+  // F42b: ambient and routine notifications stay unread until the user opens the hub
+  // (no auto-dismiss timer). The docked hub is not a transient toast, so an unseen event
+  // must not silently tick the unread badge down while the hub stays closed.
   // -----------------------------------------------------------------------
 
   it("F42b: an ambient notification stays unread past its old dismiss window while the hub is closed", async () => {

@@ -2,10 +2,10 @@
  * menubar.spec.ts
  *
  * Keyboard navigation:
- * - open menu via Enter/click on trigger
- * - Arrow nav between items
- * - Escape closes AND focus returns to trigger
- * Screenshot: open menu state
+ * - Open the menu with Enter or a click on the trigger.
+ * - Use the arrow keys to move between items.
+ * - Escape closes the menu, and focus returns to the trigger.
+ * Screenshot: the open menu state.
  */
 
 import { test, expect } from "@playwright/test";

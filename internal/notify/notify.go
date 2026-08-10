@@ -26,7 +26,8 @@ func (f *FakeNotifier) Notify(title, body string) error {
 	return nil
 }
 
-// RunFunc is the injectable seam for notify-send (mirrors claude.go func-field idiom).
+// RunFunc is the injectable seam for notify-send (it mirrors the claude.go
+// func-field idiom).
 type RunFunc func(name string, args ...string) error
 
 type dbusNotifier struct{}
@@ -50,11 +51,13 @@ type runnerNotifier struct{ run RunFunc }
 
 func (r runnerNotifier) Notify(title, body string) error { return r.run("notify-send", title, body) }
 
-// New returns a dbus Notifier; falls back to notify-send if dbus is unavailable.
+// New returns a dbus Notifier. It falls back to notify-send when dbus is
+// unavailable.
 func New() Notifier {
-	// Probe dbus availability with a throwaway connection; close it immediately
-	// so the probe never leaks a session-bus connection. dbusNotifier opens its
-	// own short-lived connection per Notify call.
+	// Probe dbus availability with a throwaway connection, and close the
+	// connection immediately, so the probe never leaks a session-bus
+	// connection. dbusNotifier opens its own short-lived connection for each
+	// Notify call.
 	if conn, err := dbus.SessionBusPrivate(); err == nil {
 		_ = conn.Close()
 		return dbusNotifier{}

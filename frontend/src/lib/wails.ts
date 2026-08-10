@@ -1,5 +1,5 @@
-// Typed seam over Wails-injected globals. Components import ONLY from here.
-// Event names: colon-separated per the frozen Wails event table.
+// Typed seam over the Wails-injected globals. Components import only from
+// here. Event names are colon-separated, per the frozen Wails event table.
 
 export interface StaleSessionVM {
   id: string;
@@ -16,11 +16,13 @@ export interface StaleSessionVM {
 export interface WorkspaceVM {
   id: string; worktreePath: string; repoPath: string; agent: string; title: string; branch: string;
   state: AgentState; caps: AgentCaps; paneId: string; lastActive: string;
-  // Whether reopening this session resumes the prior agent conversation (true) or
-  // starts a fresh one (false). Surfaced in the resume-preview modal.
+  // True when reopening this session resumes the prior agent conversation.
+  // False starts a fresh conversation. The resume-preview modal shows this
+  // value.
   willResume?: boolean;
-  // The branch/ref this worktree was forked from, when known. Empty/omitted for
-  // old or in-repo (non-worktree) records, which have no fork point to show.
+  // The branch or ref this worktree forked from, when known. Empty or
+  // omitted for old records, or for in-repo (non-worktree) records, which
+  // have no fork point to show.
   baseRef?: string;
 }
 export type AgentState = "running"|"idle"|"awaiting-approval"|"awaiting-input"|"done"|"errored"|"exited";
@@ -90,11 +92,12 @@ declare global {
   interface Window {
     runtime: {
       EventsOn(event: string, cb: (...data: any[]) => void): () => void;
-      // Native OS file drop. Delivers each dropped file's ABSOLUTE path (the DOM
-      // drop event carries none on WebKitGTK). useDropTarget=false makes the
-      // callback fire for every file drop; we hit-test the coordinates ourselves
-      // against [data-drop-pane] in lib/osFileDrop.ts. Only one registration is
-      // honored process-wide, so it is registered once in App.svelte.
+      // Native OS file drop. Delivers each dropped file's absolute path.
+      // The DOM drop event carries no path on WebKitGTK. useDropTarget:
+      // false makes the callback fire for every file drop. The code
+      // hit-tests the coordinates itself against [data-drop-pane] in
+      // lib/osFileDrop.ts. The app honors only one registration
+      // process-wide, so App.svelte registers it once.
       OnFileDrop(cb: (x: number, y: number, paths: string[]) => void, useDropTarget: boolean): void;
       OnFileDropOff(): void;
     };
@@ -120,14 +123,16 @@ export const writeToPty = (paneId: string, data: number[])                      
 export const resizePty  = (paneId: string, cols: number, rows: number)            => app().ResizePty(paneId, cols, rows);
 export const openShell  = (paneId: string, cwd: string)                           => app().OpenShell(paneId, cwd);
 export const closeShell = (paneId: string)                                        => app().CloseShell(paneId);
-// Captures the drawer shell's current environment and relaunches the agent with
-// it, conversation preserved (perch reload). paneID is the per-workspace drawer
-// pane, "shell-{workspaceID}"; rejected on the home drawer, which has no workspace.
+// Captures the drawer shell's current environment, and relaunches the
+// agent with it, keeping the conversation (perch reload). paneID is the
+// per-session drawer pane, "shell-{workspaceID}". The call is rejected on
+// the home drawer, which has no session.
 export const reloadAgentEnv = (paneID: string)                                    => app().ReloadAgentEnv(paneID);
 // Approvals
 export const approve = (reqId: string, decision: "allow"|"deny"|"always")         => app().Approve(reqId, decision);
-// Every approval still awaiting a decision — seeded on mount/open to rebuild the
-// queue after a reload or a late open (the agent:event carrying it is one-shot).
+// Every approval still awaiting a decision. This list is seeded on mount
+// or open, to rebuild the queue after a reload or a late open, because the
+// agent:event that carries it fires only once.
 export function pendingApprovals(): Promise<{ workspaceId: string; req: ApprovalReq }[]> { return app().PendingApprovals(); }
 // Git
 export const diffStat    = (worktree: string)                                     => app().DiffStat(worktree);
@@ -154,8 +159,9 @@ export const saveSettings    = (s: AppSettings)                                 
 export const setWindowFocus  = (focused: boolean)                                   => app().SetWindowFocus(focused);
 export const homeShellCwd    = ()                                                    => app().HomeShellCwd();
 
-// Event name constants — MUST match Go's ptyDataEventPrefix / ptyExitEventPrefix in app/app.go.
-// Any rename here requires a matching rename on the Go side.
+// Event name constants. These must match Go's ptyDataEventPrefix and
+// ptyExitEventPrefix in app/app.go. Any rename here requires a matching
+// rename on the Go side.
 export const EVT_AGENT            = "agent:event";
 export const EVT_FS_CHANGED       = "fs:changed";
 export const EVT_NOTIFY           = "notify";
@@ -164,7 +170,7 @@ export const EVT_PTY_EXIT_PREFIX  = "pty:exit:"; // append paneId to form full e
 export const EVT_WORKSPACE_ATTACH = "workspace:attach";
 export const EVT_WORKSPACE_RELAUNCH = "workspace:relaunch";
 
-// Event helpers — colon-separated names match the frozen Wails event table.
+// Event helpers. The colon-separated names match the frozen Wails event table.
 export function onPtyData(paneId: string, cb: (bytes: Uint8Array) => void): () => void {
   return window.runtime.EventsOn(EVT_PTY_DATA_PREFIX + paneId, (data: number[]) => cb(Uint8Array.from(data)));
 }
@@ -185,10 +191,10 @@ export function onNotify(
 export function onWorkspaceAttach(cb: (p: { query: string }) => void): () => void {
   return window.runtime.EventsOn(EVT_WORKSPACE_ATTACH, cb);
 }
-// A conversation-preserving relaunch (perch reload / the drawer's env→agent button)
-// respawns the agent pty under the same paneId. The app remounts that workspace's
-// agent terminal so the new agent redraws into a fresh xterm instead of over the
-// stale buffer.
+// A conversation-preserving relaunch (perch reload, or the drawer's
+// env-to-agent button) respawns the agent pty under the same paneId. The
+// app remounts that session's agent terminal, so the new agent redraws
+// into a fresh xterm instead of drawing over the stale buffer.
 export function onWorkspaceRelaunch(cb: (p: { workspaceId: string }) => void): () => void {
   return window.runtime.EventsOn(EVT_WORKSPACE_RELAUNCH, cb);
 }

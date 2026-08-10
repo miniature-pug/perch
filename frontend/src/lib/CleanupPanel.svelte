@@ -15,8 +15,9 @@
     onOpen?: (id: string) => void;
   } = $props();
 
-  // Initial selection: the safe rows. Only the initial `sessions` value seeds
-  // this; the $effect below keeps it reconciled as `sessions` changes.
+  // Initial selection: the safe rows. Only the initial `sessions` value sets
+  // this selection. The $effect below keeps the selection in sync as
+  // `sessions` changes.
   // svelte-ignore state_referenced_locally
   let checked = $state<Set<string>>(new Set(sessions.filter(s => s.safe).map(s => s.id)));
   let confirmOpen = $state(false);
@@ -24,9 +25,10 @@
   let removing = $state(false);
   let error = $state<string | null>(null);
 
-  // Re-derive the checked set from the current `sessions` prop: default to the
-  // safe rows, but drop any checked id that no longer appears in `sessions` so a
-  // removed session never lingers in the selection (and never gets re-sent).
+  // This effect re-derives the checked set from the current `sessions` prop. It
+  // defaults to the safe rows. It drops any checked id that no longer appears
+  // in `sessions`, so a removed session never stays in the selection and is
+  // never sent again.
   $effect(() => {
     const ids = new Set(sessions.map(s => s.id));
     let mutated = false;
@@ -40,12 +42,13 @@
 
   const allChecked = $derived(sessions.length > 0 && sessions.every(s => checked.has(s.id)));
 
-  // Split the checked selection by safety: the normal Remove control only ever
-  // touches safe rows (force=false, unchanged behavior); unsafe rows require the
-  // separate, explicitly-confirmed force path below. This is what makes it
-  // impossible for a checked-but-unsafe row to be removed non-destructively —
-  // the destructive git operations (worktree --force, branch -D) are gated
-  // behind their own control and their own confirmation.
+  // This splits the checked selection by safety. The normal Remove control
+  // only touches safe rows (force=false). This behavior is unchanged. Unsafe
+  // rows need the separate force path below, which needs its own explicit
+  // confirm. This design makes sure a checked but unsafe row is never removed
+  // non-destructively. The destructive git operations, `worktree --force` and
+  // `branch -D`, are gated behind their own control and their own
+  // confirmation.
   const checkedSafeIds = $derived(sessions.filter(s => checked.has(s.id) && s.safe).map(s => s.id));
   const checkedUnsafeIds = $derived(sessions.filter(s => checked.has(s.id) && !s.safe).map(s => s.id));
   const hasUnsafeSessions = $derived(sessions.some(s => !s.safe));
@@ -68,9 +71,9 @@
     error = null;
     removing = true;
     try {
-      // Only ever the safe subset — force is never true on this path. An unsafe
-      // row that happens to also be checked is silently left for the force
-      // control below rather than failing (or force-destroying) the whole batch.
+      // This path only ever removes the safe subset. force is never true here.
+      // An unsafe row that is also checked is left for the force control below.
+      // This avoids failing, or force-destroying, the whole batch.
       await cleanupSessions(checkedSafeIds, false);
       onClose?.();
     } catch (e) {
@@ -80,11 +83,12 @@
     }
   }
 
-  // Distinct destructive path: force-removes the checked UNSAFE rows only,
-  // discarding uncommitted changes (git worktree remove --force) and unmerged
-  // commits (git branch -D). Gated by its own control (disabled unless an
-  // unsafe row is checked) and its own explicit confirm dialog — never
-  // reachable from the normal Remove button or a single click.
+  // This is a separate destructive path. It force-removes only the checked
+  // unsafe rows. It discards uncommitted changes (`git worktree remove
+  // --force`) and unmerged commits (`git branch -D`). Its own control gates
+  // this path. The control stays disabled unless an unsafe row is checked. Its
+  // own explicit confirm dialog also gates this path. The normal Remove
+  // button, or a single click, can never reach this path.
   async function handleForceRemove() {
     if (removing) return;
     forceConfirmOpen = false;
@@ -241,10 +245,11 @@
   .cleanup-remove-btn { background: var(--perch-bg); color: var(--perch-err); border: 1px solid var(--perch-err); border-radius: var(--perch-radius-sm); padding: 4px 16px; cursor: pointer; font-family: var(--perch-font-sans); font-size: var(--perch-fs-body); }
   .cleanup-remove-btn:disabled { opacity: var(--perch-opacity-disabled); cursor: not-allowed; }
   .cleanup-remove-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--perch-err) 10%, var(--perch-bg)); }
-  /* Force-remove: visually distinct from the plain Remove button (warn color,
-     same token as the row's ⚠ unsafe badge) so the two controls can't be
-     confused at a glance; separated by the footer gap, and disabled until an
-     unsafe row is explicitly checked so it can never be a stray misclick. */
+  /* The force-remove button is visually distinct from the plain Remove button.
+     It uses the warn color, the same token as the row's unsafe badge (⚠), so a
+     user cannot confuse the two controls at a glance. The footer gap separates
+     the two buttons. The force-remove button stays disabled until the user
+     checks an unsafe row, so a stray click never triggers it. */
   .cleanup-force-btn { background: var(--perch-bg); color: var(--perch-warn); border: 1px solid var(--perch-warn); border-radius: var(--perch-radius-sm); padding: 4px 16px; cursor: pointer; font-family: var(--perch-font-sans); font-size: var(--perch-fs-body); margin-right: auto; }
   .cleanup-force-btn:disabled { opacity: var(--perch-opacity-disabled); cursor: not-allowed; }
   .cleanup-force-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--perch-warn) 10%, var(--perch-bg)); }

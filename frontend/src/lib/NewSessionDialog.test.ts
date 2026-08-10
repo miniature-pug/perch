@@ -64,7 +64,7 @@ test("disabling worktree hides Starting point and sub-toggle; shows single branc
   const { default: D } = await import("./NewSessionDialog.svelte");
   render(D, { props: defaultProps() });
   await waitFor(() => screen.getByRole("dialog", { name: /new session/i }));
-  // Turn off worktree
+  // Turn off the worktree.
   await fireEvent.click(screen.getByLabelText(/^worktree$/i));
   await waitFor(() => {
     expect(screen.queryByLabelText(/starting point/i)).not.toBeInTheDocument();
@@ -93,7 +93,7 @@ test("Starting point hidden when use-existing sub-toggle is on", async () => {
   await waitFor(() => expect(screen.queryByLabelText(/starting point/i)).not.toBeInTheDocument());
 });
 
-// ── 4. Branch field — new-name text input ────────────────────────────────────
+// ── 4. Branch field: new-name text input ────────────────────────────────────
 
 test("branch name input is prefilled with agent/work suggestion", async () => {
   const { default: D } = await import("./NewSessionDialog.svelte");
@@ -194,14 +194,14 @@ test("Agent field change flows through to onCreate", async () => {
   render(D, { props: defaultProps({ onCreate }) });
   await waitFor(() => screen.getByLabelText(/starting point/i));
   await fireEvent.change(screen.getByLabelText(/^agent$/i), { target: { value: "opencode" } });
-  // Branch suggestion updates: opencode/work
+  // The branch suggestion updates to opencode/work.
   await waitFor(() => {
     const input = screen.getByLabelText(/^branch name$/i) as HTMLInputElement;
     expect(input.value).toBe("opencode/work");
   });
   await fireEvent.click(screen.getByRole("button", { name: /create/i }));
   expect(onCreate.mock.calls[0][0]).toBe("opencode");
-  // Index 4 is the (empty) title; index 5 is the worktree boolean.
+  // Index 4 is the (empty) title. Index 5 is the worktree boolean.
   expect(onCreate.mock.calls[0][4]).toBe("");
   expect(onCreate.mock.calls[0][5]).toBe(true);
 });
@@ -252,7 +252,7 @@ test("changing repo triggers loadBranches with the new repo", async () => {
   expect(loadBranches).toHaveBeenCalledWith("/home/user/projB");
 });
 
-// ── 7b. F#5 — friendly repo names in the Repo select ─────────────────────────
+// ── 7b. F#5: friendly repo names in the Repo select ─────────────────────────
 
 test("repo option shows the friendly name and branch from repoInfo, keeping the path as the value", async () => {
   const { default: D } = await import("./NewSessionDialog.svelte");
@@ -276,7 +276,7 @@ test("repo option falls back to the raw path when no repoInfo entry exists for i
   render(D, {
     props: defaultProps({
       repos: ["/home/user/proj"],
-      repoInfo: {}, // no entry — e.g. a workspace-derived worktree path
+      repoInfo: {}, // This has no entry, for example for a session-derived worktree path.
     }),
   });
   await waitFor(() => screen.getByRole("dialog", { name: /new session/i }));
@@ -308,16 +308,16 @@ test("Escape key calls onClose", async () => {
 // ── 9. CSS styling assertions ─────────────────────────────────────────────────
 
 test("style block contains option background token", () => {
-  // jsdom cannot resolve CSS custom properties; assert the raw style text instead.
+  // jsdom cannot resolve CSS custom properties. This test asserts the raw style text instead.
   const styleText = [...document.querySelectorAll("style")].map(s => s.textContent).join("\n");
-  // The style must contain option color theming so browser popups are dark.
+  // The style must set option colors, so browser popups appear dark.
   expect(styleText).toContain("background: var(--perch-bg)");
   expect(styleText).toContain("color: var(--perch-text)");
 });
 
 test("style block contains min-width: 0 for .field-select and .field-input", () => {
   const styleText = [...document.querySelectorAll("style")].map(s => s.textContent).join("\n");
-  // Count occurrences — must appear for both .field-select and .field-input
+  // Count the occurrences. The pattern must appear for both .field-select and .field-input.
   const count = (styleText.match(/min-width:\s*0/g) ?? []).length;
   expect(count).toBeGreaterThanOrEqual(2);
 });
@@ -332,12 +332,12 @@ test("does not crash and branch list is empty when loadBranches resolves null", 
   await waitFor(() => expect(screen.getByRole("dialog", { name: /new session/i })).toBeInTheDocument());
   // Wait for the load to settle so the loading placeholder is gone.
   await waitFor(() => expect(screen.queryByText(/loading branches/i)).not.toBeInTheDocument());
-  // No branch options should be rendered in the "starting point" select (branches treated as [])
+  // The "starting point" select must show no branch options, because the code treats null branches as an empty array.
   const startingPointSelect = screen.getByRole("combobox", { name: /starting point/i });
   expect(startingPointSelect.querySelectorAll("option").length).toBe(0);
 });
 
-// ── 11. F29 — unique branch suggestion (no per-agent constant collision) ──────
+// ── 11. F29: unique branch suggestion (no per-agent constant collision) ──────
 
 test("typing a Name derives a slugified branch suggestion", async () => {
   const { default: D } = await import("./NewSessionDialog.svelte");
@@ -352,14 +352,14 @@ test("typing a Name derives a slugified branch suggestion", async () => {
 
 test("empty Name twice suggests claude/work then claude/work-2 (auto-increment)", async () => {
   const { default: D } = await import("./NewSessionDialog.svelte");
-  // First default session: claude/work is free.
+  // For the first default session, claude/work is free.
   const first = render(D, { props: defaultProps({ loadBranches: vi.fn(async () => ["main"]) }) });
   await waitFor(() => {
     const input = screen.getByLabelText(/^branch name$/i) as HTMLInputElement;
     expect(input.value).toBe("claude/work");
   });
   first.unmount();
-  // Second default session: claude/work now exists as a branch → auto-increment.
+  // For the second default session, claude/work already exists as a branch, so the suggestion auto-increments.
   render(D, { props: defaultProps({ loadBranches: vi.fn(async () => ["main", "claude/work"]) }) });
   await waitFor(() => {
     const input = screen.getByLabelText(/^branch name$/i) as HTMLInputElement;
@@ -378,7 +378,7 @@ test("editing the branch field stops auto-suggestion from clobbering it", async 
   expect(input.value).toBe("my/custom");
 });
 
-// ── 12. F30 — base ref defaults to the repo's default branch ──────────────────
+// ── 12. F30: base ref defaults to the repo's default branch ──────────────────
 
 test("default baseRef is the repo's default branch, not the alphabetically-first branch", async () => {
   const { default: D } = await import("./NewSessionDialog.svelte");
@@ -388,12 +388,12 @@ test("default baseRef is the repo's default branch, not the alphabetically-first
     const sel = screen.getByLabelText(/starting point/i) as HTMLSelectElement;
     expect(sel.value).toBe("main");
   });
-  // ...and the default branch is pinned to the top of the list.
+  // The default branch is also pinned to the top of the list.
   const options = Array.from((screen.getByLabelText(/starting point/i) as HTMLSelectElement).options).map((o) => o.value);
   expect(options[0]).toBe("main");
 });
 
-// ── 13. F43 — in-flight feedback (Creating… + Loading branches…) ──────────────
+// ── 13. F43: in-flight feedback (Creating… + Loading branches…) ──────────────
 
 test("Create button reads 'Creating…' while onCreate is pending", async () => {
   const { default: D } = await import("./NewSessionDialog.svelte");
@@ -420,7 +420,7 @@ test("selects show a 'Loading branches…' placeholder while the branch list is 
   await waitFor(() => expect(screen.queryByText(/loading branches/i)).not.toBeInTheDocument());
 });
 
-// ── 14. F26b — inline error prop ──────────────────────────────────────────────
+// ── 14. F26b: inline error prop ──────────────────────────────────────────────
 
 test("error prop renders inline as an alert above the actions", async () => {
   const { default: D } = await import("./NewSessionDialog.svelte");
@@ -437,15 +437,15 @@ test("no alert is rendered when the error prop is absent", async () => {
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
-// ── 15. F57 — worktree hint reflects checked state ────────────────────────────
+// ── 15. F57: worktree hint reflects checked state ────────────────────────────
 
 test("worktree checkbox shows a state-dependent hint", async () => {
   const { default: D } = await import("./NewSessionDialog.svelte");
   render(D, { props: defaultProps() });
   await waitFor(() => screen.getByRole("dialog", { name: /new session/i }));
-  // Checked by default → isolated-worktree hint.
+  // The worktree checkbox is checked by default, so the dialog shows the isolated-worktree hint.
   expect(screen.getByText(/isolated git worktree/i)).toBeInTheDocument();
-  // Uncheck → repo-mode hint mentioning a clean working tree.
+  // Uncheck the worktree checkbox. The dialog then shows the repo-mode hint about a clean working tree.
   await fireEvent.click(screen.getByLabelText(/^worktree$/i));
   await waitFor(() => {
     expect(screen.getByText(/clean working tree/i)).toBeInTheDocument();
@@ -453,7 +453,7 @@ test("worktree checkbox shows a state-dependent hint", async () => {
   });
 });
 
-// ── 16. F50 — sentence-case title ─────────────────────────────────────────────
+// ── 16. F50: sentence-case title ─────────────────────────────────────────────
 
 test("dialog heading uses sentence case", async () => {
   const { default: D } = await import("./NewSessionDialog.svelte");

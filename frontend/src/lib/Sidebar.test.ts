@@ -4,12 +4,9 @@ import { fireEvent } from "@testing-library/svelte";
 import { vi } from "vitest";
 import type { WorkspaceVM } from "./wails";
 
-// Each fake sets title equal to the basename of repoPath — the row's primary
-// label is now the user-chosen ws.title, so selectors by that name still resolve
-// while the repo name is shown as a dim secondary span.
-// Titles are the row's bold primary label; repo basenames are kept distinct from
-// the titles so getByText(title) resolves to exactly one element (the title span),
-// while the repo name still renders as a dim secondary span.
+// Each fake sets title equal to the basename of repoPath. The row's bold primary
+// label is the user-chosen ws.title, so selectors by that title still resolve to exactly
+// one element (the title span), while the repo name renders as a dim secondary span.
 const workspaces: WorkspaceVM[] = [
   { id: "ws_a", worktreePath: "/wt/a", repoPath: "/repo/repo-auth", agent: "claude", title: "feat-auth",
     branch: "feat/auth", state: "running", caps: { approvals: false, attention: false }, paneId: "p1", lastActive: "" },
@@ -256,10 +253,10 @@ test("workspace-row carries --row-color style for its row position", async () =>
   await waitFor(() => screen.getByText("feat-auth"));
 
   const btn = screen.getByRole("button", { name: /feat-auth/ }) as HTMLElement;
-  // ws_a is the first row (index 0) → position-based palette entry 0 (F39 wired:
-  // App now passes the loop index so the first 8 rows are pairwise distinct).
+  // ws_a is the first row (index 0), so it maps to position-based palette entry 0
+  // (F39 wired: App now passes the loop index, so the first 8 rows are pairwise distinct).
   const expected = worktreeColor("ws_a", 0);
-  // style:--row-color is set as a CSS custom property on the element's inline style
+  // The component sets style:--row-color as a CSS custom property on the element's inline style.
   const styleAttr = btn.getAttribute("style") ?? "";
   expect(styleAttr).toContain(expected);
 });
@@ -272,7 +269,7 @@ test("workspace-row --row-color is assigned by row position (F39 distinct colors
 
   const btnA = screen.getByRole("button", { name: /feat-auth/ }) as HTMLElement;
   const btnB = screen.getByRole("button", { name: /feat-core/ }) as HTMLElement;
-  // Rows 0 and 1 → distinct palette entries 0 and 1 (round-robin), not a hash.
+  // Rows 0 and 1 map to distinct palette entries 0 and 1 (round-robin), not a hash.
   expect(btnA.getAttribute("style") ?? "").toContain(worktreeColor("ws_a", 0));
   expect(btnB.getAttribute("style") ?? "").toContain(worktreeColor("ws_b", 1));
 });
@@ -291,7 +288,7 @@ test("the first WORKTREE_COLORS.length rows each render a distinct --row-color (
   const rows = Array.from(document.querySelectorAll<HTMLElement>(".workspace-row"));
   expect(rows.length).toBe(WORKTREE_COLORS.length);
   // Each row i renders palette entry i (position-based round-robin), so the
-  // first 8 sessions are pairwise distinct — the live-component proof of F39,
+  // first 8 sessions are pairwise distinct. This is the live-component proof of F39,
   // not just the helper's unit test.
   rows.forEach((r, i) => {
     expect(r.getAttribute("style") ?? "").toContain(WORKTREE_COLORS[i]);
@@ -315,7 +312,7 @@ test("row renders repo · branch · agent · relative last-active", async () => 
     paneId: "pr", lastActive: recentIso,
   }];
   render(Sidebar, { props: { workspaces: ws, activeId: null, onSelect: () => {}, onNew: () => {} } });
-  // Repo name (basename of repoPath) is shown as a dim secondary span.
+  // The repo name (basename of repoPath) renders as a dim secondary span.
   expect(screen.getByText("my-repo")).toBeInTheDocument();
   expect(screen.getByText(/feat\/resume/)).toBeInTheDocument();
   expect(screen.getByText(/opencode/i)).toBeInTheDocument();
@@ -336,7 +333,7 @@ test("row primary label is the user title; repo name shown as secondary context"
   // The repo basename is still visible as a dim secondary span.
   const repoSpan = document.querySelector(".workspace-repo")!;
   expect(repoSpan.textContent).toBe("perch");
-  // aria-label correlates title + repo + branch.
+  // aria-label correlates the title, repo, and branch.
   const btn = screen.getByRole("button", { name: "My Session perch claude/work" });
   expect(btn).toBeInTheDocument();
 });
@@ -448,7 +445,7 @@ test("F37: a non-active row exposes a remove (×) control wired to requestRemove
   await waitFor(() => screen.getByText("feat-core"));
 
   // ws_b is a background (non-active) row. The × control is always in the DOM
-  // (CSS reveals it on hover/focus), so presence + click are directly testable.
+  // (CSS reveals it on hover or focus), so presence and click are directly testable.
   const removeBtn = screen.getByTestId("row-remove-ws_b") as HTMLButtonElement;
   expect(removeBtn).toBeInTheDocument();
   await fireEvent.click(removeBtn);
@@ -528,8 +525,8 @@ test("persistent status word shows on EVERY row (background calm rows included),
   // ws_b (idle) is the active row, so ws_a (running) is a BACKGROUND calm row.
   render(Sidebar, { props: { workspaces, activeId: "ws_b", onSelect: () => {}, onNew: () => {} } });
 
-  // A background RUNNING row now shows its word (was screen-reader-only before) —
-  // the whole point of glanceable per-session status without switching.
+  // A background RUNNING row now shows its word (it was screen-reader-only before).
+  // This is the whole point of glanceable per-session status without switching.
   const runBtn = screen.getByRole("button", { name: /feat-auth/ });
   expect(runBtn.querySelector(".status-text")!.textContent).toBe("running");
 
@@ -537,8 +534,8 @@ test("persistent status word shows on EVERY row (background calm rows included),
   const approvalBtn = screen.getByRole("button", { name: /bug-fix/ });
   expect(approvalBtn.querySelector(".status-text")!.textContent).toBe("needs you");
 
-  // The old sr-only-only .status-label element is gone everywhere (the visible
-  // word is the accessible label now).
+  // The old sr-only .status-label element is gone everywhere. The visible
+  // word is the accessible label now.
   expect(document.querySelector(".status-label")).toBeNull();
 });
 
@@ -559,9 +556,9 @@ test("status-running carries a persistent spin (alive), disabled under reduced m
 });
 
 // ---------------------------------------------------------------------------
-// ackedDoneIds: a done/errored the user already opened stops BEGGING (but its
-// persistent ✓/✗ status stays). Scoped to done/errored only — awaiting-approval
-// /-input are pending actions and keep begging regardless.
+// ackedDoneIds: a done or errored session the user already opened stops BEGGING (but its
+// persistent ✓/✗ status stays). This applies only to the done and errored states. The
+// awaiting-approval and awaiting-input states are pending actions, and they keep begging regardless.
 // ---------------------------------------------------------------------------
 
 test("attn: a background done row in ackedDoneIds stops begging but keeps its ✓ status", async () => {
@@ -647,18 +644,18 @@ test("F49a: sidebar last-active renders the shared formatRelativeAge output", as
 
 // ---------------------------------------------------------------------------
 // Row-level attention signal: a BACKGROUND (non-active) row in an
-// awaiting/errored/done state begs for a look via .attn + a per-urgency class.
-// The active row never gets it (opening the session IS the acknowledgement).
+// awaiting, errored, or done state begs for a look via .attn and a per-urgency class.
+// The active row never gets this signal (opening the session IS the acknowledgement).
 //
-// NOTE: the actual bar/tint/glow + the slow pulse are pure CSS on a ::before
+// NOTE: the actual bar, tint, glow, and slow pulse are pure CSS on a ::before
 // pseudo-element. jsdom has no layout or animation engine, so these tests
-// verify only the class/marker wiring and the injected CSS text — the visible
+// verify only the class and marker wiring and the injected CSS text. The visible
 // treatment and its motion are manual-smoke-only.
 // ---------------------------------------------------------------------------
 
 test("attn: background rows in awaiting/errored/done states get .attn + the per-urgency class", async () => {
   const { default: Sidebar } = await import("./Sidebar.svelte");
-  // ws_a active → every other attention-state row is a background row.
+  // ws_a is active, so every other attention-state row is a background row.
   render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {} } });
 
   const cases: Array<[RegExp, string]> = [
@@ -676,7 +673,7 @@ test("attn: background rows in awaiting/errored/done states get .attn + the per-
 
 test("attn: the ACTIVE row never gets the attention treatment, even in an attention state", async () => {
   const { default: Sidebar } = await import("./Sidebar.svelte");
-  // Make the awaiting-approval session the active one — viewing it clears the beg.
+  // Make the awaiting-approval session the active one. Viewing that session clears the beg.
   render(Sidebar, { props: { workspaces, activeId: "ws_c", onSelect: () => {}, onNew: () => {} } });
 
   const activeRow = screen.getByRole("button", { name: /bug-fix/ });
@@ -694,8 +691,8 @@ test("attn: calm background rows (idle/running) do NOT get the attention treatme
 
 test("attn: an already-seen awaiting-input row (in ackedInputIds) stops begging", async () => {
   const { default: Sidebar } = await import("./Sidebar.svelte");
-  // ws_q is awaiting-input and backgrounded, but its question was acknowledged →
-  // displayState collapses it to "idle", so it should not carry .attn.
+  // ws_q is awaiting-input and backgrounded, but the user acknowledged its question.
+  // displayState then collapses ws_q to "idle", so the row should not carry .attn.
   render(Sidebar, {
     props: {
       workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {},
@@ -719,13 +716,13 @@ test("attn CSS: each urgency maps to its color token; done is calmer (finite, no
   expect(attnColorOf("attn-errored")).toBe("var(--perch-err)");
   expect(attnColorOf("attn-done")).toBe("var(--perch-ok)");
 
-  // The base pulse (awaiting/errored) runs continuously until viewed…
-  // ([^{}]* swallows Svelte's injected .svelte-hash scope class before ::before;
-  //  (?=[.:]) keeps this off the .attn-done rule, whose next char is '-'.)
+  // The base pulse (awaiting or errored) runs continuously until the user views it.
+  // ([^{}]* swallows Svelte's injected .svelte-hash scope class before ::before.
+  //  (?=[.:]) keeps this off the .attn-done rule, whose next character is '-'.)
   const base = /\.workspace-row\.attn(?=[.:])[^{}]*::before[^{}]*\{([^}]*)\}/.exec(styleText)?.[1] ?? "";
   expect(base).toContain("perch-attn-row");
   expect(base).toContain("infinite");
-  // …but "done" settles after a finite, gentler breath (never infinite).
+  // In contrast, "done" settles after a finite, gentler breath (never infinite).
   const doneRule = /\.workspace-row\.attn-done[^{}]*::before[^{}]*\{([^}]*)\}/.exec(styleText)?.[1] ?? "";
   expect(doneRule).toContain("perch-attn-row");
   expect(doneRule).not.toContain("infinite");
@@ -736,18 +733,18 @@ test("attn contrast: the wash sits BEHIND row content (isolated context + negati
   render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {} } });
   const styleText = [...document.querySelectorAll("style")].map((s) => s.textContent).join("\n");
 
-  // The row establishes its own stacking context so the tint pseudo can be pushed
-  // behind the in-flow text/icon without escaping behind the row's own background.
+  // The row establishes its own stacking context, so the code can push the tint pseudo
+  // behind the in-flow text and icon, without letting it escape behind the row's own background.
   const rowRule = /\.workspace-row\.attn(?=[.:])[^{}]*\{([^}]*)\}/.exec(styleText)?.[1] ?? "";
   expect(rowRule).toMatch(/isolation:\s*isolate/);
 
-  // The ::before tint/glow paints at a negative z-index — above the row background
-  // but BELOW the text/icon, which keep full contrast. jsdom has no compositor, so
-  // this asserts the wiring only; the RENDERED contrast is manual-smoke.
+  // The ::before tint and glow paint at a negative z-index. This sits above the row background
+  // but BELOW the text and icon, which keep full contrast. jsdom has no compositor, so
+  // this test asserts the wiring only. The RENDERED contrast is manual-smoke.
   const beforeRule = /\.workspace-row\.attn(?=[.:])[^{}]*::before[^{}]*\{([^}]*)\}/.exec(styleText)?.[1] ?? "";
   expect(beforeRule).toMatch(/z-index:\s*-1/);
-  // inset:0 fills only the padding box, so the 3px per-worktree --row-color border
-  // is never covered by the attn wash (the old `inset: 0 0 0 -3px` overlaid it).
+  // inset:0 fills only the padding box, so the attn wash never covers the 3px
+  // per-worktree --row-color border (the old `inset: 0 0 0 -3px` overlaid it).
   expect(beforeRule).not.toContain("-3px");
 });
 
@@ -756,9 +753,9 @@ test("attn CSS: prefers-reduced-motion disables the row pulse (static bar/tint f
   render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {} } });
   const styleText = [...document.querySelectorAll("style")].map((s) => s.textContent).join("\n");
 
-  // The grouped attn::before + attn-done::before selector with animation:none
+  // The grouped attn::before and attn-done::before selector with animation:none
   // appears ONLY in the reduced-motion guard (the standalone base rule uses a
-  // single selector), so matching the comma-joined pair is a robust proxy.
+  // single selector), so matching the comma-joined pair is a dependable proxy.
   expect(styleText).toMatch(/prefers-reduced-motion/);
   expect(styleText).toMatch(
     /\.workspace-row\.attn[^{}]*::before\s*,\s*\.workspace-row\.attn-done[^{}]*::before\s*\{[^}]*animation:\s*none/,

@@ -14,53 +14,60 @@
     onNew: () => void;
     onReorder?: (draggedId: string, targetId: string) => void;
     diffStats?: Record<string, { added: number; removed: number; files?: number }>;
-    // Ids of sessions that currently have a live pty this app-run. Rows NOT in
-    // this set are "closed" (record kept, pty gone) and get a subtle dim cue.
+    // Ids of sessions that have a live pty now, in this app run. Rows not in
+    // this set are "closed": the record stays, but the pty is gone. These
+    // rows get a subtle dim cue.
     openIds?: Set<string>;
-    // Ids whose current awaiting-input question the user has already seen (was
-    // active + agent pane visible). Their "asking you a question" badge is
-    // suppressed so a seen question does not nag forever; a fresh question in App
-    // removes the id, re-raising the badge.
+    // Ids whose current awaiting-input question the user has already seen: the
+    // session was active with the agent pane visible. Their "asking you a
+    // question" attention signal is suppressed, so a seen question does not
+    // keep signalling. A fresh question in App removes the id, which raises the
+    // signal again.
     ackedInputIds?: Set<string>;
-    // Ids whose CURRENT done/errored the user has already seen (opened the session
-    // while it was finished/failed). Suppresses only the row-level BEGGING for
-    // those rows — the persistent ✓/✗ status icon and word still show — so a
-    // finished session stops nagging once looked at while its status stays put. A
-    // fresh done/errored event in App removes the id, so a NEW finish re-begs.
+    // Ids whose current done or errored state the user has already seen: the
+    // user opened the session while it was finished or failed. This suppresses
+    // only the row-level attention signal for those rows; the persistent ✓/✗
+    // status icon and word still show. So a finished session stops signalling
+    // once the user looks at it, while its status stays visible. A fresh done
+    // or errored event in App removes the id, so a new finish signals again.
     ackedDoneIds?: Set<string>;
-    // Inline rename: onRename commits a new title; onEditStart lets the parent
-    // dismiss any transient overlay (e.g. resume preview) when editing begins.
+    // Inline rename: onRename commits a new title. onEditStart lets the parent
+    // dismiss any transient overlay, for example a resume preview, when
+    // editing begins.
     onRename?: (id: string, title: string) => void;
     onEditStart?: () => void;
-    // Optional: request removal of a session by id (hover ×/right-click Remove).
-    // The parent (App) wires this in a later phase; the remove affordances are
-    // only rendered when the callback is provided, so nothing dangles unwired.
+    // Optional: request removal of a session by id, through a hover × or a
+    // right-click Remove. The parent (App) wires this in a later phase. The
+    // remove controls render only when the callback is provided, so nothing
+    // stays unwired.
     requestRemove?: (id: string) => void;
   } = $props();
 
-  // The state to RENDER for a row. When a session is awaiting-input but the user
-  // has already acknowledged that question (id in ackedInputIds), the attention
-  // signal has done its job, so present it as neutral "idle" — no question badge,
-  // no pulse, no "asking you" label. Every other state renders as-is. awaiting-
-  // approval is deliberately NOT suppressible here (it must persist until decided).
+  // The state to render for a row. When a session is awaiting-input, but the
+  // user has already acknowledged that question (id in ackedInputIds), the
+  // attention signal has done its job. The row then renders as neutral "idle":
+  // no question signal, no pulse, no "asking you" label. Every other state
+  // renders as-is. awaiting-approval is deliberately not suppressible here; it
+  // must persist until the user decides.
   function displayState(ws: WorkspaceVM): WorkspaceVM["state"] {
     if (ws.state === "awaiting-input" && ackedInputIds?.has(ws.id)) return "idle";
     return ws.state;
   }
 
-  // Inline-rename edit state. editingId is the row currently in edit mode (or
-  // null); editValue seeds/holds the in-progress text.
+  // Inline-rename edit state. editingId is the row now in edit mode, or null.
+  // editValue seeds and holds the in-progress text.
   let editingId = $state<string | null>(null);
   let editValue = $state("");
 
-  // The bold primary label: the user-chosen title, falling back to the repo name
-  // when the title is empty.
+  // The bold primary label: the user-chosen title, or the repo name when the
+  // title is empty.
   function primaryLabel(ws: WorkspaceVM): string {
     return ws.title || repoName(ws.repoPath);
   }
 
-  // Enter inline-rename mode for ws (core, event-agnostic — used by the
-  // double-click gesture and the right-click menu's Rename item).
+  // Enter inline-rename mode for ws. This core function does not depend on the
+  // triggering event; the double-click gesture and the right-click menu's
+  // Rename item both call it.
   function beginEdit(ws: WorkspaceVM) {
     onEditStart?.();
     editingId = ws.id;
@@ -73,8 +80,8 @@
     beginEdit(ws);
   }
 
-  // Commit the in-progress rename (Enter or blur): only when the trimmed value is
-  // non-empty and actually changed. Always leaves edit mode.
+  // Commit the in-progress rename on Enter or blur, only when the trimmed
+  // value is non-empty and actually changed. This always leaves edit mode.
   function commitEdit(ws: WorkspaceVM) {
     if (editingId !== ws.id) return;
     const trimmed = editValue.trim();
@@ -98,9 +105,10 @@
     exited:              { icon: "⏻", label: "exited" },
   } as const;
 
-  // Right-click row menu (Rename + Remove). Mirrors the FileTree context-menu
-  // pattern: a solid fixed-position card anchored at the cursor, closed on an
-  // outside click (svelte:window), Escape, or after an action.
+  // Right-click row menu (Rename and Remove). Mirrors the FileTree
+  // context-menu pattern: a solid, fixed-position card anchored at the
+  // cursor. It closes on an outside click (svelte:window), on Escape, or
+  // after an action.
   let rowMenu = $state<{ ws: WorkspaceVM; x: number; y: number } | null>(null);
 
   const ROW_MENU_APPROX_W = 160;
@@ -134,24 +142,30 @@
     }
   }
 
-  // The compact status word beside the colored icon shows on EVERY row, always.
-  // Persistent, glanceable per-session status is the point of the left pane: the
-  // user reads "running" / "done" / "idle" across all sessions without switching,
-  // and a background session's status stays put (it is not a transient flash).
-  // Calm states (idle/exited) render dim so active states (running/done/awaiting/
-  // errored) still stand out; the word doubles as the accessible state label.
+  // The compact status word beside the colored icon shows on every row,
+  // always. Persistent, glanceable per-session status is the point of the
+  // sidebar. The user reads "running", "done", or "idle" across all sessions
+  // without switching. A background session's status stays put. It is not a
+  // transient flash. Calm states (idle, exited) render dim, so active
+  // states (running, done, awaiting, errored) still stand out. The word also
+  // serves as the accessible state label.
 
-  // Row-level attention signal — the BEGGING, distinct from the always-on status
-  // word above. A BACKGROUND (non-active) session that needs the user or has just
-  // finished begs for a glanceable look: the whole row gets a color-coded left bar
-  // + slow pulsing tint (see the .attn CSS), far stronger than the tiny icon.
-  // Suppressed when: (a) this is the active row — opening the session IS the
-  // acknowledgement; (b) an awaiting-input question was already seen (displayState
-  // → "idle" via ackedInputIds); or (c) a done/errored the user already opened is
-  // in ackedDoneIds — a finished/failed turn nags until looked at, then goes quiet
-  // (its ✓/✗ status word stays). awaiting-approval is never suppressible here: it
-  // is a pending action that must beg until decided. Returns the urgency state to
-  // color by, or null for no treatment.
+  // Row-level attention signal: the strong urgency treatment, distinct from
+  // the always-on status word above. A background, non-active session that
+  // needs the user, or has just finished, signals for a glanceable look. The
+  // whole row gets a color-coded left bar plus a slow, pulsing tint (see the
+  // .attn CSS), far stronger than the tiny icon. The signal is suppressed in
+  // three cases:
+  //   - the row is active, because opening the session is itself the
+  //     acknowledgement
+  //   - the user already saw the awaiting-input question (displayState
+  //     returns "idle" through ackedInputIds)
+  //   - the user already opened a done or errored state (tracked in
+  //     ackedDoneIds)
+  // A finished or failed turn signals until the user looks at it, then goes
+  // quiet, but its ✓/✗ status word stays. awaiting-approval is never
+  // suppressible here: it is a pending action, so it signals until the user
+  // decides. Returns the urgency state to color by, or null for no treatment.
   const ATTENTION_STATES = new Set<WorkspaceVM["state"]>([
     "awaiting-approval", "awaiting-input", "errored", "done",
   ]);
@@ -187,7 +201,8 @@
     onReorder?.(draggedId, targetId);
   }
 
-  // Basename of a repo path; falls back to the raw path if it has no segments.
+  // Basename of a repo path. Falls back to the raw path if it has no
+  // segments.
   function repoName(p: string): string {
     const s = (p ?? "").split("/").filter(Boolean);
     return s.length ? s[s.length - 1] : (p || "");
@@ -225,7 +240,8 @@
           title={closed ? "Click to open" : undefined}
           style:--row-color={worktreeColor(ws.id, i)}
         >
-          <!-- Line 1: status icon + bold primary name (room to read it before ellipsis) -->
+          <!-- Line 1: status icon plus bold primary name, with room to read it
+               before the ellipsis -->
           <span class="workspace-row-primary">
             <span class="status-icon status-{rowState}" aria-hidden="true" title={st.label}>{st.icon}</span>
             {#if editingId === ws.id}
@@ -245,11 +261,11 @@
                 onblur={() => commitEdit(ws)}
               />
             {:else}
-              <!-- Double-click on the title is a mouse-gesture shortcut for
-                   inline rename; right-click anywhere on the row opens the
-                   Rename/Remove menu (handled on the row button). The row button
-                   remains the accessible primary control, so this span needs no
-                   ARIA role. -->
+              <!-- A double-click on the title is a mouse-gesture shortcut for
+                   inline rename. A right-click anywhere on the row opens the
+                   Rename/Remove menu, handled on the row button. The row
+                   button remains the accessible primary control, so this
+                   span needs no ARIA role. -->
               <!-- svelte-ignore a11y_no_static_element_interactions -->
               <span
                 class="workspace-title"
@@ -260,7 +276,7 @@
             <span class="status-text st-{rowState}">{st.label}</span>
           </span>
 
-          <!-- Line 2: dim meta — repo · branch · agent · age · diffstat -->
+          <!-- Line 2: dim meta: repo, branch, agent, age, diffstat -->
           <span class="workspace-row-meta">
             <span class="workspace-repo dim" title={repoName(ws.repoPath)}>{repoName(ws.repoPath)}</span>
             <span class="workspace-branch dim" title={ws.branch}>{ws.branch}</span>
@@ -373,9 +389,9 @@
   }
 
   /* ── Session row button ───────────────────────────────────────── */
-  /* Two lines: bold name on top, dim meta below. Column layout gives the name
-     the full row width so it is readable before ellipsis (single-flex-row
-     previously truncated it to uselessness). */
+  /* Two lines: bold name on top, dim meta below. The column layout gives the
+     name the full row width, so it stays readable before the ellipsis. A
+     single flex row previously truncated it until it was unreadable. */
   .workspace-row {
     display: flex;
     flex-direction: column;
@@ -400,8 +416,9 @@
     user-select: none;
   }
 
-  /* Reserve a right gutter for the hover-revealed remove (×) control so the
-     status word never sits under it (only present once requestRemove is wired). */
+  /* Reserves a right gutter for the hover-revealed remove (×) control, so the
+     status word never sits under it. This gutter is present only once
+     requestRemove is wired. */
   .workspace-row.has-remove {
     padding-right: calc(var(--perch-sp-1) * var(--perch-density-scale) * 1.5 + 20px);
   }
@@ -416,9 +433,9 @@
     background: color-mix(in srgb, var(--perch-accent) 16%, transparent);
   }
 
-  /* Closed session: no live pty. Dim the row to signal it's dormant; clicking
-     reopens it (routes through the resume-preview flow). The active row is never
-     dimmed even if momentarily flagged closed. */
+  /* Closed session: no live pty. Dim the row to signal it is dormant. A click
+     reopens it, through the resume-preview flow. The active row is never
+     dimmed, even if it is momentarily flagged closed. */
   .workspace-row.closed:not([aria-current="page"]) {
     color: var(--perch-text-dim);
     opacity: 0.7;
@@ -430,13 +447,14 @@
   }
 
   /* ── Row-level attention signal ───────────────────────────────── */
-  /* A BACKGROUND (non-active) session that needs you or just finished begs for
-     a glanceable look: a color-coded left bar + soft, slow pulsing tint over
-     the WHOLE row, not just the tiny status icon. --attn-color drives the bar,
-     tint, and glow; it is set per urgency below. Painted as a non-interactive
-     ::before so it never disturbs layout, click targets, or the row's own hover
-     shadow. The active row never gets .attn (attentionState() returns null for
-     it), so viewing a session clears its signal. */
+  /* A background, non-active session that needs the user, or has just
+     finished, signals for a glanceable look: a color-coded left bar plus a
+     soft, slow pulsing tint over the whole row, not just the tiny status
+     icon. --attn-color drives the bar, tint, and glow; each urgency level
+     sets it below. This is painted as a non-interactive ::before, so it
+     never disturbs layout, click targets, or the row's own hover shadow. The
+     active row never gets .attn, because attentionState() returns null for
+     it, so viewing a session clears its signal. */
   .workspace-row.attn                   { position: relative; isolation: isolate; --attn-color: var(--perch-accent); }
   .workspace-row.attn-awaiting-approval { --attn-color: var(--perch-warn); }  /* blocking: amber */
   .workspace-row.attn-awaiting-input    { --attn-color: var(--perch-info); }  /* a question: info/accent */
@@ -446,13 +464,15 @@
   .workspace-row.attn::before {
     content: "";
     position: absolute;
-    /* Fill only the padding box (inset:0), NOT the 3px border, so the per-worktree
-       --row-color left edge stays visible; the urgency bar sits just inside it. */
+    /* Fills only the padding box (inset:0), not the 3px border, so the
+       per-worktree --row-color left edge stays visible. The urgency bar sits
+       just inside it. */
     inset: 0;
-    /* Paint BEHIND the row's text/icon but ABOVE the row's own background/border:
-       the row is isolated (isolation:isolate above), so a negative z-index puts the
-       tint + inset glow under the in-flow content — it can no longer wash over the
-       text/icon and lower contrast (the app holds WCAG AA across all 9 themes). */
+    /* Paints behind the row's text and icon, but above the row's own
+       background and border. The row is isolated (isolation:isolate above),
+       so a negative z-index puts the tint and inset glow under the in-flow
+       content. It can no longer wash over the text and icon and lower
+       contrast; the cockpit holds WCAG AA across all 9 themes. */
     z-index: -1;
     pointer-events: none;
     border-left: 3px solid var(--attn-color);
@@ -461,9 +481,10 @@
     animation: perch-attn-row var(--perch-dur-attn-row) ease-in-out infinite;
   }
 
-  /* "done" is informational, not blocking — a calmer, less naggy treatment:
-     a low steady tint with a single gentle breath on appear (finite, not the
-     continuous pulse of the awaiting/errored rows), then it settles. */
+  /* "done" is informational, not blocking, so it gets a calmer treatment: a
+     low, steady tint with a single gentle breath on appear. This animation
+     is finite, not the continuous pulse of the awaiting or errored rows, and
+     then it settles. */
   .workspace-row.attn-done::before {
     background: color-mix(in srgb, var(--attn-color) 8%, transparent);
     box-shadow: inset 0 0 8px -3px color-mix(in srgb, var(--attn-color) 28%, transparent);
@@ -481,7 +502,7 @@
     }
   }
 
-  /* ── Row line 1: status icon + bold name ─────────────────────── */
+  /* ── Row line 1: status icon plus bold name ───────────────────── */
   .workspace-row-primary {
     display: flex;
     align-items: center;
@@ -502,22 +523,24 @@
     overflow: hidden;
   }
 
-  /* ── Status icon — colored per state ─────────────────────────── */
+  /* ── Status icon: colored per state ───────────────────────────── */
   .status-icon {
     font-size: var(--perch-fs-caption);
     flex-shrink: 0;
-    /* inline-block so the running spinner's rotate transform applies (transforms
-       are ignored on non-replaced inline elements). width keeps the glyph boxed. */
+    /* inline-block, so the running spinner's rotate transform applies;
+       transforms are ignored on non-replaced inline elements. The width
+       keeps the glyph boxed. */
     display: inline-block;
     width: 16px;
     text-align: center;
-    color: var(--perch-text-dim); /* default / idle */
+    color: var(--perch-text-dim); /* default, idle */
   }
 
   /* "running" spins its ◐ slowly and forever while the agent works, so a live
-     session reads as alive at a glance — a static icon can't be told from a
-     frozen one. This is the ONLY motion on a running row (running is not an
-     attention state), so it never competes with the begging pulse. */
+     session reads as alive at a glance; a static icon cannot be told apart
+     from a frozen one. This is the only motion on a running row, since
+     running is not an attention state, so it never competes with the
+     attention signal's pulse. */
   .status-running {
     color: var(--perch-ok);
     animation: perch-spin var(--perch-dur-spin) linear infinite;
@@ -528,9 +551,10 @@
     color: var(--perch-text-dim);
   }
 
-  /* Approval can't be dismissed until decided, so its pulse runs a few cycles
-     to catch the eye, then settles to a steady (full-opacity) colored dot rather
-     than nagging forever. The warn color + ⚠ glyph + "needs you" word persist. */
+  /* An approval cannot be dismissed until the user decides, so its pulse runs
+     a few cycles to catch the eye, then settles to a steady, full-opacity
+     colored dot instead of signalling forever. The warn color, the ⚠ glyph,
+     and the "needs you" word persist. */
   .status-awaiting-approval {
     color: var(--perch-warn);
     animation: perch-attn-pulse var(--perch-dur-attn-approval) ease-in-out 6;
@@ -541,9 +565,9 @@
     animation: perch-attn-pulse var(--perch-dur-attn-input) ease-in-out infinite;
   }
 
-  /* "done" gets the accent color (distinct from running's ok-green) so a finished
-     session that wants your review reads apart from one still working; it also
-     ties to the accent-colored review pill. */
+  /* "done" gets the accent color, distinct from running's ok-green, so a
+     finished session that wants review reads apart from one still working.
+     It also ties to the accent-colored review pill. */
   .status-done {
     color: var(--perch-accent);
     animation: perch-settle-pop var(--perch-dur-pop) var(--perch-ease);
@@ -553,9 +577,10 @@
     color: var(--perch-err);
   }
 
-  /* "exited" is a NEUTRAL terminal state (a graceful /exit or a crash the user must
-     reopen), NOT a red error — it reads dim, like idle, so a clean exit never looks
-     alarming. The distinct ⏻ glyph + "exited" word carry the meaning. */
+  /* "exited" is a neutral terminal state, either a graceful /exit or a crash
+     the user must reopen, not a red error. It reads dim, like idle, so a
+     clean exit never looks alarming. The distinct ⏻ glyph and "exited" word
+     carry the meaning. */
   .status-exited {
     color: var(--perch-text-dim);
   }
@@ -564,22 +589,22 @@
   @media (prefers-reduced-motion: reduce) {
     .status-awaiting-approval, .status-awaiting-input { animation: none; }
     .status-icon.status-done { animation: none; }
-    /* No spin: a running row falls back to a static ◐ (still colored ok-green). */
+    /* No spin: a running row falls back to a static ◐, still colored ok-green. */
     .status-icon.status-running { animation: none; }
     .workspace-row { transition: none; }
     .workspace-row:hover { transform: none; }
     .row-remove { transition: none; }
-    /* No pulsing: the row-level signal falls back to a STATIC colored bar +
-       steady tint + glow (the ::before's non-animated declarations). */
+    /* No pulsing: the row-level signal falls back to a static colored bar,
+       steady tint, and glow, the ::before's non-animated declarations. */
     .workspace-row.attn::before,
     .workspace-row.attn-done::before { animation: none; }
   }
 
   /* ── Compact visible status word ─────────────────────────────── */
-  /* Shown on EVERY row so each session's status is readable at a glance without
-     switching; colored to match the state so the word reinforces the icon, and
-     it is the accessible state label. Sits at the right of line 1, left of the
-     reserved remove-(×) gutter. */
+  /* Shown on every row, so each session's status is readable at a glance
+     without switching. It is colored to match the state, so the word
+     reinforces the icon, and it is the accessible state label. It sits at
+     the right of line 1, left of the reserved remove-(×) gutter. */
   .status-text {
     flex-shrink: 0;
     font-size: var(--perch-fs-caption);
@@ -604,7 +629,7 @@
     min-width: 0;
   }
 
-  /* ── Inline rename input — replaces the title span in edit mode ─── */
+  /* ── Inline rename input: replaces the title span in edit mode ───── */
   .workspace-title-edit {
     flex: 1;
     min-width: 0;
@@ -624,7 +649,7 @@
     outline-offset: 0;
   }
 
-  /* ── Repo name — dim secondary context ────────────────────────── */
+  /* ── Repo name: dim secondary context ─────────────────────────── */
   .workspace-repo {
     font-size: var(--perch-fs-caption);
     color: var(--perch-text-dim);
@@ -636,7 +661,7 @@
     white-space: nowrap;
   }
 
-  /* ── Branch — mono dim caption ────────────────────────────────── */
+  /* ── Branch: mono dim caption ──────────────────────────────────── */
   .workspace-branch {
     font-family: var(--perch-font-mono);
     font-size: var(--perch-fs-caption);
@@ -701,10 +726,11 @@
     flex-shrink: 0;
   }
 
-  /* ── Row remove (×) — hover/focus revealed ───────────────────── */
-  /* Sibling of the row button inside the <li> (never nested — a button in a
-     button is invalid); revealed on row hover or when anything in the row is
-     focused, so mouse and keyboard both reach it. */
+  /* ── Row remove (×): revealed on hover or focus ───────────────── */
+  /* A sibling of the row button inside the <li>. It is never nested, because
+     a button inside a button is invalid. It is revealed on row hover, or
+     when anything in the row is focused, so mouse and keyboard both reach
+     it. */
   .row-remove {
     position: absolute;
     top: 50%;
@@ -742,10 +768,11 @@
     outline-offset: -2px;
   }
 
-  /* ── Row context menu (Rename / Remove) ──────────────────────── */
-  /* Solid, never glass: this menu can overlap the agent terminal, where
-     WebKitGTK paints backdrop-filter surfaces transparent over the composited
-     terminal subtree (mirrors the FileTree/ApprovalCard fix). */
+  /* ── Row context menu (Rename, Remove) ─────────────────────────── */
+  /* Solid, never glass. This menu can overlap the agent pane's terminal,
+     where WebKitGTK paints backdrop-filter surfaces transparent over the
+     composited terminal subtree (mirrors the fix in FileTree and
+     ApprovalCard). */
   .context-menu {
     list-style: none;
     margin: 0;

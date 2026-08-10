@@ -1,4 +1,4 @@
-# Force every new issue through a template; questions and security reports have
+# Every new issue must use a template. Questions and security reports have
 # their own channels below.
 blank_issues_enabled: false
 contact_links:

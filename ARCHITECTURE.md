@@ -42,8 +42,8 @@ Facts of record:
 ### Process model
 
 Perch runs as one OS process. The Wails runtime embeds a WebKit2GTK webview in a
-GTK window. The Svelte SPA is embedded from `frontend/dist/` with `//go:embed`,
-so it ships inside the binary. The `production` build tag selects the Wails
+GTK window. `//go:embed` embeds the Svelte SPA from `frontend/dist/`, so it
+ships inside the binary. The `production` build tag selects the Wails
 production runtime, and `webkit2_41` links WebKit2GTK 4.1. There is no separate
 frontend process and no IPC server in a release build.
 
@@ -77,8 +77,8 @@ The three downstream seams:
 `com.miniature-pug.perch`. A second `perch` process, including `perch attach
 <query>`, hands its arguments to the running instance through
 `onSecondInstance`, which raises the window and emits a `workspace:attach` event
-carrying the query. The second process then exits, with a non-zero status on
-Linux, which is the expected behavior of the forwarding path. When nothing is
+carrying the query. The second process then exits with a non-zero status on
+Linux. This is the expected behavior of the forwarding path. When nothing is
 running, `perch attach` launches the cockpit normally.
 
 ### Bound-method API
@@ -110,30 +110,31 @@ callable over the bridge. The load-bearing methods:
 | `DiscoverRepos() ([]RepoInfo, error)` | Repositories under the configured roots, for the New Session dialog |
 
 The full set is in [internal/README.md](internal/README.md) and `app/app.go`.
-There is no model or token parameter anywhere: perch chose its agents per
-session and never metered usage.
+There is no model or token parameter anywhere: perch chooses its agents per
+session and never meters usage.
 
-Every argument that crosses the bridge is validated in `app.App` before any pty
-or git work. Session and pane identifiers are checked against an
-`A-Za-z0-9_-` charset allowlist, and worktree paths are resolved and verified to
-lie under the configured roots. All git work runs as argv through
-`internal/proc`, never through a shell.
+`app.App` validates every argument that crosses the bridge before any pty or
+git work. It checks session and pane identifiers against an `A-Za-z0-9_-`
+charset allowlist, and it resolves and verifies worktree paths under the
+configured roots. All git work runs as argv through `internal/proc`, never
+through a shell.
 
 ### The direct-pty bridge
 
 `OpenWorkspace` spawns a login shell inside a pseudo-terminal, with `creack/pty`,
 in the worktree. The pty captures raw output and forwards it to the frontend as
 Wails events, where a Svelte component feeds the bytes to an xterm.js terminal.
-Keystrokes return through `WriteToPty` and resizes through `ResizePty`. The
-agent's launch command, produced by the Monitor's `Prepare`, is written into the
-shell so the agent starts in the same pty. Because the agent runs inside the
-shell rather than as the pane process, its exit returns control to the still-alive
-shell and fires no `pty:exit`. So the launch line carries an exit sentinel: after
-the agent command the shell captures `$?` and pings a loopback listener, which the
-Monitor translates into the `exited` state. The listener's token and URL reach the
-shell through its process environment (`Monitor.PaneEnv`, injected at spawn) rather
-than the typed line, which the interactive shell would echo. Closing the bridge
-kills the whole process group, so the shell's children die with it.
+Keystrokes return through `WriteToPty` and resizes through `ResizePty`.
+`OpenWorkspace` writes the agent's launch command, produced by the Monitor's
+`Prepare`, into the shell, so the agent starts in the same pty. Because the
+agent runs inside the shell rather than as the pane process, its exit returns
+control to the still-alive shell and fires no `pty:exit`. So the launch line
+carries an exit sentinel. After the agent command, the shell captures `$?` and
+pings a loopback listener. The Monitor translates this into the `exited` state. The listener's token and
+URL reach the shell through its process environment (`Monitor.PaneEnv`,
+injected at spawn) rather than the typed line, which the interactive shell
+would echo. Closing the bridge kills the whole process group, so the shell's
+children die with it.
 
 ### The agent Monitor seam
 
@@ -227,28 +228,29 @@ The project targets at least 80% statement coverage per `internal` package;
 
 ## Configuration and constants
 
-State lives under `~/.config/perch`, resolved by `registry.DefaultConfigDir()`
-(honoring `$XDG_CONFIG_HOME`), which `config.DefaultGlobalPath()` reuses so the
-path is computed in one place. The config directory is created with mode `0o700`
-(`registry.ConfigDirMode`), and `settings.json` and `layout.json` are written
-with mode `0o600` through an atomic write-and-rename. The loopback host
-`127.0.0.1` is the exported `hooklistener.LoopbackHost`, used by both monitors.
+`registry.DefaultConfigDir()` resolves the state directory under
+`~/.config/perch` and honors `$XDG_CONFIG_HOME`. `config.DefaultGlobalPath()`
+reuses it, so the path is computed in one place. perch creates the config
+directory with mode `0o700` (`registry.ConfigDirMode`). It writes
+`settings.json` and `layout.json` with mode `0o600` through an atomic
+write-and-rename. The loopback host `127.0.0.1` is the exported
+`hooklistener.LoopbackHost`, used by both monitors.
 
 Tuning values are named constants rather than literals. The Go side holds pty
 defaults, buffer sizes, file modes, debounce intervals, the token size, and
 frecency weights. The frontend gathers its timers, limits, layout defaults,
-option lists, and MIME types in `frontend/src/lib/constants.ts`, and its design
-tokens (the type scale, spacing grid, motion, z-index ladder, colors, and glass
-material) in `frontend/src/tokens/`. The settings defaults appear on both sides
-of the bridge, because Go and the SPA share no module, so the two copies are
-kept in sync by hand.
+option lists, and MIME types in `frontend/src/lib/constants.ts`. It keeps its
+design tokens (the type scale, spacing grid, motion, z-index ladder, colors,
+and glass material) in `frontend/src/tokens/`. The settings defaults appear on
+both sides of the bridge. Go and the SPA share no module, so maintainers keep
+the two copies in sync by hand.
 
 ## Workspace registry and discovery
 
 `docs/diagrams/discovery-state.mmd` shows the data flow.
 
-Sessions are stored as a single JSON array in `workspaces.json`, each record
-carrying:
+perch stores sessions as a single JSON array in `workspaces.json`. Each record
+carries:
 
 | Field | Contents |
 |-------|----------|
@@ -297,22 +299,23 @@ claude agent
 opencode, the same lifecycle events arrive over the `opencode serve` SSE stream:
 `session.status` carries busy and idle and the session id used for resume, and
 `session.error` becomes errored. opencode's experimental step frames sit behind
-an environment flag perch never sets, so they never fire. For both agents the exit
-sentinel's `AgentExit` ping becomes the `exited` state, distinct from `errored` so
-a graceful `/exit` never reads as a failure; for opencode a terminal guard makes it
-final, so a straggling status frame from the backgrounded `serve` cannot revive it.
+an environment flag perch never sets, so they never fire. For both agents, the
+exit sentinel's `AgentExit` ping becomes the `exited` state, distinct from
+`errored`, so a graceful `/exit` never reads as a failure. For opencode, a
+terminal guard makes this final, so a straggling status frame from the
+backgrounded `serve` cannot revive it.
 
 The approval loop above is Claude's alone. opencode's `attach` terminal is an
 independent interactive client that runs its own permission prompt in the pane,
 and perch has no hook to intercept it. So perch does not answer opencode
 approvals: `OpencodeMonitor.Capabilities()` returns `approvals: false`, its
 `permission.asked` frame becomes a passive `awaiting-approval` attention signal
-with no `Approval` payload, and no pending approval is registered. The user
+with no `Approval` payload, and perch registers no pending approval. The user
 decides in opencode's own prompt. `OpencodeMonitor.Approve` remains only to
-satisfy the Monitor interface; it is an unreachable no-op, since nothing ever
+satisfy the Monitor interface. It is an unreachable no-op, since nothing ever
 registers a pending opencode approval to answer.
 
-Claude status reporting needs no manual setup; the monitor writes the hook
+Claude status reporting needs no manual setup. The monitor writes the hook
 config into the worktree's `.claude/settings.json` when the session opens.
 opencode reports natively over its SSE stream.
 
@@ -331,7 +334,7 @@ and for state events a `State`. The seven states:
 | `errored` | The agent reported a failure |
 | `exited` | The agent process is gone (graceful `/exit` or crash) while its shell lives; reopen from the in-pane overlay |
 
-For Claude, an approval is a request to act that perch gates behind the approval
+For Claude, an approval is a request to act. perch gates it behind the approval
 card until you decide, because Claude's blocking `PreToolUse` hook lets perch own
 the answer and suppress Claude's own prompt. For opencode, `awaiting-approval` is
 a signal only: opencode's `attach` terminal owns the permission prompt, so perch
@@ -342,12 +345,12 @@ like a question in that respect, but keeps its own distinct amber
 A question is the agent asking you to choose: Claude's `AskUserQuestion`, whose
 `PreToolUse` perch auto-allows so the agent renders the question in its own pane,
 and opencode's `question.asked`. A question is a signal only. perch renders no
-card and sends no reply; you answer in the agent's pane. Claude's `ExitPlanMode`
+card and sends no reply. You answer in the agent's pane. Claude's `ExitPlanMode`
 stays on the normal approval path, so you still review a plan. opencode's
 `question.replied` resumes running and `question.rejected` falls back to idle.
 
 The sidebar gives each state a glanceable look, with color, icon, and label
-together so it never relies on color alone. Pulses are suppressed under
+together so it never relies on color alone. The sidebar suppresses pulses under
 `prefers-reduced-motion`.
 
 ## Worktree lifecycle
@@ -368,19 +371,20 @@ together so it never relies on color alone. Pulses are suppressed under
 ### Remove
 
 1. A confirm dialog, then a deferred removal with an undo window.
-2. The pty bridge and Monitor are torn down. The Monitor's `Teardown` removes the
-   session's hook entries from `.claude/settings.json` and closes the listener.
-3. The record is removed. A worktree session has its tree deleted with `git
-   worktree remove`; a dirty tree requires `ForceRemoveWorkspace`. An in-repo
-   session is record-only, and the branch is never deleted by remove.
+2. perch tears down the pty bridge and Monitor. The Monitor's `Teardown` removes
+   the session's hook entries from `.claude/settings.json` and closes the
+   listener.
+3. perch removes the record. For a worktree session, `git worktree remove`
+   deletes the tree; a dirty tree requires `ForceRemoveWorkspace`. An in-repo
+   session is record-only, and remove never deletes the branch.
 
 ## Security model
 
 ### IPC has no listening port
 
 Frontend and backend speak over Wails bindings and events, not a socket. A
-release build opens no TCP or Unix socket for IPC. The `ws://localhost:34115`
-hot-reload socket is `//go:build dev` only and is stripped from release builds.
+release build opens no TCP or Unix socket for IPC. The `//go:build dev` tag
+gates the `ws://localhost:34115` hot-reload socket, and release builds strip it.
 
 ### The agent hook listener
 
@@ -400,8 +404,8 @@ port, guarded by a per-listener bearer token of 32 random bytes.
 `internal/envsync` backs `perch reload` and the drawer's reload button
 (`App.ReloadAgentEnv`, which just types `perch reload` into the drawer's
 bridge, so both share one code path). Unlike the hook listener, this is one
-listener for the app's whole run, shared by every workspace, standing up at
-startup and torn down at exit (`app/app.go`, wired alongside the baseline
+listener for the app's whole run, shared by every workspace. It stands up at
+startup and tears down at exit (`app/app.go`, wired alongside the baseline
 `os.Environ()` capture).
 
 | Constraint | Detail |
@@ -419,13 +423,13 @@ surface.
 
 ### Always-allow rules
 
-Choosing "Always" stores an `AlwaysRule{agent, tool, pattern, hash}` in
-`settings.json`. The `hash` is the SHA-256 of the full tool input captured when
-you clicked; `pattern` is a truncated copy kept only for display and is not the
-boundary. A later request auto-approves only when the agent, the tool, and the
-input hash all match. A rule with no hash never auto-approves. Hashing the full
-input means two calls that share a prefix but differ later cannot collide, so a
-rule never grants more than the exact request you approved.
+When you choose "Always," perch stores an `AlwaysRule{agent, tool, pattern,
+hash}` in `settings.json`. The `hash` is the SHA-256 of the full tool input
+captured when you clicked. `pattern` is a truncated copy kept only for display,
+not the boundary. A later request auto-approves only when the agent, the tool,
+and the input hash all match. A rule with no hash never auto-approves. Hashing
+the full input means two calls that share a prefix but differ later cannot
+collide, so a rule never grants more than the exact request you approved.
 
 ### Input validation and teardown
 
@@ -438,34 +442,34 @@ rule never grants more than the exact request you approved.
 
 ### Repository trust
 
-There are two paths by which opening a repository can run code, and they differ
+Opening a repository can run code through two distinct paths, and they differ
 in kind. The first is git's own hooks. perch runs `git worktree add` and `git
 checkout`, and git may run a repository's configured `.git/hooks`, the same as if
 you ran those commands yourself. perch does not disable them, because that would
-break workflows like git-lfs and submodules. Those hooks live outside the tree
-and are not transferred by clone, fetch, or push, so their exposure is only from
-hooks already present in a local repository.
+break workflows like git-lfs and submodules. Those hooks live outside the tree.
+Clone, fetch, and push do not transfer them, so exposure comes only from hooks
+already present in a local repository.
 
 The second path travels with the tree. An agent reads its configuration from the
 worktree on startup: `claude` from `.claude/settings.json`, opencode from its own
-config. A repository can commit such a file, and its `PreToolUse` or command
-hooks are executed as shell by the agent runtime the moment a session opens. Perch's
+config. A repository can commit such a file, and the agent runtime executes its
+`PreToolUse` or command hooks as shell the moment a session opens. Perch's
 own approval channel is itself one such command hook, so `ClaudeMonitor.writeHooks`
 merges into a repository's existing `.claude/settings.json` rather than replacing
 it, preserving any hooks already committed there. The approval gate intercepts the
-tool calls an agent routes through the loopback listener; it does not intercept the
-configuration's own hooks, which the runtime executes before and outside that
-channel. Committed agent-config hooks therefore run ungated, so opening an
-untrusted repository should include a look at its `.claude` and opencode
-configuration. Open repositories you trust.
+tool calls an agent routes through the loopback listener. It does not intercept
+the configuration's own hooks, which the runtime executes before and outside
+that channel. Committed agent-config hooks therefore run ungated. Before opening
+an untrusted repository, look at its `.claude` and opencode configuration. Open
+repositories you trust.
 
 ## Capabilities and degradation
 
 Each Monitor advertises `Caps{approvals, attention}`. The frontend surfaces only
-the controls an agent supports, so an agent that omits a cap has that surface
-hidden rather than dead. Both monitors advertise `attention`. Only Claude
+the controls an agent supports. It hides, rather than disables, the surface for
+any capability an agent omits. Both monitors advertise `attention`. Only Claude
 advertises `approvals`, because only Claude's blocking hook lets perch own the
-decision and suppress the agent's own prompt; opencode returns `approvals: false`
+decision and suppress the agent's own prompt. opencode returns `approvals: false`,
 so the card stays hidden and its own terminal owns the approval.
 
 ## Debug aids

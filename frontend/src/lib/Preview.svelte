@@ -10,17 +10,19 @@
     path: string;
     kind: "markdown" | "mermaid" | "image";
     content: string;
-    // False when the preview is mounted but off-screen (on the agent/diff views).
-    // Gates the render side-effect so marked/mermaid never run while hidden; the
-    // effect re-runs and renders the current content when it becomes visible again.
+    // False when the preview is mounted but off-screen, for example on the agent
+    // pane or the diff view. This gates the render side-effect, so marked and
+    // mermaid never run while hidden. The effect re-runs and renders the
+    // current content when the preview becomes visible again.
     visible?: boolean;
   } = $props();
 
   let html = $state("");
 
   $effect(() => {
-    // Read `visible` first so it is tracked: while hidden, return before touching
-    // kind/content so a background content change does not re-render off-screen.
+    // Read `visible` first, so Svelte tracks it. While hidden, return before
+    // reading kind or content, so a background content change does not
+    // re-render an off-screen preview.
     if (!visible) return;
     let cancelled = false;
     if (kind === "markdown" && content) {
@@ -32,20 +34,21 @@
     } else if (kind === "mermaid" && content) {
       mermaid.initialize({ startOnLoad: false, securityLevel: "strict" });
       mermaid.render("preview-mermaid", content).then(({ svg }) => {
-        // Mermaid draws arrowheads as <marker> elements referenced via
-        // marker-end="url(#id)"; forbidding `id` here strips the marker ids and
-        // the arrowheads vanish. So `id` is NOT forbidden on the diagram SVG
-        // (verified against mermaid's .attr("id",…) + url(#…) markers). `name`
-        // stays forbidden and the render is still strict-mode + svg-profile
-        // sanitized, so this is functionality-only, not a security relaxation.
+        // Mermaid draws arrowheads as <marker> elements, referenced through
+        // marker-end="url(#id)". Forbidding `id` here would strip the marker
+        // ids, and the arrowheads would vanish. So this sanitize call does NOT
+        // forbid `id` on the diagram SVG (verified against mermaid's
+        // .attr("id", …) and url(#…) markers). `name` stays forbidden, and the
+        // render still runs strict-mode and svg-profile sanitizing. This change
+        // restores function only; it does not relax security.
         if (!cancelled) html = DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true, html: true }, FORBID_ATTR: ['name'] });
       }).catch((e) => {
-        // A malformed diagram must not blank the pane with an unhandled rejection;
-        // show an inline error banner instead.
+        // A malformed diagram must not blank the pane with an unhandled
+        // rejection. Show an inline error banner instead.
         if (!cancelled) html = errorBanner(e);
       });
     } else {
-      // Empty content: clear any stale rendered diagram/markdown.
+      // Empty content: clear any stale rendered diagram or markdown.
       html = "";
     }
     return () => { cancelled = true; };
@@ -200,7 +203,7 @@
     font-weight: 600;
   }
 
-  /* Mermaid diagram — centered */
+  /* Mermaid diagram: centered */
   :global(.prose svg),
   :global(.preview-body svg) {
     display: block;

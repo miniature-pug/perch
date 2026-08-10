@@ -1,8 +1,9 @@
 //go:build integration
 
-// app_create_rollback_test.go: integration guard for CreateWorkspace's worktree
-// rollback on a persist failure. Uses real git against a throwaway repo (the app
-// package's real-git tests are integration-tagged; plain unit tests use fakes).
+// app_create_rollback_test.go: integration guard for CreateWorkspace's
+// worktree rollback on a persist failure. This test uses real git against a
+// throwaway repo. The app package's real-git tests carry the integration
+// tag. Plain unit tests use fakes.
 package app
 
 import (
@@ -17,12 +18,13 @@ import (
 	"github.com/miniature-pug/perch/internal/registry"
 )
 
-// TestCreateWorkspace_RollsBackWorktreeOnPersistFailure is the regression guard for
-// the orphaned-worktree bug: when store.Upsert fails AFTER `git worktree add -b`
-// created the tree+branch, CreateWorkspace must roll back the just-created worktree
-// AND the new branch so nothing is orphaned and a retry does not hit ErrBranchExists
-// forever. The persist failure is injected by making workspaces.json a directory,
-// so the store's atomic rename fails.
+// TestCreateWorkspace_RollsBackWorktreeOnPersistFailure is the regression
+// guard for the orphaned-worktree bug. When store.Upsert fails after `git
+// worktree add -b` creates the tree and branch, CreateWorkspace must roll
+// back the just-created worktree and the new branch. This way nothing is
+// orphaned, and a retry does not hit ErrBranchExists forever. The test
+// injects the persist failure by making workspaces.json a directory, so the
+// store's atomic rename fails.
 func TestCreateWorkspace_RollsBackWorktreeOnPersistFailure(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
@@ -54,7 +56,7 @@ func TestCreateWorkspace_RollsBackWorktreeOnPersistFailure(t *testing.T) {
 	a.layoutPath = filepath.Join(cfgDir, "layout.json")
 
 	// ── inject the persist failure: make workspaces.json a DIRECTORY so the
-	//    store's atomic temp-file→rename flush cannot succeed. ─────────────────
+	//    store's atomic temp-file-to-rename flush cannot succeed. ─────────────
 	if err := os.Mkdir(filepath.Join(cfgDir, "workspaces.json"), 0o755); err != nil {
 		t.Fatalf("inject upsert failure: %v", err)
 	}
@@ -65,7 +67,7 @@ func TestCreateWorkspace_RollsBackWorktreeOnPersistFailure(t *testing.T) {
 		t.Fatalf("WorktreePath: %v", err)
 	}
 
-	// ── CreateWorkspace: new-branch mode (baseRef "main") → git worktree add -b ──
+	// ── CreateWorkspace: new-branch mode (baseRef "main") uses git worktree add -b ──
 	_, err = a.CreateWorkspace("claude", repo, "main", branch, "", true)
 	if err == nil {
 		t.Fatal("CreateWorkspace must fail when the store cannot persist the record")

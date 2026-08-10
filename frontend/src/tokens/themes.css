@@ -1,4 +1,4 @@
-/* gruvbox (default) — bg #282828; text #ebdbb2 ≈10.75:1; text-dim #a89984 ≈5.30:1 PASS; border #504945 ≈1.67:1; border-strong #7c716b ≈3.11:1 */
+/* gruvbox (default): bg #282828; text #ebdbb2 ≈10.75:1; text-dim #a89984 ≈5.30:1 PASS; border #504945 ≈1.67:1; border-strong #7c716b ≈3.11:1 */
 :root, [data-theme="gruvbox"] {
   color-scheme: dark;
   --perch-bg: #282828;       --perch-bg-elev: #1d2021;   --perch-surface: #32302f;
@@ -10,7 +10,7 @@
   --perch-glass-bg-solid: rgba(40,40,40,0.97);
   --perch-glass-border: rgba(235,219,178,0.12);
 }
-/* tokyo-night — bg #1a1b26; text #c0caf5 ≈10.59:1; text-dim #7b83ac ≈4.63:1 PASS; border #414868 ≈1.91:1; border-strong #5d6896 ≈3.16:1 */
+/* tokyo-night: bg #1a1b26; text #c0caf5 ≈10.59:1; text-dim #7b83ac ≈4.63:1 PASS; border #414868 ≈1.91:1; border-strong #5d6896 ≈3.16:1 */
 [data-theme="tokyo-night"] {
   color-scheme: dark;
   --perch-bg: #1a1b26;       --perch-bg-elev: #13141f;   --perch-surface: #24283b;
@@ -22,7 +22,7 @@
   --perch-glass-bg-solid: rgba(26,27,38,0.97);
   --perch-glass-border: rgba(192,202,245,0.12);
 }
-/* catppuccin mocha — bg #1e1e2e; text #cdd6f4 ≈11.34:1; text-dim #84889c ≈4.67:1 PASS; border #45475a ≈1.80:1; border-strong #676a87 ≈3.11:1 */
+/* catppuccin mocha: bg #1e1e2e; text #cdd6f4 ≈11.34:1; text-dim #84889c ≈4.67:1 PASS; border #45475a ≈1.80:1; border-strong #676a87 ≈3.11:1 */
 [data-theme="catppuccin"] {
   color-scheme: dark;
   --perch-bg: #1e1e2e;       --perch-bg-elev: #181825;   --perch-surface: #313244;
@@ -34,7 +34,7 @@
   --perch-glass-bg-solid: rgba(30,30,46,0.97);
   --perch-glass-border: rgba(205,214,244,0.12);
 }
-/* dracula — bg #282a36; text #f8f8f2 ≈13.36:1; text-dim #8692b9 ≈4.63:1 PASS; border #44475a ≈1.56:1; border-strong #6f7492 ≈3.11:1 */
+/* dracula: bg #282a36; text #f8f8f2 ≈13.36:1; text-dim #8692b9 ≈4.63:1 PASS; border #44475a ≈1.56:1; border-strong #6f7492 ≈3.11:1 */
 [data-theme="dracula"] {
   color-scheme: dark;
   --perch-bg: #282a36;       --perch-bg-elev: #1e1f29;   --perch-surface: #343746;
@@ -46,7 +46,7 @@
   --perch-glass-bg-solid: rgba(40,42,54,0.97);
   --perch-glass-border: rgba(248,248,242,0.12);
 }
-/* nord — bg #2e3440; text #d8dee9 ≈9.25:1; text-dim #949fb3 ≈4.68:1 PASS; border #434c5e ≈1.45:1; border-strong #727f9a ≈3.10:1 */
+/* nord: bg #2e3440; text #d8dee9 ≈9.25:1; text-dim #949fb3 ≈4.68:1 PASS; border #434c5e ≈1.45:1; border-strong #727f9a ≈3.10:1 */
 [data-theme="nord"] {
   color-scheme: dark;
   --perch-bg: #2e3440;       --perch-bg-elev: #242933;   --perch-surface: #3b4252;
@@ -58,7 +58,7 @@
   --perch-glass-bg-solid: rgba(46,52,64,0.97);
   --perch-glass-border: rgba(216,222,233,0.12);
 }
-/* rose-pine — bg #191724; text #e0def4 ≈13.39:1; text-dim #84809b ≈4.66:1 PASS; border #403d52 ≈1.69:1; border-strong #686385 ≈3.12:1 */
+/* rose-pine: bg #191724; text #e0def4 ≈13.39:1; text-dim #84809b ≈4.66:1 PASS; border #403d52 ≈1.69:1; border-strong #686385 ≈3.12:1 */
 [data-theme="rose-pine"] {
   color-scheme: dark;
   --perch-bg: #191724;       --perch-bg-elev: #120f1d;   --perch-surface: #26233a;
@@ -70,7 +70,7 @@
   --perch-glass-bg-solid: rgba(25,23,36,0.97);
   --perch-glass-border: rgba(224,222,244,0.12);
 }
-/* one-dark — bg #282c34; text #abb2bf ≈6.57:1; text-dim #8e95a2 ≈4.65:1 PASS; border #3e4451 ≈1.43:1; border-strong #6c778e ≈3.11:1 */
+/* one-dark: bg #282c34; text #abb2bf ≈6.57:1; text-dim #8e95a2 ≈4.65:1 PASS; border #3e4451 ≈1.43:1; border-strong #6c778e ≈3.11:1 */
 [data-theme="one-dark"] {
   color-scheme: dark;
   --perch-bg: #282c34;       --perch-bg-elev: #21252b;   --perch-surface: #2c313c;
@@ -82,7 +82,7 @@
   --perch-glass-bg-solid: rgba(40,44,52,0.97);
   --perch-glass-border: rgba(171,178,191,0.12);
 }
-/* perch-cyan — bg #0d1117; text #e2e8f0 ≈15.35:1; text-dim #75808c ≈4.71:1 PASS; border #30363d ≈1.55:1; border-strong #5a6572 ≈3.19:1 */
+/* perch-cyan: bg #0d1117; text #e2e8f0 ≈15.35:1; text-dim #75808c ≈4.71:1 PASS; border #30363d ≈1.55:1; border-strong #5a6572 ≈3.19:1 */
 [data-theme="perch-cyan"] {
   color-scheme: dark;
   --perch-bg: #0d1117;       --perch-bg-elev: #090d12;   --perch-surface: #161b22;
@@ -94,7 +94,7 @@
   --perch-glass-bg-solid: rgba(13,17,23,0.97);
   --perch-glass-border: rgba(226,232,240,0.12);
 }
-/* light — bg #f5f0e8; text #1c1917 ≈15.42:1; text-dim #716b66 ≈4.63:1 PASS; border #c7bfb2 ≈1.61:1; border-strong #95856d ≈3.16:1 */
+/* light: bg #f5f0e8; text #1c1917 ≈15.42:1; text-dim #716b66 ≈4.63:1 PASS; border #c7bfb2 ≈1.61:1; border-strong #95856d ≈3.16:1 */
 [data-theme="light"] {
   color-scheme: light;
   --perch-bg: #f5f0e8;       --perch-bg-elev: #ebe5d9;   --perch-surface: #faf7f2;

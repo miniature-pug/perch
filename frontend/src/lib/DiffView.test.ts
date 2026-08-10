@@ -52,7 +52,7 @@ test("stage refreshes file list (diffStat re-called) and fires onDiffChanged", a
   render(DiffView, { props: { worktree: "/wt", onDiffChanged } });
   await waitFor(() => screen.getByText("src/main.go"));
 
-  // diffStat already called once for initial load
+  // diffStat was already called once, for the initial load.
   const callsBefore = vi.mocked(w.diffStat).mock.calls.length;
 
   // Expand and stage
@@ -80,7 +80,7 @@ test("discard shows an undo toast and does NOT revert immediately", async () => 
   await waitFor(() => screen.getByRole("button", { name: /discard/i }));
   await fireEvent.click(screen.getByRole("button", { name: /discard/i }));
 
-  // Toast appears; the working tree is NOT touched yet.
+  // The toast appears. The working tree is NOT touched yet.
   await waitFor(() => expect(screen.getByTestId("discard-undo-toast")).toBeInTheDocument());
   expect(screen.getByRole("button", { name: /undo/i })).toBeInTheDocument();
   expect(w.discardHunk).not.toHaveBeenCalled();
@@ -102,7 +102,7 @@ test("Undo cancels the discard entirely — the backend revert never runs", asyn
   await waitFor(() => screen.getByRole("button", { name: /undo/i }));
   await fireEvent.click(screen.getByRole("button", { name: /undo/i }));
 
-  // Nothing was lost: no git revert, toast dismissed, hunk restored.
+  // Nothing is lost: no git revert, toast dismissed, hunk restored.
   await waitFor(() => expect(screen.queryByTestId("discard-undo-toast")).toBeNull());
   expect(w.discardHunk).not.toHaveBeenCalled();
   await waitFor(() => screen.getByRole("button", { name: /discard/i }));
@@ -164,7 +164,7 @@ test("send hunk to agent button not rendered when onSendToAgent prop is absent",
   // Expand src/main.go
   await fireEvent.click(screen.getByRole("button", { name: /src\/main\.go/ }));
   await waitFor(() => screen.getByRole("button", { name: /stage/i }));
-  // No send button without the prop
+  // No send button appears without the prop.
   expect(screen.queryByRole("button", { name: /send hunk to agent/i })).toBeNull();
 });
 
@@ -182,7 +182,7 @@ test("send hunk to agent button calls onSendToAgent with hunk lines joined", asy
   // Click the send button
   await fireEvent.click(screen.getByRole("button", { name: /send hunk to agent/i }));
 
-  // The spy should be called with the hunk's lines joined by "\n"
+  // The spy must receive the hunk's lines joined by "\n".
   const expectedText = fakeHunks[0].lines.map((l) => l.text).join("\n");
   expect(spy).toHaveBeenCalledWith(expectedText);
   expect(spy).toHaveBeenCalledTimes(1);
@@ -224,14 +224,14 @@ test("dragstart on a hunk row sets application/x-perch-text to the hunk text", a
 test("a fast diffStat resolve does not flash the 'Loading…' placeholder", async () => {
   const { default: DiffView } = await import("./DiffView.svelte");
   render(DiffView, { props: { worktree: "/wt-fast" } });
-  // The placeholder is armed on a delay, so it is absent even synchronously.
+  // The component arms the placeholder after a delay, so the placeholder stays absent even synchronously.
   expect(screen.queryByText("Loading…")).toBeNull();
   // The list arrives without the placeholder ever appearing.
   await waitFor(() => screen.getByText("src/main.go"));
   expect(screen.queryByText("Loading…")).toBeNull();
 });
 
-// --- F2-fe: staged hunks are no longer a one-way trap — Unstage is offered ---
+// --- F2-fe: staged hunks are no longer a one-way trap. Unstage is offered. ---
 
 test("a staged hunk offers Unstage in place of Stage/Discard, and Unstage calls unstageHunk", async () => {
   const { default: DiffView } = await import("./DiffView.svelte");
@@ -244,7 +244,7 @@ test("a staged hunk offers Unstage in place of Stage/Discard, and Unstage calls 
   await waitFor(() => screen.getByText("src/main.go"));
   await fireEvent.click(screen.getByRole("button", { name: /src\/main\.go/ }));
 
-  // Staged → only Unstage is offered; the one-way-trap Stage/Discard are gone.
+  // When staged, the component offers only Unstage. The one-way-trap Stage and Discard buttons disappear.
   await waitFor(() => screen.getByRole("button", { name: /unstage/i }));
   expect(screen.queryByRole("button", { name: /^stage$/i })).toBeNull();
   expect(screen.queryByRole("button", { name: /discard/i })).toBeNull();
@@ -252,7 +252,7 @@ test("a staged hunk offers Unstage in place of Stage/Discard, and Unstage calls 
   await fireEvent.click(screen.getByRole("button", { name: /unstage/i }));
   expect(w.unstageHunk).toHaveBeenCalledWith("/wt", "src/main.go", 0);
 
-  // The refetched (now unstaged) hunk toggles the action back to Stage/Discard.
+  // The refetched (now unstaged) hunk toggles the action back to Stage and Discard.
   await waitFor(() => screen.getByRole("button", { name: /^stage$/i }));
   expect(screen.queryByRole("button", { name: /unstage/i })).toBeNull();
 });

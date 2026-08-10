@@ -20,9 +20,9 @@
 
   let hubEl = $state<HTMLElement>();
 
-  // Filter on the explicit kind tagged at creation, not tier/title heuristics —
-  // an error ("Stage failed") and an approval are both tier "blocking", so only
-  // the kind separates them.
+  // Filter on the explicit kind tagged at creation, not on tier/title heuristics.
+  // An error ("Stage failed") and an approval are both tier "blocking", so only
+  // the kind tells them apart.
   let visible = $derived(
     filter === "all"       ? items :
     filter === "approvals" ? items.filter((n) => n.kind === "approval") :
@@ -30,8 +30,8 @@
                              items.filter((n) => n.kind === "done")
   );
 
-  // Filter-aware empty state: name what is absent under the active filter rather
-  // than always claiming "No notifications".
+  // Filter-aware empty state: names what is absent under the active filter,
+  // instead of always claiming "No notifications".
   let emptyText = $derived(
     filter === "approvals" ? "No approvals" :
     filter === "errors"    ? "No errors" :
@@ -39,10 +39,10 @@
                              "No notifications"
   );
 
-  // Self-close (F40): the hub is a docked panel App renders conditionally, so it
-  // owns its own dismissal — Escape or a click outside the panel asks the parent
-  // to close via onClose. This does not depend on App's global modal Escape
-  // handling (the dock is intentionally excluded from modalOpen).
+  // Self-close (F40): App renders the hub as a docked panel, conditionally, so
+  // the hub owns its own dismissal. Escape or a click outside the panel asks the
+  // parent to close it through onClose. This does not depend on App's global
+  // modal Escape handling; the dock is intentionally excluded from modalOpen.
   function onWindowKey(e: KeyboardEvent) {
     if (e.key === "Escape") { e.stopPropagation(); onClose?.(); }
   }
@@ -86,13 +86,13 @@
 </section>
 
 <style>
-  /* Panel — App positions this; we own bg, border, overflow */
+  /* Panel: App positions this; NotificationHub owns bg, border, and overflow. */
   .notif-hub {
     display: flex;
     flex-direction: column;
-    /* Solid, never glass: this panel can overlap the agent terminal, where
-       WebKitGTK paints backdrop-filter surfaces transparent over the composited
-       terminal subtree (mirrors the ApprovalCard fix). */
+    /* Solid, never glass. This panel can overlap the agent pane's terminal,
+       where WebKitGTK paints backdrop-filter surfaces transparent over the
+       composited terminal subtree (mirrors the fix in ApprovalCard). */
     background: var(--perch-glass-bg-solid);
     border-left: 1px solid var(--perch-glass-border);
     box-shadow: var(--perch-shadow-float);
@@ -156,7 +156,7 @@
     border-color: var(--perch-warn);
   }
 
-  /* Clear read — subtle, text-dim */
+  /* Clear read: subtle, text-dim */
   .clear-btn {
     margin-left: auto;
   }
@@ -177,7 +177,7 @@
   .notif-list::-webkit-scrollbar-thumb { background: var(--perch-border); border-radius: var(--perch-scrollbar-radius); }
   .notif-list::-webkit-scrollbar-thumb:hover { background: var(--perch-text-dim); }
 
-  /* Base notification row — grid: [icon] [title dismiss] / [icon] [body] */
+  /* Base notification row. Grid: [icon] [title dismiss] / [icon] [body]. */
   .notif-item {
     display: grid;
     grid-template-columns: 16px 1fr auto;
@@ -187,7 +187,7 @@
     padding: calc(var(--perch-sp-1) * var(--perch-density-scale)) calc(var(--perch-sp-1) * var(--perch-density-scale) * 1.5);
     border-bottom: 1px solid var(--perch-border);
     border-left: 3px solid transparent;
-    /* Inset worktree-color stripe — overlaid atop the tier border so tier signal is preserved */
+    /* Inset worktree-color stripe, overlaid atop the tier border, so the tier signal stays visible */
     box-shadow: inset 3px 0 0 var(--item-color, transparent);
     transition: background var(--perch-dur) var(--perch-ease),
                 border-color var(--perch-dur) var(--perch-ease),
@@ -215,13 +215,14 @@
     background: color-mix(in srgb, var(--perch-text) 4%, transparent);
   }
 
-  /* Tier — left accent border + ::before icon in col 1 row 1
-     (satisfies color+icon+label rule: border=color, ::before=icon, .notif-title=label) */
+  /* Tier: a left accent border plus a ::before icon in column 1, row 1.
+     This meets the color+icon+label rule: border = color, ::before = icon,
+     .notif-title = label. */
   .tier-blocking { border-left-color: var(--perch-err); }
   .tier-ambient  { border-left-color: var(--perch-info); }
   .tier-routine  { border-left-color: var(--perch-text-dim); }
 
-  /* ::before occupies grid col 1, spans both rows */
+  /* ::before occupies grid column 1 and spans both rows. */
   .notif-item::before {
     grid-column: 1;
     grid-row: 1 / 3;
@@ -237,8 +238,9 @@
   .tier-ambient::before  { content: "ℹ"; color: var(--perch-info); }
   .tier-routine::before  { content: "·"; color: var(--perch-text-dim); font-size: var(--perch-fs-body); }
 
-  /* Navigable title/body area — col 2, spans both rows. A bare button reset so
-     it reads as plain text but is keyboard/click focusable to focus its session. */
+  /* Navigable title/body area: column 2, spans both rows. A bare button reset,
+     so it reads as plain text but stays focusable by keyboard or click to
+     focus its session. */
   .notif-nav {
     grid-column: 2;
     grid-row: 1 / 3;
@@ -261,7 +263,7 @@
     border-radius: var(--perch-radius-sm);
   }
 
-  /* Title — col 2 row 1 (or row 1 inside .notif-nav) */
+  /* Title: column 2, row 1 (or row 1 inside .notif-nav) */
   .notif-title {
     grid-column: 2;
     grid-row: 1;
@@ -273,7 +275,7 @@
     text-overflow: ellipsis;
   }
 
-  /* Body — col 2 row 2 (or row 2 inside .notif-nav) */
+  /* Body: column 2, row 2 (or row 2 inside .notif-nav) */
   .notif-body {
     grid-column: 2;
     grid-row: 2;
@@ -284,12 +286,13 @@
     text-overflow: ellipsis;
   }
 
-  /* When title/body live inside the .notif-nav button, they use its own two-row
-     grid rather than the outer item grid — reset the outer column/row placement. */
+  /* When the title and body live inside the .notif-nav button, they use its own
+     two-row grid instead of the outer item grid. This resets the outer
+     column/row placement. */
   .notif-nav .notif-title { grid-column: 1; grid-row: 1; }
   .notif-nav .notif-body  { grid-column: 1; grid-row: 2; }
 
-  /* Dismiss icon button — col 3, spans both rows */
+  /* Dismiss icon button: column 3, spans both rows */
   .dismiss-btn {
     grid-column: 3;
     grid-row: 1 / 3;

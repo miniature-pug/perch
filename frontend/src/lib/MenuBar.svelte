@@ -2,20 +2,21 @@
 <script lang="ts">
   let { onCommand, unreadCount = 0 }: { onCommand: (id: string) => void; unreadCount?: number } = $props();
 
-  // `accel` is the global keyboard accelerator for the command, shown right-
-  // aligned in the dropdown. It is rendered aria-hidden (announced via
-  // aria-keyshortcuts instead) so the menuitem's accessible name stays the
-  // plain label.
+  // `accel` is the global keyboard shortcut for the command. The dropdown
+  // shows it right-aligned. The shortcut is rendered aria-hidden and is
+  // announced through aria-keyshortcuts instead. This keeps the
+  // menuitem's accessible name as the plain label.
   type MenuItem = { id: string; label: string; accel?: string };
   const menus: { label: string; items: MenuItem[] }[] = [
     { label: "Session", items: [
       { id: "session:new",    label: "New session" },
       { id: "session:close",  label: "Close session" },
       { id: "session:remove", label: "Remove session" },
-      // Folded in from the former "Worktree" menu: the user-facing noun is
-      // "session", so "Open worktree" reads as "Open session" (opens the
-      // selected session, the Enter accelerator) and the git-jargon top-level
-      // menu is gone. "Reveal in Files" opens the session's directory.
+      // This item replaces the former "Worktree" menu. The user-facing
+      // term is "session", so the label reads "Open session", not "Open
+      // worktree". The item opens the selected session and uses Enter as
+      // its accelerator. The old git-jargon top-level menu is gone now.
+      // "Reveal in Files" opens the session's directory.
       { id: "worktree:open",   label: "Open session", accel: "Enter" },
       { id: "worktree:reveal", label: "Reveal in Files" },
     ]},
@@ -40,7 +41,8 @@
   ];
 
   let openMenu = $state<string | null>(null);
-  // Track which top-level button opened the current menu (for focus-return on Escape)
+  // Tracks which top-level button opened the current menu. This lets
+  // focus return to that button when the user presses Escape.
   let triggerButtons = $state<Map<string, HTMLButtonElement>>(new Map());
 
   function toggleMenu(label: string, btn: HTMLButtonElement) {
@@ -54,17 +56,19 @@
     const label = openMenu;
     openMenu = null;
     if (label) {
-      // Return focus to the button that opened this menu
+      // Returns focus to the button that opened this menu
       const btn = triggerButtons.get(label);
       if (btn) btn.focus();
     }
   }
 
-  // Roving focus across the top-level menu buttons (WAI-ARIA menubar: Left/Right
-  // move between menus). `anchor` is any element inside the menubar, used to find
-  // the ordered set of top-level trigger buttons. When `keepOpen` is true (a
-  // dropdown was already open) the adjacent menu opens and its first item is
-  // focused; otherwise focus just moves to the adjacent trigger button.
+  // Moves focus across the top-level menu buttons. This follows the
+  // WAI-ARIA menubar pattern, where Left and Right move between menus.
+  // `anchor` is any element inside the menubar. The function uses
+  // `anchor` to find the ordered set of top-level trigger buttons. When
+  // `keepOpen` is true, a dropdown was already open, so the adjacent
+  // menu opens and focus moves to its first item. When `keepOpen` is
+  // false, focus moves only to the adjacent trigger button.
   function moveTopLevel(currentLabel: string, dir: 1 | -1, anchor: HTMLElement, keepOpen: boolean) {
     const bar = anchor.closest('[role="menubar"]');
     if (!bar) return;
@@ -161,11 +165,12 @@
       {/if}
     </div>
   {/each}
-  <!-- The bell is a direct child of role="menubar", so it must carry a menubar
-       role to be a valid menubar item (a bare button here is invalid ARIA). It
-       toggles the notification hub, so it stays an action menuitem (no submenu →
-       no aria-haspopup). Roving lives over the .menu-root triggers; the bell
-       stays reachable via Tab and click. -->
+  <!-- The bell is a direct child of role="menubar". It must carry a
+       menuitem role to be a valid menubar item. A bare button here would
+       be invalid ARIA. The bell toggles the notification hub, so it
+       stays an action menuitem with no submenu and no aria-haspopup.
+       Focus roving covers only the .menu-root triggers. The bell stays
+       reachable by Tab and by click. -->
   <button class="bell" role="menuitem" aria-label="notifications"
     onclick={(e) => { e.stopPropagation(); onCommand("notifications:open"); }}>
     🔔{#if unreadCount > 0}<span class="badge">{unreadCount > 99 ? '99+' : unreadCount}</span>{/if}
@@ -237,9 +242,10 @@
     list-style: none;
     margin: 0;
     padding: var(--perch-sp-1) 0;
-    /* Solid, never glass: this dropdown can overlap the agent terminal, where
-       WebKitGTK paints backdrop-filter surfaces transparent over the composited
-       terminal subtree (mirrors the ApprovalCard fix). */
+    /* Solid, not glass. This dropdown can overlap the agent terminal,
+       where WebKitGTK paints backdrop-filter surfaces as transparent
+       over the composited terminal subtree. This mirrors the
+       ApprovalCard fix. */
     background: var(--perch-glass-bg-solid);
     border: 1px solid var(--perch-glass-border);
     border-radius: var(--perch-radius-md);
@@ -262,7 +268,8 @@
     user-select: none;
   }
 
-  /* Accelerator hint — mono, dim, right-aligned (mirrors the palette's kbd). */
+  /* Accelerator hint: mono font, dim color, right aligned. This matches
+     the palette's kbd style. */
   .menu-accel {
     font-family: var(--perch-font-mono);
     font-size: var(--perch-fs-code);

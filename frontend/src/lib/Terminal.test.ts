@@ -8,12 +8,12 @@ const focusSpy   = vi.fn();
 const pasteSpy   = vi.fn();
 const fitSpy     = vi.fn();
 const onDataCbs: Array<(d: string) => void> = [];
-// Captured attachCustomKeyEventHandler callback + a controllable selection so the
-// copy/paste chord and context-menu tests can drive the real handler directly.
+// This captures the attachCustomKeyEventHandler callback and a controllable selection.
+// The copy/paste chord and context-menu tests can then drive the real handler directly.
 let keyHandler: ((e: KeyboardEvent) => boolean) | null = null;
 let selectionText = "";
-// Grid dimensions the mock reports. Default 80x24 (what every existing test pins);
-// a test can change them mid-run to prove a resize actually re-sends new dims.
+// These are the grid dimensions the mock reports. The default is 80x24, which every
+// existing test pins. A test can change the dimensions mid-run to prove a resize actually re-sends the new dimensions.
 let mockCols = 80;
 let mockRows = 24;
 
@@ -60,8 +60,8 @@ const realCAF = globalThis.cancelAnimationFrame;
 
 afterEach(async () => {
   cleanup();
-  // Restore vi's fakes FIRST, then force the known-good jsdom rAF/CAF back so the
-  // next test's mount effect (which schedules a frame) always has a working global.
+  // First restore vi's fake timers. Then force the known-good jsdom rAF and CAF back.
+  // The next test's mount effect schedules a frame, so that effect always needs a working global.
   vi.useRealTimers();
   globalThis.requestAnimationFrame = realRAF;
   globalThis.cancelAnimationFrame = realCAF;
@@ -135,7 +135,7 @@ describe("Terminal.svelte", () => {
     expect(offSpy).toHaveBeenCalled();
   });
   it("collapses a resize storm into a single pty resize (rAF fit + trailing-edge dedup)", async () => {
-    // Capture the ResizeObserver callback so we can fire ticks like a drag would.
+    // This captures the ResizeObserver callback, so the test can fire ticks like a drag would.
     let roCb: () => void = () => {};
     (globalThis as any).ResizeObserver = class {
       constructor(fn: () => void) { roCb = fn; }
@@ -143,8 +143,8 @@ describe("Terminal.svelte", () => {
       unobserve()  {}
       disconnect() {}
     };
-    // Queue rAF callbacks instead of running them synchronously, so the per-frame
-    // fit() coalescing is exercised the same way a real animation frame would.
+    // This queues rAF callbacks instead of running them synchronously. The test then
+    // exercises the per-frame fit() coalescing the same way a real animation frame would.
     const rafQueue: FrameRequestCallback[] = [];
     globalThis.requestAnimationFrame = ((fn: FrameRequestCallback) => rafQueue.push(fn)) as any;
     const flushRaf = () => { rafQueue.splice(0).forEach((fn) => fn(0)); };
@@ -156,7 +156,7 @@ describe("Terminal.svelte", () => {
     render(Terminal, { props: { paneId: "paneR", cwd: "/repo" } });
     vi.mocked(w.resizePty).mockClear();
 
-    // 10 frames, 2 ticks each — 20 observations, all reporting the mock's 80x24.
+    // 10 frames, 2 ticks each: 20 observations total, all reporting the mock's 80x24.
     for (let frame = 0; frame < 10; frame++) {
       roCb(); roCb();
       flushRaf();
@@ -207,9 +207,9 @@ describe("Terminal.svelte", () => {
     render(Terminal, { props: { paneId: "paneK", cwd: "/repo" } });
     // A plain key must reach the pty.
     expect(keyHandler!({ type: "keydown", ctrlKey: false, shiftKey: false, key: "a" } as unknown as KeyboardEvent)).toBe(true);
-    // Bare ctrl-c (SIGINT/cancel) must NOT be swallowed by the copy chord.
+    // The copy chord must NOT swallow bare ctrl-c (SIGINT/cancel).
     expect(keyHandler!({ type: "keydown", ctrlKey: true, shiftKey: false, key: "c" } as unknown as KeyboardEvent)).toBe(true);
-    // ctrl+shift+c with NO selection is not a copy — pass through.
+    // ctrl+shift+c with no selection is not a copy. The handler passes it through.
     selectionText = "";
     expect(keyHandler!({ type: "keydown", ctrlKey: true, shiftKey: true, key: "c" } as unknown as KeyboardEvent)).toBe(true);
   });
@@ -255,8 +255,8 @@ describe("Terminal.svelte", () => {
 
   // ── Re-fit when the pane becomes visible (A2) ───────────────────────────────
   it("re-fits when it becomes visible again (double-rAF -> fit + resizePty)", async () => {
-    // Fake timers first: vi.useFakeTimers() installs its OWN fake requestAnimationFrame,
-    // so we override rAF with our manual queue AFTER it to keep control of the frames.
+    // vi.useFakeTimers() first installs its own fake requestAnimationFrame. The test then
+    // overrides rAF with a manual queue after that call, to keep control of the frames.
     vi.useFakeTimers();
     const rafQueue: FrameRequestCallback[] = [];
     globalThis.requestAnimationFrame = ((fn: FrameRequestCallback) => rafQueue.push(fn)) as any;
@@ -265,14 +265,14 @@ describe("Terminal.svelte", () => {
     const { default: Terminal } = await import("./Terminal.svelte");
     const w = await import("./wails");
     const { rerender } = render(Terminal, { props: { paneId: "paneVis", cwd: "/repo", visible: false } });
-    // Ignore any fit()/resize scheduled during mount; we only care about the show transition.
+    // This ignores any fit() or resize scheduled during mount. The test cares only about the show transition.
     fitSpy.mockClear();
     vi.mocked(w.resizePty).mockClear();
 
-    // Flip hidden -> visible: the effect schedules a double rAF, then a debounced resize.
+    // Flip the state from hidden to visible: the effect schedules a double rAF, then a debounced resize.
     await rerender({ props: { paneId: "paneVis", cwd: "/repo", visible: true } });
-    flushRaf(); // outer rAF -> schedules inner
-    flushRaf(); // inner rAF -> refit()
+    flushRaf(); // The outer rAF then schedules the inner one.
+    flushRaf(); // The inner rAF then calls refit().
     expect(fitSpy).toHaveBeenCalled();
 
     vi.advanceTimersByTime(200);
@@ -307,15 +307,15 @@ describe("Terminal.svelte", () => {
     const w = await import("./wails");
     render(Terminal, { props: { paneId: "paneInit", cwd: "/repo" } });
 
-    // Deferred: nothing is fitted synchronously at mount time (the old code ran a
-    // bare fit.fit() here before layout/cell-metrics settled and never resized).
+    // Deferred: the code does not fit synchronously at mount time. (The old code ran a
+    // bare fit.fit() here before layout and cell metrics settled, and it never resized.)
     expect(fitSpy).not.toHaveBeenCalled();
 
-    flushRaf(); // outer rAF -> schedules inner
-    flushRaf(); // inner rAF -> refit() -> fit()
+    flushRaf(); // The outer rAF then schedules the inner one.
+    flushRaf(); // The inner rAF then calls refit(), which calls fit().
     expect(fitSpy).toHaveBeenCalled();
 
-    // ...and the first resizePty is now sent (the bare fit never told the pty).
+    // The component now sends the first resizePty call (the bare fit never told the pty).
     vi.advanceTimersByTime(200);
     expect(w.resizePty).toHaveBeenCalledWith("paneInit", 80, 24);
   });
@@ -330,7 +330,7 @@ describe("Terminal.svelte", () => {
     const { default: Terminal } = await import("./Terminal.svelte");
     const w = await import("./wails");
     render(Terminal, { props: { paneId: "paneWin", cwd: "/repo" } });
-    // Settle the deferred mount fit so we isolate the resize-driven refit.
+    // This settles the deferred mount fit, to isolate the resize-driven refit.
     flushRaf(); flushRaf();
     vi.advanceTimersByTime(200);
     expect(w.resizePty).toHaveBeenCalledWith("paneWin", 80, 24);
@@ -338,11 +338,11 @@ describe("Terminal.svelte", () => {
     vi.mocked(w.resizePty).mockClear();
 
     // The box actually shrank. The default beforeEach ResizeObserver stub never
-    // invokes its callback (observe() is a no-op), so ONLY the window 'resize'
-    // backstop can drive a refit here — exactly the WebKitGTK dropped-notification case.
+    // invokes its callback (observe() is a no-op). So only the window 'resize'
+    // backstop can drive a refit here. This is exactly the WebKitGTK dropped-notification case.
     mockRows = 20;
     window.dispatchEvent(new Event("resize"));
-    flushRaf(); // coalesced rAF (shared rafId guard) -> refit() -> fit()
+    flushRaf(); // The coalesced rAF (shared rafId guard) then calls refit(), which calls fit().
     expect(fitSpy).toHaveBeenCalled();
 
     vi.advanceTimersByTime(200);

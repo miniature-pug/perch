@@ -1,20 +1,21 @@
 /**
  * editor.spec.ts
  *
- * Mock readFile + hunks (git gutter); assert .perch-git-gutter renders;
- * Ctrl-S → assert WriteFile called once with edited content.
+ * Mock readFile and hunks (the git gutter). Assert that .perch-git-gutter renders.
+ * Press Ctrl-S and assert that WriteFile is called once with the edited content.
  *
- * The Editor only mounts when layout.view === "code" AND a codePath is set.
- * codePath is set by clicking a file in the FileTree.
- * Since we can't click a real file (ListDir returns [] by default), we instead:
- *   1. Override ListDir to return a mock file entry so FileTree renders it
- *   2. Click the mock file to set codePath → Editor mounts
- *   3. Assert ReadFile and Hunks were called (editor loaded)
- *   4. Assert .perch-git-gutter is rendered (hunks not empty)
- *   5. Ctrl-S → WriteFile called with content
+ * The Editor only mounts when layout.view === "code" and a codePath is set.
+ * Clicking a file in the FileTree sets codePath.
+ * The test cannot click a real file, because ListDir returns [] by default.
+ * So the test does this instead:
+ *   1. Override ListDir to return a mock file entry, so FileTree renders it.
+ *   2. Click the mock file to set codePath. The Editor then mounts.
+ *   3. Assert that ReadFile and Hunks were called (the editor loaded).
+ *   4. Assert that .perch-git-gutter renders (the hunks are not empty).
+ *   5. Press Ctrl-S and assert that WriteFile is called with the content.
  *
  * IPC methods: ReadFile, Hunks, WriteFile
- * role="region" name="editor" → <section aria-label="editor">
+ * role="region" name="editor" maps to <section aria-label="editor">
  * gutter class: .perch-git-gutter (from Editor.svelte: gutter({ class: "perch-git-gutter", ... }))
  */
 
@@ -41,10 +42,10 @@ const MOCK_HUNKS = [
   },
 ];
 
-// We need ListDir to return a file so the FileTree shows it.
-// Build a custom init script that also overrides ListDir.
+// ListDir must return a file so the FileTree shows it.
+// This builds a custom init script that also overrides ListDir.
 function buildEditorInitScript() {
-  // We embed a special ListDir that returns one file for the worktree root
+  // This embeds a special ListDir that returns one file for the worktree root.
   const base = buildInitScriptContent({
     workspaces: [WORKSPACE_FIXTURE],
     readFileContent: MOCK_FILE_CONTENT,
@@ -76,12 +77,12 @@ test.beforeEach(async ({ page }) => {
   await page.waitForSelector("#app", { timeout: 10000 });
   await page.waitForTimeout(1500);
 
-  // Activate the workspace
+  // Activate the session
   const sidebarItem = page.locator("text=test session").first();
   if (await sidebarItem.isVisible()) {
     await sidebarItem.click();
     await page.waitForTimeout(500);
-    // Resume preview now gates session open — click "Open" to confirm.
+    // The resume preview now gates opening a session. Click "Open" to confirm.
     const resumeOpenBtn = page.locator('[data-testid="resume-preview"] button.btn-primary');
     await resumeOpenBtn.waitFor({ state: "visible", timeout: 5000 });
     await resumeOpenBtn.click();
@@ -123,7 +124,7 @@ test("git gutter renders for a file with hunks", async ({ page }) => {
   await fileItem.click();
   await page.waitForTimeout(1000);
 
-  // .perch-git-gutter class from Editor.svelte gutter({ class: "perch-git-gutter" })
+  // The .perch-git-gutter class comes from Editor.svelte's gutter({ class: "perch-git-gutter" }).
   const gutter = page.locator(".perch-git-gutter");
   await expect(gutter, ".perch-git-gutter gutter element should be present when hunks returned").toBeVisible({ timeout: 5000 });
 
@@ -167,6 +168,6 @@ test("Ctrl-S calls WriteFile with the current content", async ({ page }) => {
 });
 
 test("Editor renders nothing when no file is selected", async ({ page }) => {
-  // In code view without clicking a file, no editor region
+  // In code view, if no file is clicked, no editor region should render.
   await expect(page.locator('section[aria-label="editor"]')).not.toBeVisible();
 });

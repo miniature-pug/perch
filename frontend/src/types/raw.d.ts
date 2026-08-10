@@ -3,7 +3,7 @@ declare module "*?raw" {
   export default content;
 }
 
-// Allow side-effect CSS imports (e.g. import "./tokens/tokens.css")
+// Allow side-effect CSS imports, for example import "./tokens/tokens.css"
 declare module "*.css" {
   const stylesheet: never;
   export default stylesheet;

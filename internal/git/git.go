@@ -20,36 +20,37 @@ import (
 // sequence, control characters or space, any of the special chars ~ ^ : ? * [ \,
 // trailing '/', ".lock" suffix, "@{" sequence, leading '/'.
 //
-// This is the security chokepoint for user-supplied branch and base-branch values
-// before they are passed as positional arguments to git worktree add.
+// ValidRef is the security chokepoint for user-supplied branch and
+// base-branch values, before callers pass them as positional arguments to
+// git worktree add.
 func ValidRef(name string) error {
 	if name == "" {
 		return fmt.Errorf("git: ref name must not be empty")
 	}
-	// Leading '-' would be parsed as a flag by git.
+	// git would parse a leading '-' as a flag.
 	if name[0] == '-' {
 		return fmt.Errorf("git: ref name %q must not begin with '-'", name)
 	}
-	// Leading '/' is not allowed by git check-ref-format.
+	// git check-ref-format does not allow a leading '/'.
 	if name[0] == '/' {
 		return fmt.Errorf("git: ref name %q must not begin with '/'", name)
 	}
-	// Trailing '/' is not allowed.
+	// git check-ref-format does not allow a trailing '/'.
 	if name[len(name)-1] == '/' {
 		return fmt.Errorf("git: ref name %q must not end with '/'", name)
 	}
-	// ".lock" suffix is reserved by git for lock files.
+	// git reserves the ".lock" suffix for lock files.
 	if strings.HasSuffix(name, ".lock") {
 		return fmt.Errorf("git: ref name %q must not end with '.lock'", name)
 	}
-	// Scan rune by rune for forbidden sequences and chars.
+	// Scan rune by rune for forbidden sequences and characters.
 	prev := rune(0)
 	for i, r := range name {
 		// Control characters (including NUL) and space.
 		if r < 0x20 || r == 0x7f || r == ' ' {
 			return fmt.Errorf("git: ref name %q contains forbidden character %q", name, r)
 		}
-		// Special chars forbidden by git check-ref-format.
+		// git check-ref-format forbids these special characters.
 		switch r {
 		case '~', '^', ':', '?', '*', '[', '\\':
 			return fmt.Errorf("git: ref name %q contains forbidden character %q", name, r)
@@ -62,14 +63,16 @@ func ValidRef(name string) error {
 		if prev == '@' && r == '{' {
 			return fmt.Errorf("git: ref name %q contains forbidden sequence '@{'", name)
 		}
-		// A dot at position 0 is allowed (e.g. ".git" is not a ref but "." alone
-		// would fail the empty check). A component starting with '.' is allowed by
-		// git (e.g. ".perch"); git check-ref-format only bans ".." and leading ".".
-		// Trailing '.' check: if the next char would end the string.
+		// A dot at position 0 is allowed. For example, ValidRef accepts
+		// ".perch" as a component. A lone "." is still rejected, but by the
+		// trailing-dot check below, not by the empty-name check above. Real
+		// git check-ref-format also forbids a leading dot in a ref
+		// component; ValidRef does not enforce that stricter rule here, only
+		// the ".." sequence ban.
 		_ = i
 		prev = r
 	}
-	// Trailing '.' is forbidden by git check-ref-format.
+	// git check-ref-format forbids a trailing '.'.
 	if prev == '.' {
 		return fmt.Errorf("git: ref name %q must not end with '.'", name)
 	}
@@ -105,15 +108,15 @@ type Worktree struct {
 // ParsePorcelain parses the output of `git worktree list --porcelain` into a
 // slice of Worktree records. It is a pure function with no I/O.
 //
-// Records are separated by blank lines. Each record starts with a "worktree"
-// line followed by attribute lines. Unknown attribute lines are silently
-// skipped. CRLF line endings are tolerated. Leading and trailing blank lines
-// are ignored.
+// Blank lines separate records. Each record starts with a "worktree" line,
+// followed by attribute lines. ParsePorcelain silently skips unknown
+// attribute lines. ParsePorcelain tolerates CRLF line endings and ignores
+// leading and trailing blank lines.
 //
 // ParsePorcelain returns an error only when a known attribute line appears
-// before any "worktree" line has been seen — that is structurally broken input.
-// All other malformed conditions (unknown lines, extra blanks) are handled
-// defensively.
+// before any "worktree" line. That input is structurally broken.
+// ParsePorcelain handles all other malformed conditions defensively,
+// including unknown lines and extra blank lines.
 func ParsePorcelain(raw []byte) ([]Worktree, error) {
 	// known attribute keywords (everything except "worktree" itself).
 	isKnownAttr := map[string]bool{
@@ -159,13 +162,14 @@ func ParsePorcelain(raw []byte) ([]Worktree, error) {
 			continue
 		}
 
-		// For all other keywords: check if it's a known attribute appearing
-		// before any worktree line — that is structurally broken.
+		// For all other keywords, check whether the keyword is a known
+		// attribute that appears before any worktree line. That input is
+		// structurally broken.
 		if cur == nil {
 			if isKnownAttr[keyword] {
 				return nil, fmt.Errorf("git: ParsePorcelain: attribute %q before any worktree line", keyword)
 			}
-			// Unknown line before first worktree — skip defensively.
+			// Skip an unknown line before the first worktree line, defensively.
 			continue
 		}
 
@@ -184,10 +188,10 @@ func ParsePorcelain(raw []byte) ([]Worktree, error) {
 			cur.Detached = true
 		case "locked":
 			cur.Locked = true
-			// Reason may follow on the same line — we record the bool only.
+			// A reason may follow on the same line. ParsePorcelain records only the bool.
 		case "prunable":
 			cur.Prunable = true
-			// Reason may follow on the same line — we record the bool only.
+			// A reason may follow on the same line. ParsePorcelain records only the bool.
 		default:
 			// Unknown attribute: skip silently (forward-compatible).
 		}
@@ -202,11 +206,11 @@ func ParsePorcelain(raw []byte) ([]Worktree, error) {
 }
 
 // ListWorktrees invokes `git -C <repoRoot> worktree list --porcelain` through r
-// and parses the output with ParsePorcelain. The repoRoot argument is included
-// in all error messages for debugging.
+// and parses the output with ParsePorcelain. ListWorktrees includes the
+// repoRoot argument in every error message, for debugging.
 //
-// On runner error, stderr (if any) is included in the returned error. On parse
-// error, the error is wrapped with context.
+// On a runner error, ListWorktrees includes stderr, if any, in the returned
+// error. On a parse error, ListWorktrees wraps the error with context.
 func ListWorktrees(ctx context.Context, r proc.Runner, repoRoot string) ([]Worktree, error) {
 	stdout, stderr, err := r.Run(ctx, "git", "-C", repoRoot, "worktree", "list", "--porcelain")
 	if err != nil {
@@ -223,12 +227,13 @@ func ListWorktrees(ctx context.Context, r proc.Runner, repoRoot string) ([]Workt
 	return wts, nil
 }
 
-// firstNonBare returns the index of the first non-bare entry in wts, or -1 if
-// none exists. This is the canonical main worktree position.
+// firstNonBare returns the index of the first non-bare entry in wts, or -1
+// if none exists. This index is the canonical main worktree position.
 //
 // Rule: the main worktree is the first non-bare entry. Git always lists it
-// first in normal repos; in a bare-repo-with-attached-worktrees the bare entry
-// comes first and the main working checkout is the next non-bare entry.
+// first in normal repositories. In a bare repository with attached
+// worktrees, the bare entry comes first, and the main working checkout is
+// the next non-bare entry.
 func firstNonBare(wts []Worktree) int {
 	for i := range wts {
 		if !wts[i].Bare {
@@ -238,14 +243,14 @@ func firstNonBare(wts []Worktree) int {
 	return -1
 }
 
-// MainWorktree returns the canonical main worktree, which is defined as the
-// first non-bare entry in wts. For a bare-only repository (no working
-// checkout), ok is false.
+// MainWorktree returns the canonical main worktree: the first non-bare entry
+// in wts. For a bare-only repository (no working checkout), ok is false.
 //
-// Git always places the main worktree first in the porcelain output regardless
-// of which worktree directory the command was run from, so index 0 is normally
-// the main checkout. The non-bare check makes this function safe for the rare
-// case of a bare repo with linked working worktrees.
+// Git always places the main worktree first in the porcelain output,
+// regardless of which worktree directory the caller ran the command from.
+// So index 0 is normally the main checkout. The non-bare check makes
+// MainWorktree safe for the rare case of a bare repository with linked
+// working worktrees.
 func MainWorktree(wts []Worktree) (Worktree, bool) {
 	i := firstNonBare(wts)
 	if i < 0 {
@@ -255,17 +260,18 @@ func MainWorktree(wts []Worktree) (Worktree, bool) {
 }
 
 // ToTrees maps a slice of Worktree records to []model.Tree for the given
-// project. Bare entries have no working checkout and are skipped entirely.
+// project. Bare entries have no working checkout, so ToTrees skips them
+// entirely.
 //
 // IsMain is true for the first non-bare entry (the main checkout). All other
-// non-bare entries are linked worktrees with IsMain == false. The Project
-// pointer is set on every returned Tree.
+// non-bare entries are linked worktrees with IsMain == false. ToTrees sets
+// the Project pointer on every returned Tree.
 func ToTrees(wts []Worktree, project *model.Project) []model.Tree {
 	mainIdx := firstNonBare(wts)
 	var trees []model.Tree
 	for i, wt := range wts {
 		if wt.Bare {
-			// Bare worktrees have no working directory — skip them.
+			// Bare worktrees have no working directory. Skip them.
 			continue
 		}
 		trees = append(trees, model.Tree{

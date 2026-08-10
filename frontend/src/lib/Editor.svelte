@@ -28,11 +28,13 @@
   }: {
     path: string | null;
     worktree: string;
-    // Bumped by the parent when files change on disk. A change reloads the file
-    // only when there are no unsaved edits (see the load effect below).
+    // The parent bumps this value when files change on disk. A change
+    // reloads the file, but only when there are no unsaved edits. See the
+    // load effect below.
     reloadToken?: number;
-    // False when the editor is mounted but off-screen (on the agent/diff views).
-    // Gates the Ctrl-S shortcut so a hidden editor never hijacks it.
+    // This is false when the editor is mounted but off-screen, for example
+    // on the agent pane or diff pane. It gates the Ctrl-S shortcut, so a
+    // hidden editor never captures it.
     visible?: boolean;
     onSendToAgent?: (text: string) => void;
   } = $props();
@@ -40,18 +42,20 @@
   let container = $state<HTMLDivElement | null>(null);
   let view = $state<EditorView | null>(null);
 
-  // Selection tracking for send-to-agent affordance
+  // Selection tracking for the send-to-agent action
   let selectionText = $state<string>("");
 
-  // dirty/unsaved state: true when document has been modified since last load/save
+  // Dirty (unsaved) state. True when the document has changed since the
+  // last load or save.
   let dirty = $state<boolean>(false);
 
   // ---------------------------------------------------------------------------
   // Language detection by filename extension
   // Installed packages: lang-javascript, lang-css, lang-html, lang-json,
   //   lang-markdown, lang-python, lang-go.
-  // NOT installed: @codemirror/language-data (would give full coverage incl.
-  //   Rust, Java, C/C++, Ruby, Shell, YAML, TOML, etc.)
+  // Not installed: @codemirror/language-data. This package would add full
+  //   language coverage, including Rust, Java, C/C++, Ruby, Shell, YAML,
+  //   and TOML.
   // ---------------------------------------------------------------------------
   function languageForPath(p: string) {
     const ext = p.split(".").pop()?.toLowerCase() ?? "";
@@ -91,7 +95,7 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Git gutter — change tracking (added and deleted lines)
+  // Git gutter: change tracking for added and deleted lines
   // ---------------------------------------------------------------------------
   interface GutterState { changed: Set<number>; deleted: Set<number>; }
 
@@ -135,7 +139,7 @@
   });
 
   // ---------------------------------------------------------------------------
-  // Selection listener for send-to-agent affordance
+  // Selection listener for the send-to-agent action
   // ---------------------------------------------------------------------------
   const selectionListener = EditorView.updateListener.of((update) => {
     if (update.selectionSet || update.docChanged) {
@@ -154,22 +158,27 @@
     }
   }
 
-  // Generation counter: each load() claims a generation. If a newer load starts (a
-  // file switch or a reloadToken bump) before this one's async reads resolve, this
-  // call's generation no longer matches and its stale result is dropped — so a slow
-  // readFile(A) that resolves after readFile(B) can never show A's content over B's.
+  // Generation counter. Each call to `load()` claims a generation number. A
+  // newer load can start before this call's async reads resolve, for
+  // example on a file switch or a `reloadToken` bump. When that happens,
+  // this call's generation number no longer matches, and the code drops
+  // the stale result. So a slow `readFile(A)` call that resolves after
+  // `readFile(B)` can never show file A's content over file B's.
   let loadGen = 0;
-  // The path whose content is currently applied to the view. Lets load() tell a
-  // same-file reload (preserve caret + scroll) apart from a real file switch (fresh
-  // state, caret reset to the top).
+  // The path whose content is now in the view. This lets `load()`
+  // tell a same-file reload apart from a real file switch. A same-file
+  // reload keeps the caret position and scroll position. A real file
+  // switch resets to a fresh state, with the caret at the top.
   let renderedPath: string | null = null;
 
-  // Clipboard keymap (B4). CodeMirror leaves copy/cut/paste to the browser's native
-  // clipboard, which is unreliable under WebKit2GTK, so bind Ctrl-Shift-C / Ctrl-Shift-V
-  // to the host clipboard binding (the same route used elsewhere in the app).
-  // Ctrl-Shift-C copies the main selection — it returns false on an empty selection so
-  // the shortcut is never swallowed when there is nothing to copy. Ctrl-Shift-V pastes
-  // the host clipboard text over the current selection via an ordinary CM transaction.
+  // Clipboard keymap (B4). CodeMirror leaves copy, cut, and paste to the
+  // browser's native clipboard. This clipboard is unreliable under
+  // WebKit2GTK. So the code binds Ctrl-Shift-C and Ctrl-Shift-V to the host
+  // clipboard binding, the same route used elsewhere in the cockpit.
+  // Ctrl-Shift-C copies the main selection. It returns false on an empty
+  // selection, so the shortcut is never captured when there is nothing to
+  // copy. Ctrl-Shift-V pastes the host clipboard text over the current
+  // selection, using an ordinary CodeMirror transaction.
   const clipboardKeymap = keymap.of([
     {
       key: "Ctrl-Shift-c",
@@ -191,8 +200,9 @@
     },
   ]);
 
-  // Build a fresh EditorState for a file. Used on first mount and on a file switch,
-  // where resetting selection and scroll to the top is the intended behavior.
+  // Build a fresh EditorState for a file. The code calls this on first
+  // mount and on a file switch. Resetting the selection and scroll to the
+  // top is the intended behavior then.
   function buildState(p: string, content: string): EditorState {
     return EditorState.create({
       doc: content,
@@ -204,7 +214,7 @@
         clipboardKeymap,
         keymap.of([...searchKeymap, ...defaultKeymap, indentWithTab]),
         bracketMatching(),
-        // syntax highlighting via perch CSS-variable-mapped HighlightStyle
+        // syntax highlighting, using a HighlightStyle mapped to perch CSS variables
         perchSyntaxHighlighting,
         selectionListener,
         languageForPath(p),
@@ -282,9 +292,10 @@
       readFile(p),
       fetchHunks(worktree, p).catch(() => [] as Hunk[]),
     ]);
-    // Drop a superseded result: a newer load claimed a later generation, or the
-    // component is tearing down (cancelled). Guards against a stale file flashing in
-    // and against dispatching into a view that is about to be destroyed.
+    // Drop a superseded result. A newer load may have claimed a later
+    // generation, or the component may be tearing down (cancelled). This
+    // guards against a stale file flashing in, and against dispatching
+    // into a view that the code is about to destroy.
     if (cancelled() || gen !== loadGen) return;
     const gutterState = gutterChangesFromHunks(hunkList);
 
@@ -293,13 +304,16 @@
       if (!container) return;
       view = new EditorView({ state: buildState(p, content), parent: container });
     } else if (!sameFile) {
-      // File switch: a fresh state (caret/scroll intentionally reset to the top).
+      // File switch. The code builds a fresh state, and resets the caret
+      // and scroll to the top on purpose.
       view.setState(buildState(p, content));
     } else {
-      // Same-file reload (an on-disk change bumped reloadToken while clean). Keep the
-      // caret/selection and scroll: replace the document only when the text actually
-      // changed, clamping the old selection into the new length. A bare setState here
-      // would reset the cursor to 0 and jump scroll to the top on every reload.
+      // Same-file reload. An on-disk change bumped `reloadToken` while the
+      // buffer was clean. Keep the caret, selection, and scroll position.
+      // Replace the document only when the text actually changed, and
+      // clamp the old selection to the new length. A bare `setState` call
+      // here would reset the cursor to 0 and jump the scroll to the top on
+      // every reload.
       const current = view.state.doc.toString();
       if (current !== content) {
         const max = content.length;
@@ -315,11 +329,13 @@
       }
     }
     renderedPath = p;
-    // Refresh the git gutter to match the freshly-loaded hunks (also clears stale
-    // markers on a same-file reload where the changes were just staged away).
+    // Refresh the git gutter to match the newly loaded hunks. This also
+    // clears stale markers on a same-file reload, when the changes were
+    // just staged away.
     view.dispatch({ effects: setChangedLines.of(gutterState) });
-    // setState / the doc-replacing dispatch fires docChanged via the update listener;
-    // clear dirty so the freshly-loaded buffer starts clean.
+    // The `setState` call and the doc-replacing dispatch both fire
+    // `docChanged` through the update listener. Clear `dirty`, so the
+    // newly loaded buffer starts clean.
     dirty = false;
   }
 
@@ -329,8 +345,9 @@
       await writeFile(path, view.state.doc.toString());
       dirty = false;
     } catch (e) {
-      // A failed write must NOT look successful: keep the buffer dirty and raise
-      // a blocking notification so the unsaved edit is never silently lost.
+      // A failed write must not look successful. Keep the buffer dirty,
+      // and raise a blocking notification, so the code never silently
+      // loses the unsaved edit.
       const msg = e instanceof Error ? e.message : String(e);
       addBlocking(path, "Save failed", `Could not write ${path}: ${msg}`);
     }
@@ -338,15 +355,17 @@
 
   function handleKeyDown(e: KeyboardEvent) {
     if ((e.ctrlKey || e.metaKey) && e.key === "s") {
-      // The editor can stay mounted while hidden (on the agent/diff views). Ignore the
-      // shortcut then, so it does not hijack Ctrl-S from the terminal or save off-screen.
+      // The editor can stay mounted while hidden, for example on the agent
+      // pane or diff pane. Ignore the shortcut then, so it does not
+      // capture Ctrl-S from the terminal, or save an off-screen file.
       if (!visible) return;
       e.preventDefault();
       save();
     }
   }
 
-  // drag selected text as application/x-perch-text (matches DragDrop.svelte MIME)
+  // Drag the selected text as application/x-perch-text. This matches the
+  // MIME type in DragDrop.svelte.
   function handleDragStart(e: DragEvent) {
     if (!selectionText || !e.dataTransfer) return;
     e.dataTransfer.effectAllowed = "copy";
@@ -354,20 +373,23 @@
     e.dataTransfer.setData("text/plain", selectionText);
   }
 
-  // Tracks the file the editor currently holds, so we can tell a file switch apart
-  // from an in-place reload signal.
+  // Tracks the file the editor now holds. This lets the code tell a
+  // file switch apart from an in-place reload signal.
   let loadedPath: string | null = null;
 
-  // Load on a file switch. On an external change to the same file (reloadToken bumps),
-  // reload only when there are no unsaved edits, so a background change never discards
-  // the user's draft. `dirty` and `loadedPath` are read untracked so this effect depends
-  // only on `path` and `reloadToken`.
+  // Load on a file switch. On an external change to the same file, when
+  // `reloadToken` bumps, reload only when there are no unsaved edits. This
+  // stops a background change from discarding the user's draft. The code
+  // reads `dirty` and `loadedPath` untracked, so this effect depends only
+  // on `path` and `reloadToken`.
   $effect(() => {
     const p = path;
     reloadToken;
-    // Cancellation flag for this run: the cleanup below flips it when the effect
-    // re-runs (path/reloadToken changed) or the component is destroyed, so an
-    // in-flight load resolving afterward drops its stale result (see load()).
+    // Cancellation flag for this run. The cleanup function below flips
+    // this flag when the effect re-runs, for example when `path` or
+    // `reloadToken` changes, or when the component is destroyed. So an
+    // in-flight load that resolves afterward drops its stale result. See
+    // `load()`.
     let cancelled = false;
     untrack(() => {
       if (!p) { loadedPath = null; return; }
@@ -382,11 +404,13 @@
   onMount(() => document.addEventListener("keydown", handleKeyDown));
   onDestroy(() => {
     document.removeEventListener("keydown", handleKeyDown);
-    // A dirty buffer here means unsaved edits, and destroying the view discards the
-    // document. Persist first (mirroring save()'s care) rather than silently dropping
-    // the user's work on a session switch. save() captures the document synchronously
-    // before the write and raises a blocking notification if the write fails, so a
-    // failed save is surfaced — never swallowed.
+    // A dirty buffer here means unsaved edits. Destroying the view
+    // discards the document. So the code saves the document first, with
+    // the same care as `save()`, instead of silently dropping the user's
+    // work on a session switch. `save()` captures the document
+    // synchronously before the write, and raises a blocking notification
+    // if the write fails. So a failed save always surfaces, and the code
+    // never hides it.
     if (dirty) save();
     view?.destroy();
     view = null;
@@ -402,7 +426,7 @@
     {/if}
 
     {#if onSendToAgent && selectionText}
-      <!-- draggable with application/x-perch-text; button also acts as drag affordance -->
+      <!-- Draggable with application/x-perch-text. The button also acts as a drag handle. -->
       <button
         class="send-to-agent-btn"
         aria-label="Send to agent"
@@ -430,10 +454,12 @@
     flex-direction: column;
     flex: 1;
     min-height: 0;
-    /* CodeMirror mounts .cm-editor here; it needs height:100% to fill */
+    /* CodeMirror mounts .cm-editor here. It needs height:100% to fill the space. */
   }
 
-  /* Target the CodeMirror editor element itself (unscoped to pierce shadow) */
+  /* Target the CodeMirror editor element itself. The rule is unscoped
+     (:global), so it can pierce into the shadow content CodeMirror
+     creates. */
   :global(.cm-editor) {
     height: 100%;
   }

@@ -11,21 +11,23 @@ import (
 )
 
 // WorktreeInfo is a summary of one git worktree from `git worktree list --porcelain`.
-// JSON tags are frozen — do not rename.
+// JSON tags are frozen. Do not rename them.
 type WorktreeInfo struct {
 	Path   string `json:"path"`
 	Branch string `json:"branch"`
 	Head   string `json:"head"`
 }
 
-// Branches returns all local branch names in repo (bare names, no refs/heads/
-// prefix), ordered so the branch a caller most likely wants comes FIRST: the
-// currently checked-out branch, else the repo's default branch (origin/HEAD, then
-// a main/master fallback). The remaining branches follow in alphabetical order.
+// Branches returns all local branch names in repo. Names are bare, with no
+// refs/heads/ prefix. Branches orders the result so the branch a caller most
+// likely wants comes FIRST: the checked-out branch, else the repo's default
+// branch (from origin/HEAD, then a main/master fallback). The remaining
+// branches follow in alphabetical order.
 //
-// The pin-first ordering matters because callers that need a single sensible
-// default (e.g. the New Session dialog's base-ref field) take branches[0]; without
-// it they would pick whatever sorted alphabetically first ("aardvark" over "main").
+// This pin-first order matters because callers that need one sensible
+// default, for example the New Session dialog's base-ref field, take
+// branches[0]. Without this order, they would pick whatever branch sorts
+// first alphabetically, such as "aardvark" instead of "main".
 func Branches(ctx context.Context, r proc.Runner, repo string) ([]string, error) {
 	out, errOut, err := r.Run(ctx, "git", "-C", repo, "branch", "--format=%(refname:short)")
 	if err != nil {
@@ -86,8 +88,8 @@ func pinnedFirstBranch(ctx context.Context, r proc.Runner, repo string, branches
 }
 
 // sortBranchesPinnedFirst sorts branches in place: pin (when non-empty and
-// present) first, then every other branch alphabetically. Stable so the ordering
-// is deterministic across calls.
+// present) first, then every other branch alphabetically. The sort is
+// stable, so the ordering stays deterministic across calls.
 func sortBranchesPinnedFirst(branches []string, pin string) {
 	sort.SliceStable(branches, func(i, j int) bool {
 		if branches[i] == pin {

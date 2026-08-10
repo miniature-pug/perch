@@ -18,7 +18,7 @@ situation, not the solution.
 
 ## Proposed solution
 
-What would you like perch to do instead? If you have thoughts on how it should
+What do you want perch to do instead? If you have thoughts on how it should
 look or behave in the cockpit, sketch them here.
 
 ## Alternatives considered
@@ -28,5 +28,5 @@ do not cover this.
 
 ## Additional context
 
-Anything else — the agent (`claude` / `opencode`) or workflow this relates to,
+Anything else that helps: the agent (`claude` / `opencode`) or workflow this relates to,
 mock-ups, or links to related issues.

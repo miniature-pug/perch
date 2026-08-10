@@ -4,7 +4,7 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 import type { AppSettings } from "./wails";
 
 // ---------------------------------------------------------------------------
-// Mock wails — getSettings resolves a fixture with 2 alwaysRules;
+// Mock wails. getSettings resolves a fixture with 2 alwaysRules.
 // saveSettings is a vi.fn() we can assert against.
 // ---------------------------------------------------------------------------
 const fixture: AppSettings = {
@@ -24,7 +24,7 @@ vi.mock("./wails", () => ({
   saveSettings: vi.fn(async () => {}),
 }));
 
-// Mock the notifications store — used for live DND toggle.
+// Mock the notifications store. The tests use it for the live DND toggle.
 vi.mock("./stores/notifications.svelte", () => ({
   getDnd: vi.fn(() => false),
   setDnd: vi.fn(),
@@ -73,7 +73,7 @@ describe("SettingsPanel — open, always-rules", () => {
     const revokeBtns = await screen.findAllByRole("button", { name: "Revoke" });
     expect(revokeBtns).toHaveLength(2);
 
-    // Click first revoke
+    // Click the first Revoke button.
     await fireEvent.click(revokeBtns[0]);
 
     await waitFor(() =>
@@ -111,7 +111,7 @@ describe("SettingsPanel — DND toggle persists", () => {
     const { default: SettingsPanel } = await import("./SettingsPanel.svelte");
     render(SettingsPanel, { props: { open: true, onClose: vi.fn() } });
 
-    // Wait for panel to load (rules appear)
+    // Wait for the panel to load (the rules appear).
     await screen.findAllByRole("button", { name: "Revoke" });
 
     const dndBtn = screen.getByRole("switch", { name: "Do not disturb" });
@@ -132,11 +132,11 @@ describe("SettingsPanel — glass toggle persists", () => {
     const { default: SettingsPanel } = await import("./SettingsPanel.svelte");
     render(SettingsPanel, { props: { open: true, onClose: vi.fn() } });
 
-    // Wait for panel to load (rules appear)
+    // Wait for the panel to load (the rules appear).
     await screen.findAllByRole("button", { name: "Revoke" });
 
     const glassBtn = screen.getByRole("switch", { name: "Glass effects" });
-    // Default fixture has glassDisabled=false → glass is ON (aria-checked=true)
+    // The default fixture has glassDisabled=false, so glass is ON (aria-checked=true).
     expect(glassBtn).toHaveAttribute("aria-checked", "true");
     await fireEvent.click(glassBtn);
 
@@ -194,13 +194,13 @@ describe("SettingsPanel — F52 appearance display names", () => {
     const optByText = (sel: HTMLSelectElement, text: string) =>
       Array.from(sel.options).find((o) => o.textContent?.trim() === text);
 
-    // Display name shown, slug preserved as the value
+    // The select shows the display name and keeps the slug as the value.
     expect(optByText(themeSelect, "Tokyo Night")?.value).toBe("tokyo-night");
     expect(optByText(themeSelect, "Rosé Pine")?.value).toBe("rose-pine");
     expect(optByText(densitySelect, "Comfortable")?.value).toBe("comfortable");
     expect(optByText(fontSelect, "IBM Plex")?.value).toBe("ibm-plex");
 
-    // Raw slugs are no longer rendered as option text
+    // The select no longer renders raw slugs as option text.
     expect(optByText(themeSelect, "tokyo-night")).toBeUndefined();
     expect(optByText(fontSelect, "ibm-plex")).toBeUndefined();
   });

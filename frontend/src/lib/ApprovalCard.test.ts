@@ -67,7 +67,7 @@ test("batch Deny all invokes onDenyAll prop when provided", async () => {
   expect(onDecision).not.toHaveBeenCalled();
 });
 
-// F27-fe: a large tool input is rendered in the card body (no more approving blind).
+// F27-fe: the card body renders a large tool input (no more approving blind).
 test("renders the tool input text in the body for a large input", async () => {
   const { default: ApprovalCard } = await import("./ApprovalCard.svelte");
   const bigInput = "echo " + "x".repeat(200); // >= 120 bytes
@@ -77,7 +77,7 @@ test("renders the tool input text in the body for a large input", async () => {
   expect(body.textContent).toContain(bigInput);
 });
 
-// F25: Allow is focused on open (Enter approves) and single-key 'a' fires allow.
+// F25: Allow gets focus on open (Enter approves), and the single key 'a' fires allow.
 test("Allow is focused on mount and keydown 'a' fires allow", async () => {
   const { default: ApprovalCard } = await import("./ApprovalCard.svelte");
   const onDecision = vi.fn();
@@ -88,7 +88,7 @@ test("Allow is focused on mount and keydown 'a' fires allow", async () => {
   expect(onDecision).toHaveBeenCalledWith("req_1", "allow");
 });
 
-// F25: 'd' denies; the risky "always" needs the Shift+A chord, never a lone key.
+// F25: 'd' denies. The risky "always" action needs the Shift+A chord, never a lone key.
 test("keydown 'd' fires deny; plain 'a' never fires always", async () => {
   const { default: ApprovalCard } = await import("./ApprovalCard.svelte");
   const onDecision = vi.fn();

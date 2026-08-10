@@ -12,21 +12,23 @@ import (
 )
 
 const (
-	// lockRetryMax is the number of attempts made when a mutating git command
+	// lockRetryMax is the number of retries after a mutating git command
 	// fails because another git process holds the repository index lock.
 	lockRetryMax = 8
-	// lockRetryInitialBackoff is the wait before the first retry; it doubles each
-	// attempt up to lockRetryMaxBackoff. The total worst-case wait stays well
-	// under uiGitTimeout so a genuinely wedged lock still surfaces an error.
+	// lockRetryInitialBackoff is the wait before the first retry. The wait
+	// doubles on each attempt, up to lockRetryMaxBackoff. The total
+	// worst-case wait stays well under uiGitTimeout, so a lock that never
+	// clears still surfaces an error.
 	lockRetryInitialBackoff = 50 * time.Millisecond
 	lockRetryMaxBackoff     = 800 * time.Millisecond
 )
 
-// isIndexLockContention reports whether stderr indicates the git index lock was
-// held by a concurrent process — the one condition worth retrying. It matches
-// the stable fragments git prints for lock contention ("Unable to create
-// '<repo>/.git/index.lock': File exists.") rather than an exit code, which git
-// shares across many unrelated failures.
+// isIndexLockContention reports whether stderr shows that a concurrent
+// process holds the git index lock. This is the one condition worth
+// retrying. isIndexLockContention matches the stable fragments git prints
+// for lock contention ("Unable to create '<repo>/.git/index.lock': File
+// exists.") instead of matching an exit code, because git shares that exit
+// code across many unrelated failures.
 func isIndexLockContention(stderr string) bool {
 	return strings.Contains(stderr, "index.lock") &&
 		(strings.Contains(stderr, "Unable to create") || strings.Contains(stderr, "File exists"))
@@ -150,16 +152,17 @@ func statusCode(xy string) string {
 	}
 }
 
-// Hunks returns unified-diff hunks for file from both the working tree
-// (unstaged changes) and the index (staged-only changes). Files that appear
-// in neither diff return an empty slice. Files with both staged and unstaged
-// changes are deduplicated by hunk header so identical hunks are not reported
-// twice.
+// Hunks returns unified-diff hunks for file, from both the working tree
+// (unstaged changes) and the index (staged-only changes). A file that
+// appears in neither diff returns an empty slice. When file has both staged
+// and unstaged changes, Hunks deduplicates by hunk header, so it does not
+// report identical hunks twice.
 //
-// NOTE: this function only READS hunks. The Hunk.Index it assigns is the shared
-// contract for all three mutators: StageHunk/DiscardHunk act on working-tree
-// hunks (Staged==false), and UnstageHunk acts on staged hunks (Staged==true), all
-// addressed by this merged index — not by a position within either raw diff.
+// NOTE: this function only READS hunks. The Hunk.Index it assigns is the
+// shared contract for all three mutators. StageHunk and DiscardHunk act on
+// working-tree hunks (Staged==false). UnstageHunk acts on staged hunks
+// (Staged==true). All three address a hunk by this merged index, not by its
+// position within either raw diff.
 func Hunks(ctx context.Context, r proc.Runner, worktree, file string) ([]Hunk, error) {
 	// Working-tree (unstaged) hunks.
 	wtOut, wtErr, err := r.Run(ctx, "git", "-C", worktree, "diff", "--unified=3", "--no-color", "--", file)
@@ -168,8 +171,8 @@ func Hunks(ctx context.Context, r proc.Runner, worktree, file string) ([]Hunk, e
 	}
 	wtHunks := parseUnifiedDiff(file, string(wtOut))
 
-	// Staged (cached) hunks — cover files added to the index but not further
-	// modified in the working tree.
+	// Staged (cached) hunks. These cover files added to the index but not
+	// further modified in the working tree.
 	stOut, stErr, err := r.Run(ctx, "git", "-C", worktree, "diff", "--cached", "--unified=3", "--no-color", "--", file)
 	if err != nil {
 		return nil, fmt.Errorf("git diff --cached %s: %w: %s", file, err, strings.TrimSpace(string(stErr)))
@@ -177,7 +180,7 @@ func Hunks(ctx context.Context, r proc.Runner, worktree, file string) ([]Hunk, e
 	stHunks := parseUnifiedDiff(file, string(stOut))
 
 	if len(stHunks) == 0 {
-		// Fast path: no staged hunks — just return working-tree hunks.
+		// Fast path: no staged hunks. Return the working-tree hunks only.
 		return wtHunks, nil
 	}
 
@@ -273,30 +276,35 @@ func DiscardHunk(ctx context.Context, r proc.Runner, worktree, file string, inde
 	return applyHunkByIndex(ctx, r, worktree, file, index, "--reverse")
 }
 
-// UnstageHunk moves a staged hunk back to the working tree by reverse-applying it
-// to the INDEX ONLY via `git apply --reverse --cached`. It is the inverse of
-// StageHunk: `--cached` scopes the apply to the index so the working-tree content
-// is never touched — only the staged entry is reverted, and the hunk reappears as
-// an unstaged change.
+// UnstageHunk moves a staged hunk back to the working tree. It does this by
+// reverse-applying the hunk to the INDEX ONLY, via `git apply --reverse
+// --cached`. UnstageHunk is the inverse of StageHunk: the `--cached` flag
+// scopes the apply to the index, so the working-tree content is never
+// touched. Only the staged entry is reverted, and the hunk reappears as an
+// unstaged change.
 //
-// `index` is the hunk's position in the MERGED Hunks(worktree, file) output — the
-// SAME contract StageHunk/DiscardHunk take — and MUST refer to a Staged==true
-// hunk (unstaging an unstaged hunk is a caller error and returns an error). A
-// staged hunk's merged index is offset past the unstaged hunks and skips any
-// header-deduplicated hunks, so it does NOT equal that hunk's position in raw
-// `git diff --cached` output; slicing the cached diff by the merged index would
-// pick the wrong hunk (or run out of range). The target is therefore located in
-// the cached diff by header match rather than by positional index. Unstaging
-// shifts the remaining hunks, so callers MUST re-derive hunks (re-call Hunks)
-// after each UnstageHunk before unstaging another — the same precondition as
-// StageHunk.
+// `index` is the hunk's position in the MERGED Hunks(worktree, file) output.
+// This is the SAME contract that StageHunk and DiscardHunk use. `index`
+// MUST refer to a Staged==true hunk; unstaging an unstaged hunk is a caller
+// error, and UnstageHunk returns an error.
+//
+// A staged hunk's merged index is offset past the unstaged hunks, and it
+// skips any header-deduplicated hunks. So the merged index does NOT equal
+// that hunk's position in the raw `git diff --cached` output. Slicing the
+// cached diff by the merged index would pick the wrong hunk, or run out of
+// range. UnstageHunk therefore locates the target in the cached diff by
+// header match, not by positional index.
+//
+// Unstaging shifts the remaining hunks. Callers MUST re-derive hunks
+// (re-call Hunks) after each UnstageHunk call, before unstaging another
+// hunk. This is the same precondition StageHunk uses.
 func UnstageHunk(ctx context.Context, r proc.Runner, worktree, file string, index int) error {
 	if strings.ContainsAny(file, "\n\r") {
 		return fmt.Errorf("git: invalid file path %q", file)
 	}
-	// Resolve index against the merged Hunks() list so the contract matches
-	// StageHunk/DiscardHunk exactly — Hunks() is the single source of truth for
-	// the merge, dedup, and index assignment.
+	// Resolve index against the merged Hunks() list, so the contract matches
+	// StageHunk and DiscardHunk exactly. Hunks() is the single source of
+	// truth for the merge, dedup, and index assignment.
 	hunks, err := Hunks(ctx, r, worktree, file)
 	if err != nil {
 		return err
@@ -308,12 +316,13 @@ func UnstageHunk(ctx context.Context, r proc.Runner, worktree, file string, inde
 	if !target.Staged {
 		return fmt.Errorf("git: hunk %d is not staged and cannot be unstaged", index)
 	}
-	// Re-read the raw cached diff and locate the target hunk by its header. The
-	// merged index is NOT the cached-diff position (it is offset past the unstaged
-	// hunks and skips dedup'd ones), so header match — not positional slicing — is
-	// what maps the merged index onto the cached diff. singleHunkPatch then slices
-	// the verbatim block, preserving "\ No newline" markers and the true ---/+++
-	// headers exactly as StageHunk/DiscardHunk do.
+	// Re-read the raw cached diff and locate the target hunk by its header.
+	// The merged index is NOT the cached-diff position: it is offset past
+	// the unstaged hunks and skips dedup'd ones. So header match, not
+	// positional slicing, maps the merged index onto the cached diff.
+	// singleHunkPatch then slices the verbatim block. This preserves "\ No
+	// newline" markers and the true ---/+++ headers, exactly as StageHunk
+	// and DiscardHunk do.
 	out, errOut, err := r.Run(ctx, "git", "-C", worktree, "diff", "--cached", "--unified=3", "--no-color", "--", file)
 	if err != nil {
 		return fmt.Errorf("git diff --cached %s: %w: %s", file, err, strings.TrimSpace(string(errOut)))
@@ -347,9 +356,10 @@ func hunkPositionByHeader(raw, want string) (int, error) {
 	return 0, fmt.Errorf("git: staged hunk %q not found in cached diff", want)
 }
 
-// applyHunkByIndex re-runs `git diff` for file, slices out the index-th hunk's
-// verbatim patch text (file header + that @@ block, preserving newline markers
-// and real ---/+++ headers), and pipes it to `git apply <flag>`.
+// applyHunkByIndex re-runs `git diff` for file, slices out the index-th
+// hunk's verbatim patch text (the file header and that @@ block, preserving
+// newline markers and real ---/+++ headers), and pipes it to `git apply
+// <flag>`.
 func applyHunkByIndex(ctx context.Context, r proc.Runner, worktree, file string, index int, flag string) error {
 	if strings.ContainsAny(file, "\n\r") {
 		return fmt.Errorf("git: invalid file path %q", file)
@@ -365,11 +375,12 @@ func applyHunkByIndex(ctx context.Context, r proc.Runner, worktree, file string,
 	return gitApplyPatch(ctx, r, worktree, patch, flag)
 }
 
-// singleHunkPatch builds a self-contained, git-apply-compatible patch for hunk
-// `index` (0-based) from the raw `git diff` output of a single file: the file
-// header (every line before the first "@@ ") plus the index-th "@@…@@" block,
-// copied verbatim so that "\ No newline at end of file" markers and the true
-// ---/+++ headers (including "+++ /dev/null" for deletions) are preserved.
+// singleHunkPatch builds a self-contained, git-apply-compatible patch for
+// hunk `index` (0-based) from the raw `git diff` output of a single file.
+// The patch is the file header (every line before the first "@@ ") plus the
+// index-th "@@…@@" block, copied verbatim. This preserves "\ No newline at
+// end of file" markers and the true ---/+++ headers, including "+++
+// /dev/null" for deletions.
 func singleHunkPatch(raw string, index int) (string, error) {
 	lines := strings.Split(raw, "\n")
 	firstHunk := -1
@@ -406,7 +417,7 @@ func singleHunkPatch(raw string, index int) (string, error) {
 	}
 	for i := start; i < end; i++ {
 		// strings.Split on a trailing-newline-terminated diff yields a final ""
-		// element; don't emit it as a spurious blank line at EOF.
+		// element. Do not emit it as a spurious blank line at EOF.
 		if i == len(lines)-1 && lines[i] == "" {
 			continue
 		}
@@ -415,21 +426,23 @@ func singleHunkPatch(raw string, index int) (string, error) {
 	return sb.String(), nil
 }
 
-// gitApplyPatch pipes patch into `git apply <flags...> -` via the runner so that
-// the call is visible to FakeRunner in tests and obeys the runner's context
-// and timeout controls. flags carries the apply mode: "--cached" (stage),
-// "--reverse" (discard), or "--reverse --cached" (unstage — reverse the index
-// entry only, leaving the working tree untouched).
+// gitApplyPatch pipes patch into `git apply <flags...> -` through the
+// runner. This keeps the call visible to FakeRunner in tests, and it obeys
+// the runner's context and timeout controls. flags carries the apply mode:
+// "--cached" for stage, "--reverse" for discard, or "--reverse --cached" for
+// unstage. Unstage reverses the index entry only and leaves the working
+// tree untouched.
 //
-// The apply takes the repository index lock. When the agent and the UI touch
-// the same worktree concurrently, git can fail with "Unable to create
-// '.git/index.lock': File exists." — a transient condition the holder clears in
-// milliseconds. Rather than surfacing that as a hard error, retry with capped
-// exponential backoff (only for lock contention; every other failure returns
-// immediately). The retry budget is bounded well under uiGitTimeout and honors
-// ctx cancellation.
+// The apply takes the repository index lock. When the agent and the UI
+// touch the same worktree at the same time, git can fail with "Unable to
+// create '.git/index.lock': File exists." This is a transient condition;
+// the holder clears the lock in milliseconds. Instead of surfacing that as
+// a hard error, gitApplyPatch retries with capped exponential backoff, only
+// for lock contention. Every other failure returns immediately. The retry
+// budget stays well under uiGitTimeout, and gitApplyPatch honors ctx
+// cancellation.
 func gitApplyPatch(ctx context.Context, r proc.Runner, worktree, patch string, flags ...string) error {
-	// git apply <flags...> - ; args built once and reused across lock retries.
+	// git apply <flags...> -. gitApplyPatch builds args once and reuses them across lock retries.
 	args := make([]string, 0, len(flags)+2)
 	args = append(args, "apply")
 	args = append(args, flags...)

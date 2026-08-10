@@ -13,8 +13,9 @@ func TestDetectPlaceholderFrontend(t *testing.T) {
 		t.Error("the committed stub must be detected as a placeholder frontend")
 	}
 
-	// A realistic Vite build: hashed asset bundles under /assets/ plus the SPA
-	// mount element. Must NOT be flagged as a placeholder.
+	// A realistic Vite build has hashed asset bundles under /assets/ and the
+	// SPA mount element. detectPlaceholderFrontend must not flag this build as
+	// a placeholder.
 	const real = `<!doctype html>` +
 		`<html lang="en"><head><meta charset="UTF-8" />` +
 		`<title>perch</title>` +
@@ -25,7 +26,8 @@ func TestDetectPlaceholderFrontend(t *testing.T) {
 		t.Error("a real Vite build must NOT be detected as a placeholder frontend")
 	}
 
-	// Defensive: a document missing either marker is treated as a placeholder.
+	// As a defensive check, detectPlaceholderFrontend treats a document
+	// missing either marker as a placeholder.
 	if !detectPlaceholderFrontend(`<div id="app"></div>`) {
 		t.Error("an index without /assets/ bundles must be treated as a placeholder")
 	}
@@ -50,7 +52,7 @@ func TestCheckFrontendIndex(t *testing.T) {
 		t.Errorf("a real embed must pass the guard, got %v", err)
 	}
 
-	// A missing index.html is an equally broken embed.
+	// A missing index.html file is an equally broken embed.
 	if err := checkFrontendIndex(fstest.MapFS{}); !errors.Is(err, errPlaceholderFrontend) {
 		t.Errorf("a missing index must yield errPlaceholderFrontend, got %v", err)
 	}

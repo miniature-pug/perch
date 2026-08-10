@@ -142,7 +142,7 @@ describe("countUp", () => {
 
     action.update(100);
 
-    // rAF has been called — capturedCb is the first frame callback.
+    // rAF has run. capturedCb is the first frame callback.
     expect(capturedCb).toBeDefined();
 
     // Cancel the in-flight animation.
@@ -152,20 +152,20 @@ describe("countUp", () => {
     // Snapshot textContent right after destroy().
     const valueAfterDestroy = node.textContent;
 
-    // Re-stub rAF to a spy so we can assert it is NOT called when the stale
-    // callback fires (the `destroyed` guard in the implementation makes it return
-    // early, preventing any further rAF scheduling).
+    // Re-stub rAF to a spy, so the test can assert the spy is NOT called when the stale
+    // callback fires. (The `destroyed` guard in the implementation makes the callback return
+    // early. This prevents any further rAF scheduling.)
     const rafAfterDestroySpy = vi.fn().mockReturnValue(99);
     vi.stubGlobal("requestAnimationFrame", rafAfterDestroySpy);
 
-    // Drive the stale callback directly — the browser would have suppressed it
-    // via cancelAnimationFrame, but here we invoke it manually to prove the
+    // This drives the stale callback directly. The browser would have suppressed the callback
+    // via cancelAnimationFrame, but this test invokes the callback manually to prove the
     // `destroyed` flag silences it completely.
     if (capturedCb) capturedCb(50); // mid-animation timestamp
 
-    // textContent must not have changed — the guard returned early.
+    // textContent must not have changed. The guard returned early.
     expect(node.textContent).toBe(valueAfterDestroy);
-    // And no new rAF was scheduled.
+    // The code also schedules no new rAF.
     expect(rafAfterDestroySpy).not.toHaveBeenCalled();
 
     cleanup(node);
@@ -273,8 +273,8 @@ describe("trapFocus", () => {
   });
 
   it("nested traps: inner trap owns Tab even when an outer focusable follows it in DOM order", () => {
-    // Outer trap scrim: a focusable, then the inner trap container placed BEFORE
-    // a trailing outer focusable — the fragile DOM order the fix must handle.
+    // Outer trap scrim: a focusable, then the inner trap container, placed BEFORE
+    // a trailing outer focusable. This is the fragile DOM order the fix must handle.
     const outer = document.createElement("div");
 
     const outerFirst = document.createElement("button");
@@ -288,8 +288,8 @@ describe("trapFocus", () => {
     inner.append(innerA, innerB);
 
     // Trailing outer focusable AFTER the inner container. Without the nesting
-    // guard the outer trap's `last` would be this element and Tab from innerB
-    // would leak here instead of wrapping to innerA.
+    // guard, the outer trap's `last` would be this element. Tab from innerB
+    // would then leak here instead of wrapping to innerA.
     const outerLast = document.createElement("button");
     outerLast.textContent = "outer-last";
 
@@ -317,7 +317,7 @@ describe("trapFocus", () => {
     expect(eShift.defaultPrevented).toBe(true);
     expect(document.activeElement).toBe(innerB);
 
-    // Once the inner trap is gone, the outer trap resumes normal ownership: Tab
+    // Once the inner trap is gone, the outer trap resumes normal ownership. Tab
     // from the outer tail wraps to the outer head across the whole scrim.
     innerAction.destroy();
     outerLast.focus();

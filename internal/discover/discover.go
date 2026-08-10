@@ -1,10 +1,13 @@
 // Package discover finds git repository candidate directories under a root.
 //
-// It is the first stage of the perch discovery pipeline: it walks the
-// filesystem and returns paths of directories that contain a ".git" entry
-// (directory for normal repos, regular file for linked worktrees / submodules).
-// It does not build domain objects, resolve worktrees, or enumerate branches;
-// those steps are handled by the integration layer that reads this output.
+// This package is the first stage of the perch discovery pipeline. It walks
+// the filesystem and returns paths of directories that contain a ".git"
+// entry: a directory for normal repos, or a regular file for linked
+// worktrees and submodules.
+//
+// Package discover does not build domain objects, resolve worktrees, or
+// enumerate branches. The integration layer that reads this output handles
+// those steps.
 package discover
 
 import (
@@ -19,49 +22,50 @@ import (
 // Root itself is depth 0; a direct child of root is depth 1.
 const DefaultMaxDepth = 8
 
-// DefaultPrune is the set of directory base names skipped during a scan.
-// Heavy build-artifact and dependency directories are excluded by default
-// because they are never top-level git repos and can be enormous.
+// DefaultPrune is the set of directory base names Scan skips.
+// Scan excludes heavy build-artifact and dependency directories by default
+// because they are never top-level git repos and can be huge.
 var DefaultPrune = []string{"node_modules", "vendor", ".git"}
 
 // Options controls a Scan.
 type Options struct {
 	// MaxDepth is the maximum directory depth below root that Scan descends.
-	// Root itself is depth 0; a direct child of root is depth 1.
-	// Scan considers a candidate (directory containing ".git") only when the
-	// candidate's depth is <= MaxDepth — that is, only when depth(parent of .git) <= MaxDepth.
-	// A value <= 0 is treated as the default depth of 8.
+	// Root itself is depth 0. A direct child of root is depth 1.
+	// Scan considers a candidate (a directory that contains ".git") only when
+	// the candidate's depth is <= MaxDepth. In other words, Scan requires
+	// depth(parent of .git) <= MaxDepth.
+	// Scan treats a value <= 0 as the default depth of 8.
 	MaxDepth int
 
-	// Prune lists directory base names never descended into during a scan.
-	// A nil slice uses DefaultPrune. A non-nil but empty slice disables all pruning.
+	// Prune lists directory base names that Scan never enters.
+	// A nil slice uses DefaultPrune. A non-nil, empty slice turns off all pruning.
 	Prune []string
 }
 
-// Scan walks the filesystem rooted at root and returns the absolute paths of
-// directories that contain a child named ".git" (either a directory for a
-// normal repo or a regular file for a linked worktree / submodule). Hidden
-// (dot-prefixed) directories are never descended into, so tool/config caches
-// such as ~/.pyenv or ~/.npm are never returned as candidates.
+// Scan walks the filesystem rooted at root. Scan returns the absolute paths
+// of directories that contain a child named ".git": a directory for a normal
+// repo, or a regular file for a linked worktree or submodule. Scan never
+// enters hidden (dot-prefixed) directories, so it never returns tool or
+// config caches such as ~/.pyenv or ~/.npm as candidates.
 //
-// Behaviour summary:
-//   - root must exist; if it does not Scan returns an error.
-//   - Symlinks are never followed (filepath.WalkDir does not follow directory
-//     symlinks, which also prevents infinite cycles).
-//   - Finding a repo does NOT stop the descent; nested independent repos are
-//     still discovered.
-//   - Per-entry read errors cause that subtree to be skipped; they do not abort
+// Behavior summary:
+//   - root must exist. If root does not exist, Scan returns an error.
+//   - Scan never follows symlinks (filepath.WalkDir does not follow
+//     directory symlinks, which also prevents infinite cycles).
+//   - Finding a repo does NOT stop the descent. Scan still finds nested,
+//     independent repos.
+//   - A read error on one entry skips only that subtree. It does not abort
 //     the whole scan.
-//   - Results are returned in the lexical order produced by filepath.WalkDir.
-//     The caller is responsible for any further sorting or deduplication.
+//   - Scan returns results in the lexical order that filepath.WalkDir
+//     produces. The caller must do any further sorting or deduplication.
 func Scan(root string, opts Options) ([]string, error) {
 	abs, err := filepath.Abs(root)
 	if err != nil {
 		return nil, fmt.Errorf("discover: resolve root %s: %w", root, err)
 	}
 
-	// Fail fast if root does not exist so callers receive a meaningful error
-	// rather than a silent empty result.
+	// Fail fast when root does not exist, so callers get a clear error
+	// instead of a silent empty result.
 	if _, err := os.Stat(abs); err != nil {
 		return nil, fmt.Errorf("discover: root %s: %w", abs, err)
 	}
@@ -83,7 +87,7 @@ func Scan(root string, opts Options) ([]string, error) {
 	var results []string
 
 	err = filepath.WalkDir(abs, func(path string, d fs.DirEntry, werr error) error {
-		// Per-entry error: skip this entry/subtree but continue the walk.
+		// Per-entry error: skip this entry or subtree, but continue the walk.
 		if werr != nil {
 			if d != nil && d.IsDir() {
 				return fs.SkipDir
@@ -93,10 +97,10 @@ func Scan(root string, opts Options) ([]string, error) {
 
 		name := d.Name()
 
-		// Detect ".git" entry. The CONTAINING directory is the candidate, so
-		// depth is measured by the parent directory. This branch is checked before
-		// any prune logic so that ".git" in DefaultPrune never hides the detection;
-		// we never descend INTO .git, but we always detect it when visited.
+		// Detect a ".git" entry. The containing directory is the candidate, so
+		// Scan measures depth from the parent directory. Scan checks this branch
+		// before any prune logic, so ".git" in DefaultPrune never hides detection.
+		// Scan never descends into .git, but always detects .git when it visits.
 		if name == ".git" && path != abs {
 			parent := filepath.Dir(path)
 			rel, relErr := filepath.Rel(abs, parent)
@@ -106,24 +110,24 @@ func Scan(root string, opts Options) ([]string, error) {
 					results = append(results, parent)
 				}
 			}
-			// Skip .git contents regardless (dir) or move on (file).
+			// Skip the contents of a .git directory. For a .git file, just continue.
 			if d.IsDir() {
 				return fs.SkipDir
 			}
 			return nil
 		}
 
-		// Root is always entered.
+		// Scan always enters root.
 		if path == abs {
 			return nil
 		}
 
-		// Only directories need further consideration.
+		// Only directories need more checks.
 		if !d.IsDir() {
 			return nil
 		}
 
-		// Depth gate: stop descending directories that are too deep.
+		// Depth gate: Scan stops descending into directories that are too deep.
 		rel, relErr := filepath.Rel(abs, path)
 		if relErr != nil {
 			return fs.SkipDir
@@ -134,10 +138,10 @@ func Scan(root string, opts Options) ([]string, error) {
 		}
 
 		// Hidden-directory gate: never descend into dot-prefixed directories.
-		// Tool/config caches such as ~/.pyenv, ~/.npm, and ~/.cache often contain
-		// a .git entry of their own but are never the user's project repos.
-		// The scan root itself is exempt (handled above), so a root that is itself
-		// a hidden directory is still scanned.
+		// Tool and config caches such as ~/.pyenv, ~/.npm, and ~/.cache often
+		// contain their own .git entry, but they are never the user's project repos.
+		// The scan root itself is exempt from this gate (see above), so Scan still
+		// scans a root that is itself a hidden directory.
 		if strings.HasPrefix(name, ".") {
 			return fs.SkipDir
 		}

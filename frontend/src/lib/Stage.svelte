@@ -46,7 +46,7 @@
   .stage-content.split [data-pane="primary"]   { border-right: 1px solid var(--perch-border); }
   .stage-content.split [data-pane="secondary"] { }
 
-  /* Toolbar buttons — match app-wide toolbar style */
+  /* Toolbar buttons: match the app-wide toolbar style */
   .stage-bar button {
     display: inline-flex;
     align-items: center;

@@ -114,7 +114,7 @@ func TestUnstageHunk_MovesStagedHunkBackToWorktree(t *testing.T) {
 
 	// Unstage the staged hunk by its MERGED Hunks() index. Because BOTTOM_CHANGE
 	// remains an unstaged hunk, the staged TOP_CHANGE hunk sits at merged index 1,
-	// not 0 — passing a hardcoded 0 would target the wrong (unstaged) hunk.
+	// not 0. Passing a hardcoded 0 would target the wrong (unstaged) hunk.
 	hunks, err := git.Hunks(ctx, r, repo, "target.txt")
 	if err != nil {
 		t.Fatalf("Hunks: %v", err)
@@ -223,14 +223,15 @@ func hunkTouches(h git.Hunk, substr string) bool {
 }
 
 // TestUnstageHunk_MixedDiff_UnstageFirstStaged is the regression guard for the F2
-// merged-index bug. For a file with BOTH an unstaged hunk and multiple staged
-// hunks, UnstageHunk must honor the MERGED Hunks() index — the same contract
-// StageHunk/DiscardHunk use — not a `git diff --cached` position. Here mixed.txt
-// has one unstaged hunk (BOT_HUNK) and two staged hunks (TOP_HUNK, MID_HUNK), so
-// the FIRST staged hunk's merged index is 1 while its cached-diff position is 0.
-// The buggy cached-local implementation sliced cached position 1 (MID_HUNK) and
-// unstaged the WRONG hunk; the fix locates the target by header and unstages
-// TOP_HUNK. This test fails against the buggy implementation and passes after it.
+// merged-index bug. For a file with BOTH an unstaged hunk and more than one
+// staged hunk, UnstageHunk must honor the MERGED Hunks() index. This is the
+// same contract StageHunk and DiscardHunk use, not a `git diff --cached`
+// position. Here mixed.txt has one unstaged hunk (BOT_HUNK) and two staged
+// hunks (TOP_HUNK, MID_HUNK), so the FIRST staged hunk's merged index is 1,
+// while its cached-diff position is 0. The buggy cached-local implementation
+// sliced cached position 1 (MID_HUNK) and unstaged the WRONG hunk. The fix
+// locates the target by header and unstages TOP_HUNK. This test fails
+// against the buggy implementation and passes after it.
 func TestUnstageHunk_MixedDiff_UnstageFirstStaged(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	r := proc.ExecRunner{}
@@ -243,10 +244,10 @@ func TestUnstageHunk_MixedDiff_UnstageFirstStaged(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Resolve the merged index of the FIRST staged hunk — the index a frontend
+	// Resolve the merged index of the FIRST staged hunk: the index a frontend
 	// would pass. It must be nonzero here because an unstaged hunk (BOT_HUNK)
-	// precedes the staged hunks in the merged list, the exact condition the buggy
-	// cached-local interpretation mishandled.
+	// precedes the staged hunks in the merged list, the exact condition the
+	// buggy cached-local interpretation mishandled.
 	hunks, err := git.Hunks(ctx, r, repo, "mixed.txt")
 	if err != nil {
 		t.Fatalf("Hunks: %v", err)

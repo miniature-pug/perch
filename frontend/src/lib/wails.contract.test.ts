@@ -1,6 +1,6 @@
 // Compile-time contract test: import the real wails module (mocked in other suites)
 // and assert the exported function signatures match the pinned contracts.
-// These tests pass when the module exports the correct shapes; they fail when
+// These tests pass when the module exports the correct shapes. They fail when
 // old signatures or removed exports remain.
 import { describe, it, expect, test } from "vitest";
 import { forceRemoveWorkspace, listStaleSessions, cleanupSessions, homeShellCwd } from "./wails";

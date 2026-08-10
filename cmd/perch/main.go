@@ -1,8 +1,8 @@
-// Command perch is a keyboard-first GUI for managing AI coding sessions
-// (claude, opencode) across git worktrees. Run without arguments (or with a
-// path) it launches the Wails desktop GUI; it also provides the attach, doctor,
-// and version subcommands (plus a hidden debug subcommand). See ARCHITECTURE.md
-// for the full design.
+// Command perch is a keyboard-first GUI that manages AI coding sessions
+// (claude, opencode) across git worktrees. Run it without arguments, or
+// with a path, and it launches the Wails desktop GUI. It also provides the
+// attach, doctor, reload, and version subcommands (plus a hidden debug
+// subcommand). See ARCHITECTURE.md for the full design.
 package main
 
 import (
@@ -35,8 +35,9 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
-// run is the testable entry point. All handler output goes to stdout/stderr —
-// never directly to os.Stdout/os.Stderr. Returns the exit code.
+// run is the testable entry point. All handler output goes to stdout or
+// stderr, never directly to os.Stdout or os.Stderr. run returns the exit
+// code.
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		return handleLaunch("", stdout, stderr)
@@ -47,7 +48,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return doctor.Run(version, stdout, doctor.RealSystem())
 	case "version":
 		return handleVersion(stdout)
-	// debug is intentionally hidden from printUsage — it is a diagnostic
+	// debug is intentionally hidden from printUsage. It is a diagnostic
 	// surface, not part of the public CLI contract.
 	case "debug":
 		return handleDebug(args[1:], stdout, stderr)
@@ -61,9 +62,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
-// handleLaunch is the default entry point: it resolves the project root (cwd
-// when root==""), the discovery roots, and launches the Wails GUI via the
-// launchGUI seam. The GUI owns the interactive shell; there is no terminal TUI.
+// handleLaunch is the default entry point. It resolves the project root
+// (cwd when root==""), resolves the discovery roots, and launches the Wails
+// GUI through the launchGUI seam. The GUI owns the interactive shell. There
+// is no terminal TUI.
 func handleLaunch(root string, stdout, stderr io.Writer) int {
 	_ = stdout
 	if root == "" {
@@ -82,8 +84,9 @@ func handleLaunch(root string, stdout, stderr io.Writer) int {
 }
 
 // handleVersion prints the perch version and build info.
-// VCS fields from debug.ReadBuildInfo are optional — under -trimpath and
-// vendored builds these stamps may be absent, so every access is guarded.
+// VCS fields from debug.ReadBuildInfo are optional. Under -trimpath builds
+// and vendored builds, these stamps may be absent, so every access checks
+// first.
 func handleVersion(stdout io.Writer) int {
 	_, _ = fmt.Fprintf(stdout, "perch %s\n", version)
 	_, _ = fmt.Fprintf(stdout, "go %s %s/%s\n", runtime.Version(), runtime.GOOS, runtime.GOARCH)
@@ -124,15 +127,16 @@ func handlePathArg(arg string, stdout, stderr io.Writer) int {
 	return handleLaunch(arg, stdout, stderr)
 }
 
-// handleAttach implements `perch attach <query>`. When a perch window is already
-// running, the Wails SingleInstanceLock forwards os.Args[1:] to it automatically
-// (raising the window and routing the query to workspace selection via the
-// workspace:attach event) and this process exits. When no perch instance is
-// running, a fresh GUI is launched instead (the query is best-effort ignored in
-// that case — acceptable for v1).
+// handleAttach implements `perch attach <query>`. When a perch window is
+// already running, the Wails SingleInstanceLock forwards os.Args[1:] to it
+// automatically. This raises the window, and routes the query to workspace
+// selection through the workspace:attach event, and this process exits.
+// When no perch instance is running, handleAttach launches a fresh GUI
+// instead (the query is best-effort ignored in that case, which is
+// acceptable for v1).
 //
-// Note: on Linux the forwarding process exits non-zero — this is expected and
-// does not indicate an error.
+// Note: on Linux the forwarding process exits non-zero. This is expected,
+// and does not indicate an error.
 func handleAttach(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 || strings.TrimSpace(strings.Join(args, " ")) == "" {
 		_, _ = fmt.Fprintln(stderr, "Usage: perch attach <query>")
@@ -147,29 +151,30 @@ func handleAttach(args []string, stdout, stderr io.Writer) int {
 const reloadHTTPTimeout = 10 * time.Second
 
 // handleReload implements `perch reload`, run inside a per-workspace session
-// terminal. It reads its own environment (os.Environ — everything the user just
-// exported) and the env-sync handles the drawer injected (PERCH_ENVSYNC_URL/TOKEN/
-// WS), and POSTs the environment plus the workspace id to the app's loopback
-// endpoint with the Bearer token. The app computes the delta versus its baseline
-// and relaunches the agent, preserving the conversation.
+// terminal. It reads its own environment (os.Environ, everything the user
+// just exported) and the env-sync handles the drawer injected
+// (PERCH_ENVSYNC_URL, PERCH_ENVSYNC_TOKEN, PERCH_ENVSYNC_WS). handleReload
+// then POSTs the environment plus the workspace id to the app's loopback
+// endpoint, with the Bearer token. The app computes the delta against its
+// baseline, and relaunches the agent, preserving the conversation.
 //
-// It NEVER launches the GUI. When the PERCH_ENVSYNC_* handles are absent the
-// command was not run inside a perch session terminal, so it prints a friendly
-// error and exits non-zero. Environment values are never printed or logged — only
-// a generic confirmation.
+// handleReload NEVER launches the GUI. When the PERCH_ENVSYNC_* handles are
+// absent, the command did not run inside a perch session terminal, so
+// handleReload prints a friendly error and exits non-zero. It never prints
+// or logs environment values. It prints only a generic confirmation.
 func handleReload(stdout, stderr io.Writer) int {
 	url := strings.TrimSpace(os.Getenv(envsync.EnvURL))
 	token := strings.TrimSpace(os.Getenv(envsync.EnvToken))
 	ws := strings.TrimSpace(os.Getenv(envsync.EnvWS))
 	if url == "" || token == "" || ws == "" {
 		_, _ = fmt.Fprintln(stderr, "perch reload: not inside a perch session terminal (PERCH_ENVSYNC_* not set).")
-		_, _ = fmt.Fprintln(stderr, "Run it from a workspace terminal drawer, or use the reload button there.")
+		_, _ = fmt.Fprintln(stderr, "Run it from a session shell drawer, or use the reload button there.")
 		return 1
 	}
 
 	body, err := json.Marshal(envsync.SyncRequest{WorkspaceID: ws, Env: os.Environ()})
 	if err != nil {
-		// Never include the body in the error — it may hold secrets.
+		// Never include the body in the error. It may hold secrets.
 		_, _ = fmt.Fprintln(stderr, "perch reload: could not encode environment.")
 		return 1
 	}
@@ -198,7 +203,8 @@ func handleReload(stdout, stderr io.Writer) int {
 }
 
 // printUsage writes the usage summary to w.
-// Note: "debug" is intentionally absent — it is a hidden diagnostic surface.
+// Note: printUsage intentionally omits "debug". It is a hidden diagnostic
+// surface.
 func printUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "Usage: perch [path]")
 	_, _ = fmt.Fprintln(w, "       perch attach <query>")
@@ -263,8 +269,8 @@ func handleDebugDiscover(args []string, stdout, stderr io.Writer) int {
 // writeProjects writes a formatted listing of projects and their trees to w.
 // Each project header line is "Name  Path". Each tree line is indented two
 // spaces, followed by "*" (main) or " " (linked), the branch name, two spaces,
-// and the tree path. This is a pure formatting function; it performs no I/O
-// beyond writing to w.
+// and the tree path. writeProjects is a pure formatting function. It performs
+// no I/O beyond writing to w.
 func writeProjects(w io.Writer, projects []*discover.ProjectTrees) {
 	for _, pt := range projects {
 		_, _ = fmt.Fprintf(w, "%s  %s\n", pt.Project.Name, pt.Project.Path)

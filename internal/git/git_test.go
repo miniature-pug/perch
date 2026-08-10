@@ -89,7 +89,7 @@ func TestParsePorcelain_Linked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Fixture has exactly 2 entries: main checkout + one linked worktree.
+	// Fixture has exactly 2 entries: main checkout and one linked worktree.
 	if len(wts) != 2 {
 		t.Fatalf("want 2 worktrees, got %d", len(wts))
 	}
@@ -268,8 +268,9 @@ func TestParsePorcelain_Malformed_AttrBeforeWorktree(t *testing.T) {
 	}
 }
 
-// TestParsePorcelain_Malformed_UnknownLinesSkipped verifies that unknown lines
-// (garbage/future attributes) are silently skipped without returning an error.
+// TestParsePorcelain_Malformed_UnknownLinesSkipped verifies that
+// ParsePorcelain silently skips unknown lines (garbage or future
+// attributes) without returning an error.
 func TestParsePorcelain_Malformed_UnknownLinesSkipped(t *testing.T) {
 	input := "worktree /repos/repo\nHEAD 0000000000000000000000000000000000000001\nfuture-attr value\nbranch refs/heads/main\n"
 	wts, err := ParsePorcelain([]byte(input))
@@ -296,7 +297,7 @@ func TestParsePorcelain_LeadingTrailingBlanks(t *testing.T) {
 	}
 }
 
-// TestParsePorcelain_CRLF verifies that CRLF line endings are handled.
+// TestParsePorcelain_CRLF verifies that ParsePorcelain handles CRLF line endings.
 func TestParsePorcelain_CRLF(t *testing.T) {
 	input := "worktree /repos/repo\r\nHEAD 0000000000000000000000000000000000000001\r\nbranch refs/heads/main\r\n"
 	wts, err := ParsePorcelain([]byte(input))

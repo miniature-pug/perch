@@ -62,7 +62,7 @@ test("app-level notice with empty workspaceId is NOT a navigation button", async
   ];
   render(NotificationHub, { props: { items: appNotice, dnd: false, onDismiss: () => {}, onToggleDnd: () => {}, onClearRead: () => {}, onSelect } });
   await waitFor(() => screen.getByText("Failed to create session"));
-  // No navigation button rendered for an empty-workspaceId notice.
+  // The component renders no navigation button for a notice with an empty workspaceId.
   expect(screen.queryByRole("button", { name: /open session for/i })).toBeNull();
 });
 
@@ -84,7 +84,7 @@ test("notif-item carries --item-color style matching worktreeColor for its works
 });
 
 // -------------------------------------------------------------------------
-// F40 — self-close: Escape and outside-click ask the parent to close.
+// F40: self-close. Escape and outside-click ask the parent to close.
 // -------------------------------------------------------------------------
 
 test("F40: Escape asks the parent to close the hub (onClose)", async () => {
@@ -106,19 +106,19 @@ test("F40: a click outside the panel closes the hub; a click inside does not", a
   await fireEvent.click(screen.getByRole("button", { name: /^all$/i }));
   expect(onClose).not.toHaveBeenCalled();
 
-  // A click on the backdrop / anywhere outside the panel closes it.
+  // A click on the backdrop, or anywhere outside the panel, closes it.
   await fireEvent.click(document.body);
   expect(onClose).toHaveBeenCalledTimes(1);
 });
 
 // -------------------------------------------------------------------------
-// F41 — filter on the explicit kind; empty text reflects the active filter.
+// F41: filter on the explicit kind. Empty text reflects the active filter.
 // -------------------------------------------------------------------------
 
 test("F41: a blocking error is NOT under the Approvals filter, but is under Errors", async () => {
   const { default: NotificationHub } = await import("./NotificationHub.svelte");
   const mixed = [
-    // Both are tier "blocking" — only the kind separates the error from the approval.
+    // Both are tier "blocking". Only the kind separates the error from the approval.
     { id: "e1", workspaceId: "ws_a", tier: "blocking" as const, kind: "error"    as const, title: "Stage failed",    body: "Could not stage hunk", read: false, ts: 2 },
     { id: "a1", workspaceId: "ws_b", tier: "blocking" as const, kind: "approval" as const, title: "Approval needed", body: "run bash",             read: false, ts: 1 },
   ];

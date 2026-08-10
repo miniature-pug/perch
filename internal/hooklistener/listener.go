@@ -17,32 +17,35 @@ import (
 )
 
 const (
-	// LoopbackHost is the single source of truth for the loopback address used
-	// by the hook listener and any package that needs to bind or connect to the
-	// same loopback interface (127.0.0.1, ephemeral port — never a public interface).
+	// LoopbackHost is the single source of truth for the loopback address. The
+	// hook listener, and any package that binds or connects to the same
+	// loopback interface, use this address: 127.0.0.1 with an ephemeral port.
+	// It is never a public interface.
 	LoopbackHost = "127.0.0.1"
-	// listenerTokenBytes is the number of random bytes used for the auth token.
+	// listenerTokenBytes is the number of random bytes in the auth token.
 	listenerTokenBytes = 32
 	// hookEventChanBuf is the buffer size of the hook event channel.
 	hookEventChanBuf = 64
-	// reqIDBytes is the number of random bytes used for per-request IDs. 16 bytes
-	// (128-bit) removes any practical birthday-collision risk across request IDs.
+	// reqIDBytes is the number of random bytes in each per-request ID. 16 bytes
+	// (128 bits) make a birthday collision between request IDs practically
+	// impossible.
 	reqIDBytes = 16
-	// maxHookBodyBytes caps the hook request body (1 MiB) so an over-large POST
-	// cannot exhaust memory. Real hook payloads are orders of magnitude smaller.
+	// maxHookBodyBytes caps the hook request body at 1 MiB, so an over-large
+	// POST cannot exhaust memory. A real hook payload is far smaller.
 	maxHookBodyBytes = 1 << 20
-	// HTTP server timeouts bound how long a single connection may occupy the
-	// listener, closing the slowloris exposure of an unbounded server. The values
-	// are generous relative to real hook traffic (tiny local POSTs) yet finite.
+	// The HTTP server timeouts limit how long one connection can occupy the
+	// listener. The limits close the slowloris risk of an unbounded server. The
+	// values are generous for real hook traffic (small, local POSTs), but they
+	// stay finite.
 	//
-	// WriteTimeout is intentionally NOT set. Go's write deadline is armed at the
-	// end of the request-header read and covers the entire ServeHTTP lifetime, so
-	// any finite WriteTimeout would abort a PreToolUse approval while it blocks
-	// waiting for the user's decision — a human "think time" that legitimately
-	// exceeds any fixed bound. ReadHeaderTimeout/ReadTimeout still close the
-	// slowloris exposure (slow header/body reads), which is what an unbounded
-	// server risks; the blocking-response phase is bounded per-request by the
-	// handler's own r.Context() cancellation instead.
+	// WriteTimeout stays unset on purpose. Go arms the write deadline at the end
+	// of the request-header read, and the deadline then covers the whole
+	// ServeHTTP lifetime. A finite WriteTimeout would abort a PreToolUse
+	// approval while it waits for the user's decision. This wait is a human
+	// "think time", and it can rightly exceed any fixed bound.
+	// ReadHeaderTimeout and ReadTimeout still close the slowloris risk from slow
+	// header or body reads. The handler's own r.Context() cancellation bounds
+	// the blocking-response phase instead, on a per-request basis.
 	serverReadHeaderTimeout = 5 * time.Second
 	serverReadTimeout       = 10 * time.Second
 	serverIdleTimeout       = 60 * time.Second
@@ -61,7 +64,7 @@ type HookEvent struct {
 	ToolName       string          `json:"tool_name"`
 	ToolInput      json.RawMessage `json:"tool_input"`
 	ErrorType      string          `json:"error_type"`
-	ReqID          string          `json:"-"` // assigned by listener
+	ReqID          string          `json:"-"` // the listener sets this field
 }
 
 type pending struct{ ch chan Decision }
@@ -128,15 +131,16 @@ func (l *Listener) handleHook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	// Hooks POST their payload; reject any other method before touching the body.
+	// Hooks POST their payload. Reject any other method before touching the body.
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	// Cap the request body so a malicious or malfunctioning hook cannot exhaust
 	// memory with an unbounded POST. 1 MiB is far larger than any real hook
-	// payload (tool name + tool input); an over-limit body makes Decode return an
-	// error and falls into the 400 path below rather than being buffered whole.
+	// payload (tool name plus tool input). An over-limit body makes Decode
+	// return an error. The handler then falls into the 400 path below, instead
+	// of buffering the whole body.
 	r.Body = http.MaxBytesReader(w, r.Body, maxHookBodyBytes)
 	var ev HookEvent
 	if err := json.NewDecoder(r.Body).Decode(&ev); err != nil {
@@ -145,9 +149,9 @@ func (l *Listener) handleHook(w http.ResponseWriter, r *http.Request) {
 	}
 	if ev.Type != "PreToolUse" {
 		// Lifecycle events (Stop, StopFailure, SessionStart, Notification) must
-		// not be silently dropped — the sidebar state depends on them. Use a
-		// blocking send, but remain cancellable so client-disconnect or server
-		// shutdown cannot leak this handler goroutine.
+		// never drop silently. The sidebar state depends on them. The handler
+		// uses a blocking send here, but it stays cancellable, so a client
+		// disconnect or a server shutdown cannot leak this handler goroutine.
 		select {
 		case l.events <- ev:
 		case <-r.Context().Done():
@@ -170,14 +174,14 @@ func (l *Listener) handleHook(w http.ResponseWriter, r *http.Request) {
 		delete(l.reqs, ev.ReqID)
 		l.mu.Unlock()
 	}()
-	// Deliver the approval event — a blocking approval must not be dropped.
+	// Deliver the approval event. A blocking approval must never drop.
 	select {
 	case l.events <- ev:
 	case <-r.Context().Done():
 		http.Error(w, "client gone", http.StatusServiceUnavailable)
 		return
 	}
-	// Wait for the verdict, staying cancellable so client-disconnect or
+	// Wait for the verdict. Stay cancellable, so a client disconnect or a
 	// server shutdown never leaks this handler goroutine.
 	var d Decision
 	select {
@@ -206,11 +210,12 @@ func (l *Listener) Decide(reqID string, d Decision) {
 	if p == nil {
 		return
 	}
-	// Non-blocking send into the size-1 buffered channel. The handler consumes
-	// exactly one verdict, so the first Decide for a reqID fills the buffer and
-	// wins; a second Decide (double-click / retry) finds the buffer full and
-	// falls through the default case instead of blocking the caller (a Wails IPC
-	// goroutine) forever. The first verdict is the one delivered.
+	// This is a non-blocking send into the size-1 buffered channel. The handler
+	// consumes exactly one verdict. The first Decide call for a reqID fills the
+	// buffer and wins. A second Decide call for the same reqID (a double click
+	// or a retry) finds the buffer full and falls through the default case,
+	// instead of blocking the caller (a Wails IPC goroutine) forever. The first
+	// verdict is the one the handler delivers.
 	select {
 	case p.ch <- d:
 	default:

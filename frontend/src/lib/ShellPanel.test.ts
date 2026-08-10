@@ -1,8 +1,8 @@
 // frontend/src/lib/ShellPanel.test.ts
-// jsdom coverage for the drawer chrome: the labelled action buttons and the reload
-// shell picker. ShellDrawer (the per-cell terminal) is stubbed to an inert component
-// so these tests exercise only ShellPanel's own markup, not xterm/pty. Exact visual
-// spacing and tab-strip crowding are manual-smoke-only.
+// This file gives jsdom coverage for the shell drawer chrome: the labelled action buttons
+// and the reload shell picker. The test stubs ShellDrawer (the per-cell terminal) as an
+// inert component. These tests then exercise only ShellPanel's own markup, not xterm or pty.
+// Exact visual spacing and tab-strip crowding are manual-smoke-only items.
 import { render, screen, waitFor, fireEvent } from "@testing-library/svelte";
 import { vi, expect, beforeEach } from "vitest";
 import { tick } from "svelte";
@@ -119,8 +119,8 @@ test("selecting a shell restores focus to the caret button (not <body>)", async 
   await tick();
   await waitFor(() => screen.getByRole("menu"));
 
-  // Choosing an item closes the picker, removing the focused menu item from the DOM.
-  // reloadPane must hand focus back to the caret so it never lands on <body>.
+  // When the user chooses an item, the picker closes. This removes the focused menu item from the DOM.
+  // reloadPane must hand focus back to the caret, so focus never lands on <body>.
   await fireEvent.click(screen.getByRole("menuitem", { name: /^shell$/ }));
   await tick();
   expect(document.activeElement).toBe(caret);
@@ -137,8 +137,8 @@ test("Escape closes the open picker", async () => {
   await renderPanel(MULTI);
   await fireEvent.click(screen.getByRole("button", { name: /choose which shell to reload/i }));
   await waitFor(() => screen.getByRole("menu"));
-  // The key handler lives on the focusable menu items (focus lands on one when the
-  // picker opens), mirroring the MenuBar dropdown convention.
+  // The key handler lives on the focusable menu items. Focus lands on one item when the
+  // picker opens. This mirrors the MenuBar dropdown convention.
   await fireEvent.keyDown(screen.getByRole("menuitem", { name: /active/i }), { key: "Escape" });
   await tick();
   expect(screen.queryByRole("menu")).toBeNull();

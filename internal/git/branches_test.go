@@ -38,8 +38,8 @@ func TestBranches(t *testing.T) {
 }
 
 // TestBranches_PinsDefaultOrCurrentFirst is the FakeRunner ordering guard: the
-// current/default branch must come FIRST (callers take branches[0]), with the rest
-// alphabetical — regardless of the order `git branch` emitted them.
+// current/default branch must come FIRST (callers take branches[0]), with the
+// rest alphabetical, regardless of the order `git branch` emitted them.
 func TestBranches_PinsDefaultOrCurrentFirst(t *testing.T) {
 	branchList := proc.FakeResult{Stdout: []byte("zeta\nmain\nalpha\n")}
 

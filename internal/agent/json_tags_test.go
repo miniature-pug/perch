@@ -6,9 +6,10 @@ import (
 	"testing"
 )
 
-// TestEventOmitempty asserts that zero-value optional fields are omitted: an
+// TestEventOmitempty checks that zero-value optional fields are omitted: an
 // approval-kind event carries no state key. This keeps the wire format
-// consistent with the TS type declarations (optional fields; omitempty tags).
+// consistent with the TS type declarations, which mark these fields
+// optional with omitempty tags.
 func TestEventOmitempty(t *testing.T) {
 	t.Parallel()
 
@@ -74,10 +75,11 @@ func TestJSONTagsApprovalReq(t *testing.T) {
 }
 
 // TestJSONTagsApprovalReq_InputHashOmitempty pins the `inputHash,omitempty`
-// contract: an empty InputHash must NOT appear on the wire (so an absent hash
-// reads as "no hash" on the TS side, matching the optional field), and a set
-// InputHash must appear. maybeAutoApprove fails closed on a missing hash, so the
-// omitempty behavior is part of the security contract, not just cosmetics.
+// contract: an empty InputHash must NOT appear on the wire, so an absent
+// hash reads as "no hash" on the TS side, matching the optional field. A
+// set InputHash must appear. maybeAutoApprove fails closed on a missing
+// hash, so the omitempty behavior is part of the security contract, not
+// just a cosmetic choice.
 func TestJSONTagsApprovalReq_InputHashOmitempty(t *testing.T) {
 	t.Parallel()
 

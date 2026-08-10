@@ -66,6 +66,6 @@ test("listWorkspaces dispatches to ListWorkspaces and propagates return value", 
   const mod = await import("./wails");
   const result = await mod.listWorkspaces();
   expect(ListWorkspaces).toHaveBeenCalled();
-  // Assert the wrapper propagates the IPC return value to the caller — not just that it was called.
+  // This asserts the wrapper propagates the IPC return value to the caller, not just that the caller called it.
   expect(result).toEqual(KNOWN_WORKSPACES);
 });

@@ -45,11 +45,12 @@ func TestListenerUnauthorized(t *testing.T) {
 	}
 }
 
-// TestListenerWrongTokenNoEnqueue asserts that a /hook POST carrying a WRONG
-// Bearer token is rejected with 401 AND does not enqueue an event. This is the
-// auth boundary: a forged hook (e.g. another local process probing the loopback
-// port) must never reach the monitor's event channel. We post a fully-valid Stop
-// payload so the only thing standing between it and the queue is the token check.
+// TestListenerWrongTokenNoEnqueue asserts that a /hook POST with a WRONG
+// Bearer token gets a 401 response and does not enqueue an event. This is the
+// auth boundary: a forged hook (for example, another local process that
+// probes the loopback port) must never reach the monitor's event channel. The
+// test posts a fully valid Stop payload, so the token check is the only thing
+// between the payload and the queue.
 func TestListenerWrongTokenNoEnqueue(t *testing.T) {
 	t.Parallel()
 	l, err := hooklistener.New()
@@ -76,7 +77,7 @@ func TestListenerWrongTokenNoEnqueue(t *testing.T) {
 	case ev := <-l.Events():
 		t.Fatalf("wrong-token POST must not enqueue an event; got %+v", ev)
 	case <-time.After(200 * time.Millisecond):
-		// no event — correct.
+		// no event, as expected.
 	}
 }
 
@@ -147,26 +148,28 @@ func TestPreToolUse_ClientCancelDoesNotHang(t *testing.T) {
 
 	select {
 	case <-done:
-		// handler/client unwound — no hang
+		// The handler and client unwound cleanly. No hang occurred.
 	case <-time.After(2 * time.Second):
 		t.Fatal("request hung after client cancel — handler not cancellable")
 	}
 }
 
-// TestStopEventNotDroppedUnderBackpressure verifies that a Stop event is NOT
-// silently dropped when the 64-slot event buffer is full.
+// TestStopEventNotDroppedUnderBackpressure verifies that a Stop event does
+// NOT drop silently when the 64-slot event buffer is full.
 //
 // How it distinguishes pre-fix (drop) from post-fix (block):
 //
-//	Pre-fix:  non-blocking send with `default:`. When buffer is full the Stop
-//	          handler returns 200 immediately, silently discarding the event.
+//	Pre-fix:  non-blocking send with `default:`. When the buffer is full, the
+//	          Stop handler returns 200 immediately, and silently discards the
+//	          event.
 //	Post-fix: blocking send on r.Context(). The handler blocks until the test
 //	          drains a slot, then delivers the Stop event.
 //
-// The test uses FillEventsBuffer (an internal test helper) to fill the channel
-// to capacity atomically — no HTTP races — then posts the Stop via HTTP in a
-// goroutine. Draining starts after the POST goroutine is running; the drain
-// frees a slot which (post-fix) unblocks the handler and delivers Stop.
+// The test uses FillEventsBuffer (an internal test helper) to fill the
+// channel to capacity in one atomic step, with no HTTP races. The test then
+// posts the Stop event over HTTP in a goroutine. Draining starts after the
+// POST goroutine is running. The drain frees a slot, which unblocks the
+// handler (post-fix) and delivers Stop.
 func TestStopEventNotDroppedUnderBackpressure(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	l, err := hooklistener.New()
@@ -197,14 +200,16 @@ func TestStopEventNotDroppedUnderBackpressure(t *testing.T) {
 	}()
 
 	// Give the Stop handler time to reach the channel-send decision point. In
-	// the pre-fix code it drops and returns in <1 ms; in the post-fix code it
-	// blocks (stopDone stays open). 50 ms is a generous but still fast budget.
+	// the pre-fix code, the handler drops the event and returns in under 1 ms.
+	// In the post-fix code, the handler blocks (stopDone stays open). 50 ms is
+	// a generous but still fast budget.
 	time.Sleep(50 * time.Millisecond)
 
-	// Drain Events() until we find Stop or exhaust the buffer. The drain frees
-	// slots; post-fix that unblocks the handler so Stop is delivered. Pre-fix:
-	// the handler already dropped Stop (it returned within 50 ms), so Stop never
-	// appears in the channel and the loop exhausts bufCap reads without finding it.
+	// Drain Events() until the loop finds Stop or exhausts the buffer. Post-fix,
+	// the drain frees slots, which unblocks the handler so it delivers Stop.
+	// Pre-fix, the handler already dropped Stop (it returned within 50 ms), so
+	// Stop never appears in the channel, and the loop exhausts bufCap reads
+	// without finding it.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	found := false
@@ -247,12 +252,13 @@ func TestStopEventNotDroppedUnderBackpressure(t *testing.T) {
 	}
 }
 
-// TestDecideDoubleCallDoesNotBlock is the regression guard for the IPC deadlock:
-// a second Decide for the SAME reqID (double-click / retry) must NOT block the
-// caller (a Wails IPC goroutine) forever on the size-1 buffered channel. The
-// handler consumes exactly one verdict, so after the first Decide fills the
-// buffer, a second Decide finds it full and must fall through (non-blocking send).
-// The first verdict is the one delivered.
+// TestDecideDoubleCallDoesNotBlock is the regression guard for the IPC
+// deadlock. A second Decide call for the SAME reqID (a double click or a
+// retry) must NOT block the caller (a Wails IPC goroutine) forever on the
+// size-1 buffered channel. The handler consumes exactly one verdict. So after
+// the first Decide call fills the buffer, a second Decide call finds the
+// buffer full and must fall through (a non-blocking send). The first verdict
+// is the one the handler delivers.
 func TestDecideDoubleCallDoesNotBlock(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	l, err := hooklistener.New()
@@ -296,12 +302,13 @@ func TestDecideDoubleCallDoesNotBlock(t *testing.T) {
 		t.Fatal("timeout waiting for event")
 	}
 
-	// First verdict: allow. This fills the size-1 buffer (the handler may not have
-	// drained it yet).
+	// First verdict: allow. This fills the size-1 buffer (the handler may not
+	// have drained it yet).
 	l.Decide(reqID, hooklistener.Decision{Allow: true})
 
-	// Second verdict for the SAME reqID (double-click). This MUST return promptly;
-	// pre-fix it blocked on the now-full channel forever, wedging the IPC goroutine.
+	// Second verdict for the SAME reqID (a double click). This call MUST return
+	// promptly. Pre-fix, it blocked forever on the now-full channel, and wedged
+	// the IPC goroutine.
 	secondDone := make(chan struct{})
 	go func() {
 		l.Decide(reqID, hooklistener.Decision{Allow: false})
@@ -309,7 +316,7 @@ func TestDecideDoubleCallDoesNotBlock(t *testing.T) {
 	}()
 	select {
 	case <-secondDone:
-		// returned promptly — correct
+		// returned promptly, as expected
 	case <-time.After(2 * time.Second):
 		t.Fatal("second Decide for the same reqID blocked — IPC deadlock not fixed")
 	}
@@ -328,9 +335,10 @@ func TestDecideDoubleCallDoesNotBlock(t *testing.T) {
 	}
 }
 
-// TestHookBodySizeLimit verifies an over-limit request body is rejected without
-// buffering it whole into memory. http.MaxBytesReader caps the body at 1 MiB, so
-// a larger POST makes json.Decode fail and the handler returns 400.
+// TestHookBodySizeLimit verifies that the handler rejects an over-limit
+// request body without buffering the whole body into memory.
+// http.MaxBytesReader caps the body at 1 MiB. A larger POST makes json.Decode
+// fail, and the handler returns 400.
 func TestHookBodySizeLimit(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	l, err := hooklistener.New()
@@ -339,9 +347,10 @@ func TestHookBodySizeLimit(t *testing.T) {
 	}
 	defer func() { _ = l.Close() }()
 
-	// A valid-JSON payload whose tool_input string field is padded well past the
-	// 1 MiB cap (2 MiB of filler). MaxBytesReader truncates the read mid-stream so
-	// Decode sees invalid/short JSON and errors → 400. Memory use stays bounded.
+	// This is a valid JSON payload. Its tool_input string field is padded well
+	// past the 1 MiB cap, with 2 MiB of filler. MaxBytesReader truncates the
+	// read mid-stream, so Decode sees invalid or short JSON and returns an
+	// error (400). Memory use stays bounded.
 	var b strings.Builder
 	b.WriteString(`{"hook_event_name":"PreToolUse","session_id":"s","tool_name":"Bash","tool_input":"`)
 	for b.Len() < 2<<20 {
@@ -435,9 +444,10 @@ func TestPreToolUseAllowDeny(t *testing.T) {
 	}
 }
 
-// TestListenerRejectsNonPost asserts the /hook handler rejects any method other
-// than POST with 405 (after auth, before decoding the body). Hooks always POST;
-// a GET/PUT/DELETE is malformed and must not reach the event-enqueue path.
+// TestListenerRejectsNonPost asserts that the /hook handler rejects any
+// method other than POST with 405 (after auth, before decoding the body).
+// Hooks always POST. A GET, PUT, or DELETE is malformed, and must not reach
+// the event-enqueue path.
 func TestListenerRejectsNonPost(t *testing.T) {
 	t.Parallel()
 	l, err := hooklistener.New()
@@ -464,15 +474,15 @@ func TestListenerRejectsNonPost(t *testing.T) {
 	case ev := <-l.Events():
 		t.Fatalf("non-POST must not enqueue an event; got %+v", ev)
 	case <-time.After(200 * time.Millisecond):
-		// no event — correct.
+		// no event, as expected.
 	}
 }
 
-// TestListenerServerTimeouts asserts the slowloris-hardening deadlines are set on
-// the http.Server: ReadHeaderTimeout, ReadTimeout, and IdleTimeout are non-zero.
-// WriteTimeout MUST stay 0 — Go's write deadline covers the whole ServeHTTP
-// lifetime, so any finite value would abort a PreToolUse approval while it blocks
-// waiting for the user's decision.
+// TestListenerServerTimeouts asserts that the slowloris-hardening deadlines
+// are set on the http.Server: ReadHeaderTimeout, ReadTimeout, and IdleTimeout
+// are non-zero. WriteTimeout MUST stay 0. Go's write deadline covers the
+// whole ServeHTTP lifetime, so any finite value would abort a PreToolUse
+// approval while it waits for the user's decision.
 func TestListenerServerTimeouts(t *testing.T) {
 	t.Parallel()
 	l, err := hooklistener.New()

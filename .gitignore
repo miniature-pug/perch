@@ -27,8 +27,8 @@ go.work.sum
 # env file
 .env
 
-# Deferred worktree-teardown trash dirs (§7.2; transient, rm'd by the cleanup
-# script — ignored in case a run or test is interrupted mid-teardown)
+# Deferred worktree-teardown trash dirs (§7.2). The cleanup script removes
+# them. Ignored here in case a run or test stops mid-teardown.
 .perch_trash_*/
 
 # Build output
@@ -48,7 +48,7 @@ frontend/e2e/__screenshots__/
 frontend/playwright-report/
 
 frontend/node_modules/
-# frontend/dist/ is ignored as a whole — Vite build output is not committed.
+# frontend/dist/ is ignored as a whole. Vite build output is not committed.
 # Exception: frontend/dist/index.html is intentionally tracked as the go:embed
 # stub that Wails embeds into the production binary. To commit the stub, use
 # `git add -f frontend/dist/index.html` (or it stays tracked once committed).

@@ -1,10 +1,11 @@
 #!/bin/sh
-# install.sh — bootstrap perch and its runtime dependencies.
-# POSIX sh; no bashisms. shellcheck-clean (dialect: sh).
+# install.sh: sets up perch and its runtime dependencies.
+# This script uses POSIX sh only, with no bash-specific syntax. It is
+# shellcheck-clean for the sh dialect.
 set -e
 
 # ---------------------------------------------------------------------------
-# Repo root — derived from script location, not cwd.
+# Repo root: found from the script location, not the current directory.
 # ---------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$SCRIPT_DIR"
@@ -87,8 +88,8 @@ APT_UPDATED=0
 pkg_install() {
   case "$PKG_MGR" in
     apt)
-      # Fresh Debian/Ubuntu images ship an empty package cache; refresh once
-      # before the first install so package names resolve.
+      # Fresh Debian and Ubuntu images ship an empty package cache. Refresh
+      # it once, before the first install, so package names resolve.
       if [ "$APT_UPDATED" -eq 0 ]; then
         $SUDO apt-get update -qq
         APT_UPDATED=1
@@ -103,7 +104,7 @@ pkg_install() {
 }
 
 # ---------------------------------------------------------------------------
-# Ensure curl is available (not present by default on Ubuntu base image)
+# Ensure curl is present. The Ubuntu base image does not include it by default.
 # ---------------------------------------------------------------------------
 if ! command -v curl >/dev/null 2>&1; then
   printf '[install] curl (required for downloads)\n'
@@ -120,7 +121,7 @@ fi
 GO_MIN_MAJOR=1
 GO_MIN_MINOR=24
 
-# Check by path, not PATH, so idempotency survives across script invocations.
+# Check the fixed path, not PATH, so re-running this script gives the same result.
 GO_BIN="/usr/local/go/bin/go"
 
 go_meets_minimum() {
@@ -146,8 +147,9 @@ else
 
   printf '[install] go %s from %s\n' "$GO_VERSION" "$DOWNLOAD_URL"
 
-  # Fetch SHA256 from go.dev JSON — grep/awk only, no jq.
-  # The JSON lists filename, os, arch, version, sha256 in that order; -A5 covers it.
+  # Fetch the SHA256 value from go.dev JSON. Use grep and awk only, not jq.
+  # The JSON lists filename, os, arch, version, and sha256 in that order.
+  # The -A5 flag captures all five fields.
   EXPECTED_SHA="$(curl -fsSL 'https://go.dev/dl/?mode=json&include=all' \
     || die "Failed to fetch Go release metadata from go.dev")"
   EXPECTED_SHA="$(printf '%s' "$EXPECTED_SHA" \
@@ -160,9 +162,9 @@ else
   fi
 
   TMPFILE="$(mktemp /tmp/go-install-XXXXXX.tar.gz)"
-  # Staging dir on the same filesystem as /usr/local for atomic mv.
+  # Use a staging directory on the same filesystem as /usr/local, so the move is atomic.
   STAGE_DIR="/usr/local/.perch-go-$$"
-  # Remove tmpfile and staging dir on any exit (including errors).
+  # Remove the temp file and staging directory on any exit, including on errors.
   trap '$SUDO rm -rf "$TMPFILE" "$STAGE_DIR"' EXIT
 
   curl -fsSL -o "$TMPFILE" "$DOWNLOAD_URL" \
@@ -179,7 +181,7 @@ else
     die "SHA256 mismatch for ${TARBALL}: got ${ACTUAL_SHA}, expected ${EXPECTED_SHA}"
   fi
 
-  # Atomic extraction: extract into a staging dir, verify, then swap.
+  # Extract atomically: extract into a staging directory, verify it, then swap it in.
   $SUDO mkdir -p "$STAGE_DIR"
   $SUDO tar -C "$STAGE_DIR" -xzf "$TMPFILE"
 
@@ -188,11 +190,11 @@ else
     die "Extraction of ${TARBALL} did not produce go/bin/go — aborting (no change made to /usr/local/go)"
   fi
 
-  # Swap: remove old installation, move staged tree into place.
+  # Swap in the new install. Remove the old installation, then move the staged tree into place.
   $SUDO rm -rf /usr/local/go
   $SUDO mv "${STAGE_DIR}/go" /usr/local/go
 
-  # Cleanup temp files (trap will also fire on EXIT but clean eagerly here).
+  # Clean up temp files now. The trap also fires on EXIT, but this cleans up sooner.
   rm -f "$TMPFILE"
   $SUDO rm -rf "$STAGE_DIR"
   trap '' EXIT
@@ -204,7 +206,7 @@ fi
 export PATH="/usr/local/go/bin:$PATH"
 
 # ---------------------------------------------------------------------------
-# Step 2: git (non-fatal install check; exit 1 if absent or too old)
+# Step 2: git (required; the script exits with an error if git is absent or too old)
 # ---------------------------------------------------------------------------
 GIT_MIN_MAJOR=2
 GIT_MIN_MINOR=20
@@ -309,7 +311,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Resolve INSTALL_PREFIX once — the build step installs the perch binary here.
+# Resolve INSTALL_PREFIX once. The build step installs the perch binary here.
 # ---------------------------------------------------------------------------
 if [ -z "$INSTALL_PREFIX" ]; then
   if [ -w /usr/local/bin ]; then
@@ -361,10 +363,10 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 7: desktop integration (Linux) — icon + .desktop entry
-# The binary already carries the window icon (embedded via options.Linux.Icon);
-# this adds the app-menu / app-switcher entry, whose StartupWMClass matches the
-# ProgramName so the switcher picks up the same icon.
+# Step 7: desktop integration (Linux): icon and .desktop entry
+# The binary already carries the window icon, embedded through
+# options.Linux.Icon. This step adds the app-menu and app-switcher entry.
+# Its StartupWMClass matches ProgramName, so the switcher shows the same icon.
 # ---------------------------------------------------------------------------
 if [ "$GOOS" = "linux" ]; then
   icon_dir="${HOME}/.local/share/icons/hicolor/512x512/apps"

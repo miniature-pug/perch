@@ -38,8 +38,8 @@ func TestHunks_StagedOnlyFile(t *testing.T) {
 	runGit(t, repo, "add", ".")
 	runGit(t, repo, "commit", "-m", "add staged.txt")
 
-	// Modify the file and stage the change (git add). Do NOT leave any unstaged
-	// changes — the working tree is clean relative to the index.
+	// Modify the file and stage the change (git add). Do NOT leave any
+	// unstaged changes. The working tree must stay clean relative to the index.
 	if err := os.WriteFile(target, []byte("line1\nMODIFIED\nline3\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}

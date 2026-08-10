@@ -8,8 +8,8 @@ that deserves a clear, private way to report a flaw. This document sets one out.
 
 Perch has not yet cut a tagged release. Until it does, the actively developed
 line on the default branch (`main`) is the only supported version, and security
-fixes land there. Older checkouts are not maintained, so update to the current
-`main` before reporting and a fix will have somewhere to go.
+fixes land there. Older checkouts are not maintained. Update to the current
+`main` before you report an issue, so a fix has somewhere to land.
 
 ## Reporting a vulnerability
 
@@ -21,7 +21,8 @@ go straight to:
 
 https://github.com/miniature-pug/perch/security/advisories/new
 
-That opens a private advisory visible only to you and the maintainers. Tell us
+Reporting this way opens a private advisory visible only to you and the
+maintainers. Tell us
 what you need to reproduce the issue: the affected version or commit, the agent
 and configuration in play, the steps you took, and what you saw. A proof of
 concept helps, though a clear description is enough to begin.
@@ -31,17 +32,19 @@ publicly.
 
 ## What to expect
 
-- **Acknowledgement.** The maintainers aim to acknowledge a report within a few
-  days of receiving it.
-- **Assessment.** They will confirm the issue, weigh its severity, and tell you
+- **Acknowledgement.** The maintainers acknowledge a report within a few days of
+  receiving it.
+- **Assessment.** They confirm the issue, weigh its severity, and tell you
   whether it falls in scope.
-- **A fix.** A confirmed vulnerability is fixed on `main` as a priority, with the
-  timeline set by its severity, and you are kept informed as the work proceeds.
-- **Credit.** With your consent, the published advisory will credit you.
+- **A fix.** The maintainers fix a confirmed vulnerability on `main` as a
+  priority. Its severity sets the timeline, and they keep you informed as the
+  work proceeds.
+- **Credit.** With your consent, the maintainers credit you in the published
+  advisory.
 
 ## Threat surface in scope
 
-Perch's security model is the section by that name in
+Perch's security model appears in the section of that name in
 [ARCHITECTURE.md](ARCHITECTURE.md). Reports touching these areas are especially
 welcome.
 
@@ -55,19 +58,18 @@ welcome.
 - **Repository-carried code execution.** A repository can commit agent
   configuration into its tree, such as a `.claude/settings.json`, whose hooks the
   agent runtime executes on session start. perch does not gate those hooks, and
-  the documentation says as much. A report showing perch runs committed
-  repository code in a way a fair reading of the docs says it would not still
-  belongs here.
-- **Input validation.** Session and pane identifiers, worktree paths, and git
-  refs are validated in the backend. A crafted value that slips past those checks
+  the documentation says so. A report belongs here if it shows perch running
+  committed repository code in a way the documentation does not describe.
+- **Input validation.** The backend validates session and pane identifiers,
+  worktree paths, and git refs. A crafted value that slips past those checks
   belongs here.
 
 ## Out of scope
 
 - Vulnerabilities in the coding agents themselves (`claude`, `opencode`) or in
   their upstream dependencies. Report those to their own projects.
-- The behavior of hooks that a repository you have chosen to trust legitimately
-  carries. Opening an untrusted repository is a documented caveat, covered in the
+- The behavior of hooks carried by a repository you have chosen to trust.
+  Opening an untrusted repository is a documented caveat, covered in the
   README's Security section, not a perch vulnerability.
 - Anything that already requires a local attacker holding your user account or an
   interactive session on your machine.

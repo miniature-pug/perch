@@ -10,9 +10,9 @@ import (
 	"testing"
 )
 
-// syncCapture records the (workspaceID, delta) pairs the listener delivers via
-// its SyncFunc callback, guarded so the handler goroutine and the test goroutine
-// never race.
+// syncCapture records the (workspaceID, delta) pairs that the listener
+// delivers through its SyncFunc callback. A mutex guards syncCapture, so the
+// handler goroutine and the test goroutine never race.
 type syncCapture struct {
 	mu    sync.Mutex
 	calls []captured
@@ -135,7 +135,8 @@ func TestListener_ValidToken_DeliversDelta(t *testing.T) {
 	if got.workspaceID != "ws-a" {
 		t.Errorf("workspaceID = %q, want ws-a", got.workspaceID)
 	}
-	// Only BAR=3 (changed) and NEW=9 (new). FOO unchanged; PERCH_* excluded.
+	// Only BAR=3 (changed) and NEW=9 (new) appear. FOO stays unchanged, and the
+	// handler excludes PERCH_*.
 	want := []string{"BAR=3", "NEW=9"}
 	if !equalStringSlices(got.delta, want) {
 		t.Errorf("delta = %v, want %v", got.delta, want)
@@ -203,8 +204,8 @@ func TestListener_CrossWorkspaceToken_Rejected(t *testing.T) {
 	if _, err := l.TokenFor("ws-b"); err != nil {
 		t.Fatal(err)
 	}
-	// ws-a's token, but the body claims ws-b. Must be rejected; the delta must
-	// never be applied to ws-b.
+	// This request carries ws-a's token, but the body claims ws-b. The handler
+	// must reject it. The delta must never apply to ws-b.
 	code := post(t, l, tokA, mustJSON(t, "ws-b", []string{"NEW=1"}))
 	if code != http.StatusForbidden {
 		t.Errorf("cross-workspace token: status = %d, want 403", code)

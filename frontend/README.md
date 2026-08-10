@@ -4,8 +4,8 @@
 
 The cockpit's interface: a Svelte 5 SPA, built by Vite, embedded in the binary
 and rendered by WebKit2GTK. It draws agent terminals with xterm.js and the
-editor with CodeMirror 6. For how it talks to the backend, see
-[ARCHITECTURE.md](../ARCHITECTURE.md); for what it does, see the
+editor with CodeMirror 6. For how the frontend talks to the backend, see
+[ARCHITECTURE.md](../ARCHITECTURE.md). For what the frontend does, see the
 [usage guide](../docs/usage.md).
 
 ## Layout
@@ -42,7 +42,7 @@ frontend/
 | `Preview` | Read-only markdown, Mermaid, and image preview |
 | `DiffView` | The changed-file list and per-hunk stage, discard, and send |
 | `DragDrop` | A drop zone that writes files or text into a pty |
-| `ApprovalCard` | The docked approval card, with Allow, Deny, Always, and the all-actions |
+| `ApprovalCard` | The docked approval card, with Allow, Deny, Always, and Approve all/Deny all |
 | `NotificationHub` | The notification panel, with filters and do-not-disturb |
 | `NewSessionDialog` | The create-session modal |
 | `ConfirmDialog` | The generic confirm modal |
@@ -61,15 +61,15 @@ in `lib/stores/` hold the rest:
 
 - `layout` keeps the pane sizes, the active view, and collapse state, and saves a
   debounced JSON blob through `SaveLayout`.
-- `mode` holds the current keyboard mode (normal, terminal, or command); it is
-  not persisted.
+- `mode` holds the current keyboard mode (normal, terminal, or command).
+  `mode` is not persisted.
 - `settings` holds the theme, density, font, do-not-disturb, glass, and
   always-allow rules, and writes through `SaveSettings`.
 - `notifications` holds the hub items and the do-not-disturb flag, with
   auto-dismiss timers for the lower tiers.
 
-The settings defaults here mirror the Go defaults in `app/app.go`. The two sides
-share no module, so they are kept in sync by hand.
+The settings defaults here mirror the Go defaults in `app/app.go`. The two
+sides share no module, so contributors keep them in sync by hand.
 
 ## Build
 

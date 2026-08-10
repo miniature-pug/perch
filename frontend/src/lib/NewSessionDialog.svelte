@@ -5,9 +5,10 @@
   import { trapFocus } from "./actions";
   import type { RepoInfo } from "./wails";
 
-  // Friendly label for a repo option: "name · branch" when a RepoInfo is known
-  // for this path, otherwise the raw path (e.g. a workspace-derived worktree
-  // path with no discoverRepos() match). The option VALUE always stays the path.
+  // repoLabel builds a friendly label for a repo option. It shows "name · branch"
+  // when a RepoInfo entry matches this path. Otherwise it shows the raw path, for
+  // example a worktree path with no match in discoverRepos(). The option VALUE
+  // always stays the path.
   function repoLabel(path: string, info: Record<string, RepoInfo> | undefined): string {
     const r = info?.[path];
     return r ? `${r.name} · ${r.branch}` : path;
@@ -15,15 +16,16 @@
 
   const SLUG_RE = /^[A-Za-z0-9._\/-]+$/;
 
-  // Well-known default-branch names, in priority order. Used to pin the repo's
-  // likely default branch to the top of the branch lists and to default the
-  // base ref to it. The backend already returns the default/current branch
-  // first (F30-be); this is a belt-and-suspenders guard on the frontend.
+  // Well-known default-branch names, in priority order. The list pins the repo's
+  // likely default branch to the top of the branch lists and sets it as the
+  // default base ref. The backend already returns the default or current branch
+  // first (F30-be). This is an extra guard on the frontend.
   const DEFAULT_BRANCH_NAMES = ["main", "master"];
 
-  // Slugify a free-text session Name into a branch-safe suffix: lowercased, each
-  // run of non-alphanumeric characters collapsed to a single hyphen, ends
-  // trimmed. Returns "" when the Name has no usable characters.
+  // slugifyName turns a free-text session name into a branch-safe suffix. It
+  // lowercases the name, collapses each run of non-alphanumeric characters to
+  // one hyphen, and trims the ends. It returns "" when the name has no usable
+  // characters.
   function slugifyName(name: string): string {
     return name
       .toLowerCase()
@@ -31,9 +33,9 @@
       .replace(/^-+|-+$/g, "");
   }
 
-  // Return `base` if it is not already taken, otherwise the first `${base}-N`
-  // (N starting at 2) that is free — so a second default session can never
-  // collide with the first.
+  // uniqueBranch returns `base` if it is not already taken. Otherwise it returns
+  // the first `${base}-N` (N starts at 2) that is free, so a second default
+  // session can never collide with the first.
   function uniqueBranch(base: string, taken: string[]): string {
     if (!taken.includes(base)) return base;
     let n = 2;
@@ -41,9 +43,10 @@
     return `${base}-${n}`;
   }
 
-  // Suggest a unique branch name. When a Name is given it drives the branch
-  // (`${agent}/${slug(name)}`); otherwise it falls back to `${agent}/work`.
-  // Either way the result is de-duplicated against the loaded branch list.
+  // suggestBranch suggests a unique branch name. When the caller gives a name,
+  // the name drives the branch (`${agent}/${slug(name)}`). Otherwise the branch
+  // falls back to `${agent}/work`. Either way, the function removes duplicates
+  // against the loaded branch list.
   function suggestBranch(agent: string, name: string, taken: string[]): string {
     const s = slugifyName(name);
     const base = s ? `${agent}/${s}` : `${agent}/work`;
@@ -54,8 +57,9 @@
     return SLUG_RE.test(name);
   }
 
-  // The repo's likely default branch: the first well-known name present in the
-  // list, else the first entry (the backend already sorts the default first).
+  // pickDefaultBranch returns the repo's likely default branch: the first
+  // well-known name in the list, or else the first entry, because the backend
+  // already sorts the default branch first.
   function pickDefaultBranch(list: string[]): string {
     for (const known of DEFAULT_BRANCH_NAMES) {
       if (list.includes(known)) return known;
@@ -63,8 +67,8 @@
     return list[0] ?? "";
   }
 
-  // Move the default branch to the front so both branch dropdowns and the
-  // base-ref default surface it first.
+  // pinDefaultFirst moves the default branch to the front, so both branch
+  // dropdowns and the base-ref default show it first.
   function pinDefaultFirst(list: string[]): string[] {
     const def = pickDefaultBranch(list);
     if (!def || list[0] === def) return list;
@@ -76,16 +80,17 @@
   }: {
     open: boolean;
     repos: string[];
-    // Path → RepoInfo lookup for friendly repo labels (F#5). Entries are optional —
-    // paths with no match (e.g. workspace-derived worktree paths) fall back to
-    // showing the raw path.
+    // Path to RepoInfo lookup for friendly repo labels (F#5). Entries are
+    // optional. A path with no match, for example a worktree path with no
+    // repo record, falls back to the raw path.
     repoInfo?: Record<string, RepoInfo>;
     loadBranches: (repo: string) => Promise<string[]>;
     onCreate: (agent: string, repo: string, baseRef: string, branch: string, title: string, worktree: boolean) => void;
     onClose: () => void;
     initialAgent?: string | null;
-    // Optional inline error (e.g. a humanized "branch already exists" message),
-    // rendered above the action row. App.svelte feeds it after a failed create.
+    // Optional inline error, for example a readable "branch already exists"
+    // message. It renders above the action row. App.svelte supplies it after a
+    // failed create.
     error?: string | null;
   } = $props();
 
@@ -99,18 +104,21 @@
   let branchSel   = $state("");
   let branches    = $state<string[]>([]);
   let submitting  = $state(false);
-  // True once the user edits the branch-name field directly, which stops the
-  // auto-suggestion from clobbering their choice (agent/Name/branch-list changes
-  // no longer overwrite it). Reset on each open.
+  // True once the user edits the branch-name field directly. This stops the
+  // auto-suggestion from overwriting the user's choice: agent, name, or
+  // branch-list changes no longer overwrite it. The dialog resets this flag
+  // each time it opens.
   let branchTouched = $state(false);
-  // True while an async loadBranches for the current repo is in flight. Blocks
-  // Create in new-branch mode so a fast repo switch can't submit a stale baseRef.
+  // True while an async loadBranches call for the current repo is in flight. It
+  // blocks Create in new-branch mode, so a fast repo switch cannot submit a
+  // stale baseRef.
   let branchesLoading = $state(false);
 
-  // Reset dialog state when opened. Wrapped in untrack so the write to `agent`
-  // (and subsequent reads of `agent` inside suggestBranch) do not register
-  // this effect as a subscriber to `agent` — otherwise any user change to the
-  // agent dropdown would re-fire this effect and snap agent back to DEFAULT_AGENT.
+  // Reset the dialog state when it opens. The reset is wrapped in untrack, so
+  // the write to `agent` (and the later reads of `agent` inside suggestBranch)
+  // do not register this effect as a subscriber to `agent`. Without untrack,
+  // any user change to the agent dropdown would re-fire this effect and reset
+  // agent back to DEFAULT_AGENT.
   $effect(() => {
     if (open) untrack(() => {
       name        = "";
@@ -125,23 +133,25 @@
     });
   });
 
-  // Keep the suggested new-branch name in sync with the agent, the Name field,
-  // and the loaded branch list — until the user edits the branch field, after
-  // which `branchTouched` freezes their choice. Reading agent/name/branches only
-  // inside the guard means a user edit stops all further auto-suggestion.
+  // Keep the suggested new-branch name in sync with the agent, the name field,
+  // and the loaded branch list. Once the user edits the branch field,
+  // `branchTouched` freezes the user's choice. The effect reads agent, name,
+  // and branches only inside the guard, so a user edit stops all further
+  // auto-suggestion.
   $effect(() => {
     if (worktree && !useExisting && !branchTouched) {
       branchName = suggestBranch(agent, name, branches);
     }
   });
 
-  // Load branches when repo changes; cancellation guard prevents stale resolves.
-  // The branch-derived fields (branches/baseRef/branchSel) are cleared
-  // SYNCHRONOUSLY here, before the async load, so a fast repo switch can never
-  // leave the previous repo's baseRef in place while the new list is pending.
+  // Load branches when the repo changes. A cancellation guard prevents stale
+  // resolves. This effect clears the branch-derived fields (branches, baseRef,
+  // branchSel) synchronously, before the async load. So a fast repo switch
+  // can never leave the previous repo's baseRef in place while the new list
+  // loads.
   $effect(() => {
     const currentRepo = repo;
-    // Clear immediately so no stale branch data survives the switch.
+    // Clear the fields at once, so no stale branch data survives the switch.
     untrack(() => {
       branches  = [];
       baseRef   = "";
@@ -152,8 +162,8 @@
     let cancelled = false;
     loadBranches(currentRepo).then((list) => {
       if (cancelled) return;
-      // Pin the default branch first so the base-ref default and both branch
-      // dropdowns surface it rather than the alphabetically-first branch.
+      // Pin the default branch first, so the base-ref default and both branch
+      // dropdowns show it instead of the alphabetically first branch.
       const ordered = pinDefaultFirst(list ?? []);
       branches  = ordered;
       baseRef   = ordered[0] ?? "";
@@ -168,8 +178,9 @@
 
   // Derived validity
   const nameValid  = $derived(!worktree || useExisting || slugValid(branchName));
-  // In new-branch mode a pending branch load means baseRef is not yet settled, so
-  // Create is blocked until the load resolves (prevents submitting a stale baseRef).
+  // In new-branch mode, a pending branch load means baseRef is not settled yet.
+  // Create stays blocked until the load resolves. This prevents submitting a
+  // stale baseRef.
   const newBranchReady = $derived(!branchesLoading);
   const canCreate  = $derived(
     !!repo &&
@@ -180,18 +191,19 @@
 
   async function handleCreate() {
     if (!canCreate || submitting) return;
-    // Trim the optional session name; a whitespace-only value is treated as empty.
+    // Trim the optional session name. The dialog treats a whitespace-only value
+    // as empty.
     const title = name.trim();
     submitting = true;
     try {
       if (!worktree) {
-        // non-worktree: baseRef="" always
+        // Non-worktree mode: baseRef is always "".
         await Promise.resolve(onCreate(agent, repo, "", branchSel, title, false));
       } else if (useExisting) {
-        // existing branch: baseRef="" signals no -b
+        // Existing-branch mode: baseRef="" signals no -b flag.
         await Promise.resolve(onCreate(agent, repo, "", branchSel, title, true));
       } else {
-        // new branch from baseRef
+        // New-branch mode: creates a branch from baseRef.
         await Promise.resolve(onCreate(agent, repo, baseRef, branchName, title, true));
       }
     } finally {
@@ -246,8 +258,8 @@
       </label>
 
       {#if branchesLoading}
-        <!-- Branch list in flight: show a placeholder so the empty selects read
-             as loading rather than broken, and Create stays blocked (F43). -->
+        <!-- Branch list in flight: shows a placeholder, so the empty selects read
+             as loading, not broken. Create stays blocked (F43). -->
         <div class="setting-row">
           <span class="setting-label"></span>
           <span class="field-hint" aria-live="polite">Loading branches…</span>
@@ -255,7 +267,7 @@
       {/if}
 
       {#if worktree}
-        <!-- Starting point (base-ref) — visible only in new-branch mode -->
+        <!-- Starting point (base-ref): visible only in new-branch mode -->
         {#if !useExisting}
           <label class="setting-row">
             <span class="setting-label">Starting point</span>
@@ -265,7 +277,7 @@
           </label>
         {/if}
 
-        <!-- Branch — new-name text input or existing dropdown -->
+        <!-- Branch: a new-name text input, or an existing-branch dropdown -->
         {#if !useExisting}
           <div class="setting-row">
             <span class="setting-label">Branch</span>

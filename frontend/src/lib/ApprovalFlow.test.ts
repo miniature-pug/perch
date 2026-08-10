@@ -7,8 +7,8 @@ import type { ApprovalReq, AgentCaps } from "./wails";
 // ---------------------------------------------------------------------------
 // ApprovalCard tests
 // ---------------------------------------------------------------------------
-// ApprovalCard imports only `type { ApprovalReq, AgentCaps }` from "./wails" —
-// no runtime wails values are used by the component itself, so no mock is needed.
+// ApprovalCard imports only `type { ApprovalReq, AgentCaps }` from "./wails".
+// The component itself uses no runtime wails values, so it needs no mock.
 
 describe("ApprovalCard", () => {
   const req: ApprovalReq = { reqId: "req-1", tool: "Write", summary: "Write /tmp/foo.txt" };

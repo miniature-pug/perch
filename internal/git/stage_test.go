@@ -206,7 +206,7 @@ func TestStageHunk_IndexOutOfRange(t *testing.T) {
 	}
 }
 
-// A file path containing a newline must be rejected before invoking git.
+// StageHunk must reject a file path that contains a newline, before invoking git.
 func TestStageHunk_RejectsNewlineInPath(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	repo := initRepo(t)

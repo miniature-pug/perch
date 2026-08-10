@@ -2,11 +2,12 @@
 
 package app
 
-// This file is compiled ONLY under `-tags dev` (set automatically by
-// `wails dev`). It exists to document — and make grep-able — the boundary:
-// the dev reload websocket (ws://localhost:34115) is a Wails-internal,
-// dev-tag-only facility. Production (`wails build`, plain `go build`) never
-// compiles it. Do NOT add any options.App field here that opens a port in
-// release builds; if a network listener is ever needed it must stay behind
-// this `//go:build dev` tag.
+// devReloadServerIsDevOnly marks the dev-only reload boundary for this file.
+// Go compiles this file only under the `dev` build tag, which `wails dev`
+// sets. This comment makes the boundary easy to find with grep.
+// The dev reload websocket (ws://localhost:34115) is a Wails-internal
+// facility for the dev tag only. Production builds, `wails build` or a plain
+// `go build`, never compile this file. Do not add an options.App field here
+// that opens a port in release builds. If perch ever needs a network
+// listener, keep the listener behind this `//go:build dev` tag.
 const devReloadServerIsDevOnly = true

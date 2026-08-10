@@ -2,8 +2,9 @@
 
 # internal/
 
-The backend packages. `cmd/perch` wires them together and `app/` exposes them to
-the frontend. For how they interact, see [ARCHITECTURE.md](../ARCHITECTURE.md).
+The backend packages. `cmd/perch` wires the packages together, and `app/`
+exposes them to the frontend. For how the packages interact, see
+[ARCHITECTURE.md](../ARCHITECTURE.md).
 
 | Package | What it owns | Notable exports |
 |---------|--------------|-----------------|

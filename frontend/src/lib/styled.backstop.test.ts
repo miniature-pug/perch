@@ -1,16 +1,16 @@
 // frontend/src/lib/styled.backstop.test.ts
 //
-// Static backstop: every *.svelte in src/lib/ and src/App.svelte must contain a
-// <style block, or be explicitly exempted. A failing test here means a component
-// shipped without scoped CSS — the design-token system would be disconnected from it.
+// Static backstop: every *.svelte file in src/lib/ and src/App.svelte must contain a
+// <style> block, or the test must list it as exempt. A failing test here means a
+// component shipped without scoped CSS. That component would then disconnect from the design-token system.
 
 import { readdirSync, readFileSync } from "fs";
 import { join, basename } from "path";
 import { test, expect } from "vitest";
 
 // Components legitimately exempt from the <style> requirement.
-// ThemeProvider is a logic-only wrapper: it sets data-theme/data-density on
-// <html> and renders its children — it has no visual surface of its own.
+// ThemeProvider is a logic-only wrapper. It sets data-theme and data-density on
+// <html> and renders its children. ThemeProvider has no visual surface of its own.
 const EXEMPT = new Set(["ThemeProvider.svelte"]);
 
 const LIB_DIR = join(__dirname, ".");
@@ -45,14 +45,14 @@ test("every Svelte component has a <style> block", () => {
 });
 
 test("EXEMPT list only contains files that actually lack <style>", () => {
-  // Guard against the allowlist growing stale: if someone adds styles to an
-  // exempted component, this test will remind them to remove the exemption.
+  // This guards against a stale allowlist. If someone adds styles to an
+  // exempted component, this test reminds them to remove the exemption.
   const files = collectSvelteFiles();
   const filesByName = new Map(files.map((f) => [basename(f), f]));
 
   for (const name of EXEMPT) {
     const filePath = filesByName.get(name);
-    if (!filePath) continue; // file deleted — also OK, exemption will be harmless
+    if (!filePath) continue; // file deleted, also OK. The exemption is harmless.
     const source = readFileSync(filePath, "utf-8");
     expect(
       source.includes("<style"),

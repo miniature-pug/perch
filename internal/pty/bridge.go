@@ -23,11 +23,12 @@ type Bridge struct {
 	closer  func() error
 	setsize func(cols, rows uint16) error
 	writeFn func([]byte) (int, error)
-	// suppressExit, when set, DISARMS the reaper goroutine's exitEvent emit: the
-	// process is still killed and reaped, but no pty:exit is emitted. Set via
-	// SuppressExit under mu; read by the reaper under mu before it emits. Used only
-	// for a DISPLACED pane whose bridge shares its exitEvent name with the pane's
-	// replacement (see app.OpenWorkspace) — a genuine exit must still emit, so this
+	// suppressExit, when set, DISARMS the reaper goroutine's exitEvent emit.
+	// The process still gets killed and reaped, but the reaper never emits
+	// pty:exit. SuppressExit sets this flag under mu. The reaper reads the
+	// flag under mu before it emits. This applies only to a DISPLACED pane,
+	// whose bridge shares its exitEvent name with the pane's replacement (see
+	// app.OpenWorkspace). A genuine exit must still emit, so suppressExit
 	// stays false on every normally-closed bridge.
 	suppressExit bool
 }
@@ -44,8 +45,9 @@ func (b *Bridge) Write(p []byte) (int, error) {
 	return b.ptyFile.Write(p)
 }
 
-// OverrideWriteForTest replaces the pty write target with fn. Test-only; used by
-// app tests that capture what OpenWorkspace writes to the shell without a real pty.
+// OverrideWriteForTest replaces the pty write target with fn. This function
+// is test-only. App tests use it to capture what OpenWorkspace writes to the
+// shell, without a real pty.
 func (b *Bridge) OverrideWriteForTest(fn func([]byte) (int, error)) {
 	b.writeFn = fn
 }
@@ -71,19 +73,21 @@ func (b *Bridge) Close() error {
 	return c()
 }
 
-// SuppressExit disarms the reaper's exitEvent emit for this bridge: after this
-// call the process is still killed and reaped by Close (or by ctx cancellation),
-// but no pty:exit event is ever emitted. It is idempotent and safe to call on a
-// bridge with no reaper (a test bridge).
+// SuppressExit disarms the reaper's exitEvent emit for this bridge. After
+// this call, Close (or a ctx cancellation) still kills and reaps the
+// process, but the reaper never emits a pty:exit event. SuppressExit is
+// idempotent, and safe to call on a bridge with no reaper (a test bridge).
 //
-// It exists for the pane-displacement path in app.OpenWorkspace: on Reopen the
-// displaced login shell SURVIVES the agent's /exit, and its bridge shares the
-// exitEvent name ("pty:exit:pane-<id>") with the freshly-remounted Terminal, so a
-// stray reaper emit would re-latch the "session has ended" overlay. The disarm
-// MUST run BEFORE the pane context is cancelled: that cancellation reaps the shell
-// via exec.CommandContext and can wake the reaper, so a combined "close-and-
-// suppress" performed later would race the emit. Hence suppression is separable
-// from Close. Genuine agent/shell exits never call this, so they still emit.
+// SuppressExit exists for the pane-displacement path in app.OpenWorkspace. On
+// Reopen, the displaced login shell SURVIVES the agent's /exit, and its
+// bridge shares the exitEvent name ("pty:exit:pane-<id>") with the freshly
+// remounted Terminal. Without SuppressExit, a stray reaper emit would
+// re-latch the "session has ended" overlay. The caller MUST call
+// SuppressExit BEFORE the pane context is cancelled: that cancellation reaps
+// the shell through exec.CommandContext and can wake the reaper, so a
+// combined "close-and-suppress" call performed later would race the emit.
+// Suppression therefore stays separable from Close. A genuine agent or shell
+// exit never calls SuppressExit, so it still emits.
 func (b *Bridge) SuppressExit() {
 	b.mu.Lock()
 	b.suppressExit = true
@@ -104,17 +108,19 @@ func LoginShellArgv() []string {
 	return []string{sh, "-l"}
 }
 
-// Spawn starts argv[0] argv[1:] inside a pty in working directory cwd,
-// pumping output to emit on dataEvent as bounded []int chunks (≤ maxChunk).
-// When the process exits (naturally or via Close), emit fires exitEvent with
-// a map payload {"code": <int>} where code is the process exit code or -1 on
-// signal death / forced close. No tmux. Closing the returned Bridge kills the
-// process group; the reaper goroutine owns the single cmd.Wait call.
+// Spawn starts argv[0] with argv[1:] inside a pty, in working directory cwd.
+// Spawn pumps output to emit on dataEvent, as bounded []int chunks (at most
+// maxChunk each). When the process exits, whether naturally or through
+// Close, emit fires exitEvent with a map payload {"code": <int>}. code holds
+// the process exit code, or -1 on a signal death or a forced close. Spawn
+// uses no tmux. Closing the returned Bridge kills the process group. The
+// reaper goroutine owns the single cmd.Wait call.
 //
-// env, when non-nil, becomes the child process environment verbatim; callers that
-// want to ADD variables must pass append(os.Environ(), extra...) so the inherited
-// environment is preserved. A nil env leaves cmd.Env unset, so Go inherits the
-// current process environment unchanged (the plain-shell case).
+// When env is non-nil, it becomes the child process environment verbatim.
+// Callers that want to ADD variables must pass
+// append(os.Environ(), extra...), to preserve the inherited environment. A
+// nil env leaves cmd.Env unset, so Go inherits the current process
+// environment unchanged (the plain-shell case).
 func Spawn(ctx context.Context, cwd string, argv []string, env []string, dataEvent, exitEvent string, emit EmitFunc, cols, rows uint16) (*Bridge, error) {
 	if len(argv) == 0 {
 		return nil, fmt.Errorf("pty Spawn: argv must not be empty")
@@ -135,44 +141,48 @@ func Spawn(ctx context.Context, cwd string, argv []string, env []string, dataEve
 		},
 		closer: func() error {
 			// Send SIGKILL to the whole process group BEFORE closing the pty
-			// master fd. Closing first unblocks pumpReader → the reaper goroutine
-			// calls cmd.Wait() → the kernel can reap the pid and potentially
-			// reuse it before the Kill reaches the (now stale) pgid. By killing
-			// first we guarantee the signal targets the correct group.
+			// master fd. Closing first would unblock pumpReader → the reaper
+			// goroutine calls cmd.Wait() → the kernel can reap the pid and could
+			// reuse it before the Kill reaches the (now stale) pgid. Killing
+			// first guarantees the signal targets the correct group.
 			// Fall back to killing just the process on any Kill error.
 			if cmd.Process != nil {
 				if perr := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); perr != nil {
 					_ = cmd.Process.Kill()
 				}
 			}
-			// Close the pty master fd after the kill so pumpReader unblocks and
+			// Close the pty master fd after the kill, so pumpReader unblocks and
 			// the reaper goroutine can proceed with cmd.Wait().
 			// NOTE: cmd.Wait() is NOT called here. The reaper goroutine below is
-			// the single Wait site. Calling Wait in two places yields an incorrect
-			// ProcessState on the second call; we must not do it.
+			// the single Wait site. Calling Wait in two places yields an
+			// incorrect ProcessState on the second call. This function must
+			// never call Wait.
 			return f.Close()
 		},
 	}
 	go func() {
 		defer safe.Recover("pty-reaper")
-		// pumpReader blocks until the pty fd returns EOF (which happens when
-		// f.Close() is called by closer, or when the process closes its side).
-		// Recover a pumpReader panic in a nested func so the child is still
-		// reaped below — a panicking reader must never leak the process.
+		// pumpReader blocks until the pty fd returns EOF. This happens when
+		// closer calls f.Close(), or when the process closes its own side.
+		// This nested func recovers a pumpReader panic, so the child is still
+		// reaped below. A panicking reader must never leak the process.
 		func() {
 			defer safe.Recover("pty-pump")
 			pumpReader(f, dataEvent, emit, maxChunk)
 		}()
-		// Pump returned ⇒ pty EOF ⇒ process is ending. Single Wait site (no race).
+		// Pump returned ⇒ pty EOF ⇒ the process is ending. This is the single
+		// Wait site (no race).
 		_ = cmd.Wait()
 		code := -1 // signal death (forced Close / ctx kill) reports -1
 		if cmd.ProcessState != nil {
 			code = cmd.ProcessState.ExitCode()
 		}
-		// Re-check the disarm under the same mutex SuppressExit writes: a displaced
-		// pane suppresses its exit emit before the process is reaped, so the reaper
-		// observes the flag here and stays silent (see SuppressExit). The lock is
-		// released before emit so a full events consumer can never block a mutex.
+		// This re-checks the disarm flag under the same mutex that
+		// SuppressExit writes. A displaced pane suppresses its exit emit
+		// before the process is reaped, so the reaper observes the flag here
+		// and stays silent (see SuppressExit). The reaper releases the lock
+		// before it calls emit, so a full events consumer can never block a
+		// mutex.
 		b.mu.Lock()
 		suppressed := b.suppressExit
 		b.mu.Unlock()
@@ -185,13 +195,15 @@ func Spawn(ctx context.Context, cwd string, argv []string, env []string, dataEve
 }
 
 // NewBridgeForTest returns a Bridge whose only behaviour is to call closer on
-// Close. Used by app tests that need an observable Bridge without a real pty.
+// Close. App tests use it when they need an observable Bridge without a real
+// pty.
 func NewBridgeForTest(closer func() error) *Bridge {
 	return &Bridge{closer: closer}
 }
 
 // NewBridgeForTestWithResize returns a Bridge whose closer and resize are the
-// supplied funcs. For app tests that assert Resize routing without a real pty.
+// supplied funcs. App tests use it to assert Resize routing without a real
+// pty.
 func NewBridgeForTestWithResize(closer func() error, resize func(cols, rows uint16) error) *Bridge {
 	return &Bridge{closer: closer, setsize: resize}
 }

@@ -5,26 +5,29 @@
   import { onPtyData, onPtyExit, writeToPty, resizePty, clipboardSetText, clipboardText } from "./wails";
   import { TERMINAL_SCROLLBACK, PTY_MAX_DIM } from "./constants";
 
-  // `visible` mirrors the pattern Editor/FileTree/Preview already use: the pane is
-  // kept MOUNTED and merely hidden by an ancestor `display:none` on collapse/tab
-  // switch. A ResizeObserver never fires for an ancestor display toggle, so without
-  // this signal the terminal's cols/rows go stale while hidden and the cursor
-  // scrolls out of view on re-show. The effect below re-fits on the hidden→visible
-  // edge to correct that.
+  // `visible` mirrors the pattern that Editor, FileTree, and Preview already
+  // use: the pane stays mounted and is merely hidden by an ancestor
+  // `display:none` on collapse or tab switch. A ResizeObserver never fires
+  // for an ancestor display toggle. Without this signal, the terminal's cols
+  // and rows go stale while hidden, and the cursor scrolls out of view when
+  // shown again. The effect below re-fits on the hidden-to-visible edge to
+  // correct that.
   let { paneId, cwd, onExit, visible = true }:
     { paneId: string; cwd: string; onExit?: (code: number) => void; visible?: boolean } = $props();
 
-  // Hex-alpha suffix for the xterm text-selection layer. color-mix() isn't usable
-  // as a raw ITheme value, so we append this to the accent hex instead. 0x66 ≈ 40%
-  // opacity — enough to tint the selection without hiding the glyphs underneath.
+  // Hex-alpha suffix for the xterm text-selection layer. color-mix() is not
+  // usable as a raw ITheme value, so this suffix is appended to the accent
+  // hex instead. 0x66 is about 40% opacity: enough to tint the selection
+  // without hiding the glyphs underneath.
   const SELECTION_ALPHA_HEX = "66";
 
   // Trailing-edge debounce for the pty resize. A splitter drag fires the
-  // ResizeObserver dozens of times per second; each resizePty is a SIGWINCH the
-  // agent TUI reflows on, so a raw storm makes it splutter. We coalesce fit() into
-  // one layout pass per animation frame and only send the resize once the drag
-  // settles, and only when the dimensions actually changed. 80ms spans a drag's
-  // frame cadence yet still feels instant on release.
+  // ResizeObserver dozens of times per second. Each resizePty call is a
+  // SIGWINCH that the agent TUI reflows on, so a raw storm of calls makes it
+  // stutter. This code coalesces fit() into one layout pass per animation
+  // frame, and sends the resize only once the drag settles and only when the
+  // dimensions actually changed. 80ms spans a drag's frame cadence, yet still
+  // feels instant on release.
   const PTY_RESIZE_DEBOUNCE_MS = 80;
 
   let host:     HTMLDivElement;
@@ -36,25 +39,25 @@
   let themeObs: MutationObserver | undefined;
   let disposed = false;
 
-  // Resize coalescing state: one pending rAF for fit(), one trailing-edge timer
-  // for the pty resize, and the last cols/rows we actually sent (so an unchanged
-  // observation is a no-op). -1 is an impossible dimension, so the first real
-  // measurement always sends.
+  // Resize coalescing state: one pending rAF for fit(), one trailing-edge
+  // timer for the pty resize, and the last cols/rows this component actually
+  // sent, so an unchanged observation is a no-op. -1 is an impossible
+  // dimension, so the first real measurement always sends.
   let rafId:       number | undefined;
   let resizeTimer: ReturnType<typeof setTimeout> | undefined;
   let lastCols = -1;
   let lastRows = -1;
 
-  // Pending frames for the deferred initial fit (double rAF, mirrors the
-  // become-visible effect). Tracked so onDestroy can cancel a still-queued fit and
-  // it never runs after teardown.
+  // Pending frames for the deferred initial fit, a double rAF that mirrors
+  // the become-visible effect. This is tracked so onDestroy can cancel a
+  // still-queued fit; it must never run after teardown.
   let initRaf1: number | undefined;
   let initRaf2: number | undefined;
 
-  // Right-click Copy/Paste menu (modelled on FileTree's context menu). `canCopy`
-  // is snapshotted at open time from term.hasSelection() so the Copy item's
-  // enabled state is stable while the menu is up. Approx dims clamp the menu
-  // inside the viewport, same as FileTree.
+  // Right-click Copy/Paste menu, modelled on FileTree's context menu.
+  // `canCopy` is captured at open time from term.hasSelection(), so the Copy
+  // item's enabled state stays stable while the menu is up. Approximate
+  // dimensions clamp the menu inside the viewport, the same as FileTree.
   const MENU_APPROX_W = 140;
   const MENU_APPROX_H = 80;
   let menu = $state<{ x: number; y: number; canCopy: boolean } | null>(null);
@@ -76,7 +79,8 @@
         const accent = cssVar("--perch-accent", "#d79921");
         return accent.startsWith("#") && accent.length === 7 ? accent + SELECTION_ALPHA_HEX : accent;
       })(),
-      // Standard 16-colour ANSI mapped to Gruvbox equivalents via tokens where possible
+      // Standard 16-color ANSI, mapped to Gruvbox equivalents through tokens
+      // where possible
       black:             cssVar("--perch-bg-elev",      "#1d2021"),
       red:               cssVar("--perch-err",          "#fb4934"),
       green:             cssVar("--perch-ok",           "#b8bb26"),
@@ -97,11 +101,11 @@
   }
 
   /**
-   * Fit the grid to the host and, if the dimensions actually changed, tell the
-   * pty on the trailing edge (one SIGWINCH per settled resize). Shared by the
-   * live-drag ResizeObserver and the become-visible effect. All the 0-dimension /
-   * hidden / unchanged-grid guards live here, so both callers are protected. No-op
-   * after teardown.
+   * Fit the grid to the host and, if the dimensions actually changed, tell
+   * the pty on the trailing edge, one SIGWINCH per settled resize. The
+   * live-drag ResizeObserver and the become-visible effect both call this.
+   * All the zero-dimension, hidden, and unchanged-grid guards live here, so
+   * both callers are protected. This is a no-op after teardown.
    */
   function refit() {
     if (disposed || !term || !fit) return;
@@ -109,10 +113,10 @@
     const cols = Math.max(1, Math.min(PTY_MAX_DIM, term.cols | 0));
     const rows = Math.max(1, Math.min(PTY_MAX_DIM, term.rows | 0));
     if (!(Number.isFinite(cols) && Number.isFinite(rows) && cols > 0 && rows > 0)) return;
-    // Nothing to tell the pty if the grid is unchanged from the last send.
+    // Nothing to tell the pty when the grid is unchanged from the last send.
     if (cols === lastCols && rows === lastRows) return;
-    // Trailing edge: reset the timer on every changed frame so a whole drag
-    // collapses to one resizePty when it settles.
+    // Trailing edge: reset the timer on every changed frame, so a whole drag
+    // collapses into one resizePty call when it settles.
     if (resizeTimer !== undefined) clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => {
       resizeTimer = undefined;
@@ -123,12 +127,13 @@
     }, PTY_RESIZE_DEBOUNCE_MS);
   }
 
-  // Window-resize backstop. The host ResizeObserver only fires when the .terminal
-  // BOX changes size, and under WebKitGTK a shrink/settle notification can be
-  // coalesced or never delivered — leaving an oversized grid that xterm thinks is
-  // fully visible, so it never scrolls to the cursor during typing. A window
-  // 'resize' catches those. It coalesces through the SAME rafId guard the
-  // ResizeObserver uses, so the two never double-schedule a fit within one frame.
+  // Window-resize backstop. The host ResizeObserver fires only when the
+  // .terminal box changes size, and under WebKitGTK a shrink or settle
+  // notification can be coalesced or never delivered. This leaves an
+  // oversized grid that xterm believes is fully visible, so it never scrolls
+  // to the cursor during typing. A window 'resize' event catches those cases.
+  // It coalesces through the same rafId guard the ResizeObserver uses, so the
+  // two never double-schedule a fit within one frame.
   function onWindowResize() {
     if (rafId !== undefined) return;
     rafId = requestAnimationFrame(() => {
@@ -149,12 +154,13 @@
     fit  = new FitAddon();
     term.loadAddon(fit);
     term.open(host);
-    // Defer the first fit across a double rAF (mirrors the become-visible effect).
-    // A synchronous fit() here runs before layout and cell metrics settle, which
-    // can freeze the grid too tall so xterm never scrolls to the cursor during
-    // typing; the bare call also never told the pty. Deferring measures a settled
-    // box + a non-zero cell metric and, via refit(), sends the first resizePty.
-    // Frames are cancelled in onDestroy.
+    // Defer the first fit across a double rAF, mirroring the become-visible
+    // effect. A synchronous fit() here runs before layout and cell metrics
+    // settle, which can freeze the grid too tall, so xterm never scrolls to
+    // the cursor during typing; a bare call also never told the pty.
+    // Deferring measures a settled box and a non-zero cell metric, and sends
+    // the first resizePty call through refit(). onDestroy cancels the
+    // frames.
     initRaf1 = requestAnimationFrame(() => {
       initRaf2 = requestAnimationFrame(() => {
         if (!disposed) refit();
@@ -169,10 +175,11 @@
     });
     term.onData((d) => writeToPty(paneId, Array.from(new TextEncoder().encode(d))));
 
-    // Copy/paste: return FALSE only for the two exact chords so xterm suppresses
-    // its default handling; TRUE for everything else so ordinary keys — and bare
-    // ctrl-c (SIGINT/cancel) — still reach the pty untouched. We route through the
-    // host clipboard (WebKit2GTK) because navigator.clipboard is unreliable there.
+    // Copy/paste: return false only for the two exact chords, so xterm
+    // suppresses its default handling. Return true for everything else, so
+    // ordinary keys, and bare ctrl-c (SIGINT/cancel), still reach the pty
+    // untouched. This routes through the host clipboard (WebKit2GTK) because
+    // navigator.clipboard is unreliable there.
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;
       const chord = e.ctrlKey && e.shiftKey;
@@ -181,8 +188,9 @@
         return false;
       }
       if (chord && (e.key === "V" || e.key === "v")) {
-        // term.paste routes through onData -> writeToPty and honours bracketed-paste
-        // mode, so shells/TUIs that opt in are protected — no manual encoding here.
+        // term.paste routes through onData -> writeToPty and honors bracketed
+        // paste mode, so shells and TUIs that opt in are protected. No manual
+        // encoding happens here.
         void clipboardText().then((t) => { if (t && !disposed) term.paste(t); });
         return false;
       }
@@ -190,8 +198,8 @@
     });
 
     obs = new ResizeObserver(() => {
-      // Coalesce fit() to one layout pass per frame — many ticks can land inside
-      // a single animation frame during a drag.
+      // Coalesce fit() to one layout pass per frame. Many ticks can land
+      // inside a single animation frame during a drag.
       if (rafId !== undefined) return;
       rafId = requestAnimationFrame(() => {
         rafId = undefined;
@@ -200,30 +208,34 @@
     });
     obs.observe(host);
 
-    // Backstop for window shrinks the host ResizeObserver may coalesce or drop
-    // under WebKitGTK. Coalesced via the shared rafId guard inside onWindowResize.
+    // Backstop for window shrinks that the host ResizeObserver may coalesce
+    // or drop under WebKitGTK. Coalesced through the shared rafId guard
+    // inside onWindowResize.
     window.addEventListener("resize", onWindowResize);
 
-    // Right-click Copy/Paste menu. Attached here (not inline) to keep the host div
-    // role-less; removed on teardown below.
+    // Right-click Copy/Paste menu. Attached here, not inline, to keep the
+    // host div role-less. It is removed on teardown below.
     host.addEventListener("contextmenu", openTermMenu);
 
-    // Re-apply theme whenever the active theme changes (data-theme attribute on <html>)
+    // Re-apply the theme whenever the active theme changes, through the
+    // data-theme attribute on <html>
     themeObs = new MutationObserver(() => {
       term.options.theme = buildXtermTheme();
     });
     themeObs.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
   });
 
-  /** Programmatic focus — lets the parent route the keyboard to this pty without
-      requiring a click (used by the awaiting-input auto-focus). Safe before mount. */
+  /** Programmatic focus. Lets the parent route the keyboard to this pty
+      without requiring a click; the awaiting-input auto-focus uses this.
+      Safe to call before mount. */
   export function focus(): void { term?.focus(); }
 
-  // Re-fit on the hidden→visible edge. Reading `visible` first tracks it as the
-  // sole dependency (term/fit/disposed are plain lets, deliberately untracked), so
-  // this re-runs only when the pane is shown, never on unrelated state churn. The
-  // double rAF lets the browser apply the ancestor display change and flush layout
-  // before FitAddon measures — a single frame still reads the stale (0-height) box.
+  // Re-fit on the hidden-to-visible edge. Reading `visible` first tracks it
+  // as the sole dependency (term, fit, and disposed are plain lets,
+  // deliberately untracked), so this re-runs only when the pane is shown,
+  // never on unrelated state changes. The double rAF lets the browser apply
+  // the ancestor display change and flush layout before FitAddon measures; a
+  // single frame still reads the stale, zero-height box.
   $effect(() => {
     if (!visible || !term || !fit || disposed) return;
     let inner: number | undefined;
@@ -232,15 +244,16 @@
         if (!disposed && visible) refit();
       });
     });
-    // Cancel any still-pending frame on teardown / visibility flip, so a scheduled
-    // callback never fires after the component (or the test environment) is gone.
+    // Cancel any still-pending frame on teardown or a visibility flip, so a
+    // scheduled callback never fires after the component, or the test
+    // environment, is gone.
     return () => {
       cancelAnimationFrame(outer);
       if (inner !== undefined) cancelAnimationFrame(inner);
     };
   });
 
-  // ── Right-click Copy/Paste menu ──────────────────────────────────────────────
+  // ── Right-click Copy/Paste menu ───────────────────────────────────────────
   function openTermMenu(e: MouseEvent) {
     e.preventDefault();
     const x = Math.min(e.clientX, window.innerWidth  - MENU_APPROX_W);
@@ -256,12 +269,14 @@
     void clipboardText().then((t) => { if (t && !disposed) term?.paste(t); });
     closeMenu();
   }
-  /** Keyboard support for the floating menu: activate on Enter/Space, close on Escape. */
+  /** Keyboard support for the floating menu: activate on Enter or Space,
+      close on Escape. */
   function handleMenuKey(e: KeyboardEvent, action: () => void) {
     if (e.key === "Enter" || e.key === " ") { e.preventDefault(); action(); }
     else if (e.key === "Escape") { closeMenu(); }
   }
-  /** Close the menu on Escape from anywhere while it is open (outside-click is handled by window onclick). */
+  /** Close the menu on Escape from anywhere while it is open. Window onclick
+      handles an outside click. */
   function onWindowKey(e: KeyboardEvent) {
     if (menu && e.key === "Escape") closeMenu();
   }
@@ -282,9 +297,9 @@
   });
 </script>
 
-<!-- The contextmenu listener is attached imperatively in onMount (not inline) so
-     this xterm host stays a plain, role-less container — xterm owns its own a11y
-     via the textarea it renders inside. -->
+<!-- The contextmenu listener is attached imperatively in onMount, not inline,
+     so this xterm host stays a plain, role-less container. xterm owns its
+     own accessibility through the textarea it renders inside. -->
 <div class="terminal" bind:this={host}></div>
 
 {#if menu}
@@ -309,7 +324,7 @@
     flex: 1;
     min-height: 0;
     min-width: 0;
-    /* xterm manages its own viewport; do NOT set overflow here */
+    /* xterm manages its own viewport. Do NOT set overflow here. */
   }
 
   /* ---------- Right-click Copy/Paste menu (mirrors FileTree) ---------- */
@@ -318,9 +333,9 @@
     margin: 0;
     padding: var(--perch-sp-1) 0;
     min-width: 140px;
-    /* Solid, never glass: this menu overlaps the composited terminal subtree,
-       where WebKitGTK paints backdrop-filter surfaces transparent (mirrors the
-       FileTree/ApprovalCard fix). */
+    /* Solid, never glass. This menu overlaps the composited terminal subtree,
+       where WebKitGTK paints backdrop-filter surfaces transparent (mirrors
+       the fix in FileTree and ApprovalCard). */
     background: var(--perch-glass-bg-solid);
     border: 1px solid var(--perch-glass-border);
     border-radius: var(--perch-radius-md);

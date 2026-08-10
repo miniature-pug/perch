@@ -70,17 +70,17 @@ describe("settings store", () => {
 
   // A UI-pref save must preserve an Always rule the backend appended AFTER load.
   // Approve(...,"always") writes to the settings blob with no event, so the store's
-  // in-memory alwaysRules is stale; persistPref re-reads it before saving.
+  // in-memory alwaysRules is stale. persistPref re-reads it before saving.
   it("setTheme preserves an alwaysRule added to the backend after load", async () => {
     const w = await import("../wails");
-    // load() sees no rules...
+    // First, load() sees no rules.
     vi.mocked(w.getSettings).mockResolvedValueOnce({
       theme: "gruvbox", density: "dense", font: "geist", dnd: false, glassDisabled: false, alwaysRules: [],
     });
     const { settings } = await import("./settings.svelte");
     await settings.load();
     expect(settings.alwaysRules).toEqual([]);
-    // ...then the backend appends a rule (e.g. user clicked "always" in a card).
+    // Then the backend appends a rule (for example, the user clicked "always" in a card).
     const rule = { agent: "claude", tool: "Bash", pattern: "ls", hash: "abc" };
     vi.mocked(w.getSettings).mockResolvedValueOnce({
       theme: "gruvbox", density: "dense", font: "geist", dnd: false, glassDisabled: false, alwaysRules: [rule],
@@ -93,8 +93,8 @@ describe("settings store", () => {
     expect(settings.alwaysRules).toEqual([rule]);
   });
 
-  // setAlwaysRules is the authoritative writer — it must NOT re-read (that would
-  // race its own write) and must persist exactly what it was given.
+  // setAlwaysRules is the authoritative writer. It must NOT re-read (that would
+  // race its own write) and must persist exactly what the caller gave it.
   it("setAlwaysRules writes the given rules without re-reading the backend", async () => {
     const { settings } = await import("./settings.svelte");
     const w = await import("../wails");
@@ -108,7 +108,7 @@ describe("settings store", () => {
     );
   });
 
-  // Issue B: staleThresholdDays must round-trip through load → setTheme → saveSettings
+  // Issue B: staleThresholdDays must round-trip through load, then setTheme, then saveSettings.
   it("staleThresholdDays is preserved in SaveSettings payload after unrelated UI change", async () => {
     const w = await import("../wails");
     vi.mocked(w.getSettings).mockResolvedValueOnce({
@@ -123,8 +123,8 @@ describe("settings store", () => {
     );
   });
 
-  // WIN #1 — setStaleThresholdDays mirrors the other setters exactly (update
-  // state, then persist through the shared persistPref path).
+  // WIN #1: setStaleThresholdDays mirrors the other setters exactly (it updates
+  // state, then persists through the shared persistPref path).
   it("setStaleThresholdDays updates state and calls saveSettings with the new value", async () => {
     const { settings } = await import("./settings.svelte");
     const w = await import("../wails");

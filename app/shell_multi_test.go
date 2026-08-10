@@ -1,6 +1,7 @@
-// shell_multi_test.go: tests for multiple shell terminals per session — the
-// paneID→workspace recovery helper, per-tab CloseShell, and CloseWorkspace reaping
-// every one of a session's shells (default "shell-<id>" plus "shell-<id>_<n>" tabs).
+// shell_multi_test.go: tests for many shell terminals per session. These
+// tests cover the paneID-to-workspace recovery helper, per-tab CloseShell,
+// and CloseWorkspace reaping every one of a session's shells, the default
+// "shell-<id>" plus "shell-<id>_<n>" tabs.
 package app
 
 import (
@@ -16,11 +17,11 @@ import (
 
 func TestWorkspaceIDForShellPane(t *testing.T) {
 	tests := []struct{ pane, want string }{
-		{"shell-abc", "abc"},                   // default shell
-		{"shell-abc-def-1a2b-3c4d", "abc-def-1a2b-3c4d"}, // UUID (hyphens), default
-		{"shell-abc-def-1a2b-3c4d_1", "abc-def-1a2b-3c4d"}, // additional tab
+		{"shell-abc", "abc"},                               // default shell
+		{"shell-abc-def-1a2b-3c4d", "abc-def-1a2b-3c4d"},   // UUID (hyphens), default
+		{"shell-abc-def-1a2b-3c4d_1", "abc-def-1a2b-3c4d"}, // extra tab
 		{"shell-abc-def-1a2b-3c4d_42", "abc-def-1a2b-3c4d"},
-		{"shell-home", "home"}, // home shell — callers guard homeShellPaneID separately
+		{"shell-home", "home"}, // home shell (callers guard homeShellPaneID separately)
 		{"pane-abc", ""},       // agent pane, not a shell
 		{"shell-", ""},         // empty remainder
 		{"", ""},
@@ -73,7 +74,8 @@ func TestCloseShell_ClosesOnePaneAndIsIdempotent(t *testing.T) {
 	}
 	mu.Unlock()
 
-	// Idempotent: closing an already-gone pane is a no-op, not an error.
+	// CloseShell is idempotent. Closing an already-gone pane is a no-op, not
+	// an error.
 	if err := a.CloseShell("shell-ws1_1"); err != nil {
 		t.Errorf("second CloseShell must be idempotent, got %v", err)
 	}
@@ -83,7 +85,8 @@ func TestCloseShell_ClosesOnePaneAndIsIdempotent(t *testing.T) {
 	}
 	mu.Unlock()
 
-	// A malformed pane id is rejected (same guard as every pty method).
+	// CloseShell rejects a malformed pane id (the same guard used by every
+	// pty method).
 	if err := a.CloseShell("bad;id"); err == nil {
 		t.Error("CloseShell must reject a malformed pane id")
 	}

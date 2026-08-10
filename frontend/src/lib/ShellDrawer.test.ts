@@ -16,7 +16,7 @@ test("calls openShell on mount", async () => {
   await waitFor(() => expect(w.openShell).toHaveBeenCalledWith("shell-1", "/wt"));
 });
 
-// collapsed is a prop; onToggleCollapse is called when the button is clicked.
+// collapsed is a prop. onToggleCollapse runs when the user clicks the button.
 test("collapse toggle calls onToggleCollapse when button clicked", async () => {
   const { default: ShellDrawer } = await import("./ShellDrawer.svelte");
   const onToggleCollapse = vi.fn();
@@ -26,13 +26,13 @@ test("collapse toggle calls onToggleCollapse when button clicked", async () => {
 
   await fireEvent.click(screen.getByRole("button", { name: /collapse/i }));
   await tick();
-  // onToggleCollapse must have been called — App.svelte is the one that changes collapsed
+  // The component must call onToggleCollapse. App.svelte is the one that changes collapsed.
   expect(onToggleCollapse).toHaveBeenCalledTimes(1);
 });
 
 // ── Reload-agent-env button ─────────────────────────────────────────────────
 // Per docs/superpowers/specs/2026-08-09-perch-session-env-reload-design.md §7:
-// present only on a per-workspace drawer, absent on the home drawer.
+// the button appears only on a per-session drawer. It stays absent on the home drawer.
 
 test("reload button renders on a per-workspace drawer", async () => {
   const { default: ShellDrawer } = await import("./ShellDrawer.svelte");
@@ -64,7 +64,7 @@ test("reload button carries the file-credential hint text", async () => {
   const btn = await waitFor(() => screen.getByRole("button", { name: /reload agent with this terminal's environment/i }));
   expect(btn.getAttribute("title")).toMatch(/AWS SSO/i);
   expect(btn.getAttribute("title")).toMatch(/no reload/i);
-  // getByTitle is the accessible route to the same hint, confirming it renders as a real tooltip.
+  // getByTitle is the accessible route to the same hint. This confirms the hint renders as a real tooltip.
   expect(screen.getByTitle(/no reload/i)).toBe(btn);
 });
 

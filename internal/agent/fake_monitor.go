@@ -23,8 +23,8 @@ type FakeMonitor struct {
 	tornDown     bool
 	launchCmd    string
 	paneEnv      []string
-	// capturedResumeID holds the last resumeID arg passed to Prepare.
-	// Test-only: read via CapturedResumeID().
+	// capturedResumeID holds the last resumeID argument passed to Prepare.
+	// Test-only. Read it with CapturedResumeID().
 	capturedResumeID string
 }
 
@@ -53,7 +53,8 @@ func (f *FakeMonitor) Prepare(_ context.Context, workspaceID, _, resumeID string
 	return cmd, nil
 }
 
-// CapturedResumeID returns the resumeID arg last passed to Prepare. Test-only.
+// CapturedResumeID returns the resumeID argument last passed to Prepare.
+// Test-only.
 func (f *FakeMonitor) CapturedResumeID() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -108,39 +109,40 @@ func (f *FakeMonitor) LastApprovalTool() string {
 	return f.lastTool
 }
 
-// Start is a no-op for the fake — events are emitted by Prepare's goroutine.
+// Start is a no-op for the fake. Prepare's goroutine emits the events.
 func (f *FakeMonitor) Start(_ context.Context) {}
 
-// SetState overrides the state CurrentState() reports. Test-only.
+// SetState overrides the state that CurrentState() reports. Test-only.
 func (f *FakeMonitor) SetState(s State) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.state = s
 }
 
-// SetLaunchCmd overrides the launch command Prepare returns. Test-only.
+// SetLaunchCmd overrides the launch command that Prepare returns. Test-only.
 func (f *FakeMonitor) SetLaunchCmd(cmd string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.launchCmd = cmd
 }
 
-// PaneEnv returns the pane environment set via SetPaneEnv (nil by default).
+// PaneEnv returns the pane environment set by SetPaneEnv. It is nil by
+// default.
 func (f *FakeMonitor) PaneEnv() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.paneEnv
 }
 
-// SetPaneEnv overrides the pane environment PaneEnv returns. Test-only.
+// SetPaneEnv overrides the pane environment that PaneEnv returns. Test-only.
 func (f *FakeMonitor) SetPaneEnv(env []string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.paneEnv = env
 }
 
-// Replay pushes ev onto the events channel so app-level pump tests can observe
-// forwarding. Test-only.
+// Replay pushes ev onto the events channel, so app-level pump tests can
+// observe forwarding. Test-only.
 func (f *FakeMonitor) Replay(ev Event) {
 	f.events <- ev
 }

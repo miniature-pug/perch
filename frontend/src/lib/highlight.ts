@@ -1,28 +1,29 @@
 // frontend/src/lib/highlight.ts
 //
-// Perch syntax highlight style — maps common lezer tags to perch CSS-variable
-// tokens so token colors re-theme automatically across all 9 app themes.
+// The perch syntax highlight style. It maps common lezer tags to perch
+// CSS-variable tokens, so token colors re-theme automatically across all 9
+// app themes.
 //
-// @lezer/highlight is NOT listed directly in package.json (it's a transitive
-// dep of @codemirror/language, which is declared). It can't vanish from the
-// lock-file as long as @codemirror/language is present, but note the hygiene
-// gap if the tree is audited.
+// @lezer/highlight is not listed directly in package.json. It is a
+// transitive dependency of @codemirror/language, which is declared. It
+// cannot vanish from the lock file as long as @codemirror/language is
+// present, but note this hygiene gap if the dependency tree is audited.
 import { tags } from "@lezer/highlight";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 
 /**
  * HighlightStyle that maps common syntax categories to perch CSS variables.
  *
- * Palette mapping (5 semantic hues + dim):
- *   --perch-accent  → keywords, punctuation/delimiter, meta
- *   --perch-ok      → strings, regexp, attribute values
- *   --perch-warn    → numbers, booleans, literals
- *   --perch-err     → type names, class names, tags
- *   --perch-text    → function/variable names, properties
- *   --perch-text-dim → comments, line comments, block comments
+ * Palette mapping (5 semantic hues, plus dim):
+ *   --perch-accent   maps to keywords, punctuation and delimiters, meta.
+ *   --perch-ok       maps to strings, regexp, attribute values.
+ *   --perch-warn     maps to numbers, booleans, literals.
+ *   --perch-err      maps to type names, class names, tags.
+ *   --perch-text     maps to function and variable names, properties.
+ *   --perch-text-dim maps to comments: line comments and block comments.
  */
 export const perchHighlightStyle = HighlightStyle.define([
-  // Keywords — accent (bright primary)
+  // Keywords: accent (bright primary)
   { tag: tags.keyword,            color: "var(--perch-accent)", fontWeight: "bold" },
   { tag: tags.controlKeyword,     color: "var(--perch-accent)", fontWeight: "bold" },
   { tag: tags.moduleKeyword,      color: "var(--perch-accent)", fontWeight: "bold" },

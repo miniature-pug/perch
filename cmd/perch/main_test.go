@@ -75,10 +75,10 @@ func TestRun_Version_ContainsPlatformInfo(t *testing.T) {
 // ── doctor verb routes to doctor.Run ─────────────────────────────────────────
 
 func TestRun_Doctor_Routes(t *testing.T) {
-	// We don't fully control doctor's environment in this test, but we can assert
+	// This test does not fully control doctor's environment, but it can assert
 	// that the verb "doctor" actually dispatches into doctor.Run (not a stub).
 	// doctor.Run always emits a "\nperch <version>\n" header and then tool rows
-	// (git, etc.) regardless of whether those tools are present.
+	// (git, and so on), regardless of whether those tools are present.
 	// A routing regression to an unimplemented stub would print none of these.
 	var out strings.Builder
 	var errBuf strings.Builder
@@ -272,11 +272,12 @@ func TestPrintUsage_ShowsAttach(t *testing.T) {
 
 // ── reload command ────────────────────────────────────────────────────────────
 
-// TestRun_Reload_IsARealCommand mirrors the not-a-command tests (setup/status/
-// resurrect): `reload` must dispatch to its own handler, NOT fall through to the
-// path-arg handler. Outside a perch session (PERCH_ENVSYNC_* absent) it prints a
-// friendly error and exits non-zero — but never prints Usage (which would prove a
-// fall-through) and never exits 2.
+// TestRun_Reload_IsARealCommand mirrors the not-a-command tests (setup,
+// status, resurrect): `reload` must dispatch to its own handler, and must
+// NOT fall through to the path-arg handler. Outside a perch session
+// (PERCH_ENVSYNC_* absent), it prints a friendly error and exits non-zero,
+// but it never prints Usage (which would prove a fall-through), and it
+// never exits 2.
 func TestRun_Reload_IsARealCommand(t *testing.T) {
 	t.Setenv("PERCH_ENVSYNC_URL", "")
 	t.Setenv("PERCH_ENVSYNC_TOKEN", "")

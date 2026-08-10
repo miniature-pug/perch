@@ -12,12 +12,12 @@
 
   let dragActive = $state(false);
 
-  // Backstop: a drag can end without our own handleDrop ever running — a
-  // cancelled drag (Escape), a drag that leaves the window, a non-file drag, or
-  // a drop swallowed by a parent handler (e.g. Stage's `if (modalOpen) return`).
-  // In those paths the overlay would otherwise stay stuck visible forever. While
-  // a drag is active we listen at the window for `dragend`/`drop` and force the
-  // overlay off, then detach. Listeners are self-cleaning and removed on destroy.
+  // Backstop. A drag can end without handleDrop running: a cancelled drag (Escape),
+  // a drag that leaves the window, a non-file drag, or a drop that a parent handler
+  // swallows (for example, Stage's `if (modalOpen) return`). In these cases the
+  // overlay would stay visible forever. While a drag is active, this component
+  // listens at the window for `dragend` and `drop`, and turns the overlay off. It
+  // also removes the listeners when it is destroyed.
   function resetDragActive() {
     dragActive = false;
     detachBackstop();
@@ -41,18 +41,19 @@
     e.preventDefault();
     resetDragActive();
     if (!fileDrop || !e.dataTransfer) return;
-    // OS file drops are NOT handled here. On WebKitGTK the DOM drop event's File
-    // objects carry no real path (the non-standard File.path is undefined), so
-    // the absolute paths arrive out-of-band via Wails' native OnFileDrop and are
-    // routed to this pane by lib/osFileDrop.ts (matched on this drop-zone's
-    // data-drop-pane). This handler only carries the in-app text drop — a
-    // file-tree/editor @mention drag, which is a custom MIME payload, not a file.
+    // This handler does not handle OS file drops. On WebKitGTK, the DOM drop
+    // event's File objects carry no real path (the non-standard File.path is
+    // undefined). Instead, the absolute paths arrive through Wails' native
+    // OnFileDrop. lib/osFileDrop.ts routes them to this pane, matched on this drop
+    // zone's data-drop-pane. This handler carries only the in-app text drop, a
+    // file-tree or editor @mention drag. This drag is a custom MIME payload, not a
+    // file.
     const text = e.dataTransfer.getData(MIME_TEXT);
     if (text) {
       const bytes = Array.from(new TextEncoder().encode(text));
       await writeToPty(paneId, bytes);
     }
-    // MIME_SESSION drops are intentionally ignored here (handled at Stage level)
+    // This handler ignores MIME_SESSION drops on purpose. Stage handles them instead.
   }
 
   function prevent(e: DragEvent) { e.preventDefault(); e.stopPropagation(); }
@@ -65,8 +66,9 @@
   }
   function handleDragLeave(e: DragEvent) {
     prevent(e);
-    // Only deactivate when leaving the wrapper entirely — entering a child fires
-    // a dragleave on the parent whose relatedTarget is still inside the node.
+    // This handler deactivates the drag only when the pointer leaves the wrapper
+    // completely. Entering a child element also fires a dragleave on the parent,
+    // but its relatedTarget is still inside the node.
     const rt = e.relatedTarget as Node | null;
     if (!rt || !(e.currentTarget as HTMLElement).contains(rt)) resetDragActive();
   }
@@ -90,8 +92,8 @@
   {/if}
 
   {#if !fileDrop}
-    <!-- OS file drop is disabled; no file-picker IPC is available.
-         Show a non-interactive "Paste path" hint instead. -->
+    <!-- OS file drop is disabled. No file-picker IPC is available.
+         This shows a non-interactive "Paste path" hint instead. -->
     <p class="drop-hint">Paste path to open a file</p>
   {:else if children}
     {@render children()}

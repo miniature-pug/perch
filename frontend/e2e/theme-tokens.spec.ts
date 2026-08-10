@@ -2,28 +2,28 @@ import { test, expect } from "@playwright/test";
 import path from "path";
 import fs from "fs";
 
-// This test guards against the CSS token regression described in the bug report:
-// tokens.css / themes.css must be imported into the Vite build graph so that
-// --perch-* custom properties are defined in the production bundle.
+// This test checks for the CSS token regression described in the bug report.
+// The Vite build graph must import tokens.css and themes.css.
+// Only then do the --perch-* custom properties exist in the production bundle.
 //
-// Gate: assert SEMANTIC computed-style, not a pixel diff:
-//   1. --perch-bg on :root must be non-empty  (proves tokens.css / themes.css reached the bundle)
-//   2. .app-root background-color must not be transparent (proves the theme token was consumed)
+// Gate: check the semantic computed style, not a pixel diff.
+//   1. --perch-bg on :root must not be empty. This proves tokens.css and themes.css reached the bundle.
+//   2. The background-color of .app-root must not be transparent. This proves the app used the theme token.
 //
-// Note: body has no background rule in this app — the background is painted by .app-root
-// via var(--perch-bg), so we query that element, not document.body.
+// Note: the app body has no background rule. The .app-root element paints the background
+// with var(--perch-bg). So the test queries that element, not document.body.
 
 test.beforeEach(async ({ page }) => {
-  // Mock the Go/Wails boundary BEFORE navigation so the app can boot.
-  // Derived from src/lib/wails.ts: window.go.app.App.<Method> + window.runtime.EventsOn
+  // Mock the Go/Wails boundary before navigation. This lets the app boot.
+  // Source: src/lib/wails.ts, window.go.app.App.<Method> and window.runtime.EventsOn.
   await page.addInitScript(() => {
     // runtime.EventsOn must return an unsubscribe function
     (window as any).runtime = {
       EventsOn: (_event: string, _cb: (...args: any[]) => void) => () => {},
     };
 
-    // App methods called during onMount (settings.load, layout.restore, listWorkspaces)
-    // plus stubs for anything the app might call before reaching "No session selected" state.
+    // These App methods run during onMount: settings.load, layout.restore, and listWorkspaces.
+    // The stubs also cover other calls the app might make before it reaches the "No session selected" state.
     (window as any).go = {
       app: {
         App: {
@@ -34,10 +34,10 @@ test.beforeEach(async ({ page }) => {
             dnd: false,
             alwaysRules: [],
           }),
-          // Empty string → falsy → skips JSON.parse in layout.restore, keeps defaults
+          // An empty string is falsy. It skips JSON.parse in layout.restore and keeps the defaults.
           GetLayout: async () => "",
           ListWorkspaces: async () => [],
-          // Stub all other methods so the app won't throw if any other path invokes them
+          // Stub all other methods. This stops the app from throwing if another path calls them.
           CreateWorkspace: async () => ({}),
           OpenWorkspace: async () => {},
           CloseWorkspace: async () => {},
@@ -68,29 +68,29 @@ test.beforeEach(async ({ page }) => {
 test("theme tokens resolve in built bundle", async ({ page }) => {
   await page.goto("/");
 
-  // Wait for the Svelte app root to be present and the app to have rendered.
-  // "No session selected" empty-state is the expected first-paint with empty workspace list.
+  // Wait for the Svelte app root to appear and the app to render.
+  // The expected first paint is the "No session selected" empty state, with an empty session list.
   await page.waitForSelector("#app", { timeout: 10000 });
-  // Give Svelte/onMount a moment to complete (settings.load + layout.restore are async)
+  // Give Svelte and onMount a moment to finish. settings.load and layout.restore are async.
   await page.waitForTimeout(1000);
 
-  // Assertion 1: --perch-bg must be defined on :root (non-empty = tokens.css reached bundle)
+  // Assertion 1: --perch-bg must be defined on :root. Non-empty means tokens.css reached the bundle.
   const percbBg = await page.evaluate(() =>
     getComputedStyle(document.documentElement)
       .getPropertyValue("--perch-bg")
       .trim()
   );
 
-  // Assertion 2: .app-root background-color must not be transparent.
-  // The .app-root div carries `background: var(--perch-bg)` — if the token is undefined
-  // the computed value degrades to the default transparent/black.
+  // Assertion 2: the background-color of .app-root must not be transparent.
+  // The .app-root div carries `background: var(--perch-bg)`. If the token is undefined,
+  // the computed value falls back to the default transparent or black color.
   const appRootBg = await page.evaluate(() => {
     const el = document.querySelector(".app-root");
     if (!el) return "ELEMENT_MISSING";
     return getComputedStyle(el).backgroundColor;
   });
 
-  // Capture screenshot for visual evidence (regardless of pass/fail)
+  // Capture a screenshot for visual evidence, whether the test passes or fails.
   const screenshotsDir = "./e2e/__screenshots__";
   fs.mkdirSync(screenshotsDir, { recursive: true });
   await page.screenshot({

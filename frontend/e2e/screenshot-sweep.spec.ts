@@ -1,13 +1,13 @@
 /**
  * screenshot-sweep.spec.ts
  *
- * Comprehensive visual sweep of the perch UI. Each test captures one or more
+ * This is a full visual sweep of the perch UI. Each test captures one or more
  * PNG screenshots to frontend/e2e/__screenshots__/sweep/.
  *
- * Design: pure navigation + screenshot, NO brittle assertions. Uses generous
- * waits to ensure state is rendered before shooting. If a state can't be
- * reached the test screenshots whatever is visible and continues — it does NOT
- * throw.
+ * Design: pure navigation and screenshots, with no brittle assertions. The test
+ * uses generous waits, so the state renders before it takes a screenshot. If a
+ * state is unreachable, the test screenshots whatever is visible and continues.
+ * It does not throw an error.
  */
 
 import { test, expect } from "@playwright/test";
@@ -23,22 +23,22 @@ const DIR = "./e2e/__screenshots__/sweep";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Screenshot shorthand — writes to DIR/<name>.png */
+/** Screenshot shorthand. Writes the file to DIR/<name>.png. */
 async function shot(page: import("@playwright/test").Page, name: string) {
   await page.screenshot({
     path: path.join(DIR, `${name}.png`),
-    // Viewport shot — sensible for review, avoids tall white tails on empty pages
+    // A viewport shot works well for review. It avoids tall white tails on empty pages.
   });
 }
 
-/** Activate a workspace by clicking its sidebar entry and confirming resume. */
+/** Activate a session. Click its sidebar entry, then confirm the resume prompt. */
 async function activateWorkspace(page: import("@playwright/test").Page, title = "test session") {
   const item = page.locator(`text=${title}`).first();
   const visible = await item.isVisible().catch(() => false);
   if (!visible) return;
   await item.click();
   await page.waitForTimeout(400);
-  // Resume-preview gate — confirm with "Open" button if present
+  // The resume-preview gate. Confirm with the "Open" button, if present.
   const openBtn = page.locator('[data-testid="resume-preview"] button.btn-primary');
   const gateVisible = await openBtn.isVisible().catch(() => false);
   if (gateVisible) {
@@ -49,9 +49,9 @@ async function activateWorkspace(page: import("@playwright/test").Page, title = 
 
 /** Open the command palette via the ":" keystroke. */
 async function openPalette(page: import("@playwright/test").Page) {
-  // Dismiss any stray welcome-screen dialog first (clicking .app-root center
-  // when there are no workspaces lands on a welcome button and opens a modal
-  // that traps the keyboard, making ":" a no-op). Escape reaches a clean state.
+  // First, dismiss any stray welcome-screen dialog. With no sessions, a click at
+  // the center of .app-root lands on a welcome button. This opens a modal that
+  // traps the keyboard, so ":" does nothing. Escape reaches a clean state.
   await page.keyboard.press("Escape");
   await page.keyboard.press(":");
   await page.waitForTimeout(400);
@@ -87,7 +87,7 @@ async function emitNotification(
 function buildDiffInitScript(workspaces: MockWorkspace[]) {
   const base = buildInitScriptContent({ workspaces });
 
-  // Patch: inject serialised file/hunk data without template-escape issues
+  // This patch injects serialised file and hunk data, and avoids template-escape issues.
   const files = JSON.stringify([
     { path: "src/app.go",          added: 42, removed: 8,  status: "M" },
     { path: "frontend/App.svelte", added: 17, removed: 3,  status: "M" },
@@ -164,7 +164,7 @@ test("01-empty-state: no workspaces", async ({ browser }) => {
   await ctx.close();
 });
 
-// ── 2. Workspace list — varying states in sidebar ────────────────────────────
+// ── 2. Session list: various states in the sidebar ───────────────────────────
 
 test("02-sidebar-workspace-states: idle / working / awaiting-input / awaiting-approval / errored", async ({ page }) => {
   const workspaces: MockWorkspace[] = [
@@ -257,7 +257,7 @@ test("06-notification-hub: all three tiers", async ({ page }) => {
   await emitNotification(page, "ambient",  "Task Complete",     "Agent finished refactor",  "ws-1");
   await emitNotification(page, "routine",  "File written",      "src/app.go was saved",     "ws-1");
   await emitNotification(page, "ambient",  "Branch pushed",     "feat/api pushed to remote","ws-1");
-  // Open the notification hub via bell button
+  // Open the notification hub with the bell button.
   const bell = page.locator('button[aria-label="notifications"]');
   await bell.waitFor({ state: "visible", timeout: 3000 }).catch(() => {});
   await bell.click().catch(() => {});
@@ -268,15 +268,15 @@ test("06-notification-hub: all three tiers", async ({ page }) => {
 // ── 7. Diff view with hunks ───────────────────────────────────────────────────
 
 test("07-diff-view-with-hunks: multi-file diff expanded", async ({ browser }) => {
-  // Use a fresh browser context with a generous layout JSON pre-set to diff view
-  // so we can skip the activate+resume flow that was causing hangs.
+  // Use a fresh browser context with a generous layout JSON, preset to diff view.
+  // This skips the activate-and-resume flow that was causing hangs.
   const ctx = await browser.newContext({
     baseURL: `http://localhost:${PREVIEW_PORT}`,
     viewport: { width: 1440, height: 900 },
   });
   const layoutJSON = JSON.stringify({ view: "diff", split: false, sidebarW: 240, shellH: 200, collapsed: {} });
   const initScript = buildDiffInitScript([WORKSPACE_FIXTURE]);
-  // Patch: also override GetLayout to return diff view + set activeId via ws attach event
+  // This patch also overrides GetLayout to return the diff view, and sets activeId through the session-attach event.
   const layoutPatch = `
 (function() {
   var _origLayout = window.go.app.App.GetLayout;
@@ -292,11 +292,11 @@ test("07-diff-view-with-hunks: multi-file diff expanded", async ({ browser }) =>
   await page.waitForSelector("#app", { timeout: 10000 });
   await page.waitForTimeout(1000);
 
-  // Activate the workspace (which triggers DiffStat) via sidebar click + resume confirm
+  // Activate the session (this triggers DiffStat): click it in the sidebar, then confirm the resume.
   await activateWorkspace(page);
   await page.waitForTimeout(800);
 
-  // If diff view rendered, file rows should be visible; expand first file
+  // If the diff view rendered, file rows should be visible. Expand the first file.
   const firstFile = page.locator(".file-row").first();
   const fileVisible = await firstFile.isVisible().catch(() => false);
   if (fileVisible) {
@@ -353,7 +353,7 @@ test("09-shell-drawer-open: Ctrl+` toggles shell", async ({ page }) => {
   await page.waitForSelector("#app", { timeout: 10000 });
   await page.waitForTimeout(1200);
   await activateWorkspace(page);
-  // Toggle shell drawer via Ctrl+`
+  // Toggle the shell drawer with Ctrl+`.
   await page.locator(".app-root").click().catch(() => {});
   await page.keyboard.press("Control+`");
   await page.waitForTimeout(500);
@@ -499,7 +499,7 @@ test("15-menu-dropdown-open: Session menu", async ({ page }) => {
 // ── 16. Glass OFF variant ─────────────────────────────────────────────────────
 
 test("16-glass-off: workspace view without glass effect", async ({ page }) => {
-  // glassDisabled=true makes settings.glass=false → data-glass="off"
+  // glassDisabled=true makes settings.glass=false, so data-glass="off".
   const initScript =
     buildInitScriptContent({ workspaces: [WORKSPACE_FIXTURE] }) +
     `
@@ -531,7 +531,7 @@ test("17-glass-on: workspace view with glass effect (reference)", async ({ page 
 });
 
 // ── 18. Theme sweep ───────────────────────────────────────────────────────────
-// One test per theme; each opens a populated view (sidebar + agent pane + approval card).
+// One test runs per theme. Each opens a populated view: sidebar, agent pane, and approval card.
 
 for (const theme of THEMES) {
   test(`18-theme-${theme}`, async ({ browser }) => {
@@ -621,7 +621,7 @@ test("21-dnd-active: notifications hub with do-not-disturb on", async ({ page })
   await dndBtn.waitFor({ state: "visible", timeout: 3000 }).catch(() => {});
   await dndBtn.click().catch(() => {});
   await page.waitForTimeout(400);
-  // Close and re-open hub to show badge state
+  // Close and reopen the hub, to show the badge state.
   await bell.click().catch(() => {});
   await page.waitForTimeout(300);
   await bell.click().catch(() => {});
@@ -629,7 +629,7 @@ test("21-dnd-active: notifications hub with do-not-disturb on", async ({ page })
   await shot(page, "21-dnd-active");
 });
 
-// ── 22. Diff view — no changes ────────────────────────────────────────────────
+// ── 22. Diff view: no changes ─────────────────────────────────────────────────
 
 test("22-diff-view-empty: no changes state", async ({ page }) => {
   await page.addInitScript({ content: buildInitScriptContent({ workspaces: [WORKSPACE_FIXTURE] }) });
@@ -661,7 +661,7 @@ test("23-approval-plus-notification-hub: both visible states", async ({ page }) 
     });
   });
   await page.waitForTimeout(400);
-  // Also emit a blocking notification so the bell badge is lit
+  // Also emit a blocking notification, so the bell badge lights up.
   await emitNotification(page, "blocking", "Another Approval", "tool wants permission", "ws-1");
   await shot(page, "23-approval-plus-notification-hub");
 });

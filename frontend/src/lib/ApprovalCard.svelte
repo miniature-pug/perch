@@ -9,23 +9,25 @@
     req, sessionCount = 1, queue, caps, onDecision, onApproveAll, onDenyAll, onUndoAlways,
   }: {
     req: ApprovalReq;
-    // How many requests are queued for THIS session (including the shown head).
-    // >1 means the agent has more tools waiting behind this one on this session.
+    // sessionCount counts the requests queued for this session, including the one shown now.
+    // A value above 1 means the agent has more tool calls waiting for this session.
     sessionCount?: number;
     queue: ApprovalReq[];
     caps: AgentCaps;
     onDecision: (reqId: string, decision: "allow" | "deny" | "always") => void;
     onApproveAll?: () => void;
     onDenyAll?: () => void;
-    // Optional: host (App) removes the just-granted standing rule when the user
-    // hits Undo on the post-grant toast. Optional so the card is self-contained;
-    // when absent, Undo simply dismisses the toast.
+    // Optional. The host (App) removes the new standing rule when the user selects
+    // Undo on the toast shown after grant. This callback is optional so the
+    // approval card stays self-contained. If the callback is absent, Undo only
+    // closes the toast.
     onUndoAlways?: (reqId: string) => void;
   } = $props();
 
   let deciding = $state(false);
-  // Post-grant undo affordance for the standing "Always allow" rule: the rule is
-  // granted immediately (lowest friction), then a brief toast offers Undo.
+  // This is the undo control for the standing "Always allow" rule. The approval
+  // card grants the rule immediately, for lowest friction. A brief toast then
+  // offers Undo.
   let alwaysUndo = $state(false);
   let undoTimer: ReturnType<typeof setTimeout> | undefined;
   let destroyed = false;
@@ -41,10 +43,11 @@
     try {
       await handleDecision(req.reqId, "always");
     } catch {
-      return; // grant failed — no rule created, so nothing to undo
+      return; // The grant failed. No rule exists, so there is nothing to undo.
     }
-    // The host may have popped this card the moment the grant resolved; only
-    // surface the local toast if we're still mounted (App hosts it post-Phase-3).
+    // The host may remove this approval card as soon as the grant finishes.
+    // Show the local toast only if the approval card is still mounted. The App
+    // component has hosted this toast since Phase 3.
     if (destroyed) return;
     alwaysUndo = true;
     startUndoTimer();
@@ -64,9 +67,10 @@
   }
   onDestroy(() => { destroyed = true; clearUndoTimer(); });
 
-  // Single-key accelerators while the card holds focus (Allow is focused on open,
-  // so Enter also approves). 'a' = allow, 'd' = deny; the riskier standing grant
-  // needs the Shift+A chord, never a lone keypress.
+  // These are single-key accelerators. They work while the approval card holds
+  // focus. The Allow button gets focus when the card opens, so Enter also
+  // approves. The 'a' key allows and the 'd' key denies. The standing grant is
+  // riskier, so it needs the Shift+A chord. A lone keypress never triggers it.
   function handleKeydown(e: KeyboardEvent) {
     if (deciding || alwaysUndo) return;
     const key = e.key.toLowerCase();
@@ -94,12 +98,14 @@
 </script>
 
 {#if caps.approvals}
-  <!-- A docked, bottom-center card (App keeps the sidebar/terminal live), so it is
-       a labeled landmark region, NOT a modal: aria-modal="true" would falsely tell
-       assistive tech the rest of the page is inert. Initial focus lands on the
-       Allow button so Enter approves and the single-key accelerators work. The
-       keydown here is delegation from the focused action buttons (interactive),
-       so the accelerators only fire while the card owns focus. -->
+  <!-- The approval card is docked at the bottom center. The App component keeps
+       the sidebar and terminal active. The approval card is a labeled landmark
+       region, not a modal. aria-modal="true" would wrongly tell assistive
+       technology that the rest of the page is inert. Initial focus lands on the
+       Allow button. This lets Enter approve and lets the single-key accelerators
+       work. The keydown handler on this section delegates to the focused action
+       buttons, which are interactive elements. The accelerators fire only while
+       the approval card owns focus. -->
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <section aria-label="approval card" class="approval-card"
            tabindex="-1" onkeydown={handleKeydown}>
@@ -107,9 +113,10 @@
       <span class="tool-name">{req.tool}</span>
       {#if queue.length > 1}<span class="batch-count">{queue.length} pending</span>{/if}
     </header>
-    <!-- Show the actual tool input (scrollable) so nobody approves blind. The tool
-         name already lives in the header, so we don't repeat req.summary (which
-         leads with the tool name) when the full input is available. -->
+    <!-- The approval card shows the full tool input in a scrollable area, so the
+         user can see it before approval. The header already shows the tool name.
+         req.summary also starts with the tool name, so the approval card does
+         not repeat req.summary when the full input is available. -->
     {#if req.input}
       <pre class="approval-input" data-testid="approval-input">{req.input}</pre>
     {:else}
@@ -147,11 +154,12 @@
 {/if}
 
 <style>
-  /* Floating card — App positions bottom-center; we own the card chrome */
+  /* Floating card. The App component sets the position at bottom center.
+     ApprovalCard owns the card chrome. */
   .approval-card {
-    /* The blocking prompt must stay legible over the terminal, where WebKitGTK
-       paints backdrop-filter surfaces transparent over the composited terminal
-       subtree. Always solid, never glass. */
+    /* The approval card must stay readable over the terminal. WebKitGTK paints
+       backdrop-filter surfaces as transparent over the composited terminal
+       subtree. The approval card background is always solid, never glass. */
     background: var(--perch-glass-bg-solid);
     color: var(--perch-text);
     border: 1px solid var(--perch-glass-border);
@@ -172,7 +180,7 @@
     margin-bottom: var(--perch-sp-1);
   }
 
-  /* Tool name — mono accent (identifiers rule) */
+  /* Tool name in mono accent, following the identifier styling rule. */
   .tool-name {
     font-family: var(--perch-font-mono);
     font-size: var(--perch-fs-code);
@@ -195,9 +203,10 @@
     line-height: 1.5;
   }
 
-  /* Tool input — the full, exact payload the agent wants to run. Scrollable so a
-     large Write/Bash input never blows out the card, and monospace so paths,
-     JSON, and shell stay legible. */
+  /* Tool input. This shows the full, exact payload that the agent wants to run.
+     This area is scrollable, so a large Write or Bash input never breaks the
+     card layout. This area uses a monospace font, so paths, JSON, and shell
+     text stay readable. */
   .approval-input {
     margin: 0 0 var(--perch-sp-2) 0;
     padding: var(--perch-sp-1) var(--perch-sp-2);
@@ -215,7 +224,8 @@
     tab-size: 2;
   }
 
-  /* Post-grant undo toast for the standing "Always allow" rule */
+  /* This is the undo toast shown after the app grants the standing "Always
+     allow" rule. */
   .always-undo {
     display: flex;
     align-items: center;
@@ -232,7 +242,7 @@
     margin-left: auto;
   }
 
-  /* Keyboard-accelerator hint under the action row */
+  /* Hint for the keyboard accelerators, shown under the action row */
   .accel-hint {
     margin: var(--perch-sp-1) 0 0 0;
     color: var(--perch-text-dim);
@@ -298,7 +308,7 @@
     pointer-events: none;
   }
 
-  /* Allow — primary accent fill */
+  /* Allow button: primary accent fill */
   .btn-primary {
     background: var(--perch-accent);
     color: var(--perch-accent-fg);
@@ -315,7 +325,8 @@
     filter: brightness(0.92);
   }
 
-  /* Always — warn-colored: signals irreversible without red */
+  /* Always allow button: warn-colored. This signals an irreversible action
+     without using red. */
   .btn-always {
     color: var(--perch-warn);
     border-color: var(--perch-warn);

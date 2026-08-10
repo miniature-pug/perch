@@ -1,7 +1,8 @@
-/* Global reset. Neutralizes UA defaults that leak the WebKit webview's white
-   background: body's 8px margin both shows a white border and pushes the
-   100vh .app-root past the viewport (a phantom scrollbar). Loaded first so
-   component styles cascade on top. */
+/* This is the global reset. It cancels the browser defaults that leak the
+   WebKit webview's white background: body's 8px margin shows a white
+   border, and it also pushes the 100vh .app-root past the viewport, which
+   creates a phantom scrollbar. Load this file first, so component styles
+   apply on top of it. */
 *,
 *::before,
 *::after {

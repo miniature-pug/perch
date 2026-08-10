@@ -22,13 +22,13 @@ test("loads file content on mount", async () => {
 test("saves via Ctrl-S", async () => {
   const { default: Editor } = await import("./Editor.svelte");
   const w = await import("./wails");
-  // Seed a known content value so we can assert the exact string is round-tripped.
+  // This seeds a known content value, so the test can assert the exact string round-trips.
   vi.mocked(w.readFile).mockResolvedValueOnce("KNOWN_SAVE_CONTENT");
   render(Editor, { props: { path: "/wt/src/main.go", worktree: "/wt" } });
-  // Wait for readFile to be called and content to be loaded into the editor.
+  // Wait for readFile to run and the editor to load the content.
   await waitFor(() => expect(w.readFile).toHaveBeenCalledWith("/wt/src/main.go"));
   await fireEvent.keyDown(document, { key: "s", ctrlKey: true });
-  // Assert writeFile receives the exact content seeded by readFile — proves round-trip propagation.
+  // This asserts writeFile receives the exact content seeded by readFile. This proves round-trip propagation.
   await waitFor(() => expect(w.writeFile).toHaveBeenCalledWith("/wt/src/main.go", "KNOWN_SAVE_CONTENT"));
 });
 
@@ -49,8 +49,8 @@ test("mounts the git change gutter for a changed file", async () => {
   const { default: Editor } = await import("./Editor.svelte");
   render(Editor, { props: { path: "/wt/src/main.go", worktree: "/wt" } });
   // CodeMirror does not lay out individual gutter line markers in jsdom (zero-size
-  // viewport). The changed-line computation is unit-tested in gutter.test.ts; here
-  // we assert the gutter extension itself is mounted on a changed file.
+  // viewport). gutter.test.ts unit-tests the changed-line computation separately. Here,
+  // this test asserts only that the gutter extension mounts on a changed file.
   await waitFor(() =>
     expect(document.querySelector(".perch-git-gutter")).not.toBeNull()
   );
@@ -92,7 +92,7 @@ test("send-to-agent button is hidden when no selection", async () => {
   const spy = vi.fn();
   render(Editor, { props: { path: "/wt/src/main.go", worktree: "/wt", onSendToAgent: spy } });
   await waitFor(() => expect(document.querySelector(".cm-editor")).not.toBeNull());
-  // No selection yet — button must not appear
+  // No selection yet. The button must not appear.
   expect(screen.queryByRole("button", { name: /send to agent/i })).toBeNull();
 });
 
@@ -126,7 +126,7 @@ test("send-to-agent button appears after selection and calls spy with selected t
   // Click the button
   await fireEvent.click(screen.getByRole("button", { name: /send to agent/i }));
 
-  // Spy should have been called with the selected text
+  // The spy should have received the selected text.
   expect(spy).toHaveBeenCalledWith("hello world");
 });
 
@@ -138,7 +138,7 @@ test("send-to-agent button does not render when onSendToAgent prop is absent", a
   vi.mocked(w.readFile).mockResolvedValueOnce("hello world\n");
   vi.mocked(w.hunks).mockResolvedValueOnce([]);
 
-  // No onSendToAgent prop provided
+  // The test provides no onSendToAgent prop.
   render(Editor, { props: { path: "/wt/src/main.go", worktree: "/wt" } });
 
   await waitFor(() => expect(document.querySelector(".cm-editor")).not.toBeNull());
@@ -203,7 +203,7 @@ test("dirty dot disappears after Ctrl-S save", async () => {
 
   const cmEditor = document.querySelector(".cm-editor") as HTMLElement;
   const editorView = EditorView.findFromDOM(cmEditor);
-  // Make dirty
+  // Make the document dirty.
   editorView!.dispatch({ changes: { from: 0, to: 0, insert: "Y" } });
   await waitFor(() => expect(document.querySelector(".dirty-dot")).not.toBeNull());
 
@@ -262,7 +262,7 @@ test("external change reloads a clean editor when reloadToken bumps", async () =
   });
   await waitFor(() => expect(w.readFile).toHaveBeenCalledWith("/wt/a.ts"));
   const callsAfterMount = vi.mocked(w.readFile).mock.calls.length;
-  // A file changed on disk; the parent bumps reloadToken. A clean editor reloads.
+  // A file changed on disk. The parent bumps reloadToken. A clean editor then reloads.
   await rerender({ path: "/wt/a.ts", worktree: "/wt", reloadToken: 1 });
   await waitFor(() =>
     expect(vi.mocked(w.readFile).mock.calls.length).toBeGreaterThan(callsAfterMount)
@@ -284,8 +284,8 @@ test("external change does NOT reload a dirty editor, so the draft survives", as
   view.dispatch({ changes: { from: 0, to: 0, insert: "DRAFT " } });
   await waitFor(() => expect(document.querySelector(".dirty-dot")).not.toBeNull());
   const callsBefore = vi.mocked(w.readFile).mock.calls.length;
-  // An external change arrives while dirty. The editor must NOT reload (that would
-  // discard the draft): no new readFile, still dirty, draft text intact.
+  // An external change arrives while the editor is dirty. The editor must NOT reload,
+  // because that would discard the draft. It calls no new readFile, stays dirty, and keeps the draft text intact.
   await rerender({ path: "/wt/a.ts", worktree: "/wt", reloadToken: 1 });
   await new Promise((r) => setTimeout(r, 30));
   expect(vi.mocked(w.readFile).mock.calls.length).toBe(callsBefore);
@@ -310,8 +310,8 @@ test("unmounting a dirty editor persists the draft instead of silently dropping 
   view.dispatch({ changes: { from: 0, to: 0, insert: "DRAFT " } });
   await waitFor(() => expect(document.querySelector(".dirty-dot")).not.toBeNull());
 
-  // A session switch destroys the editor. onDestroy must save the dirty buffer
-  // (capturing the current document) rather than discarding it with view.destroy().
+  // A session switch destroys the editor. onDestroy must save the dirty buffer by
+  // capturing the current document, rather than discarding the buffer with view.destroy().
   unmount();
   await waitFor(() =>
     expect(w.writeFile).toHaveBeenCalledWith("/wt/a.ts", "DRAFT original\n")
@@ -340,8 +340,8 @@ test("selection survives a same-file reloadToken 1->0->1 oscillation", async () 
   expect(view.state.selection.main.head).toBe(40);
   expect(document.querySelector(".dirty-dot")).toBeNull();
 
-  // Oscillate reloadToken 1 -> 0 -> 1: same clean file, unchanged content. Before the
-  // fix each reload rebuilt state via setState and reset the caret to 0.
+  // Oscillate reloadToken from 1 to 0 to 1: same clean file, unchanged content. Before the
+  // fix, each reload rebuilt state via setState and reset the caret to 0.
   await rerender({ path: "/wt/a.ts", worktree: "/wt", reloadToken: 0 });
   await new Promise((r) => setTimeout(r, 20));
   await rerender({ path: "/wt/a.ts", worktree: "/wt", reloadToken: 1 });
@@ -383,7 +383,7 @@ test("readFile(A) resolving after readFile(B) leaves the editor showing B", asyn
     expect(v?.state.doc.toString()).toBe("B-content");
   });
 
-  // Now let the stale A resolve — its generation is superseded, so it must be dropped.
+  // Now let the stale A resolve. Its generation is superseded, so the editor must drop it.
   releaseA();
   await new Promise((r) => setTimeout(r, 30));
   const v = EditorView.findFromDOM(document.querySelector(".cm-editor") as HTMLElement)!;
@@ -391,8 +391,8 @@ test("readFile(A) resolving after readFile(B) leaves the editor showing B", asyn
 });
 
 // --- B4: WebKit2GTK clipboard keymap (Ctrl-Shift-C copy / Ctrl-Shift-V paste) ---
-// CodeMirror leaves copy/cut/paste to the browser's native clipboard, which is
-// unreliable under WebKit2GTK; the keymap routes both through the host binding.
+// CodeMirror leaves copy, cut, and paste to the browser's native clipboard. This
+// clipboard is unreliable under WebKit2GTK, so the keymap routes both actions through the host binding.
 
 test("B4: Ctrl-Shift-C copies the CM selection via clipboardSetText", async () => {
   const { default: Editor } = await import("./Editor.svelte");

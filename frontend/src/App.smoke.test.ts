@@ -1,22 +1,22 @@
 // frontend/src/App.smoke.test.ts
 // Full-composition smoke test
-// One end-to-end scenario that exercises the wired path: assembly → workspace select →
-// view switching → approval flow → notification hub.
+// One end-to-end scenario tests the full wired path: assembly, workspace
+// selection, view switching, approval flow, and notification hub.
 
 import { render, screen, fireEvent, waitFor } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { vi, it, expect, beforeEach } from "vitest";
 
 // ---------------------------------------------------------------------------
-// Stubs — mirror App.test.ts exactly
+// Stubs. These match App.test.ts exactly.
 // ---------------------------------------------------------------------------
 
-// Stub ShellDrawer (imports xterm which crashes jsdom).
+// Stub ShellDrawer. It imports xterm, and xterm crashes jsdom.
 vi.mock("./lib/ShellDrawer.svelte", async () => ({
   default: (await import("./lib/__stubs__/Empty.svelte")).default,
 }));
 
-// Stub heavy children — xterm/CodeMirror crash jsdom.
+// Stub heavy child components. xterm and CodeMirror crash jsdom.
 vi.mock("./lib/Terminal.svelte", async () => ({
   default: (await import("./lib/__stubs__/TerminalProbe.svelte")).default,
 }));
@@ -30,7 +30,7 @@ vi.mock("./lib/FileTree.svelte", async () => ({
   default: (await import("./lib/__stubs__/FileTreeProbe.svelte")).default,
 }));
 
-// Captured callbacks — reset in beforeEach.
+// Captured callbacks. beforeEach resets these.
 const captured = {
   agent:     [] as Array<(ev: any) => void>,
   notify:    [] as Array<(n: any)  => void>,
@@ -68,7 +68,7 @@ vi.mock("./lib/wails", () => ({
   setWindowFocus:  vi.fn(async () => {}),
 }));
 
-// Mirror App.test.ts: mock settings (real settings.load() is unverified in jsdom).
+// Match App.test.ts: mock the settings store. Real settings.load() is unverified in jsdom.
 vi.mock("./lib/stores/settings.svelte", () => ({
   settings: {
     theme:   "gruvbox",
@@ -82,7 +82,7 @@ vi.mock("./lib/stores/settings.svelte", () => ({
 }));
 
 // ---------------------------------------------------------------------------
-// Fake workspaces — ≥2 with caps.approvals:true
+// Fake workspaces: at least 2, each with caps.approvals:true.
 // ---------------------------------------------------------------------------
 const smokeWorkspaces = [
   {
@@ -117,7 +117,7 @@ beforeEach(async () => {
   mode.leaveCommand();
   (mode as any).current = "normal";
 
-  // Ensure DND is off so ambient notifications are not filtered.
+  // Turn off DND so the app does not filter ambient notifications.
   const { setDnd } = await import("./lib/stores/notifications.svelte");
   setDnd(false);
 });
@@ -133,29 +133,30 @@ it("full-composition smoke: assembly → select → view-switch → approval →
   const { default: App } = await import("./App.svelte");
 
   // -------------------------------------------------------------------------
-  // Step 1 — Assembly: core chrome mounts
+  // Step 1: assembly. Core chrome mounts.
   // -------------------------------------------------------------------------
   render(App);
 
   // MenuBar role="menubar"
   expect(document.querySelector('[role="menubar"]')).toBeInTheDocument();
 
-  // Sidebar: wait for workspaces to load, then check both buttons
+  // Sidebar: wait for the workspaces to load. Then check both buttons.
   const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
   expect(alphaBtn).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /^Beta\b/ })).toBeInTheDocument();
 
-  // Stage view-switcher nav (aria-label="View")
+  // Check the view-switcher nav (aria-label="View").
   expect(document.querySelector('nav[aria-label="View"]')).toBeInTheDocument();
 
-  // Empty-state is shown before any workspace is selected
+  // The empty state appears before the user selects a workspace.
   expect(document.querySelector(".empty-state")).toBeInTheDocument();
 
   // -------------------------------------------------------------------------
-  // Step 2 — Select workspace → resume preview appears → confirm → openWorkspace called, Terminal probe mounts
+  // Step 2: select a workspace. The resume preview appears. The user confirms.
+  // openWorkspace runs, and the Terminal probe mounts.
   // -------------------------------------------------------------------------
   await fireEvent.click(alphaBtn);
-  // Resume preview modal appears — confirm to open the session
+  // The resume preview modal appears. Confirm it to open the session.
   await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
   expect(openWorkspace).not.toHaveBeenCalled();
   await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
@@ -166,10 +167,11 @@ it("full-composition smoke: assembly → select → view-switch → approval →
   expect(terminal.dataset.paneId).toBe("p1");
 
   // -------------------------------------------------------------------------
-  // Step 3 — View switching via keymap (REAL keymap + REAL layout store)
+  // Step 3: view switching by keymap. This test uses the real keymap and the real layout store.
   // -------------------------------------------------------------------------
 
-  // '2' → Code view: editor visible; the terminal stays mounted (hidden) so its buffer survives
+  // Key '2' opens the Code view. The editor becomes visible. The terminal stays
+  // mounted but hidden, so its buffer survives.
   await fireEvent.keyDown(document.body, { key: "2" });
   await tick();
   await waitFor(() => {
@@ -177,7 +179,8 @@ it("full-composition smoke: assembly → select → view-switch → approval →
     expect(screen.getByTestId("terminal")).not.toBeVisible();
   });
 
-  // '3' → Diff view: diff visible; the editor stays mounted (hidden)
+  // Key '3' opens the Diff view. The diff becomes visible. The editor stays
+  // mounted but hidden.
   await fireEvent.keyDown(document.body, { key: "3" });
   await tick();
   await waitFor(() => {
@@ -186,9 +189,10 @@ it("full-composition smoke: assembly → select → view-switch → approval →
     expect(screen.getByTestId("editor")).not.toBeVisible();
   });
 
-  // '1' → Agent view: terminal visible again; the DiffView stays MOUNTED (hidden)
-  // so its expanded hunks + scroll survive a view switch (F3), rather than being
-  // destroyed and re-fetched every time.
+  // Key '1' returns to the Agent view. The terminal becomes visible again.
+  // The DiffView stays mounted but hidden, so its expanded hunks and scroll
+  // position survive a view switch (F3). The app does not destroy and
+  // refetch the DiffView every time.
   await fireEvent.keyDown(document.body, { key: "1" });
   await tick();
   await waitFor(() => {
@@ -197,10 +201,11 @@ it("full-composition smoke: assembly → select → view-switch → approval →
   expect(screen.getByTestId("diff")).not.toBeVisible();
 
   // -------------------------------------------------------------------------
-  // Step 4 — Approval flow: event → card surfaces → Allow → approve() called → card gone
+  // Step 4: approval flow. An event triggers the approval card. The user
+  // clicks Allow. approve() runs, and the card disappears.
   // -------------------------------------------------------------------------
 
-  // There is always exactly one registered agent-event callback (the one App registered in onMount).
+  // App registers exactly one agent-event callback, in onMount.
   const agentCb = captured.agent.at(-1)!;
   agentCb({
     workspaceId: "ws-1",
@@ -210,7 +215,7 @@ it("full-composition smoke: assembly → select → view-switch → approval →
   });
   await tick();
 
-  // ApprovalCard must surface with the summary text
+  // The ApprovalCard must show the summary text.
   await waitFor(() =>
     expect(screen.getByText("rm -rf")).toBeInTheDocument()
   );
@@ -222,7 +227,7 @@ it("full-composition smoke: assembly → select → view-switch → approval →
 
   expect(approve).toHaveBeenCalledWith("r1", "allow");
 
-  // Card must disappear after dequeue
+  // The card must disappear after the approval leaves the queue.
   await waitFor(() =>
     expect(screen.queryByRole("button", { name: "Allow" })).not.toBeInTheDocument()
   );
@@ -231,7 +236,8 @@ it("full-composition smoke: assembly → select → view-switch → approval →
   );
 
   // -------------------------------------------------------------------------
-  // Step 5 — Notifications: inject ambient → open hub via bell → entry visible
+  // Step 5: notifications. Inject an ambient notification. Open the
+  // notification hub with the bell. The entry becomes visible.
   // -------------------------------------------------------------------------
 
   const notifyCb = captured.notify.at(-1)!;
@@ -243,12 +249,12 @@ it("full-composition smoke: assembly → select → view-switch → approval →
   });
   await tick();
 
-  // Open the notification hub via the MenuBar bell
+  // Open the notification hub with the MenuBar bell.
   const bellBtn = screen.getByRole("menuitem", { name: "notifications" });
   await fireEvent.click(bellBtn);
   await tick();
 
-  // Hub must now be visible
+  // The notification hub must now be visible.
   expect(screen.getByRole("region", { name: "notification hub" })).toBeInTheDocument();
 
   // The notification title must appear in the hub

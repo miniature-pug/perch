@@ -6,23 +6,26 @@ import {
 
 export type View = "agent" | "code" | "diff";
 
-// Clamp a live value into [min, max]; a non-finite value is coerced to min.
+// Clamp a live value into [min, max]. The function coerces a non-finite
+// value to min.
 function clamp(v: number, min: number, max: number): number {
   if (!Number.isFinite(v)) return min;
   return Math.min(Math.max(v, min), max);
 }
 
-// Validate a persisted value: only a finite number already in [min, max] is
-// trusted; anything else (NaN, ±Infinity, out-of-range, wrong type) falls back
-// to the default so a corrupt-but-valid layout.json can never wedge the UI.
+// Validate a persisted value. The function trusts only a finite number
+// already in [min, max]. Anything else, such as NaN, plus or minus
+// Infinity, an out-of-range value, or the wrong type, falls back to the
+// default, so a corrupt-but-valid layout.json can never wedge the UI.
 function validRange(v: unknown, min: number, max: number, fallback: number): number {
   return typeof v === "number" && Number.isFinite(v) && v >= min && v <= max ? v : fallback;
 }
 
-// Accept only a plain object of boolean values. A corrupt persisted `collapsed`
-// (string, array, null) would otherwise be spread by setCollapsed into a
-// malformed object; reject anything that is not a plain object and coerce each
-// entry to boolean, dropping non-boolean values.
+// Accept only a plain object of boolean values. A corrupt persisted
+// `collapsed` value (a string, an array, or null) would otherwise get
+// spread by setCollapsed into a malformed object. Reject anything that is
+// not a plain object, and coerce each entry to boolean, dropping
+// non-boolean values.
 function validCollapsed(v: unknown): Record<string, boolean> {
   if (!v || typeof v !== "object" || Array.isArray(v)) return {};
   const out: Record<string, boolean> = {};
@@ -56,7 +59,7 @@ class LayoutStore {
         this.collapsed = validCollapsed(s.collapsed);
         this.order     = Array.isArray(s.order) ? s.order : [];
       }
-    } catch { /* corrupt — keep defaults */ }
+    } catch { /* Corrupt data. Keep the defaults. */ }
   }
 
   private save(): void {

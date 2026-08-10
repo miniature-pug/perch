@@ -70,10 +70,10 @@ func TestValidateSessionID_AdversarialCases(t *testing.T) {
 	})
 }
 
-// TestValidateSessionID_LengthBoundary pins the maxSessionIDLen edge: exactly 128
-// chars is accepted, 129 is rejected. (129-rejection is also covered by the
-// adversarial "overlong" case; this asserts the just-below boundary is accepted so
-// an off-by-one in the length check would be caught.)
+// TestValidateSessionID_LengthBoundary tests the maxSessionIDLen edge. The test
+// accepts exactly 128 characters and rejects 129 characters. The adversarial
+// "overlong" case also covers the 129 rejection. This test checks the boundary
+// just below 128, so it catches an off-by-one error in the length check.
 func TestValidateSessionID_LengthBoundary(t *testing.T) {
 	if err := validateSessionID(strings.Repeat("a", maxSessionIDLen)); err != nil {
 		t.Errorf("validateSessionID(128 chars) = %v, want nil (the boundary length must be accepted)", err)
@@ -84,9 +84,10 @@ func TestValidateSessionID_LengthBoundary(t *testing.T) {
 }
 
 // TestValidateSessionID_ShellDrawerKeyShape guards the shell drawer pane key at
-// the Go boundary: the key was changed from "<wsid>:shell" (colon => rejected by
-// the [A-Za-z0-9_-] allowlist, so OpenShell never spawned a pty) to "shell-<wsid>".
-// The NEW shape must be accepted and the OLD colon shape must be rejected.
+// the Go boundary. perch changed the key from "<wsid>:shell" to "shell-<wsid>".
+// The colon in the old shape was rejected by the [A-Za-z0-9_-] allowlist, so
+// OpenShell never spawned a pty. The NEW shape must be accepted, and the OLD
+// colon shape must be rejected.
 func TestValidateSessionID_ShellDrawerKeyShape(t *testing.T) {
 	if err := validateSessionID("shell-ws-1"); err != nil {
 		t.Errorf("validateSessionID(\"shell-ws-1\") = %v, want nil (new shell drawer key shape must be accepted)", err)
@@ -96,9 +97,10 @@ func TestValidateSessionID_ShellDrawerKeyShape(t *testing.T) {
 	}
 }
 
-// TestApp_OpenShell_RejectsColonPaneID is the call-boundary guard: OpenShell
-// validates the paneID via validateSessionID BEFORE spawning, so a colon-containing
-// key (the old "<wsid>:shell" shape) is rejected early and the pty is never spawned.
+// TestApp_OpenShell_RejectsColonPaneID is the call-boundary guard. OpenShell
+// validates the paneID with validateSessionID before spawning, so it rejects a
+// colon-containing key (the old "<wsid>:shell" shape) early. The pty is never
+// spawned.
 func TestApp_OpenShell_RejectsColonPaneID(t *testing.T) {
 	shellCwd := t.TempDir()
 	spawnCalled := false
@@ -152,10 +154,10 @@ func TestValidateWorktreeUnderRoots(t *testing.T) {
 	}
 }
 
-// TestValidateWorktreeUnderRoots_SymlinkEscape uses REAL on-disk symlinks so the
-// EvalSymlinks containment check is actually exercised (not skipped). The escape
-// link points at a real directory OUTSIDE the root, so EvalSymlinks resolves
-// successfully and it is the prefix check — not a resolve error — that rejects it.
+// TestValidateWorktreeUnderRoots_SymlinkEscape uses REAL on-disk symlinks, so the
+// test exercises the EvalSymlinks containment check (not skipped). The escape link
+// points at a real directory outside the root. EvalSymlinks resolves the link
+// successfully, so the prefix check rejects the link, not a resolve error.
 func TestValidateWorktreeUnderRoots_SymlinkEscape(t *testing.T) {
 	root := t.TempDir()
 	roots := []string{root}
@@ -196,7 +198,7 @@ func TestContainedUnderRoots_SymlinkRoot(t *testing.T) {
 		t.Fatalf("os.Symlink: %v", err)
 	}
 
-	// treePath is built from the LINK path (lexical only — it does not exist on disk yet).
+	// treePath is built from the LINK path. This path is lexical only, and it does not exist on disk yet.
 	treePathViaLink := filepath.Join(linkRoot, "proj__worktrees", "feat-x")
 
 	// PRIMARY ASSERTION: a treePath under a symlinked root MUST be accepted.
@@ -474,8 +476,9 @@ func TestApp_CreateWorkspace_RejectsInvalidAgent(t *testing.T) {
 	}
 }
 
-// TestApp_CreateWorkspace_Title_UserAndFallback verifies that a non-empty title
-// is stored verbatim, while a blank title falls back to the branch slug.
+// TestApp_CreateWorkspace_Title_UserAndFallback verifies that CreateWorkspace
+// stores a non-empty title verbatim, and a blank title falls back to the branch
+// slug.
 func TestApp_CreateWorkspace_Title_UserAndFallback(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
@@ -518,8 +521,9 @@ func TestApp_CreateWorkspace_Title_UserAndFallback(t *testing.T) {
 	}
 }
 
-// TestApp_SetWorkspaceTitle verifies renaming updates the stored title, and that
-// an unknown id or a blank title errors (leaving the store untouched).
+// TestApp_SetWorkspaceTitle verifies that renaming updates the stored title.
+// An unknown id or a blank title returns an error and leaves the store
+// unchanged.
 func TestApp_SetWorkspaceTitle(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
@@ -645,9 +649,9 @@ func TestApp_CreateWorkspace_WorktreeNewBranch(t *testing.T) {
 	}
 }
 
-// TestApp_CreateWorkspace_PersistsBaseRef verifies that the baseRef argument
-// supplied to CreateWorkspace is stored in the registry record as BaseRef.
-// This field is required by the stale-cleanup merge checks.
+// TestApp_CreateWorkspace_PersistsBaseRef verifies that CreateWorkspace stores
+// the baseRef argument in the registry record as BaseRef. The stale-cleanup
+// merge checks need this field.
 func TestApp_CreateWorkspace_PersistsBaseRef(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
@@ -759,11 +763,11 @@ func TestApp_CreateWorkspace_NonWorktree(t *testing.T) {
 	}
 }
 
-// TestApp_CreateWorkspace_NonWorktree_DirtyBranchSwitch_Fails verifies that a
-// non-worktree session asking to switch to a DIFFERENT branch is refused when the
-// working tree is dirty (non-conflicting changes would otherwise be silently
-// carried across the switch). The error must wrap ErrWorktreeDirty and no
-// registry record may be created.
+// TestApp_CreateWorkspace_NonWorktree_DirtyBranchSwitch_Fails verifies that
+// CreateWorkspace refuses a non-worktree session that asks to switch to a
+// DIFFERENT branch when the working tree is dirty. Otherwise, the switch would
+// silently carry non-conflicting changes across branches. The error must wrap
+// ErrWorktreeDirty, and CreateWorkspace must not create a registry record.
 func TestApp_CreateWorkspace_NonWorktree_DirtyBranchSwitch_Fails(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
@@ -775,8 +779,8 @@ func TestApp_CreateWorkspace_NonWorktree_DirtyBranchSwitch_Fails(t *testing.T) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git branch: %v: %s", err, out)
 	}
-	// Make the tree dirty with a NON-conflicting untracked file. Bare
-	// `git checkout` would succeed here and carry the file across — that's the bug.
+	// Make the tree dirty with a NON-conflicting untracked file. A bare
+	// `git checkout` would succeed here and carry the file across. That is the bug.
 	if err := os.WriteFile(filepath.Join(repo, "foo.txt"), []byte("dirty\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -809,9 +813,10 @@ func TestApp_CreateWorkspace_NonWorktree_DirtyBranchSwitch_Fails(t *testing.T) {
 	}
 }
 
-// TestApp_CreateWorkspace_NonWorktree_SameBranchDirty_OK verifies that attaching a
-// non-worktree session to the CURRENT branch succeeds even when the tree is dirty
-// (no switch is needed, so dirtiness is allowed).
+// TestApp_CreateWorkspace_NonWorktree_SameBranchDirty_OK verifies that
+// CreateWorkspace succeeds when it attaches a non-worktree session to the CURRENT
+// branch, even when the tree is dirty. No switch is needed, so a dirty tree is
+// allowed.
 func TestApp_CreateWorkspace_NonWorktree_SameBranchDirty_OK(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
@@ -842,8 +847,9 @@ func TestApp_CreateWorkspace_NonWorktree_SameBranchDirty_OK(t *testing.T) {
 	}
 }
 
-// TestApp_CreateWorkspace_NonWorktree_CleanSwitch_OK verifies that switching to a
-// different branch with a CLEAN tree still performs the checkout and succeeds.
+// TestApp_CreateWorkspace_NonWorktree_CleanSwitch_OK verifies that
+// CreateWorkspace still does the checkout and succeeds when it switches to a
+// different branch with a CLEAN tree.
 func TestApp_CreateWorkspace_NonWorktree_CleanSwitch_OK(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
@@ -883,10 +889,10 @@ func TestApp_CreateWorkspace_NonWorktree_CleanSwitch_OK(t *testing.T) {
 
 // ── ErrBranchInUse ────────────────────────────────────────────────────────────
 
-// TestApp_CreateWorkspace_ErrBranchInUse verifies that attempting to create a
-// *worktree* session for a branch already tracked by another worktree session
-// returns ErrBranchInUse. Non-worktree sessions sharing a branch are allowed
-// (like two terminals).
+// TestApp_CreateWorkspace_ErrBranchInUse verifies that CreateWorkspace returns
+// ErrBranchInUse when it creates a *worktree* session for a branch already
+// tracked by another worktree session. Non-worktree sessions can share a branch,
+// like two terminals.
 func TestApp_CreateWorkspace_ErrBranchInUse(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
@@ -955,14 +961,15 @@ func TestApp_CreateWorkspace_NewBranch_BranchAlreadyExists_Fails(t *testing.T) {
 	if !errors.Is(err, git.ErrBranchExists) {
 		t.Errorf("want errors.Is(err, git.ErrBranchExists), got %v", err)
 	}
-	// No broken workspace record must have been persisted.
+	// The code must not persist a broken workspace record.
 	if got := len(store.List()); got != countBefore {
 		t.Errorf("workspace count = %d, want %d (no record should be persisted)", got, countBefore)
 	}
 }
 
-// TestApp_CreateWorkspace_NonWorktreeBranchSharing verifies that two
-// non-worktree sessions on the same branch are allowed (not ErrBranchInUse).
+// TestApp_CreateWorkspace_NonWorktreeBranchSharing verifies that
+// CreateWorkspace allows two non-worktree sessions on the same branch, and does
+// not return ErrBranchInUse.
 func TestApp_CreateWorkspace_NonWorktreeBranchSharing(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
@@ -999,14 +1006,14 @@ func TestApp_CreateWorkspace_NonWorktreeBranchSharing(t *testing.T) {
 }
 
 // TestApp_CreateWorkspace_UnbornHead_ReturnsNoCommits verifies that
-// CreateWorkspace returns ErrNoCommits (via errors.Is) and does NOT persist any
-// workspace record when called against a freshly git-init'd repo with no commits
-// (unborn HEAD).
+// CreateWorkspace returns ErrNoCommits (via errors.Is) and does not persist a
+// workspace record. This happens when the target repo is freshly git-init'd
+// with no commits (an unborn HEAD).
 func TestApp_CreateWorkspace_UnbornHead_ReturnsNoCommits(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 
-	// Create repo with ZERO commits — do NOT make any commit.
+	// Create the repo with ZERO commits. Do NOT make any commit.
 	repo := filepath.Join(root, "proj")
 	if err := os.MkdirAll(repo, 0o755); err != nil {
 		t.Fatal(err)
@@ -1041,7 +1048,7 @@ func TestApp_CreateWorkspace_UnbornHead_ReturnsNoCommits(t *testing.T) {
 	if !errors.Is(err, git.ErrNoCommits) {
 		t.Errorf("want errors.Is(err, git.ErrNoCommits), got %v", err)
 	}
-	// No workspace record must have been persisted.
+	// The code must not persist a workspace record.
 	if got := len(store.List()); got != countBefore {
 		t.Errorf("workspace count = %d, want %d (no record should be persisted)", got, countBefore)
 	}
@@ -1089,9 +1096,10 @@ func TestApp_WorkspaceForBranch_Miss(t *testing.T) {
 	}
 }
 
-// TestApp_WorkspaceForBranch_IgnoresNonWorktree verifies that a non-worktree
-// session on the same repo+branch is NOT returned (WorkspaceForBranch is used
-// to detect worktree-branch conflicts only).
+// TestApp_WorkspaceForBranch_IgnoresNonWorktree verifies that
+// WorkspaceForBranch does not return a non-worktree session on the same
+// repo+branch. The app uses WorkspaceForBranch only to detect worktree-branch
+// conflicts.
 func TestApp_WorkspaceForBranch_IgnoresNonWorktree(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cfgDir := t.TempDir()
@@ -1266,7 +1274,7 @@ func TestApp_OpenWorkspace_AgentMissing_SkipsLaunchAndNotifies(t *testing.T) {
 		newAdapter: fakeAdapterSeam(&fakeAdapter{name: "claude", detect: false}),
 	}
 
-	// (a) OpenWorkspace must return nil — the missing agent is non-fatal.
+	// (a) OpenWorkspace must return nil. The missing agent is not fatal.
 	if err := a.OpenWorkspace("ws-missing-agent"); err != nil {
 		t.Fatalf("OpenWorkspace returned unexpected error: %v", err)
 	}
@@ -1343,9 +1351,9 @@ func TestApp_OpenWorkspace_UnknownID(t *testing.T) {
 	}
 }
 
-// OpenWorkspace must bump LastActive so an actively-opened session does not keep
-// reading as stale (LastActive was previously only ever set at creation, which
-// ListStaleSessions and sidebar ordering key on).
+// OpenWorkspace must bump LastActive so an actively-opened session does not
+// read as stale. Previously, only session creation set LastActive, and
+// ListStaleSessions and the sidebar order key on this field.
 func TestApp_OpenWorkspace_AdvancesLastActive(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cfgDir := t.TempDir()
@@ -1484,10 +1492,11 @@ func TestApp_CloseWorkspace_ClosesAndKeepsInRegistry(t *testing.T) {
 }
 
 // TestApp_CloseWorkspace_ClosesShellBridge is the regression guard for the leaked
-// shell drawer pty: OpenShell registers a workspace shell under "shell-<id>", and
-// CloseWorkspace must close AND drop it (mirroring the "pane-<id>" close). Before
-// the fix only the pane bridge was closed, so the shell bridge leaked until
-// shutdown, left running against a now-deleted worktree cwd after RemoveWorkspace.
+// shell drawer pty. OpenShell registers a workspace shell under "shell-<id>", and
+// CloseWorkspace must close and drop this shell bridge, mirroring the "pane-<id>"
+// close. Before the fix, CloseWorkspace closed only the pane bridge. The shell
+// bridge leaked until shutdown, and stayed running against a now-deleted
+// worktree cwd after RemoveWorkspace.
 func TestApp_CloseWorkspace_ClosesShellBridge(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cfgDir := t.TempDir()
@@ -1705,9 +1714,9 @@ func TestApp_Settings_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestAtomicWriteApp_Mode0600 verifies atomicWriteApp (used by SaveSettings and
-// SaveLayout) produces files with mode 0600 so a token-bearing settings payload
-// is never readable by group/world.
+// TestAtomicWriteApp_Mode0600 verifies that atomicWriteApp, used by SaveSettings
+// and SaveLayout, produces files with mode 0600. This mode keeps a token-bearing
+// settings payload unreadable by the group or the world.
 func TestAtomicWriteApp_Mode0600(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cfgDir := t.TempDir()
@@ -1862,9 +1871,10 @@ func TestApp_Approve_RoutesToMonitor(t *testing.T) {
 	}
 }
 
-// TestApp_Approve_NegativePaths covers the two reqID failure modes: a malformed
-// reqID with no ":" separator (cannot split workspace) and a well-formed reqID whose
-// workspace has no live monitor. Both must return an error and must not panic.
+// TestApp_Approve_NegativePaths covers two reqID failure modes. The first is a
+// malformed reqID with no ":" separator, so the code cannot split out the
+// workspace. The second is a well-formed reqID whose workspace has no live
+// monitor. Both cases must return an error and must not panic.
 func TestApp_Approve_NegativePaths(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cfgDir := t.TempDir()
@@ -1891,10 +1901,11 @@ func TestApp_Approve_NegativePaths(t *testing.T) {
 	})
 }
 
-// TestApp_StageHunk_RejectsPathTraversal asserts the hunk apply path's
-// path-traversal guard (validateRelFile): a file arg that escapes the worktree via
-// ".." or is absolute must be rejected BEFORE any git command runs, so a malicious
-// `file` cannot turn into a git pathspec pointing outside the worktree.
+// TestApp_StageHunk_RejectsPathTraversal asserts that the hunk apply path's
+// path-traversal guard, validateRelFile, rejects a file argument that escapes
+// the worktree via ".." or is absolute. validateRelFile rejects the argument
+// before any git command runs, so a malicious `file` value cannot turn into a
+// git pathspec that points outside the worktree.
 func TestApp_StageHunk_RejectsPathTraversal(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cfgDir := t.TempDir()
@@ -2025,8 +2036,8 @@ func TestApp_Approve_AlwaysPersistsRule(t *testing.T) {
 		emit:     func(string, ...any) {},
 		bridges:  map[string]*internalpty.Bridge{},
 		monitors: map[string]agent.Monitor{"ws-alw": fm},
-		// Seed the pending approval the pump would have registered. tool+input
-		// are resolved from here (backend-authoritative), not from the frontend.
+		// Seed the pending approval the pump would have registered. The backend
+		// resolves tool and input from this value, not the frontend.
 		pending:      map[string]agent.ApprovalReq{"req-002:ws-alw": {ReqID: "req-002", Tool: "Bash", Input: "rm -rf /tmp/x"}},
 		settingsPath: filepath.Join(cfgDir, "settings.json"),
 	}
@@ -2076,9 +2087,10 @@ func newAlwaysTestApp(t *testing.T, agentName string, notifies *[]map[string]any
 	return a, fm
 }
 
-// TestApp_MaybeAutoApprove_ExactMatch asserts that a request exactly matching a
-// persisted rule is allowed via the monitor, fires a routine transparency
-// notification, and is suppressed (returns true).
+// TestApp_MaybeAutoApprove_ExactMatch asserts that when a request exactly
+// matches a persisted rule, maybeAutoApprove allows the request through the
+// monitor, fires a routine transparency notification, and suppresses the
+// approval card (returns true).
 func TestApp_MaybeAutoApprove_ExactMatch(t *testing.T) {
 	var notifies []map[string]any
 	a, fm := newAlwaysTestApp(t, "claude", &notifies)
@@ -2128,10 +2140,11 @@ func TestApp_MaybeAutoApprove_NoMatch(t *testing.T) {
 	}
 }
 
-// TestApp_Approve_Always_CapturesPendingByReqID is the discriminating test: with
-// two approvals pending, clicking Always on the FIRST must persist a rule for
-// the FIRST's tool+input — never the most-recently-seen approval. This fails
-// under a racy "last approval" accessor and passes only with reqID resolution.
+// TestApp_Approve_Always_CapturesPendingByReqID is the key test. With two
+// approvals pending, clicking Always on the FIRST approval must persist a rule
+// for the FIRST approval's tool and input, never for the most-recently-seen
+// approval. This test fails with a racy "last approval" accessor. This test
+// passes only with reqID resolution.
 func TestApp_Approve_Always_CapturesPendingByReqID(t *testing.T) {
 	a, _ := newAlwaysTestApp(t, "claude", nil)
 	a.pending = map[string]agent.ApprovalReq{
@@ -2236,8 +2249,8 @@ func TestApp_DiffStat_ValidateAndDelegate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Write an untracked file — git numstat ignores untracked files,
-	// so its Added/Removed will be 0 (that is the documented contract).
+	// Write an untracked file. git numstat ignores untracked files, so the file's
+	// Added and Removed fields stay 0. This is the documented contract.
 	if err := os.WriteFile(filepath.Join(repo, "hello.txt"), []byte("hi\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -2713,8 +2726,8 @@ func TestApp_OpenWorkspace_SessionIDPersistedOnSessionStart(t *testing.T) {
 }
 
 // TestApp_OpenWorkspace_ResumeUsesLastSessionID verifies that on a second
-// OpenWorkspace call after a session id has been persisted, the stored
-// LastSessionID is passed as resumeID to Monitor.Prepare.
+// OpenWorkspace call after a session id is persisted, OpenWorkspace passes the
+// stored LastSessionID as resumeID to Monitor.Prepare.
 func TestApp_OpenWorkspace_ResumeUsesLastSessionID(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cfgDir := t.TempDir()
@@ -2903,8 +2916,8 @@ func TestApp_DispatchNotify_OSSuppressed_WhenFocused(t *testing.T) {
 
 // TestApp_DispatchNotify_OSFires_BlockingDespiteDND asserts that a blocking-tier
 // OS notification STILL fires when DND is enabled (unfocused). DND mutes only the
-// ambient and routine tiers and never the blocking tier; since only blocking events
-// fire an OS notification, DND must not suppress them.
+// ambient and routine tiers, never the blocking tier. Only blocking events fire an
+// OS notification, so DND must not suppress a blocking-tier notification.
 func TestApp_DispatchNotify_OSFires_BlockingDespiteDND(t *testing.T) {
 	a, fn := newNotifyTestApp(t, false /*focused*/, true /*dnd*/)
 
@@ -2987,9 +3000,10 @@ func TestApp_SetWindowFocus_UpdatesState(t *testing.T) {
 	}
 }
 
-// TestApp_Watcher_NoEmitAfterClose asserts that after CloseWorkspace the debounce
-// goroutine has exited: additional onChange calls must not produce new fs:changed
-// events. This proves the goroutine exits on wctx cancellation (no leak).
+// TestApp_Watcher_NoEmitAfterClose checks the debounce goroutine after
+// CloseWorkspace. The goroutine has exited, so more onChange calls must not
+// produce new fs:changed events. This proves the goroutine exits on wctx
+// cancellation, with no leak.
 func TestApp_Watcher_NoEmitAfterClose(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	wt := t.TempDir()
@@ -3003,7 +3017,7 @@ func TestApp_Watcher_NoEmitAfterClose(t *testing.T) {
 		t.Fatal("onChange not captured")
 	}
 
-	// Close the workspace — this cancels wctx and closes the watcher.
+	// Close the workspace. This call cancels wctx and closes the watcher.
 	if err := a.CloseWorkspace("ws-watch"); err != nil {
 		t.Fatalf("CloseWorkspace: %v", err)
 	}
@@ -3011,10 +3025,10 @@ func TestApp_Watcher_NoEmitAfterClose(t *testing.T) {
 	// Give the goroutine time to observe the cancellation.
 	time.Sleep(20 * time.Millisecond)
 
-	// Record the fs:changed count before any additional onChange calls.
+	// Record the fs:changed count before any more onChange calls.
 	before := countFsChanged(snapshot())
 
-	// Fire additional raw changes — the goroutine must be dead, so no new emits.
+	// Fire more raw changes. The goroutine is dead, so it emits nothing new.
 	capturedOnChange("after-close.go")
 	capturedOnChange("after-close2.go")
 
@@ -3030,12 +3044,12 @@ func TestApp_Watcher_NoEmitAfterClose(t *testing.T) {
 // TestApp_DiscoverRepos_FindsReposUnderRoots verifies that DiscoverRepos
 // returns RepoInfo entries for real git repositories placed under App.roots.
 // The existing initGitRepo helper creates a "repo" subdirectory inside the
-// supplied root, so we use two separate temp dirs as parent containers.
+// supplied root, so the test uses two separate temp dirs as parent containers.
 func TestApp_DiscoverRepos_FindsReposUnderRoots(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	// Each call to initGitRepo creates <parent>/repo; use two parents so
-	// we get two distinct repos under a single scan root.
+	// Each call to initGitRepo creates <parent>/repo. The test uses two parents,
+	// so it gets two distinct repos under a single scan root.
 	root := t.TempDir()
 	parent1 := filepath.Join(root, "alpha")
 	parent2 := filepath.Join(root, "beta")
@@ -3094,7 +3108,7 @@ func TestApp_DiscoverRepos_FindsReposUnderRoots(t *testing.T) {
 func TestApp_DiscoverRepos_EmptyWhenNoRepos(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	root := t.TempDir() // empty directory — no git repos inside
+	root := t.TempDir() // empty directory, no git repos inside
 
 	a := &App{roots: []string{root}}
 
@@ -3169,7 +3183,7 @@ func TestApp_RemoveWorkspace_DirtyWorktree_ReturnsErrWorktreeDirty(t *testing.T)
 	if _, ok := store.Get("ws-dirty"); !ok {
 		t.Error("workspace record removed despite ErrWorktreeDirty")
 	}
-	// No worktree remove must have been attempted.
+	// The code must not call worktree remove.
 	for _, c := range r.Calls {
 		if c.Name == "git" && len(c.Args) >= 4 && c.Args[2] == "worktree" && c.Args[3] == "remove" {
 			t.Error("worktree remove attempted on dirty tree (non-force)")
@@ -3308,7 +3322,7 @@ func TestApp_ListStaleSessions_SafeFlag(t *testing.T) {
 	r.Respond(proc.FakeResult{Stdout: []byte("")}, "git", "-C", tree, "status", "--porcelain")
 	// BranchMerged
 	r.Respond(proc.FakeResult{Stdout: []byte("feat/s\n")}, "git", "-C", repo, "branch", "--merged", "main", "--format=%(refname:short)")
-	// DiffStat command 2: diff --numstat — return 3 added, 1 removed for feat/s.go
+	// DiffStat command 2 (diff --numstat) returns 3 added, 1 removed for feat/s.go
 	r.Respond(proc.FakeResult{Stdout: []byte("3\t1\tfeat/s.go\n")}, "git", "-C", tree, "diff", "--numstat")
 	// DiffStat command 3: diff --cached --numstat
 	r.Respond(proc.FakeResult{Stdout: []byte("")}, "git", "-C", tree, "diff", "--cached", "--numstat")
@@ -3337,10 +3351,10 @@ func TestApp_ListStaleSessions_SafeFlag(t *testing.T) {
 }
 
 // TestApp_ListStaleSessions_UnmergedNotSafe verifies the merged conjunct of
-// Safe==clean&&merged: a clean worktree whose branch is NOT present in
+// Safe==clean&&merged. A clean worktree whose branch is NOT present in the
 // `git branch --merged <base>` output must yield Clean==true, Merged==false,
-// Safe==false.  Reverting the conjunct to `safe := clean` in app.go would make
-// this test fail because Safe would become true.
+// and Safe==false. Reverting the conjunct to `safe := clean` in app.go would
+// make this test fail, because Safe would become true.
 func TestApp_ListStaleSessions_UnmergedNotSafe(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cfgDir := t.TempDir()
@@ -3445,9 +3459,10 @@ func TestApp_CleanupSessions_WorktreeRemoveFails_KeepsRecord(t *testing.T) {
 		BaseRef: "main", LastActive: time.Now().Add(-40 * 24 * time.Hour),
 	})
 	r := proc.NewFakeRunner()
-	// The pre-check reports CLEAN (empty status) so the flow reaches the remove;
-	// the remove itself then FAILS (e.g. a race between the check and the remove).
-	// The record must still be kept and the branch delete skipped.
+	// The pre-check reports CLEAN (empty status), so the flow reaches the remove
+	// step. The remove step then FAILS, for example from a race between the check
+	// and the remove. CleanupSessions must still keep the record and skip the
+	// branch delete.
 	r.Respond(proc.FakeResult{Stdout: []byte("")}, "git", "-C", tree, "status", "--porcelain")
 	r.Respond(proc.FakeResult{Err: fmt.Errorf("fatal: contains modified or untracked files")}, "git", "-C", repo, "worktree", "remove", tree)
 	a := &App{
@@ -3464,7 +3479,7 @@ func TestApp_CleanupSessions_WorktreeRemoveFails_KeepsRecord(t *testing.T) {
 	if _, ok := store.Get("ws-dirty"); !ok {
 		t.Error("record removed despite worktree-remove failure — orphaned tree")
 	}
-	// Branch delete MUST NOT have been attempted.
+	// The code must not delete the branch.
 	for _, c := range r.Calls {
 		if c.Name == "git" && len(c.Args) >= 4 && c.Args[2] == "branch" && c.Args[3] == "-d" {
 			t.Error("branch delete attempted after worktree-remove failure")
@@ -3472,13 +3487,14 @@ func TestApp_CleanupSessions_WorktreeRemoveFails_KeepsRecord(t *testing.T) {
 	}
 }
 
-// TestApp_CleanupSessions_DirtyWorktree_KeepsRecordAndMonitor is the regression
-// guard for the "destroy a dirty agent before checking" bug: CleanupSessions used
-// to CloseWorkspace (killing the agent/pty/monitor) UNCONDITIONALLY, THEN call
-// RemoveWorktree(force=false), which only fails on a dirty tree AFTER the session
-// was already torn down. With force==false the dirty check must run FIRST: a dirty
-// tree is skipped entirely — the record is kept AND the monitor is left alive (not
-// torn down) so the session is retryable with its agent intact.
+// TestApp_CleanupSessions_DirtyWorktree_KeepsRecordAndMonitor guards against a
+// bug where CleanupSessions destroyed a dirty agent before it checked the tree.
+// CleanupSessions used to call CloseWorkspace unconditionally, which killed the
+// agent, pty, and monitor. It then called RemoveWorktree(force=false), which
+// fails on a dirty tree, but only after teardown already happened. With
+// force==false, the dirty check must now run FIRST. When the tree is dirty, the
+// code skips it entirely. The code keeps the record and leaves the monitor
+// alive, not torn down, so the session stays retryable with its agent intact.
 func TestApp_CleanupSessions_DirtyWorktree_KeepsRecordAndMonitor(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cfgDir := t.TempDir()
@@ -3512,7 +3528,7 @@ func TestApp_CleanupSessions_DirtyWorktree_KeepsRecordAndMonitor(t *testing.T) {
 	if _, ok := store.Get("ws-dirty"); !ok {
 		t.Error("record removed for dirty worktree — should be kept/retryable")
 	}
-	// Monitor MUST NOT have been torn down (agent kept alive).
+	// The code must not tear down the monitor (agent stays alive).
 	if fm.TornDown() {
 		t.Error("monitor torn down before the dirty check — agent killed on a dirty tree")
 	}
@@ -3523,7 +3539,7 @@ func TestApp_CleanupSessions_DirtyWorktree_KeepsRecordAndMonitor(t *testing.T) {
 	if !stillThere {
 		t.Error("monitor removed from registry for a dirty (skipped) session")
 	}
-	// No worktree remove must have been attempted (checked before teardown).
+	// The dirty check runs before teardown, so the code must not call worktree remove.
 	for _, c := range r.Calls {
 		if c.Name == "git" && len(c.Args) >= 4 && c.Args[2] == "worktree" && c.Args[3] == "remove" {
 			t.Error("worktree remove attempted on dirty tree (non-force)")
@@ -3532,10 +3548,10 @@ func TestApp_CleanupSessions_DirtyWorktree_KeepsRecordAndMonitor(t *testing.T) {
 }
 
 // TestApp_RemoveWorkspace_MissingWorktreePath_DropsRecord is the regression guard
-// for the ghost-session bug: if the worktree dir was deleted OUTSIDE perch, the
-// WorktreeDirty check (git -C <missing> status) would error and the record could
-// never be dropped. A path that no longer exists must be treated as already gone —
-// the git remove is skipped and the record dropped cleanly.
+// for the ghost-session bug. If a process deleted the worktree dir outside perch,
+// the WorktreeDirty check (git -C <missing> status) would error, and the record
+// could never be dropped. The code must treat a path that no longer exists as
+// already gone. The code skips the git remove and drops the record cleanly.
 func TestApp_RemoveWorkspace_MissingWorktreePath_DropsRecord(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cfgDir := t.TempDir()
@@ -3559,7 +3575,7 @@ func TestApp_RemoveWorkspace_MissingWorktreePath_DropsRecord(t *testing.T) {
 	if _, ok := store.Get("ws-gone"); ok {
 		t.Error("ghost record survived RemoveWorkspace for a deleted worktree path")
 	}
-	// No git worktree remove nor status must have been attempted on the missing path.
+	// The code must not call git worktree remove or status on the missing path.
 	for _, c := range r.Calls {
 		if c.Name == "git" {
 			t.Errorf("unexpected git call for missing worktree path: %v", c.Args)
@@ -3568,11 +3584,11 @@ func TestApp_RemoveWorkspace_MissingWorktreePath_DropsRecord(t *testing.T) {
 }
 
 // TestApp_CloseWorkspace_DeniesPendingApprovals is the regression guard for the
-// hung-agent bug: when a workspace with an in-flight approval is closed, the
-// blocked agent hook (claude POST / opencode permission) would hang until its own
-// timeout. CloseWorkspace must deny each still-pending approval via the monitor so
-// the agent unblocks promptly, using the raw reqID (the pending key is
-// "<raw>:<workspaceID>").
+// hung-agent bug. When CloseWorkspace closes a workspace with an in-flight
+// approval, the blocked agent hook (claude POST or opencode permission) would
+// hang until its own timeout. CloseWorkspace must deny each still-pending
+// approval through the monitor, using the raw reqID, so the agent unblocks
+// promptly. The pending key has the form "<raw>:<workspaceID>".
 func TestApp_CloseWorkspace_DeniesPendingApprovals(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cfgDir := t.TempDir()
@@ -3740,11 +3756,12 @@ func findNotify(recs []emitRec, tier, title string) (map[string]any, bool) {
 }
 
 // TestApp_OpenWorkspace_InjectsExitEnvAndWritesSentinel is the F32 wiring proof at
-// the app layer: OpenWorkspace must (a) write a launch line carrying the exit
-// sentinel that references PERCH_EXIT_TOKEN/PERCH_EXIT_URL BY NAME (never the literal
-// token — the interactive shell echoes the typed line), and (b) inject those vars
-// into the pty spawn ENV, merged onto os.Environ() (not clobbered). Uses a REAL
-// ClaudeMonitor + listener so the sentinel/env under test are production values.
+// the app layer. OpenWorkspace must do two things. First, it writes a launch line
+// carrying the exit sentinel, which references PERCH_EXIT_TOKEN and
+// PERCH_EXIT_URL by name, never by the literal token (the interactive shell
+// echoes the typed line). Second, it injects those vars into the pty spawn env,
+// merged onto os.Environ(), not clobbered. The test uses a REAL ClaudeMonitor and
+// listener, so the sentinel and env under test are production values.
 func TestApp_OpenWorkspace_InjectsExitEnvAndWritesSentinel(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cfgDir := t.TempDir()
@@ -3849,8 +3866,9 @@ func envSliceHasPrefix(env []string, prefix string) bool {
 // ── host-side clipboard routes (ctx==nil no-op guard) ────────────────────────
 //
 // Mirror CopyPath's ctx==nil guard so headless tests can exercise the methods
-// without a Wails runtime. With ctx == nil both must be no-ops (no panic, no
-// error), matching CopyPath's behavior in security_fixes_test.go.
+// without a Wails runtime. With ctx == nil, both methods must be no-ops. They
+// must not panic and must not return an error. This matches CopyPath's
+// behavior in security_fixes_test.go.
 
 func TestClipboardSetText_NilCtxNoOp(t *testing.T) {
 	a := &App{}
@@ -3920,15 +3938,16 @@ func openExitTestApp(t *testing.T, wsID string) (*App, *agent.FakeMonitor, func(
 	return a, fm, snapshot, fn
 }
 
-// TestApp_ExitedEvent_ForwardsNotifiesAndPrunesPending is the F32 app-forward proof:
-// an exited event from the monitor must (1) re-emit as agent:event(state:exited),
-// (2) fire a BLOCKING "Agent exited" notify (in-app + OS while unfocused), and
-// (3) prune the workspace's pending approval so a PreToolUse-time crash cannot
+// TestApp_ExitedEvent_ForwardsNotifiesAndPrunesPending is the F32 app-forward
+// proof. When the monitor sends an exited event, the app must do three things.
+// (1) Re-emit the event as agent:event(state:exited). (2) Fire a BLOCKING
+// "Agent exited" notify, in-app and OS, while the window is unfocused. (3)
+// Prune the workspace's pending approval, so a PreToolUse-time crash cannot
 // false-resolve to a live card on a webview reload.
 func TestApp_ExitedEvent_ForwardsNotifiesAndPrunesPending(t *testing.T) {
-	// OS-notify (FakeNotifier) is asserted synchronously in
-	// TestApp_DispatchNotify_Exited_LiveGuard; here the notifier is unread to avoid
-	// racing the pump goroutine on the unsynchronized FakeNotifier.Calls slice.
+	// TestApp_DispatchNotify_Exited_LiveGuard asserts the OS notify (FakeNotifier)
+	// synchronously. Here, the test leaves the notifier unread, to avoid racing the
+	// pump goroutine on the unsynchronized FakeNotifier.Calls slice.
 	a, fm, snapshot, _ := openExitTestApp(t, "ws-exit")
 
 	// Seed a pending approval as a PreToolUse-time crash would leave behind.
@@ -3966,10 +3985,10 @@ func TestApp_ExitedEvent_ForwardsNotifiesAndPrunesPending(t *testing.T) {
 	}
 }
 
-// TestApp_CloseWorkspace_NoExitedNotification is the critical teardown guard: an
-// INTENTIONAL CloseWorkspace deregisters the monitor before the pane is torn down,
-// so a late exit sentinel (the shell dies as part of teardown) must NOT surface a
-// spurious "Agent exited" notification.
+// TestApp_CloseWorkspace_NoExitedNotification is the critical teardown guard.
+// An INTENTIONAL CloseWorkspace call deregisters the monitor before the pane
+// tears down. The shell dies as part of teardown, and this late exit sentinel
+// must not surface a spurious "Agent exited" notification.
 func TestApp_CloseWorkspace_NoExitedNotification(t *testing.T) {
 	a, fm, snapshot, fn := openExitTestApp(t, "ws-close")
 
@@ -4026,11 +4045,12 @@ func newDispatchTestApp(t *testing.T) (*App, func() []emitRec, *notify.FakeNotif
 	}, fn
 }
 
-// TestApp_DispatchNotify_Exited_LiveGuard asserts the exited notification fires for a
-// LIVE workspace (genuine crash: monitor still registered, only the agent process
-// died) and is SUPPRESSED for a deregistered one (intentional teardown removed the
-// monitor before a late sentinel could land) — the guard against a spurious "Agent
-// exited" on CloseWorkspace/displacement/shutdown.
+// TestApp_DispatchNotify_Exited_LiveGuard asserts that the exited notification
+// fires for a LIVE workspace. A live workspace means a genuine crash: the monitor
+// is still registered, and only the agent process died. The notification is
+// SUPPRESSED for a deregistered workspace, where intentional teardown removed the
+// monitor before a late sentinel could land. This guards against a spurious
+// "Agent exited" notification on CloseWorkspace, displacement, or shutdown.
 func TestApp_DispatchNotify_Exited_LiveGuard(t *testing.T) {
 	// (1) LIVE: monitor still registered → blocking in-app + OS notify fire.
 	a, snap, fn := newDispatchTestApp(t)
@@ -4056,10 +4076,10 @@ func TestApp_DispatchNotify_Exited_LiveGuard(t *testing.T) {
 	}
 }
 
-// TestApp_DispatchNotify_Exited_PrunesPendingEvenWhenNotLive asserts the pending
-// prune runs regardless of the live guard: a PreToolUse-time crash on a workspace
-// that is then being torn down must still have its dead approval pruned so it cannot
-// resurface on a reload.
+// TestApp_DispatchNotify_Exited_PrunesPendingEvenWhenNotLive asserts that the
+// pending prune runs regardless of the live guard. Consider a PreToolUse-time
+// crash on a workspace that is then torn down. dispatchNotify must still prune
+// the dead approval, so it cannot resurface on a reload.
 func TestApp_DispatchNotify_Exited_PrunesPendingEvenWhenNotLive(t *testing.T) {
 	a, _, _ := newDispatchTestApp(t)
 	a.pending["r1:ws-x"] = agent.ApprovalReq{ReqID: "r1:ws-x", Tool: "Bash"}

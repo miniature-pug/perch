@@ -1,7 +1,7 @@
 // frontend/src/lib/constants.test.ts
 //
 // Unit tests for the worktree color identity helpers in constants.ts.
-// Covers stability, id-derivation, palette membership, and edge cases.
+// This file covers stability, id derivation, palette membership, and edge cases.
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { WORKTREE_COLORS, worktreeColor, formatRelativeAge } from "./constants";
@@ -27,7 +27,7 @@ describe("worktreeColor(id)", () => {
   });
 
   it("two ids that hash to different buckets return different colors", () => {
-    // djb2 bucket check (computed offline): "main" -> 6, "dev" -> 2
+    // djb2 bucket check (computed offline): "main" maps to 6, "dev" maps to 2.
     const colorA = worktreeColor("main");
     const colorB = worktreeColor("dev");
     expect(colorA).not.toBe(colorB);
@@ -54,8 +54,8 @@ describe("worktreeColor(id)", () => {
 
 describe("worktreeColor(id, index) position-based assignment (F39)", () => {
   it("the first 8 workspaces (by position) each get a distinct color", () => {
-    // Regardless of how the ids would hash, positions 0..7 map round-robin
-    // onto the 8 distinct palette entries — no collisions in the common case.
+    // Regardless of how the ids would hash, positions 0 through 7 map round-robin
+    // onto the 8 distinct palette entries. This causes no collisions in the common case.
     const colors = Array.from({ length: WORKTREE_COLORS.length }, (_, i) =>
       worktreeColor(`ws_${i}`, i),
     );
@@ -64,7 +64,7 @@ describe("worktreeColor(id, index) position-based assignment (F39)", () => {
 
   it("ignores the ids entirely when positions are supplied", () => {
     // Two ids that hash to the SAME bucket still get distinct colors when
-    // their positions differ — proving position, not hash, drives the result.
+    // their positions differ. This proves that position, not hash, drives the result.
     const a = worktreeColor("collision", 0);
     const b = worktreeColor("collision", 1);
     expect(a).toBe(WORKTREE_COLORS[0]);
@@ -79,9 +79,9 @@ describe("worktreeColor(id, index) position-based assignment (F39)", () => {
   });
 
   it("falls back to the stable hash when index is omitted or invalid", () => {
-    // No index → hash path (unchanged legacy behavior).
+    // With no index, the code uses the hash path (unchanged legacy behavior).
     expect(worktreeColor("main")).toBe(worktreeColor("main"));
-    // Negative / non-integer indices are rejected → hash path, still valid.
+    // The code rejects negative or non-integer indices and falls back to the hash path, which is still valid.
     expect(WORKTREE_COLORS as readonly string[]).toContain(worktreeColor("main", -1));
     expect(WORKTREE_COLORS as readonly string[]).toContain(worktreeColor("main", 1.5));
   });

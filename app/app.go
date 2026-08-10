@@ -1,8 +1,8 @@
-// Package app hosts the Wails App: the bound-method API the untrusted Svelte
-// frontend calls. Every argument crossing the IPC boundary is validated here —
-// workspace ids against a charset allowlist, worktree paths against the
-// configured project roots. Subprocesses are always spawned via argv
-// (internal/proc or internal/pty), never a shell.
+// Package app hosts the Wails App. The App is the bound-method API that the
+// untrusted Svelte frontend calls. This package checks every argument that
+// crosses the IPC boundary: workspace ids against a charset allowlist, and
+// worktree paths against the configured project roots. Subprocesses always
+// spawn through argv (internal/proc or internal/pty), never through a shell.
 package app
 
 import (
@@ -32,9 +32,10 @@ import (
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-// Named constants for values used in multiple places or formerly magic numbers.
+// Named constants for values used in many places, or values that were formerly
+// magic numbers.
 const (
-	// pty defaults — used identically by OpenWorkspace and OpenShell.
+	// pty defaults. OpenWorkspace and OpenShell use them the same way.
 	defaultPtyCols = 220
 	defaultPtyRows = 50
 
@@ -45,26 +46,27 @@ const (
 	perchSettingsFile = "settings.json"
 	perchLayoutFile   = "layout.json"
 
-	// pty event-name prefixes; the full event name is prefix + paneID.
+	// pty event-name prefixes. The full event name is the prefix plus the paneID.
 	ptyDataEventPrefix = "pty:data:"
 	ptyExitEventPrefix = "pty:exit:"
 
-	// homeShellPaneID is the reserved pane id for the home-screen shell. OpenShell
-	// bypasses root-containment for this pane id (its cwd is OS-derived via
-	// HomeShellCwd, not user IPC input). Must match the frontend ShellDrawer paneId.
+	// homeShellPaneID is the reserved pane id for the home-screen shell.
+	// OpenShell bypasses root-containment for this pane id, because its cwd
+	// comes from HomeShellCwd (OS-derived), not from user IPC input. This id
+	// must match the frontend ShellDrawer paneId.
 	homeShellPaneID = "shell-home"
 
 	// File-permission modes.
 	settingsFileMode = 0o600
 
-	// uiGitTimeout bounds a UI-initiated git subprocess call so a wedged or
-	// pathologically large git operation cannot hang a frontend binding forever.
-	// Kept generous so legitimate large repositories still complete.
+	// uiGitTimeout limits a git subprocess call that the UI starts, so a stuck
+	// or very large git operation cannot hang a frontend binding forever. The
+	// value stays generous so large real repositories still finish.
 	uiGitTimeout = 120 * time.Second
 
 	// UUIDv4 byte masks applied in newWorkspaceID.
-	// RFC 4122 §4.4: version nibble = 0100 (0x40), cleared with 0x0f;
-	// variant bits = 10xx (0x80), cleared with 0x3f.
+	// RFC 4122 §4.4: the version nibble is 0100 (0x40), cleared with 0x0f.
+	// The variant bits are 10xx (0x80), cleared with 0x3f.
 	uuidVersion4    = 0x40
 	uuidVersionMask = 0x0f
 	uuidVariantRFC  = 0x80
@@ -79,7 +81,8 @@ const fsDebounce = 150 * time.Millisecond
 // debounce collapses a burst into a single WindowSetTitle call.
 const titleDebounce = 150 * time.Millisecond
 
-// Settings defaults — source of truth for settings defaults; frontend mirrors these in frontend/src/lib/constants.ts.
+// Settings defaults. This is the source of truth for settings defaults. The
+// frontend mirrors these values in frontend/src/lib/constants.ts.
 const (
 	defaultTheme   = "gruvbox"
 	defaultDensity = "dense"
@@ -95,20 +98,21 @@ const (
 	ptyMaxDim = 65535
 )
 
-// spawnPtyFunc and newMonitorFunc are injectable seams (real funcs in NewApp,
-// replaced in tests for headless execution).
+// spawnPtyFunc and newMonitorFunc are injectable seams. NewApp wires them to
+// the real functions; tests replace them for headless execution.
 type spawnPtyFunc func(ctx context.Context, cwd string, argv []string, env []string, dataEvent, exitEvent string,
 	emit internalpty.EmitFunc, cols, rows uint16) (*internalpty.Bridge, error)
 
 type newMonitorFunc func(tool string, adapter agent.Adapter) (agent.Monitor, error)
 
-// newWatcherFunc is an injectable seam for the fs watcher (real fspkg.Watch in
-// NewApp, replaced with a fake in tests for headless execution).
+// newWatcherFunc is an injectable seam for the fs watcher. NewApp wires it to
+// the real fspkg.Watch function; tests replace it with a fake for headless
+// execution.
 type newWatcherFunc func(absRoot string, onChange func(string)) (*fspkg.Watcher, error)
 
-// agentAdapterFunc is an injectable seam returning the Adapter for a tool
-// name (real agentAdapter in NewApp; a fake in tests so Detect() is
-// deterministic regardless of what is on the host PATH).
+// agentAdapterFunc is an injectable seam that returns the Adapter for a tool
+// name. NewApp wires it to the real agentAdapter function. Tests use a fake so
+// Detect() gives the same result regardless of what is on the host PATH.
 type agentAdapterFunc func(tool string) agent.Adapter
 
 // App is the Wails bound object.
@@ -116,15 +120,15 @@ type App struct {
 	store *registry.Store
 	roots []string
 
-	// ctx is set by startup; used by CopyPath and other host-side runtime calls.
+	// startup sets ctx. CopyPath and other host-side runtime calls use it.
 	ctx context.Context
 
-	// run is the process runner for git invocations; nil falls back to a real
-	// ExecRunner via runner(). Tests may inject a fake.
+	// run is the process runner for git invocations. When run is nil, runner()
+	// falls back to a real ExecRunner. Tests can inject a fake.
 	run proc.Runner
 
-	// emit delivers events to the frontend. Production wires this to a
-	// runtime.EventsEmit closure in startup; tests inject a capture seam.
+	// emit delivers events to the frontend. Production code wires it to a
+	// runtime.EventsEmit closure in startup. Tests inject a capture seam.
 	emit internalpty.EmitFunc
 
 	mu       sync.Mutex
@@ -132,16 +136,17 @@ type App struct {
 	monitors map[string]agent.Monitor       // workspaceID → Monitor
 
 	// settingsMu guards the GetSettings→check-duplicate→append→SaveSettings
-	// read-modify-write sequence in Approve and the GetSettings read in
-	// maybeAutoApprove. It must NEVER be acquired while a.mu is held (lock order:
-	// a.mu first, then settingsMu — but never nest a.mu inside settingsMu).
-	// Prevents concurrent Approve(always) calls from losing rules.
+	// read-modify-write sequence in Approve, and the GetSettings read in
+	// maybeAutoApprove. Code must never acquire settingsMu while a.mu is held.
+	// The lock order is a.mu first, then settingsMu; never nest a.mu inside
+	// settingsMu. This lock stops concurrent Approve(always) calls from losing
+	// rules.
 	settingsMu sync.Mutex
 
 	// pending maps a composed approval reqID ("<raw>:<workspaceID>") to the
-	// in-flight ApprovalReq. The pump adds an entry when it surfaces a card;
-	// Approve consumes it to resolve the tool+input authoritatively for an
-	// always-rule (never trusting frontend-supplied values). Guarded by mu.
+	// in-flight ApprovalReq. The pump adds an entry when it surfaces a card.
+	// Approve consumes the entry to resolve the tool and input for an
+	// always-rule; it never trusts frontend-supplied values. mu guards this map.
 	pending map[string]agent.ApprovalReq
 
 	cancels map[string]context.CancelFunc // workspaceID → pump/translation canceller
@@ -157,48 +162,52 @@ type App struct {
 	settingsPath string
 	layoutPath   string
 
-	// notifier delivers OS desktop notifications. Constructed via notify.New() in
-	// startup; tests inject a *notify.FakeNotifier. nil means no OS notifications
-	// (safe — all call sites guard with notifier != nil).
+	// notifier delivers OS desktop notifications. startup constructs it via
+	// notify.New(); tests inject a *notify.FakeNotifier. A nil notifier means no
+	// OS notifications; this is safe because every call site checks
+	// notifier != nil.
 	notifier notify.Notifier
 
-	// focused tracks whether the Wails window currently has OS focus.
-	// Default true (set in NewApp): OS notifications are suppressed while focused.
-	// Updated by SetWindowFocus (bound method called by the frontend on window
-	// focus/blur events).
+	// focused tracks whether the Wails window has OS focus now. NewApp
+	// sets the default to true, so OS notifications stay suppressed until the
+	// frontend reports a focus change. SetWindowFocus (a bound method) updates
+	// this field when the window gains or loses focus.
 	focused bool
 
-	// baselineEnv is the app's os.Environ() captured at construction — the
-	// reference the env-sync endpoint computes each delta against. Immutable.
+	// baselineEnv is the app's os.Environ(), captured at construction. The
+	// env-sync endpoint computes each delta against this reference. baselineEnv
+	// never changes after construction.
 	baselineEnv []string
 
-	// perchBin is the running binary's own absolute path (os.Executable, symlinks
-	// resolved), captured once at startup. The binary lives at bin/perch and is
-	// launched by absolute path, so it is NOT on PATH; the drawer's reload button
-	// types this quoted absolute path (and the workspace drawer prepends its dir to
-	// PATH + exports PERCH_BIN) so `perch reload` resolves regardless of PATH. Empty
-	// when os.Executable fails — callers then fall back to a bare `perch`.
+	// perchBin is the running binary's own absolute path (os.Executable, with
+	// symlinks resolved), captured once at startup. The binary lives at
+	// bin/perch and launches by absolute path, so it is not on PATH. The
+	// drawer's reload button types this quoted absolute path. The workspace
+	// drawer also prepends its directory to PATH and exports PERCH_BIN, so
+	// `perch reload` resolves regardless of PATH. perchBin stays empty when
+	// os.Executable fails; callers then fall back to a bare `perch`.
 	perchBin string
 
-	// envOverlay holds, per workspace id, the KEY=VALUE environment delta a
-	// `perch reload` captured from the session terminal. It is applied on top of
-	// os.Environ() at every agent-pane and drawer spawn (see mergeEnv). It lives
-	// in memory ONLY and is NEVER persisted to disk — the payload may hold
-	// secrets. Guarded by mu.
+	// envOverlay holds, per workspace id, the KEY=VALUE environment delta that a
+	// `perch reload` captured from the session terminal. mergeEnv applies it on
+	// top of os.Environ() at every agent-pane and drawer spawn. envOverlay lives
+	// in memory only; it is never persisted to disk, because the payload may
+	// hold secrets. mu guards this map.
 	envOverlay map[string][]string
 
 	// envsync is the app-owned loopback endpoint that receives a session
-	// terminal's environment and drives the relaunch. Stood up in startup; nil in
-	// tests that never call startup (drawers then inject no env-sync handles).
+	// terminal's environment and drives the relaunch. startup stands it up. It
+	// stays nil in tests that never call startup; drawers then inject no
+	// env-sync handles.
 	envsync *envsync.Listener
 
 	// titleMu guards titleTimer, the debounce timer that coalesces rapid state
 	// changes into a single native OS window-title refresh (WIN #6). It is a
-	// leaf lock: it must NEVER be held while acquiring a.mu, and refreshWindowTitle
-	// (the timer callback) takes a.mu only AFTER titleMu has been released by
-	// scheduleTitleUpdate. Concurrent event-pump goroutines can call
-	// scheduleTitleUpdate at once; titleMu serializes the Stop+reset so they cannot
-	// race the timer.
+	// leaf lock: code must never hold it while acquiring a.mu. refreshWindowTitle
+	// (the timer callback) takes a.mu only after scheduleTitleUpdate has released
+	// titleMu. Concurrent event-pump goroutines can call scheduleTitleUpdate at
+	// once; titleMu serializes the Stop-and-reset step so they cannot race the
+	// timer.
 	titleMu    sync.Mutex
 	titleTimer *time.Timer
 }
@@ -227,8 +236,9 @@ func NewApp(store *registry.Store, roots []string) *App {
 	}
 }
 
-// runner returns the configured process runner, defaulting to a real
-// ExecRunner when unset (so bare App{} literals in tests work for git methods).
+// runner returns the configured process runner. When run is unset, runner
+// returns a real ExecRunner, so bare App{} literals work in tests that call
+// git methods.
 func (a *App) runner() proc.Runner {
 	if a.run != nil {
 		return a.run
@@ -242,20 +252,24 @@ func (a *App) startup(ctx context.Context) {
 	a.emit = func(event string, data ...any) {
 		wailsruntime.EventsEmit(ctx, event, data...)
 	}
-	// Construct the OS notifier lazily so tests that set a.notifier before
-	// startup is called are not overwritten (tests never call startup directly).
+	// startup constructs the OS notifier lazily, so it does not overwrite a
+	// notifier that a test set before calling startup. Tests never call startup
+	// directly.
 	if a.notifier == nil {
 		a.notifier = notify.New()
 	}
-	// Capture the baseline environment (the delta reference) if a construction path
-	// left it unset. NewApp already captures it; this guards raw &App{} paths.
+	// startup captures the baseline environment (the delta reference) if a
+	// construction path left it unset. NewApp already captures it; this guards
+	// raw &App{} paths.
 	if a.baselineEnv == nil {
 		a.baselineEnv = os.Environ()
 	}
-	// Capture the running binary's own absolute path once (symlinks resolved) so the
-	// drawer's reload button and a manual `perch reload` resolve the actual binary:
-	// it lives at bin/perch, is launched by absolute path, and is not on PATH. On
-	// failure leave it empty and fall back to a bare `perch` (no regression).
+	// startup captures the running binary's own absolute path once (symlinks
+	// resolved), so the drawer's reload button and a manual `perch reload`
+	// resolve the actual binary. The binary lives at bin/perch, launches by
+	// absolute path, and is not on PATH. On failure startup leaves perchBin
+	// empty; callers then fall back to a bare `perch` and behavior does not
+	// regress.
 	if a.perchBin == "" {
 		if exe, err := os.Executable(); err == nil {
 			if resolved, rerr := filepath.EvalSymlinks(exe); rerr == nil {
@@ -264,10 +278,11 @@ func (a *App) startup(ctx context.Context) {
 			a.perchBin = exe
 		}
 	}
-	// Stand up the env-sync endpoint. Best-effort: a loopback bind failure only
-	// disables `perch reload` (the drawer then injects no PERCH_ENVSYNC_* handles
-	// and the command prints a friendly "not in a perch session" error), so it
-	// must never crash startup. No secret is involved in a bind failure.
+	// startup stands up the env-sync endpoint on a best-effort basis. A
+	// loopback bind failure only disables `perch reload`: the drawer then
+	// injects no PERCH_ENVSYNC_* handles, and the command prints a friendly
+	// "not in a perch session" error. This failure must never crash startup.
+	// No secret is involved in a bind failure.
 	if a.envsync == nil {
 		if ls, err := envsync.New(a.baselineEnv, a.onEnvSync); err == nil {
 			a.envsync = ls
@@ -277,12 +292,13 @@ func (a *App) startup(ctx context.Context) {
 	}
 }
 
-// onSecondInstance fires (in a Wails-owned goroutine) when a second `perch`
-// process launches while one is already running. Raise the window and, if the
-// launch carried a workspace query/path, route it to the frontend for selection.
+// onSecondInstance fires in a Wails-owned goroutine when a second `perch`
+// process launches while one is already running. It raises the window. If the
+// launch carried a workspace query or path, it routes the query to the
+// frontend for selection.
 func (a *App) onSecondInstance(data options.SecondInstanceData) {
 	if a.ctx == nil {
-		return // startup not complete; shouldn't happen but be safe
+		return // startup has not finished; this should not happen, but check anyway
 	}
 	wailsruntime.WindowUnminimise(a.ctx)
 	wailsruntime.WindowShow(a.ctx)
@@ -301,9 +317,10 @@ func (a *App) onSecondInstance(data options.SecondInstanceData) {
 	}
 }
 
-// SetWindowFocus is a bound method called by the frontend whenever the Wails
-// window gains or loses OS focus. It guards OS desktop notifications: they are
-// suppressed while the window is focused and enabled when it is unfocused.
+// SetWindowFocus is a bound method that the frontend calls whenever the Wails
+// window gains or loses OS focus. It guards OS desktop notifications: perch
+// suppresses them while the window is focused and enables them when the
+// window is unfocused.
 func (a *App) SetWindowFocus(focused bool) {
 	a.mu.Lock()
 	a.focused = focused
@@ -328,22 +345,25 @@ func (a *App) shutdown(_ context.Context) {
 	for _, c := range cancels {
 		c()
 	}
-	// Tear down monitors (closing their exit listeners) BEFORE SIGKILLing the pane
-	// process groups, so a late exit sentinel fired during shutdown has nowhere to
-	// land and cannot surface a spurious "Agent exited" notification on the way out.
+	// shutdown tears down monitors (closing their exit listeners) before it
+	// SIGKILLs the pane process groups. This order means a late exit sentinel
+	// fired during shutdown has nowhere to land, so it cannot surface a
+	// spurious "Agent exited" notification on the way out.
 	for _, m := range monitors {
 		_ = m.Teardown()
 	}
 	for _, b := range bridges {
 		_ = b.Close()
 	}
-	// Tear down the env-sync endpoint so its loopback listener does not outlive
-	// the app. Guarded: tests that never call startup leave it nil.
+	// shutdown tears down the env-sync endpoint so its loopback listener does
+	// not outlive the app. This step is guarded: tests that never call startup
+	// leave envsync nil.
 	if a.envsync != nil {
 		_ = a.envsync.Close()
 	}
-	// Stop any pending window-title refresh so the debounce timer does not fire a
-	// WindowSetTitle into a window that is being torn down.
+	// shutdown stops any pending window-title refresh, so the debounce timer
+	// does not fire a WindowSetTitle call into a window that shutdown is
+	// tearing down.
 	a.titleMu.Lock()
 	if a.titleTimer != nil {
 		a.titleTimer.Stop()
@@ -405,8 +425,8 @@ func validateWorktreeUnderRoots(p string, roots []string) error {
 }
 
 // validateRelFile rejects a repo-relative file path that is empty, absolute, or
-// escapes the worktree via "..". Used to gate the `file` arg of the git hunk
-// methods before it becomes a git pathspec.
+// escapes the worktree via "..". It gates the `file` arg of the git hunk
+// methods before the arg becomes a git pathspec.
 func validateRelFile(file string) error {
 	if file == "" || filepath.IsAbs(file) {
 		return fmt.Errorf("file must be a non-empty relative path")
@@ -463,13 +483,15 @@ type WorkspaceVM struct {
 	PaneID       string      `json:"paneId"`
 	LastActive   time.Time   `json:"lastActive"`
 	// WillResume is true when reopening this session resumes the prior agent
-	// conversation rather than starting fresh — i.e. a session id was persisted
-	// (registry.Workspace.LastSessionID != ""). Projected read-only for the
-	// sidebar "resumes previous conversation" affordance.
+	// conversation instead of starting fresh. This happens when a session id
+	// was persisted (registry.Workspace.LastSessionID != ""). ListWorkspaces
+	// projects this field read-only for the sidebar "resumes previous
+	// conversation" affordance.
 	WillResume bool `json:"willResume"`
 	// BaseRef is the ref this worktree session was forked from
-	// (registry.Workspace.BaseRef). Empty for old records and in-repo
-	// (non-worktree) sessions, in which case the frontend hides the fork-point.
+	// (registry.Workspace.BaseRef). BaseRef is empty for old records and for
+	// in-repo (non-worktree) sessions. When BaseRef is empty, the frontend
+	// hides the fork-point.
 	BaseRef string `json:"baseRef,omitempty"`
 }
 
@@ -479,14 +501,14 @@ func paneIDFor(workspaceID string) string {
 	return "pane-" + workspaceID
 }
 
-// workspaceIDForShellPane recovers the workspace ID from a shell drawer pane ID.
-// A session's default shell is "shell-<id>"; additional shell tabs are
-// "shell-<id>_<n>" (the workspace UUID is hex + hyphens and never contains '_', so
-// cutting on the first '_' after the "shell-" prefix isolates the id). Returns ""
-// for a non-shell pane; callers guard the home shell ("shell-home") separately
-// before calling. Keeping the id recoverable from any shell pane is what lets one
-// session own N shells while OpenShell / ReloadAgentEnv still resolve its env-sync
-// token and overlay.
+// workspaceIDForShellPane recovers the workspace ID from a shell drawer pane
+// ID. A session's default shell is "shell-<id>"; extra shell tabs use
+// "shell-<id>_<n>". The workspace UUID is hex plus hyphens and never contains
+// '_', so cutting on the first '_' after the "shell-" prefix isolates the id.
+// workspaceIDForShellPane returns "" for a non-shell pane; callers guard the
+// home shell ("shell-home") separately before calling. Keeping the id
+// recoverable from any shell pane lets one session own many shells while
+// OpenShell and ReloadAgentEnv still resolve its env-sync token and overlay.
 func workspaceIDForShellPane(paneID string) string {
 	if !strings.HasPrefix(paneID, "shell-") {
 		return ""
@@ -528,16 +550,18 @@ func (a *App) ListWorkspaces() []WorkspaceVM {
 	return out
 }
 
-// needsAttention reports whether a live agent state requires the user's action —
-// the same "need you" signal the sidebar surfaces: the agent is blocked waiting
-// for an approval decision or for the user to answer a question.
+// needsAttention reports whether a live agent state needs the user's action.
+// This is the same "need you" signal the sidebar surfaces: the agent is
+// blocked, waiting for an approval decision or for the user to answer a
+// question.
 func needsAttention(s agent.State) bool {
 	return s == agent.StateAwaitingApproval || s == agent.StateAwaitingInput
 }
 
 // countNeedsAttention counts how many of the given live states need the user.
-// Pure (no locks, no App state) so the count logic is unit-tested independently
-// of the untestable GTK WindowSetTitle call. See windowTitle / refreshWindowTitle.
+// countNeedsAttention is pure: it takes no locks and touches no App state, so
+// tests can check the count logic on its own, apart from the untestable GTK
+// WindowSetTitle call. See windowTitle and refreshWindowTitle.
 func countNeedsAttention(states []agent.State) int {
 	n := 0
 	for _, s := range states {
@@ -548,9 +572,10 @@ func countNeedsAttention(states []agent.State) int {
 	return n
 }
 
-// windowTitle renders the native OS window title for a given attention count:
-// "perch" when nothing needs the user, "perch (N need you)" otherwise. Pure and
-// exhaustively unit-tested; a non-positive count is treated as zero defensively.
+// windowTitle renders the native OS window title for a given attention count.
+// It returns "perch" when nothing needs the user, and "perch (N need you)"
+// otherwise. windowTitle is pure and has full unit-test coverage; as a
+// defensive measure, it treats a non-positive count as zero.
 func windowTitle(needCount int) string {
 	if needCount <= 0 {
 		return "perch"
@@ -558,10 +583,11 @@ func windowTitle(needCount int) string {
 	return fmt.Sprintf("perch (%d need you)", needCount)
 }
 
-// attentionCount snapshots the live monitors under a.mu, then reads each one's
-// CurrentState() OUTSIDE the lock (mirroring ListWorkspaces, so a monitor's state
-// accessor can never be called while a.mu is held) and returns how many need the
-// user. Registry records without a live monitor default to idle and never count.
+// attentionCount snapshots the live monitors under a.mu. It then reads each
+// monitor's CurrentState() outside the lock, mirroring ListWorkspaces, so a
+// monitor's state accessor is never called while a.mu is held. attentionCount
+// returns how many monitors need the user. Registry records without a live
+// monitor default to idle and never count.
 func (a *App) attentionCount() int {
 	a.mu.Lock()
 	mons := make([]agent.Monitor, 0, len(a.monitors))
@@ -576,12 +602,12 @@ func (a *App) attentionCount() int {
 	return countNeedsAttention(states)
 }
 
-// scheduleTitleUpdate coalesces rapid state changes into a single debounced
-// native window-title refresh (WIN #6). It is safe to call concurrently from
-// every workspace's event-pump goroutine: titleMu serializes the Stop+reset of
-// the shared timer so concurrent state events cannot race it. The refresh (which
-// recomputes the count and calls WindowSetTitle) fires titleDebounce after the
-// LAST call in a burst.
+// scheduleTitleUpdate coalesces rapid state changes into a single, debounced
+// native window-title refresh (WIN #6). Every workspace's event-pump goroutine
+// can call it concurrently and safely: titleMu serializes the Stop-and-reset
+// step of the shared timer, so concurrent state events cannot race it. The
+// refresh recomputes the count and calls WindowSetTitle; it fires titleDebounce
+// after the last call in a burst.
 func (a *App) scheduleTitleUpdate() {
 	a.titleMu.Lock()
 	defer a.titleMu.Unlock()
@@ -591,12 +617,13 @@ func (a *App) scheduleTitleUpdate() {
 	a.titleTimer = time.AfterFunc(titleDebounce, a.refreshWindowTitle)
 }
 
-// refreshWindowTitle recomputes the attention count across all live monitors and
-// pushes the native OS window title via the Wails runtime. Only the GTK call is
-// untestable (it needs a real display / main thread); the count/title logic it
-// delegates to (attentionCount, windowTitle) is pure and unit-tested. A nil ctx
-// (tests, or before startup wires it) makes the GTK call a no-op after the count,
-// so the pure path is still exercised. safe.Recover guards the timer goroutine.
+// refreshWindowTitle recomputes the attention count across all live monitors,
+// then pushes the native OS window title through the Wails runtime. Only the
+// GTK call is untestable, because it needs a real display and main thread. The
+// count and title logic it delegates to (attentionCount, windowTitle) is pure
+// and has unit-test coverage. A nil ctx (in tests, or before startup wires it)
+// turns the GTK call into a no-op after the count runs, so tests still
+// exercise the pure path. safe.Recover guards the timer goroutine.
 func (a *App) refreshWindowTitle() {
 	defer safe.Recover("window-title")
 	title := windowTitle(a.attentionCount())
@@ -604,7 +631,8 @@ func (a *App) refreshWindowTitle() {
 		return
 	}
 	// WindowSetTitle marshals gtk_window_set_title to the main thread on the
-	// Linux/GTK backend (same runtime used for WindowUnminimise/WindowShow).
+	// Linux/GTK backend. This is the same runtime that WindowUnminimise and
+	// WindowShow use.
 	wailsruntime.WindowSetTitle(a.ctx, title)
 }
 
@@ -630,9 +658,9 @@ type AlwaysRule struct {
 	Hash string `json:"hash,omitempty"`
 }
 
-// CreateWorkspace validates inputs, resolves/creates the worktree, persists the
-// workspace to the registry, and returns its WorkspaceVM. It does NOT start the
-// agent — call OpenWorkspace for that.
+// CreateWorkspace validates inputs, resolves or creates the worktree, persists
+// the workspace to the registry, and returns its WorkspaceVM. CreateWorkspace
+// does not start the agent; call OpenWorkspace for that.
 //
 // Three modes (controlled by worktree and baseRef):
 //
@@ -641,7 +669,8 @@ type AlwaysRule struct {
 //	!worktree                  → no new tree; CheckoutBranch if branch != current;
 //	                             WorktreePath == RepoPath, Worktree=false
 //
-// Returns ErrBranchInUse if a worktree session already tracks branch in this repo.
+// CreateWorkspace returns ErrBranchInUse if a worktree session already tracks
+// branch in this repo.
 //
 // title is the optional user-chosen session name. When blank (after trimming) it
 // falls back to the branch slug, so behavior is unchanged when no name is given.
@@ -662,8 +691,9 @@ func (a *App) CreateWorkspace(agentName, repoPath, baseRef, branch, title string
 	ctx := context.Background()
 
 	// Every mode needs a commit to branch from or check out. On an unborn HEAD
-	// (freshly init'd repo, no commits) git errors cryptically deep in worktree
-	// add / checkout; surface one clear message up front instead.
+	// (a freshly created repo with no commits), git produces a cryptic error
+	// deep inside worktree add or checkout. CreateWorkspace surfaces one clear
+	// message up front instead.
 	if has, err := gitpkg.HasCommits(ctx, a.runner(), repoPath); err != nil {
 		return WorkspaceVM{}, fmt.Errorf("check repository: %w", err)
 	} else if !has {
@@ -673,7 +703,8 @@ func (a *App) CreateWorkspace(agentName, repoPath, baseRef, branch, title string
 	var worktreePath string
 
 	if worktree {
-		// Collision check: reject if another worktree session already owns this branch.
+		// Collision check: CreateWorkspace rejects the request if another worktree
+		// session already owns this branch.
 		if _, found := a.WorkspaceForBranch(repoPath, branch); found {
 			return WorkspaceVM{}, fmt.Errorf("create worktree: %w", gitpkg.ErrBranchInUse)
 		}
@@ -703,12 +734,13 @@ func (a *App) CreateWorkspace(agentName, repoPath, baseRef, branch, title string
 		}
 		worktreePath = treePath
 	} else {
-		// Non-worktree mode: run in the repo root. Only switch branches when the
-		// target differs from the current branch. Bare `git checkout` only fails on
-		// *conflict*, so a dirty-but-non-conflicting tree would silently carry
-		// uncommitted changes across the switch; refuse instead and ask the user to
-		// clean first. Attaching to the current branch needs no switch, so a dirty
-		// tree is allowed there.
+		// Non-worktree mode: CreateWorkspace runs in the repo root. It only
+		// switches branches when the target differs from the current branch. A
+		// bare `git checkout` fails only on conflict, so a dirty-but-non-conflicting
+		// tree could silently carry uncommitted changes across the switch.
+		// CreateWorkspace refuses instead and asks the user to clean the tree
+		// first. Attaching to the current branch needs no switch, so a dirty tree
+		// is allowed there.
 		current, err := gitpkg.CurrentBranch(ctx, a.runner(), repoPath)
 		if err != nil {
 			return WorkspaceVM{}, fmt.Errorf("current branch: %w", err)
@@ -734,8 +766,9 @@ func (a *App) CreateWorkspace(agentName, repoPath, baseRef, branch, title string
 	}
 
 	now := time.Now()
-	// Resolve the session title: the user-chosen name when given, otherwise the
-	// branch slug (the historical default), so behavior is unchanged when blank.
+	// CreateWorkspace resolves the session title: the user-chosen name when
+	// given, otherwise the branch slug (the historical default). Behavior is
+	// unchanged when title is blank.
 	title = strings.TrimSpace(title)
 	if title == "" {
 		title = gitpkg.SlugifyBranch(branch)
@@ -752,24 +785,27 @@ func (a *App) CreateWorkspace(agentName, repoPath, baseRef, branch, title string
 		LastActive:   now,
 	}
 	if err := a.store.Upsert(w); err != nil {
-		// The git worktree (and, in new-branch mode, the new branch) already exist
-		// on disk, but the record did not persist. Left as-is they orphan the tree
-		// and, in new-branch mode, block every retry forever with ErrBranchExists.
-		// Best-effort roll them back so a retry starts clean. Do NOT mask the
-		// original persist error (rollback errors are swallowed intentionally).
+		// The git worktree, and in new-branch mode the new branch, already exist
+		// on disk, but the record did not persist. Left as-is, they orphan the
+		// tree, and in new-branch mode they block every retry forever with
+		// ErrBranchExists. CreateWorkspace rolls them back on a best-effort basis,
+		// so a retry starts clean. This rollback must not mask the original
+		// persist error; rollback errors are swallowed intentionally.
 		if worktree {
 			rollbackCtx := context.Background()
 			_ = gitpkg.RemoveWorktree(rollbackCtx, a.runner(), repoPath, worktreePath, true)
 			if baseRef != "" {
-				// New-branch mode (AddWorktree -b) created this branch; delete it.
-				// Existing-branch mode did NOT create the branch, so it is left intact.
+				// New-branch mode (AddWorktree -b) created this branch, so the
+				// rollback deletes it. Existing-branch mode did not create the
+				// branch, so the rollback leaves it intact.
 				_ = gitpkg.DeleteBranch(rollbackCtx, a.runner(), repoPath, branch, true)
 			}
 		}
-		// Drop the in-memory record too: Upsert wrote it into the map before the
-		// failed flush, so without this a phantom workspace (pointing at the now-
-		// removed tree) would linger in List() and WorkspaceForBranch. Remove's own
-		// flush will fail the same way; its error is intentionally ignored.
+		// CreateWorkspace also drops the in-memory record: Upsert wrote it into
+		// the map before the failed flush, so without this step a phantom
+		// workspace, pointing at the now-removed tree, would linger in List() and
+		// WorkspaceForBranch. Remove's own flush fails the same way;
+		// CreateWorkspace ignores that error intentionally.
 		_ = a.store.Remove(id)
 		return WorkspaceVM{}, fmt.Errorf("persist workspace: %w", err)
 	}
@@ -787,10 +823,14 @@ func (a *App) CreateWorkspace(agentName, repoPath, baseRef, branch, title string
 	}, nil
 }
 
-// SetWorkspaceTitle renames a workspace. It validates id against the same charset
-// allowlist used by the other id-taking bound methods, loads the record from the
-// store (erroring on an unknown id), rejects a blank title (so the UI keeps the
-// old name), and persists the new title. Auto-bound (whole App is bound).
+// SetWorkspaceTitle renames a workspace. It runs these steps:
+//  1. It validates id against the same charset allowlist that the other
+//     id-taking bound methods use.
+//  2. It loads the record from the store; an unknown id returns an error.
+//  3. It rejects a blank title, so the UI keeps the old name.
+//  4. It persists the new title.
+//
+// SetWorkspaceTitle is auto-bound, because Wails binds the whole App.
 func (a *App) SetWorkspaceTitle(id, title string) error {
 	if err := validateSessionID(id); err != nil {
 		return fmt.Errorf("invalid workspace id: %w", err)
@@ -807,9 +847,10 @@ func (a *App) SetWorkspaceTitle(id, title string) error {
 	return a.store.Upsert(w)
 }
 
-// WorkspaceForBranch returns the ID of the worktree session that is tracking
-// branch in repoPath, if any. Only worktree sessions (Worktree==true) are
-// considered; non-worktree sessions may share a branch by design.
+// WorkspaceForBranch returns the ID of the worktree session that tracks branch
+// in repoPath, if any exists. WorkspaceForBranch considers only worktree
+// sessions (Worktree==true); non-worktree sessions may share a branch by
+// design.
 func (a *App) WorkspaceForBranch(repoPath, branch string) (id string, found bool) {
 	for _, w := range a.store.List() {
 		if w.Worktree && w.RepoPath == repoPath && w.Branch == branch {
@@ -819,22 +860,30 @@ func (a *App) WorkspaceForBranch(repoPath, branch string) (id string, found bool
 	return "", false
 }
 
-// hookRewriter is implemented by monitors whose Prepare installs SHARED,
-// sentinel-keyed hooks in the worktree settings.json (ClaudeMonitor). On Reopen,
-// OpenWorkspace re-asserts the live monitor's hooks through this seam AFTER the
-// displaced monitor's Teardown stripped every perch hook group (see the call site
-// for why). Monitors with per-instance side channels (opencode's SSE serve, which
-// self-assigns a fresh port + listener on every Prepare) do NOT implement it —
-// there is no shared settings.json state to lose, so nothing to re-assert.
+// hookRewriter is implemented by monitors whose Prepare installs shared,
+// sentinel-keyed hooks in the worktree settings.json (ClaudeMonitor). On
+// Reopen, OpenWorkspace re-asserts the live monitor's hooks through this seam,
+// after the displaced monitor's Teardown strips every perch hook group (see
+// the call site for the reason). Monitors with per-instance side channels,
+// such as opencode's SSE server, which assigns itself a fresh port and
+// listener on every Prepare, do not implement hookRewriter. These monitors
+// have no shared settings.json state to lose, so they have nothing to
+// re-assert.
 type hookRewriter interface{ RewriteHooks() error }
 
-// OpenWorkspace spawns a login-shell pty for the workspace, calls Monitor.Prepare
-// to obtain the agent launch command and install the side-channel, starts the
-// monitor's event pump, writes the launch command into the pty, and forwards
-// monitor events to the frontend. All goroutines are bound to a per-workspace
-// context cancelled by CloseWorkspace/shutdown.
+// OpenWorkspace opens a workspace. It runs these steps:
+//  1. It spawns a login-shell pty for the workspace.
+//  2. It calls Monitor.Prepare to get the agent launch command and install
+//     the side-channel.
+//  3. It starts the monitor's event pump.
+//  4. It writes the launch command into the pty.
+//  5. It forwards monitor events to the frontend.
 //
-// mon.Start(wctx) is REQUIRED: without it no events ever flow from a real monitor.
+// A per-workspace context binds all goroutines; CloseWorkspace or shutdown
+// cancels that context.
+//
+// mon.Start(wctx) is required. Without it, no events ever flow from a real
+// monitor.
 func (a *App) OpenWorkspace(id string) error {
 	// Validate workspace id before touching the store.
 	if err := validateSessionID(id); err != nil {
@@ -845,10 +894,12 @@ func (a *App) OpenWorkspace(id string) error {
 		return fmt.Errorf("unknown workspace %q", id)
 	}
 
-	// Bump LastActive on open: ListStaleSessions and sidebar ordering key on it,
-	// so a session that is actively opened must not keep reading as stale (it was
-	// only ever set at creation). Persist before spawning so the freshened
-	// ordering is durable even if a later step fails.
+	// OpenWorkspace bumps LastActive when it opens the workspace.
+	// ListStaleSessions and the sidebar order both key on LastActive, so an
+	// actively opened session must not keep reading as stale (previously
+	// LastActive was only ever set at creation). OpenWorkspace persists this
+	// change before it spawns the pty, so the refreshed order survives even if
+	// a later step fails.
 	w.LastActive = time.Now()
 	_ = a.store.Upsert(w)
 
@@ -858,12 +909,13 @@ func (a *App) OpenWorkspace(id string) error {
 
 	wctx, cancel := context.WithCancel(context.Background())
 
-	// Prepare the monitor BEFORE spawning the pty: Prepare creates the exit listener
-	// (and, for claude, writes the hooks), and PaneEnv then yields the exit
-	// sentinel's PERCH_EXIT_TOKEN/PERCH_EXIT_URL that must be present in the shell's
-	// PROCESS environment at spawn time (env is inherited at exec and is never
-	// echoed, unlike the typed launch line). A monitor/prepare failure needs no
-	// bridge cleanup because the pty is not spawned yet.
+	// OpenWorkspace prepares the monitor before it spawns the pty. Prepare
+	// creates the exit listener, and for claude it also writes the hooks.
+	// PaneEnv then yields the exit sentinel's PERCH_EXIT_TOKEN and
+	// PERCH_EXIT_URL. These values must be present in the shell's process
+	// environment at spawn time, because env is inherited at exec and is never
+	// echoed, unlike the typed launch line. A monitor or prepare failure needs
+	// no bridge cleanup, because the pty is not spawned yet.
 	adpt := a.newAdapter(w.Agent)
 	mon, err := a.newMonitor(w.Agent, adpt)
 	if err != nil {
@@ -878,10 +930,11 @@ func (a *App) OpenWorkspace(id string) error {
 		return fmt.Errorf("monitor prepare: %w", err)
 	}
 
-	// Compose the pane env: os.Environ() underlays the monitor's pane env (the
-	// exit sentinel's PERCH_EXIT_* handles, referenced by name) which underlays any
-	// env-sync overlay captured for this workspace, so a `perch reload` reaches the
-	// relaunched agent. mergeEnv dedups and protects the sentinel from the overlay.
+	// OpenWorkspace composes the pane env. os.Environ() sits under the
+	// monitor's pane env (the exit sentinel's PERCH_EXIT_* handles, referenced
+	// by name), which sits under any env-sync overlay captured for this
+	// workspace, so a `perch reload` reaches the relaunched agent. mergeEnv
+	// removes duplicates and protects the sentinel from the overlay.
 	paneEnv := mergeEnv(os.Environ(), mon.PaneEnv(), a.overlayFor(id))
 
 	br, err := a.spawnPty(wctx, w.WorktreePath, internalpty.LoginShellArgv(), paneEnv, event, exitEvent, a.emit, defaultPtyCols, defaultPtyRows)
@@ -894,15 +947,16 @@ func (a *App) OpenWorkspace(id string) error {
 	// REQUIRED: start the monitor's event pump (translation/SSE), bound to wctx.
 	mon.Start(wctx)
 
-	// Wire the fs watcher with a wctx-bound debounce goroutine. The watcher is
-	// started non-fatally: a failure degrades gracefully (no watcher) but never
-	// fails OpenWorkspace.
+	// OpenWorkspace wires the fs watcher with a debounce goroutine bound to
+	// wctx. OpenWorkspace starts the watcher non-fatally: if the watcher fails,
+	// OpenWorkspace continues with no watcher, and the failure never fails
+	// OpenWorkspace itself.
 	var watcher *fspkg.Watcher
 	if a.newWatcher != nil {
 		changes := make(chan string, fsChangeChanBuf)
 
-		// Debounce goroutine: coalesces raw onChange signals into a single
-		// fs:changed emit per debounce window, bound to wctx lifetime.
+		// This debounce goroutine coalesces raw onChange signals into a single
+		// fs:changed emit per debounce window. wctx bounds its lifetime.
 		go func() {
 			defer safe.Recover("fs-debounce")
 			var timer *time.Timer
@@ -919,7 +973,7 @@ func (a *App) OpenWorkspace(id string) error {
 						timer = time.NewTimer(a.debounce)
 						timerC = timer.C
 					}
-					// else: within window — coalesce (do nothing)
+					// else: within the window, so coalesce (do nothing)
 				case <-timerC:
 					a.emit("fs:changed", map[string]any{"workspaceId": id, "path": w.WorktreePath})
 					timer = nil
@@ -946,8 +1000,9 @@ func (a *App) OpenWorkspace(id string) error {
 	oldCancel := a.cancels[id]
 	a.bridges[paneID] = br
 	a.monitors[id] = mon
-	// Composite cancel: cancels the wctx (stopping all goroutines) and closes
-	// the watcher. Rides CloseWorkspace, re-open displacement, and shutdown.
+	// This composite cancel function cancels wctx, stopping all goroutines, and
+	// closes the watcher. CloseWorkspace, reopen displacement, and shutdown all
+	// use it.
 	a.cancels[id] = func() {
 		cancel()
 		if watcher != nil {
@@ -956,41 +1011,47 @@ func (a *App) OpenWorkspace(id string) error {
 	}
 	a.mu.Unlock()
 
-	// DISARM the displaced shell's pty:exit emit BEFORE oldCancel(). On Reopen the
-	// old login shell SURVIVED the agent's /exit and its bridge shares the
-	// "pty:exit:pane-<id>" event name with the freshly-remounted Terminal, so a
-	// stray reaper emit would delete openIds and re-latch the "session has ended"
-	// overlay. The disarm must precede oldCancel() because that cancellation reaps
-	// the shell (spawned via exec.CommandContext(wctx,…)) and can wake its reaper
-	// during oldMon.Teardown()'s file I/O — before oldBr.Close() below would run.
-	// This mirrors, for the BRIDGE, the OLD-monitor exit-sentinel suppression the
-	// Teardown-before-kill order already provides. A genuine agent/shell exit still
-	// emits — CloseWorkspace uses the normal Close() with no suppression.
+	// Disarm the displaced shell's pty:exit emit before oldCancel() runs. On
+	// Reopen, the old login shell survives the agent's /exit, and its bridge
+	// shares the "pty:exit:pane-<id>" event name with the freshly remounted
+	// Terminal. Without the disarm, a stray reaper emit would delete openIds
+	// and re-latch the "session has ended" overlay. The disarm must precede
+	// oldCancel(), because that cancellation reaps the shell (spawned through
+	// exec.CommandContext(wctx, ...)) and can wake its reaper during
+	// oldMon.Teardown()'s file I/O, before oldBr.Close() below runs. This
+	// mirrors, for the bridge, the old-monitor exit-sentinel suppression that
+	// the Teardown-before-kill order already provides. A genuine agent or
+	// shell exit still emits; CloseWorkspace uses the normal Close() with no
+	// suppression.
 	if oldBr != nil {
 		oldBr.SuppressExit()
 	}
 	if oldCancel != nil {
 		oldCancel()
 	}
-	// Tear down the OLD monitor (closing its exit listener) BEFORE SIGKILLing the
-	// old pane's process group, so a late exit sentinel from the displaced shell has
-	// nowhere to land and cannot surface a spurious "Agent exited" on reopen.
+	// OpenWorkspace tears down the old monitor, closing its exit listener,
+	// before it SIGKILLs the old pane's process group. This order means a late
+	// exit sentinel from the displaced shell has nowhere to land, so it cannot
+	// surface a spurious "Agent exited" notification on reopen.
 	if oldMon != nil {
 		_ = oldMon.Teardown()
-		// oldMon.Teardown() just stripped EVERY perch hook group from the worktree
-		// settings.json — they share one sentinel, so removeMonitorHooks cannot tell
-		// the new monitor's group from the old one. The new monitor's Prepare above
-		// ALREADY tried to write its group, but its merge is idempotent by that same
-		// shared sentinel: while the old group was still present it added nothing, so
-		// the file now carries the OLD (dead) listener addr/token — or none at all.
-		// Re-assert the new monitor's hooks now that settings.json is clean, so the
-		// reopened agent POSTs SessionStart to a listener perch is actually watching.
-		// Without this the reopened session is a silent zombie: no SessionStart fires,
-		// so no live event ever heals the overlay and perch observes no state. Done
-		// HERE, after teardown, rather than by reordering teardown before Prepare, so
-		// a failed new-agent spawn above still rolls back to the OLD session — the
-		// env-sync `perch reload` relaunch (onEnvSync) calls OpenWorkspace on a LIVE
-		// agent, so the displaced monitor is not always a dead one.
+		// oldMon.Teardown() just stripped every perch hook group from the
+		// worktree settings.json. All monitors share one sentinel, so
+		// removeMonitorHooks cannot tell the new monitor's group from the old
+		// one. The new monitor's Prepare (above) already tried to write its
+		// group, but its merge is idempotent by that same shared sentinel:
+		// while the old group was still present, Prepare added nothing. The
+		// file now carries the old, dead listener address and token, or none
+		// at all. This code re-asserts the new monitor's hooks now that
+		// settings.json is clean, so the reopened agent posts SessionStart to
+		// a listener that perch is actually watching. Without this step, the
+		// reopened session becomes a silent zombie: no SessionStart fires, so
+		// no live event ever heals the overlay, and perch observes no state.
+		// This runs here, after teardown, rather than by reordering teardown
+		// before Prepare, so a failed new-agent spawn above still rolls back
+		// to the old session. The env-sync `perch reload` relaunch (onEnvSync)
+		// calls OpenWorkspace on a live agent, so the displaced monitor is not
+		// always a dead one.
 		if hr, ok := mon.(hookRewriter); ok {
 			_ = hr.RewriteHooks()
 		}
@@ -1000,16 +1061,19 @@ func (a *App) OpenWorkspace(id string) error {
 	}
 
 	if launchCmd != "" {
-		// adpt is non-nil here for every reachable case: newMonitor above returns
-		// an error for any tool other than claude/opencode (bailing before this
-		// point), and agentAdapter returns a non-nil adapter for both of those.
-		// A nil adpt (only possible via a test seam that decouples newAdapter from
-		// newMonitor) deliberately falls through to the write — do NOT rewrite this
-		// to `adpt == nil || !adpt.Detect()`, which would nil-panic on adpt.Name().
+		// adpt is non-nil here for every reachable case: newMonitor above
+		// returns an error for any tool other than claude or opencode, bailing
+		// out before this point, and agentAdapter returns a non-nil adapter
+		// for both of those tools. A nil adpt is possible only through a test
+		// seam that decouples newAdapter from newMonitor; that case
+		// deliberately falls through to the write. Do not rewrite this check
+		// to `adpt == nil || !adpt.Detect()`, which would nil-panic on
+		// adpt.Name().
 		if adpt != nil && !adpt.Detect() {
-			// Agent CLI is missing from PATH. Skip writing the launch command
-			// (which would otherwise surface as a raw shell "command not found")
-			// and surface a clear, blocking signal. The shell stays usable.
+			// The agent CLI is missing from PATH. OpenWorkspace skips writing
+			// the launch command, which would otherwise surface as a raw shell
+			// "command not found" error, and instead surfaces a clear,
+			// blocking signal. The shell stays usable.
 			a.emit("notify", map[string]any{
 				"tier":        "blocking",
 				"title":       "Agent not found",
@@ -1021,8 +1085,9 @@ func (a *App) OpenWorkspace(id string) error {
 		}
 	}
 
-	// Forward monitor events to the frontend. Forward-and-continue: emit and move
-	// on, never blocking on a user decision. Exits on wctx cancellation, since
+	// This goroutine forwards monitor events to the frontend. It follows a
+	// forward-and-continue pattern: it emits the event and moves on, never
+	// blocking on a user decision. It exits on wctx cancellation, since
 	// mon.Events() is never closed.
 	go func() {
 		defer safe.Recover("workspace-event-pump")
@@ -1034,25 +1099,28 @@ func (a *App) OpenWorkspace(id string) error {
 				if !ok {
 					return
 				}
-				// Stamp WorkspaceID so the frontend can match events to the correct
-				// workspace.
+				// This stamps WorkspaceID, so the frontend can match events to
+				// the correct workspace.
 				evt.WorkspaceID = id
-				// Compose the approval ReqID as "<raw>:<workspaceID>" so that Approve()
-				// can parse and route it via strings.LastIndex(":"). Copy the
-				// ApprovalReq to avoid mutating the monitor's own pointee.
+				// This composes the approval ReqID as "<raw>:<workspaceID>", so
+				// Approve() can parse and route it with strings.LastIndex(":").
+				// It copies the ApprovalReq to avoid mutating the monitor's own
+				// pointee.
 				if evt.Approval != nil {
 					rawReqID := evt.Approval.ReqID
 					a2 := *evt.Approval
 					a2.ReqID = rawReqID + ":" + id
 					evt.Approval = &a2
-					// Always-allow auto-approval: if this request exactly matches a
-					// persisted rule, allow it silently and suppress the card +
-					// blocking notification (a routine notify keeps it visible).
+					// Always-allow auto-approval: if this request exactly
+					// matches a persisted rule, OpenWorkspace allows it
+					// silently and suppresses the card and the blocking
+					// notification. A routine notify keeps it visible.
 					if a.maybeAutoApprove(id, rawReqID, a2, mon) {
 						continue
 					}
-					// Register the pending approval so Approve() can resolve the
-					// tool+input authoritatively when the user clicks Always.
+					// This registers the pending approval, so Approve() can
+					// resolve the tool and input authoritatively when the user
+					// clicks Always.
 					a.mu.Lock()
 					if a.pending == nil {
 						a.pending = map[string]agent.ApprovalReq{}
@@ -1060,10 +1128,11 @@ func (a *App) OpenWorkspace(id string) error {
 					a.pending[a2.ReqID] = a2
 					a.mu.Unlock()
 				}
-				// Session-resume: when the agent reports a new session id, persist
-				// it so the next OpenWorkspace call can pass it as resumeID.
-				// Validate the session id before persisting; an invalid id
-				// (e.g. containing shell metacharacters) is silently dropped so it
+				// Session-resume: when the agent reports a new session id,
+				// OpenWorkspace persists it, so the next OpenWorkspace call
+				// can pass it as resumeID. OpenWorkspace validates the session
+				// id before persisting; an invalid id, for example one
+				// containing shell metacharacters, is silently dropped, so it
 				// can never be concatenated into a shell launch command later.
 				if evt.SessionID != "" && validateSessionID(evt.SessionID) == nil {
 					if cur, ok := a.store.Get(id); ok && cur.LastSessionID != evt.SessionID {
@@ -1073,11 +1142,13 @@ func (a *App) OpenWorkspace(id string) error {
 				}
 				a.emit("agent:event", evt)
 				a.dispatchNotify(evt)
-				// WIN #6: every state transition is centrally observed here (the
-				// single point every monitor event flows through, right beside the
-				// notify dispatch), so recompute the "need you" count and debounce a
-				// native window-title refresh. Recomputing from live monitors keeps it
-				// correct regardless of which event fired; the debounce coalesces bursts.
+				// WIN #6: this is the single point every monitor event flows
+				// through, right beside the notify dispatch, so every state
+				// transition is observed here. This code recomputes the "need
+				// you" count and debounces a native window-title refresh.
+				// Recomputing from live monitors keeps the count correct
+				// regardless of which event fired; the debounce coalesces
+				// bursts.
 				a.scheduleTitleUpdate()
 			}
 		}
@@ -1086,17 +1157,19 @@ func (a *App) OpenWorkspace(id string) error {
 	return nil
 }
 
-// maybeAutoApprove auto-allows an incoming approval request when it exactly
-// matches a persisted AlwaysRule (same agent, same tool, byte-identical input).
-// On a match it allows the request via the monitor, emits a routine-tier
-// transparency notification so the auto-approval is never silent, and returns
-// true so the caller suppresses the approval card and the blocking notification.
+// maybeAutoApprove auto-allows an incoming approval request when the request
+// exactly matches a persisted AlwaysRule (same agent, same tool,
+// byte-identical input). On a match, maybeAutoApprove allows the request
+// through the monitor, emits a routine-tier transparency notification so the
+// auto-approval is never silent, and returns true, so the caller suppresses
+// the approval card and the blocking notification.
 //
-// Matching is EXACT input equality — never a glob — so an always-rule can never
-// grant more than the byte-identical request the user originally approved.
-// Rules with an empty Pattern never match (no tool-wide auto-allow hole). If the
-// monitor's Approve fails, it returns false so the card surfaces normally rather
-// than the request being silently dropped.
+// Matching requires exact input equality, never a glob, so an always-rule can
+// never grant more than the byte-identical request the user originally
+// approved. Rules with an empty Pattern never match, so there is no tool-wide
+// auto-allow hole. If the monitor's Approve call fails, maybeAutoApprove
+// returns false, so the card surfaces normally instead of the request being
+// silently dropped.
 func (a *App) maybeAutoApprove(workspaceID, rawReqID string, req agent.ApprovalReq, mon agent.Monitor) bool {
 	if req.Tool == "" || req.Input == "" {
 		return false
@@ -1105,10 +1178,11 @@ func (a *App) maybeAutoApprove(workspaceID, rawReqID string, req agent.ApprovalR
 	if w, ok := a.store.Get(workspaceID); ok && w.Agent != "" {
 		agentName = w.Agent
 	}
-	// Hold settingsMu (read side) so we see a consistent snapshot of settings
-	// and don't race with a concurrent Approve(always) write.
-	// DEADLOCK GUARD: a.mu must NOT be held before settingsMu is taken; callers
-	// of maybeAutoApprove are outside any a.mu critical section.
+	// maybeAutoApprove holds settingsMu (read side), so it sees a consistent
+	// snapshot of settings and does not race a concurrent Approve(always)
+	// write. DEADLOCK GUARD: callers must not hold a.mu before they take
+	// settingsMu. Callers of maybeAutoApprove are outside any a.mu critical
+	// section.
 	a.settingsMu.Lock()
 	s, err := a.GetSettings()
 	a.settingsMu.Unlock()
@@ -1120,14 +1194,15 @@ func (a *App) maybeAutoApprove(workspaceID, rawReqID string, req agent.ApprovalR
 		if r.Agent != agentName || r.Tool != req.Tool {
 			continue
 		}
-		// The SHA-256 hash of the full (untruncated) tool input is the sole
-		// authoritative match key. Pattern is display-only (it is truncated to
-		// MaxApprovalInputLen, so two inputs sharing a 4096-byte prefix collide on
-		// Pattern, matching on it would be a privilege-escalation hole). A rule
-		// without a Hash, or a request without an InputHash, never auto-approves
-		// (fail closed). There is no backward-compat requirement, so no legacy
-		// pattern fallback: any pre-Hash rule simply prompts once and is re-saved
-		// with a hash.
+		// The SHA-256 hash of the full, untruncated tool input is the sole
+		// authoritative match key. Pattern is display-only: it is truncated to
+		// MaxApprovalInputLen, so two inputs that share a 4096-byte prefix
+		// collide on Pattern, and matching on Pattern would open a
+		// privilege-escalation hole. A rule without a Hash, or a request
+		// without an InputHash, never auto-approves; this fails closed. There
+		// is no backward-compatibility requirement, so there is no legacy
+		// pattern fallback: any pre-Hash rule simply prompts once and is
+		// re-saved with a hash.
 		if r.Hash != "" && req.InputHash != "" && r.Hash == req.InputHash {
 			matched = true
 			break
@@ -1149,10 +1224,10 @@ func (a *App) maybeAutoApprove(workspaceID, rawReqID string, req agent.ApprovalR
 }
 
 // dispatchNotify translates an agent.Event into a "notify" Wails event at the
-// appropriate tier and, for blocking-tier events when the window is unfocused,
-// also fires an OS desktop notification. Do-Not-Disturb mutes only the ambient
-// and routine tiers and never the blocking tier; since only blocking events fire
-// an OS notification, DND has no bearing on the OS-notify path.
+// appropriate tier. For blocking-tier events, when the window is unfocused,
+// dispatchNotify also fires an OS desktop notification. Do-Not-Disturb mutes
+// only the ambient and routine tiers, never the blocking tier. Only blocking
+// events fire an OS notification, so DND has no effect on the OS-notify path.
 func (a *App) dispatchNotify(evt agent.Event) {
 	var tier, title, body string
 	switch {
@@ -1165,16 +1240,18 @@ func (a *App) dispatchNotify(evt agent.Event) {
 	case evt.Kind == "state" && evt.State == agent.StateErrored:
 		tier, title, body = "blocking", "Agent error", evt.Err
 		if body == "" {
-			// opencode's session.error can carry an empty payload; never surface a
-			// blocking notification with a blank body (mirrors the exited default).
+			// opencode's session.error can carry an empty payload. dispatchNotify
+			// must never surface a blocking notification with a blank body;
+			// this mirrors the exited default.
 			body = "The agent reported an error."
 		}
 	case evt.Kind == "state" && evt.State == agent.StateExited:
-		// Prune any pending approval for the exited workspace: a PreToolUse-time
-		// crash leaves an unresolved a.pending entry whose reqID's agent is gone;
-		// without this it would false-resolve to a live approval card on a webview
-		// reload (ListWorkspaces reports StateExited, but pendingApprovals would
-		// still surface the dead card). Keys are "<raw>:<workspaceID>".
+		// This prunes any pending approval for the exited workspace. A
+		// PreToolUse-time crash leaves an unresolved a.pending entry whose
+		// reqID's agent is gone. Without this pruning step, a webview reload
+		// would falsely show a live approval card (ListWorkspaces reports
+		// StateExited, but PendingApprovals would still surface the dead
+		// card). Keys have the form "<raw>:<workspaceID>".
 		a.mu.Lock()
 		_, live := a.monitors[evt.WorkspaceID]
 		suffix := ":" + evt.WorkspaceID
@@ -1184,11 +1261,13 @@ func (a *App) dispatchNotify(evt agent.Event) {
 			}
 		}
 		a.mu.Unlock()
-		// Suppress a spurious "Agent exited" on INTENTIONAL teardown: CloseWorkspace /
-		// displacement / shutdown deregister the monitor (under a.mu) before the pane
-		// is torn down, so a late exit sentinel here finds no live monitor and must
-		// not notify. A genuine crash keeps its monitor registered (only the agent
-		// process, inside the still-alive shell, died) so it still surfaces.
+		// This suppresses a spurious "Agent exited" notification on
+		// intentional teardown. CloseWorkspace, displacement, and shutdown
+		// deregister the monitor (under a.mu) before the pane is torn down,
+		// so a late exit sentinel here finds no live monitor and must not
+		// notify. A genuine crash keeps its monitor registered, because only
+		// the agent process, inside the still-alive shell, died, so it still
+		// surfaces.
 		if !live {
 			return
 		}
@@ -1200,12 +1279,14 @@ func (a *App) dispatchNotify(evt agent.Event) {
 		return
 	}
 
-	// Always emit the in-app Wails notification event unconditionally. The source
-	// State rides along so the frontend can identify which blocking notification a
-	// later transition supersedes (e.g. a "Question" from awaiting-input) WITHOUT
-	// re-deriving intent from the title — kind alone cannot separate a question
-	// from a real approval (both classify as "approval"). It never distinguishes a
-	// pending "Approval needed" (state awaiting-approval), which must never be cleared.
+	// dispatchNotify always emits the in-app Wails notification event,
+	// unconditionally. The source State rides along, so the frontend can
+	// identify which blocking notification a later transition supersedes, for
+	// example a "Question" from awaiting-input, without re-deriving intent
+	// from the title. Kind alone cannot separate a question from a real
+	// approval, because both classify as "approval". The frontend never
+	// treats this as superseding a pending "Approval needed" notification
+	// (state awaiting-approval), which must never be cleared.
 	a.emit("notify", map[string]any{
 		"tier":        tier,
 		"title":       title,
@@ -1214,9 +1295,10 @@ func (a *App) dispatchNotify(evt agent.Event) {
 		"state":       string(evt.State),
 	})
 
-	// OS desktop notification: only for blocking-tier events and only when the
-	// window is unfocused. DND is deliberately NOT consulted here: DND never mutes
-	// the blocking tier, and only blocking fires an OS notification.
+	// dispatchNotify fires an OS desktop notification only for blocking-tier
+	// events, and only when the window is unfocused. dispatchNotify
+	// deliberately does not consult DND here: DND never mutes the blocking
+	// tier, and only blocking events fire an OS notification.
 	if tier != "blocking" {
 		return
 	}
@@ -1277,8 +1359,9 @@ func clampPtyDim(v uint16) uint16 {
 	return v
 }
 
-// CloseWorkspace cancels the workspace pump, tears down the monitor, and closes
-// the pty — but keeps the workspace record in the registry (it can be reopened).
+// CloseWorkspace cancels the workspace pump, tears down the monitor, and
+// closes the pty. It keeps the workspace record in the registry, so the
+// session can be reopened.
 func (a *App) CloseWorkspace(id string) error {
 	// Validate workspace id before touching the store.
 	if err := validateSessionID(id); err != nil {
@@ -1289,12 +1372,13 @@ func (a *App) CloseWorkspace(id string) error {
 	a.mu.Lock()
 	br := a.bridges[paneID]
 	delete(a.bridges, paneID)
-	// The workspace's shell drawer registers its ptys under "shell-<id>" (the default
-	// terminal) and "shell-<id>_<n>" (additional tabs — see OpenShell / CloseShell).
-	// Close and drop ALL of them here — otherwise a tab leaks until shutdown, left
-	// running against a now-deleted worktree cwd after RemoveWorkspace. delete during
-	// range is allowed in Go; the exact-or-"_"-delimited match never touches another
-	// workspace's shells (UUID ids differ) or the home shell.
+	// The workspace's shell drawer registers its ptys under "shell-<id>" (the
+	// default terminal) and "shell-<id>_<n>" (extra tabs; see OpenShell and
+	// CloseShell). CloseWorkspace closes and drops all of them here. Otherwise
+	// a tab would leak until shutdown, left running against a now-deleted
+	// worktree cwd after RemoveWorkspace. Go allows delete during range. The
+	// exact-or-"_"-delimited match never touches another workspace's shells,
+	// because UUID ids differ, or the home shell.
 	var shellBrs []*internalpty.Bridge
 	for k, sb := range a.bridges {
 		if k == shellPrefix || strings.HasPrefix(k, shellPrefix+"_") {
@@ -1309,14 +1393,15 @@ func (a *App) CloseWorkspace(id string) error {
 		cancel = a.cancels[id]
 		delete(a.cancels, id)
 	}
-	// Purge pending approvals belonging to this workspace so that a closed
+	// This purges pending approvals that belong to this workspace, so a closed
 	// workspace does not accumulate phantom entries in the pending map.
-	// Pending keys have the form "<raw>:<workspaceID>" (see Approve / event pump);
-	// validateSessionID forbids ':' in ids so the suffix match is unambiguous.
-	// Collect the raw reqIDs of the still-pending approvals so we can deny them via
-	// the monitor after releasing a.mu — a blocked claude hook POST / opencode
-	// permission would otherwise hang until its own timeout when the workspace is
-	// closed out from under it.
+	// Pending keys have the form "<raw>:<workspaceID>" (see Approve and the
+	// event pump); validateSessionID forbids ':' in ids, so the suffix match
+	// is unambiguous. This also collects the raw reqIDs of the still-pending
+	// approvals, so CloseWorkspace can deny them through the monitor after it
+	// releases a.mu. A blocked claude hook POST or opencode permission call
+	// would otherwise hang until its own timeout, once the workspace closes
+	// out from under it.
 	suffix := ":" + id
 	var pendingRaw []string
 	for k := range a.pending {
@@ -1327,10 +1412,11 @@ func (a *App) CloseWorkspace(id string) error {
 	}
 	a.mu.Unlock()
 
-	// Deny each in-flight approval through the monitor BEFORE teardown so the
-	// agent's blocked hook returns promptly instead of hanging. Do this before
-	// cancel()/Teardown() so the monitor is still live to deliver the verdict.
-	// (mon.Approve is safe to call outside a.mu; it does not take a.mu.)
+	// CloseWorkspace denies each in-flight approval through the monitor before
+	// teardown, so the agent's blocked hook returns promptly instead of
+	// hanging. It does this before cancel() and Teardown(), so the monitor is
+	// still live to deliver the verdict. (mon.Approve is safe to call outside
+	// a.mu; it does not take a.mu.)
 	if mon != nil {
 		for _, raw := range pendingRaw {
 			_ = mon.Approve(raw, agent.Decision{Allow: false})
@@ -1349,11 +1435,13 @@ func (a *App) CloseWorkspace(id string) error {
 	for _, sb := range shellBrs {
 		_ = sb.Close()
 	}
-	// WIN #6: closing a session removes its monitor from the attention set, but its
-	// event pump is now cancelled and can no longer fire the state-change hook, so
-	// the native title would go stale (e.g. stuck at "perch (1 need you)" after the
-	// only awaiting session is closed). Debounce a refresh; by the time it fires the
-	// monitor is already removed above, so attentionCount reflects the removal.
+	// WIN #6: closing a session removes its monitor from the attention set,
+	// but its event pump is now cancelled and can no longer fire the
+	// state-change hook. Without a refresh, the native title would go stale,
+	// for example stuck at "perch (1 need you)" after the only awaiting
+	// session closes. CloseWorkspace debounces a refresh; by the time the
+	// refresh fires, the monitor is already removed above, so attentionCount
+	// reflects the removal.
 	a.scheduleTitleUpdate()
 	return nil
 }
@@ -1363,26 +1451,28 @@ func (a *App) CloseWorkspace(id string) error {
 var ErrWorktreeDirty = gitpkg.ErrWorktreeDirty
 
 // RemoveWorkspace closes the workspace and removes it from the registry. For
-// Worktree==true sessions it also removes the linked worktree tree from disk; a
-// dirty tree returns ErrWorktreeDirty and leaves the record intact (caller should
-// offer a force-confirm calling ForceRemoveWorkspace). The branch is never deleted
-// here. For Worktree==false (in-repo permanent) sessions only the registry record
-// is dropped — the repo root and its branch are never touched.
+// Worktree==true sessions it also removes the linked worktree tree from disk.
+// A dirty tree returns ErrWorktreeDirty and leaves the record intact; the
+// caller should then offer a force-confirm that calls ForceRemoveWorkspace.
+// RemoveWorkspace never deletes the branch. For Worktree==false (in-repo,
+// permanent) sessions, RemoveWorkspace drops only the registry record; it
+// never touches the repo root or its branch.
 func (a *App) RemoveWorkspace(id string) error {
 	if err := validateSessionID(id); err != nil {
 		return fmt.Errorf("invalid workspace id: %w", err)
 	}
 	w, ok := a.store.Get(id)
 	if !ok {
-		return nil // already gone — idempotent
+		return nil // already gone; RemoveWorkspace is idempotent
 	}
 	if w.Worktree {
 		ctx := context.Background()
-		// If the worktree dir was deleted outside perch, WorktreeDirty (git -C
-		// <missing> status) would error and the record could never be dropped —
-		// leaving a ghost session forever. Detect the missing path up front and
-		// treat the worktree as already gone: skip the git remove and drop the
-		// record cleanly. Only a present-but-dirty tree returns ErrWorktreeDirty.
+		// If something deleted the worktree dir outside perch, WorktreeDirty
+		// (git -C <missing> status) would error, and the record could never
+		// drop, leaving a ghost session forever. This code detects the
+		// missing path up front and treats the worktree as already gone: it
+		// skips the git remove and drops the record cleanly. Only a
+		// present-but-dirty tree returns ErrWorktreeDirty.
 		if worktreePathGone(w.WorktreePath) {
 			_ = a.CloseWorkspace(id)
 			return a.store.Remove(id)
@@ -1402,10 +1492,11 @@ func (a *App) RemoveWorkspace(id string) error {
 	return a.store.Remove(id)
 }
 
-// worktreePathGone reports whether a worktree path no longer exists on disk
-// (deleted outside perch). An empty path is treated as gone. A non-ENOENT stat
-// error (e.g. permission) is treated as NOT gone so the normal git path runs and
-// surfaces the real error rather than silently dropping the record.
+// worktreePathGone reports whether a worktree path no longer exists on disk,
+// for example because something deleted it outside perch. worktreePathGone
+// treats an empty path as gone. It treats a non-ENOENT stat error, such as a
+// permission error, as not gone, so the normal git path runs and surfaces the
+// real error instead of silently dropping the record.
 func worktreePathGone(path string) bool {
 	if path == "" {
 		return true
@@ -1416,9 +1507,10 @@ func worktreePathGone(path string) bool {
 	return false
 }
 
-// ForceRemoveWorkspace force-removes the linked worktree tree (discarding any
-// uncommitted changes) then drops the registry record. The branch is kept. For
-// Worktree==false sessions it behaves like RemoveWorkspace (record-only drop).
+// ForceRemoveWorkspace force-removes the linked worktree tree, discarding any
+// uncommitted changes, then drops the registry record. It keeps the branch.
+// For Worktree==false sessions, ForceRemoveWorkspace behaves like
+// RemoveWorkspace: it only drops the record.
 func (a *App) ForceRemoveWorkspace(id string) error {
 	if err := validateSessionID(id); err != nil {
 		return fmt.Errorf("invalid workspace id: %w", err)
@@ -1451,11 +1543,13 @@ type StaleSessionVM struct {
 	Safe       bool      `json:"safe"`
 }
 
-// ListStaleSessions returns Worktree==true sessions whose LastActive is older than
-// the configured threshold. Non-worktree sessions are always excluded. Per session
-// it computes clean (no uncommitted changes), merged (branch merged into BaseRef,
-// falling back to "HEAD" for old records), and diffstat. An error computing any of
-// these is treated conservatively (dirty/unmerged/zero) so the row shows unchecked.
+// ListStaleSessions returns Worktree==true sessions whose LastActive is older
+// than the configured threshold. It always excludes non-worktree sessions.
+// For each session it computes clean (no uncommitted changes), merged
+// (branch merged into BaseRef, falling back to "HEAD" for old records), and
+// diffstat. When an error occurs computing any of these, ListStaleSessions
+// treats the value conservatively (dirty, unmerged, or zero), so the row
+// shows as unchecked.
 func (a *App) ListStaleSessions() ([]StaleSessionVM, error) {
 	days, err := a.staleThreshold()
 	if err != nil {
@@ -1509,10 +1603,12 @@ func (a *App) ListStaleSessions() ([]StaleSessionVM, error) {
 	return out, nil
 }
 
-// CleanupSessions removes the given sessions: stops the agent/pty, removes the
-// linked worktree tree (force if force==true), and deletes the branch (-d, or -D if
-// force). Non-worktree sessions are record-only (never a git op). Errors are
-// accumulated; all ids are attempted before returning.
+// CleanupSessions removes the given sessions. For each session it stops the
+// agent and pty, removes the linked worktree tree (force-removing when
+// force==true), and deletes the branch (-d, or -D when force==true).
+// CleanupSessions only drops the record for non-worktree sessions; it never
+// runs a git op on them. CleanupSessions accumulates errors and tries every
+// id before it returns.
 func (a *App) CleanupSessions(ids []string, force bool) error {
 	ctx := context.Background()
 	var errs []error
@@ -1530,14 +1626,16 @@ func (a *App) CleanupSessions(ids []string, force bool) error {
 			_ = a.store.Remove(id)
 			continue
 		}
-		// When force==false, check the tree is clean BEFORE tearing anything down.
-		// Previously CloseWorkspace ran unconditionally (killing the agent/pty) and
-		// only THEN did RemoveWorktree(force=false) fail on a dirty tree — leaving a
-		// kept record whose live session was already dead. Mirror RemoveWorkspace:
-		// on a dirty tree, skip this id entirely (record + session/monitor stay
-		// alive) and record the error. A missing worktree path is treated as clean
-		// (already gone) so the record can be dropped. force==true bypasses the
-		// check and force-removes below.
+		// When force==false, CleanupSessions checks that the tree is clean
+		// before it tears anything down. Previously CloseWorkspace ran
+		// unconditionally, killing the agent and pty, and only then did
+		// RemoveWorktree(force=false) fail on a dirty tree, leaving a kept
+		// record whose live session was already dead. This code mirrors
+		// RemoveWorkspace: on a dirty tree, it skips this id entirely (the
+		// record, session, and monitor all stay alive) and records the error.
+		// It treats a missing worktree path as clean, because the tree is
+		// already gone, so the record can still be dropped. force==true
+		// bypasses this check and force-removes below.
 		if !force && !worktreePathGone(w.WorktreePath) {
 			dirty, derr := gitpkg.WorktreeDirty(ctx, a.runner(), w.WorktreePath)
 			if derr != nil {
@@ -1551,14 +1649,17 @@ func (a *App) CleanupSessions(ids []string, force bool) error {
 		}
 		_ = a.CloseWorkspace(id)
 		if err := gitpkg.RemoveWorktree(ctx, a.runner(), w.RepoPath, w.WorktreePath, force); err != nil {
-			// Worktree removal failed (e.g. dirty tree, force=false): keep the record so
-			// the session is retryable and the tree is never orphaned. Skip branch delete.
+			// Worktree removal failed, for example a dirty tree with
+			// force=false. CleanupSessions keeps the record, so the session
+			// stays retryable and the tree is never orphaned. It skips the
+			// branch delete.
 			errs = append(errs, fmt.Errorf("remove worktree %s: %w", id, err))
 			continue
 		}
 		if err := gitpkg.DeleteBranch(ctx, a.runner(), w.RepoPath, w.Branch, force); err != nil {
-			// Branch kept (e.g. unmerged with -d) — safe; the tree is already gone, so still
-			// drop the record below.
+			// The branch may stay, for example when it is unmerged with -d;
+			// this is safe. The tree is already gone, so CleanupSessions
+			// still drops the record below.
 			errs = append(errs, fmt.Errorf("delete branch %s: %w", id, err))
 		}
 		if err := a.store.Remove(id); err != nil {
@@ -1572,15 +1673,16 @@ func (a *App) CleanupSessions(ids []string, force bool) error {
 }
 
 // OpenShell spawns a $SHELL -l pty for the shell drawer pane (paneID) in cwd.
-// Output flows to the "pty:data:<paneID>" event. Separate from agent panes so
-// the shell drawer has its own independent pty.
+// Output flows to the "pty:data:<paneID>" event. OpenShell is separate from
+// agent panes, so the shell drawer has its own independent pty.
 func (a *App) OpenShell(paneID, cwd string) error {
 	if err := validateSessionID(paneID); err != nil {
 		return fmt.Errorf("invalid pane id: %w", err)
 	}
-	// The home shell pane ("shell-home") has an OS-derived cwd (HomeShellCwd) that is
-	// not user IPC input and is almost never under a configured project root, so the
-	// root-containment guard is bypassed for it alone. All other panes still validate.
+	// The home shell pane ("shell-home") has an OS-derived cwd (HomeShellCwd).
+	// This cwd is not user IPC input, and it is almost never under a
+	// configured project root, so OpenShell bypasses the root-containment
+	// guard for this pane alone. All other panes still validate.
 	if paneID != homeShellPaneID {
 		if err := validateWorktreeUnderRoots(cwd, a.roots); err != nil {
 			return fmt.Errorf("invalid shell cwd: %w", err)
@@ -1589,11 +1691,12 @@ func (a *App) OpenShell(paneID, cwd string) error {
 	event := ptyDataEventPrefix + paneID
 	exitEvent := ptyExitEventPrefix + paneID
 	ctx := context.Background()
-	// The home drawer (shell-home) has no workspace: it is a plain login shell that
-	// inherits the process environment unchanged (nil env), with no env-sync handles
-	// and no overlay. A per-workspace drawer (shell-<id>) instead receives the
-	// env-sync handles so `perch reload` run inside it can post its environment, plus
-	// any overlay already captured for the workspace (so a reopen carries it too).
+	// The home drawer (shell-home) has no workspace: it is a plain login shell
+	// that inherits the process environment unchanged (nil env), with no
+	// env-sync handles and no overlay. A per-workspace drawer (shell-<id>)
+	// instead receives the env-sync handles, so a `perch reload` run inside
+	// it can post its environment. It also receives any overlay already
+	// captured for the workspace, so a reopen carries the overlay too.
 	var env []string
 	if paneID != homeShellPaneID {
 		workspaceID := workspaceIDForShellPane(paneID)
@@ -1603,12 +1706,14 @@ func (a *App) OpenShell(paneID, cwd string) error {
 				injected = envsyncPaneEnv(a.envsync.URL(), tok, workspaceID)
 			}
 		}
-		// When we know our own absolute path, prepend its dir to PATH so a MANUAL
-		// `perch reload` typed into the drawer resolves the binary (it lives at
-		// bin/perch, off PATH), and export PERCH_BIN as a documented escape hatch
-		// (`$PERCH_BIN reload`). Only when absolute: a bare name or "." would poison
-		// PATH. mergeEnv lets this injected PATH override base, and building it from
-		// os.Getenv("PATH") preserves the rest of the existing PATH.
+		// When OpenShell knows its own absolute path, it prepends that path's
+		// directory to PATH, so a manual `perch reload` typed into the drawer
+		// resolves the binary (it lives at bin/perch, off PATH). It also
+		// exports PERCH_BIN as a documented escape hatch (`$PERCH_BIN
+		// reload`). This only happens when the path is absolute: a bare name
+		// or "." would poison PATH. mergeEnv lets this injected PATH override
+		// the base PATH; building it from os.Getenv("PATH") preserves the
+		// rest of the existing PATH.
 		if filepath.IsAbs(a.perchBin) {
 			injected = append(injected,
 				"PATH="+filepath.Dir(a.perchBin)+string(os.PathListSeparator)+os.Getenv("PATH"),
@@ -1625,11 +1730,12 @@ func (a *App) OpenShell(paneID, cwd string) error {
 	return nil
 }
 
-// CloseShell tears down one shell pane's pty and drops it from the bridge registry.
-// It is what a drawer's per-tab × calls to close a single terminal without closing
-// the whole session. Idempotent: an unknown pane id is a no-op (the tab may already
-// have been reaped by CloseWorkspace). Unlike CloseWorkspace it touches only the one
-// pane, so the session's other shells and its agent keep running.
+// CloseShell tears down one shell pane's pty and drops it from the bridge
+// registry. A drawer's per-tab × (close) button calls CloseShell to close a
+// single terminal without closing the whole session. CloseShell is
+// idempotent: an unknown pane id is a no-op, because CloseWorkspace may
+// already have reaped the tab. Unlike CloseWorkspace, CloseShell touches only
+// the one pane, so the session's other shells and its agent keep running.
 func (a *App) CloseShell(paneID string) error {
 	if err := validateSessionID(paneID); err != nil {
 		return fmt.Errorf("invalid pane id: %w", err)
@@ -1644,7 +1750,8 @@ func (a *App) CloseShell(paneID string) error {
 	return nil
 }
 
-// GetSettings reads settings from disk; returns defaults if the file is absent.
+// GetSettings reads settings from disk. It returns defaults if the file is
+// absent.
 func (a *App) GetSettings() (Settings, error) {
 	data, err := os.ReadFile(a.settingsPath)
 	if err != nil {
@@ -1667,8 +1774,9 @@ func (a *App) GetSettings() (Settings, error) {
 }
 
 // defaultSettings is the source of truth for settings defaults; the frontend
-// mirrors these in frontend/src/lib/constants.ts. Returned on first run (no
-// settings file) and when an existing settings file is corrupt.
+// mirrors these in frontend/src/lib/constants.ts. GetSettings returns these
+// defaults on first run (no settings file) and when an existing settings
+// file is corrupt.
 func defaultSettings() Settings {
 	return Settings{Theme: defaultTheme, Density: defaultDensity, Font: defaultFont, StaleThresholdDays: defaultStaleThresholdDays}
 }
@@ -1692,27 +1800,30 @@ func (a *App) HomeShellCwd() string {
 	return "/"
 }
 
-// SaveSettings atomically writes settings to disk. It is the public Wails-bound
-// method the frontend calls to persist a whole settings blob (theme/density/font/
-// dnd/alwaysRules). It takes settingsMu so a frontend write is serialized with
-// Approve(always)'s read-append-write; this prevents torn writes and prevents two
-// concurrent appends from losing each other.
+// SaveSettings atomically writes settings to disk. It is the public,
+// Wails-bound method the frontend calls to persist a whole settings blob
+// (theme, density, font, dnd, alwaysRules). SaveSettings takes settingsMu, so
+// a frontend write serializes with Approve(always)'s read-append-write. This
+// lock prevents torn writes, and it prevents two concurrent appends from
+// losing each other.
 //
-// DEADLOCK GUARD: settingsMu must not be entered while a.mu is held, and
-// saveSettingsLocked must not acquire a.mu (it doesn't — it only marshals+writes).
-// Approve already holds settingsMu across its read-modify-write and therefore calls
-// saveSettingsLocked directly; calling this public method there would self-deadlock
-// (sync.Mutex is not reentrant).
+// DEADLOCK GUARD: code must not enter settingsMu while a.mu is held, and
+// saveSettingsLocked must not acquire a.mu; it only marshals and writes.
+// Approve already holds settingsMu across its read-modify-write, so it calls
+// saveSettingsLocked directly. Calling this public method there would
+// self-deadlock, because sync.Mutex is not reentrant.
 //
-// Residual limit (inherent to whole-blob replacement, not a cut corner): the lock
-// cannot stop a stale whole-blob overwrite — a frontend SaveSettings carrying a
-// snapshot read before an Approve(always) append will still clobber the new rule.
-// This is last-writer-wins on a full-document PUT, not a data race. Closing it fully
-// would require a version field + compare-and-set; a naive "re-read and preserve
-// on-disk AlwaysRules" merge is NOT a valid fix because it would break the frontend's
-// legitimate rule-deletion path (setAlwaysRules deliberately sends a shorter list,
-// which a preserve-merge would treat as rules to resurrect). The lock is the correct
-// fix for the in-scope torn-write / concurrent-append races.
+// Residual limit (inherent to whole-blob replacement, not a cut corner): the
+// lock cannot stop a stale whole-blob overwrite. A frontend SaveSettings call
+// carrying a snapshot read before an Approve(always) append will still
+// clobber the new rule. This is last-writer-wins on a full-document PUT, not
+// a data race. Closing this gap fully would need a version field and a
+// compare-and-set. A naive "re-read and preserve on-disk AlwaysRules" merge
+// is not a valid fix, because it would break the frontend's legitimate
+// rule-deletion path: setAlwaysRules deliberately sends a shorter list, and a
+// preserve-merge would treat the missing rules as rules to resurrect. The
+// lock is the correct fix for the in-scope torn-write and concurrent-append
+// races.
 func (a *App) SaveSettings(s Settings) error {
 	a.settingsMu.Lock()
 	defer a.settingsMu.Unlock()
@@ -1758,11 +1869,12 @@ func (a *App) SaveLayout(layoutJSON string) error {
 	return atomicWriteApp(a.layoutPath, []byte(layoutJSON))
 }
 
-// atomicWriteApp writes data to path via temp file + rename (atomic on Linux),
-// creating the parent dir if needed. The file is always created with mode 0600
-// (owner read/write only) because it may carry a token-bearing settings payload.
-// os.CreateTemp already uses 0600, but we set it explicitly — before any write —
-// so the invariant is auditable and consistent with claude_monitor.go's atomicWrite.
+// atomicWriteApp writes data to path through a temp file, then a rename
+// (atomic on Linux), creating the parent dir if needed. The file is always
+// created with mode 0600 (owner read/write only), because it may carry a
+// token-bearing settings payload. os.CreateTemp already uses 0600, but this
+// function sets that mode explicitly, before any write, so the invariant is
+// auditable and consistent with claude_monitor.go's atomicWrite.
 func atomicWriteApp(path string, data []byte) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, registry.ConfigDirMode); err != nil {
@@ -1773,8 +1885,9 @@ func atomicWriteApp(path string, data []byte) error {
 		return err
 	}
 	tmpName := tmp.Name()
-	// Set settingsFileMode before writing so there is no window where content is readable
-	// at a looser mode. Mirror the same invariant as claude_monitor.go atomicWrite.
+	// This sets settingsFileMode before writing, so there is no window where
+	// the content is readable at a looser mode. It mirrors the same invariant
+	// as claude_monitor.go's atomicWrite.
 	if err := os.Chmod(tmpName, settingsFileMode); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpName)
@@ -1792,9 +1905,9 @@ func atomicWriteApp(path string, data []byte) error {
 	return os.Rename(tmpName, path)
 }
 
-// ListDir returns directory entries under absDir, honoring .gitignore patterns
-// in that directory (gitignore-aware). Entries matching any pattern in
-// absDir/.gitignore are excluded from the result.
+// ListDir returns directory entries under absDir. ListDir honors .gitignore
+// patterns in that directory: it excludes entries that match any pattern in
+// absDir/.gitignore.
 func (a *App) ListDir(absDir string) ([]fspkg.Node, error) {
 	if err := validateWorktreeUnderRoots(absDir, a.roots); err != nil {
 		return nil, err
@@ -1816,29 +1929,33 @@ func (a *App) ReadFile(absPath string) (string, error) {
 
 // WriteFile atomically writes content to absPath.
 func (a *App) WriteFile(absPath, content string) error {
-	// Validate absPath itself (not just its Dir) so a symlink-as-final-component
-	// that resolves outside root is caught.
+	// WriteFile validates absPath itself, not just its Dir, so a
+	// symlink-as-final-component that resolves outside root gets caught.
 	//
-	// Primary path: absPath resolves successfully via EvalSymlinks (file exists or is
-	// a non-dangling symlink). validateWorktreeUnderRoots does the full resolve+check.
+	// Primary path: absPath resolves successfully through EvalSymlinks (the
+	// file exists, or is a non-dangling symlink). validateWorktreeUnderRoots
+	// does the full resolve-and-check.
 	if err := validateWorktreeUnderRoots(absPath, a.roots); err == nil {
-		// absPath resolves inside roots — allow.
+		// absPath resolves inside roots, so WriteFile allows it.
 		return fspkg.WriteFile(absPath, []byte(content))
 	}
-	// absPath may be a new (not-yet-created) file, OR it may be a symlink
-	// (dangling or resolving outside root). Distinguish these cases:
+	// absPath may be a new, not-yet-created file, or it may be a symlink,
+	// dangling or resolving outside root. WriteFile distinguishes these cases:
 	//
-	// If absPath exists as a symlink (even dangling), reject it — a write would
-	// follow the symlink to an outside-root target, which is the escape vector.
+	// If absPath exists as a symlink, even a dangling one, WriteFile rejects
+	// it, because a write would follow the symlink to an outside-root target.
+	// That is the escape vector.
 	if _, lstatErr := os.Lstat(absPath); lstatErr == nil {
 		// absPath exists on disk (as a symlink or regular file). If
 		// validateWorktreeUnderRoots rejected it above, reject here too.
 		return fmt.Errorf("WriteFile: path %q is outside configured roots or escapes via symlink", absPath)
 	}
-	// absPath does not exist (truly a new file). Validate by checking:
+	// absPath does not exist; this is truly a new file. WriteFile validates
+	// it by checking:
 	//   1. The parent dir must exist and resolve inside roots.
-	//   2. The cleaned absPath must be lexically under the resolved parent
-	//      (guards against ".." or other path escapes in the filename component).
+	//   2. The cleaned absPath must be lexically under the resolved parent,
+	//      which guards against ".." or other path escapes in the filename
+	//      component.
 	parentDir := filepath.Dir(absPath)
 	if err := validateWorktreeUnderRoots(parentDir, a.roots); err != nil {
 		return err
@@ -1869,8 +1986,9 @@ func (a *App) RevealInFiles(absPath string) error {
 // CopyPath copies absPath to the system clipboard via the Wails runtime.
 // WebKit2GTK's navigator.clipboard is unreliable, so the copy happens host-side.
 func (a *App) CopyPath(absPath string) error {
-	// Validate before the ctx guard so tests can exercise the security boundary
-	// without a Wails runtime (ctx == nil → clipboard no-op after validation).
+	// CopyPath validates before the ctx guard, so tests can exercise the
+	// security boundary without a Wails runtime (ctx == nil results in a
+	// clipboard no-op after validation).
 	if err := validateWorktreeUnderRoots(absPath, a.roots); err != nil {
 		return err
 	}
@@ -1880,10 +1998,11 @@ func (a *App) CopyPath(absPath string) error {
 	return wailsruntime.ClipboardSetText(a.ctx, absPath)
 }
 
-// ClipboardSetText writes s to the system clipboard via the Wails runtime.
-// WebKit2GTK's navigator.clipboard is unreliable, so clipboard writes route
-// host-side. Mirrors CopyPath's ctx==nil guard (Wails not started → no-op) so it
-// is safe to call headless in tests.
+// ClipboardSetText writes s to the system clipboard through the Wails
+// runtime. WebKit2GTK's navigator.clipboard is unreliable, so clipboard
+// writes route host-side. ClipboardSetText mirrors CopyPath's ctx==nil guard
+// (Wails not started results in a no-op), so tests can call it safely,
+// headless.
 func (a *App) ClipboardSetText(s string) error {
 	if a.ctx == nil {
 		return nil
@@ -1891,9 +2010,10 @@ func (a *App) ClipboardSetText(s string) error {
 	return wailsruntime.ClipboardSetText(a.ctx, s)
 }
 
-// ClipboardText reads the system clipboard via the Wails runtime, host-side for
-// the same WebKit2GTK reason as ClipboardSetText. Returns "" with no error when
-// the Wails runtime is not started (ctx == nil), mirroring CopyPath's guard.
+// ClipboardText reads the system clipboard through the Wails runtime,
+// host-side, for the same WebKit2GTK reason as ClipboardSetText.
+// ClipboardText returns "" with no error when the Wails runtime is not
+// started (ctx == nil), mirroring CopyPath's guard.
 func (a *App) ClipboardText() (string, error) {
 	if a.ctx == nil {
 		return "", nil
@@ -1911,33 +2031,34 @@ func (a *App) Branches(repo string) ([]string, error) {
 	return gitpkg.Branches(ctx, a.runner(), repo)
 }
 
-// Approve routes a tool-approval decision to the owning Monitor.
-// reqID format: "<raw>:<workspaceID>". decision: "allow"|"deny"|"always".
-// On "always", an AlwaysRule is persisted to Settings.
-// PendingApprovalVM is one still-undecided approval request, tagged with the
-// workspace it belongs to so the frontend can rebuild its per-workspace queue.
+// PendingApprovalVM is one still-undecided approval request. It is tagged
+// with the workspace it belongs to, so the frontend can rebuild its
+// per-workspace queue.
 type PendingApprovalVM struct {
 	WorkspaceID string            `json:"workspaceId"`
 	Req         agent.ApprovalReq `json:"req"`
 }
 
-// PendingApprovals returns every approval request still awaiting a decision, so
-// the frontend can rebuild its approval queue after a reload or a late open (the
-// agent:event carrying an approval is a one-shot — if it arrives before the
-// workspace is listed or after a webview reload it is otherwise lost and the
-// agent's blocked hook wedges forever). The pending map key is the composed
-// ReqID "<raw>:<workspaceID>"; derive WorkspaceID the same way Approve routes it
-// (strings.LastIndex ":"). The stored ApprovalReq.ReqID is already the composed
-// id the frontend keys its queue on, so it is used verbatim as Req.
+// PendingApprovals returns every approval request still awaiting a decision,
+// so the frontend can rebuild its approval queue after a reload or a late
+// open. The agent:event that carries an approval is a one-shot: if it
+// arrives before the workspace is listed, or after a webview reload, the
+// event is otherwise lost, and the agent's blocked hook wedges forever. The
+// pending map key is the composed ReqID "<raw>:<workspaceID>";
+// PendingApprovals derives WorkspaceID the same way Approve routes it, with
+// strings.LastIndex(":"). The stored ApprovalReq.ReqID is already the
+// composed id the frontend keys its queue on, so PendingApprovals uses it
+// verbatim as Req.
 func (a *App) PendingApprovals() []PendingApprovalVM {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	// Return an empty (never nil) slice so it marshals to [] not null.
+	// This returns an empty, never nil, slice, so it marshals to [] rather
+	// than null.
 	out := make([]PendingApprovalVM, 0, len(a.pending))
 	for key, req := range a.pending {
 		sep := strings.LastIndex(key, ":")
 		if sep < 0 {
-			continue // malformed key — skip rather than mis-route
+			continue // malformed key: skip rather than mis-route
 		}
 		out = append(out, PendingApprovalVM{
 			WorkspaceID: key[sep+1:],
@@ -1947,6 +2068,9 @@ func (a *App) PendingApprovals() []PendingApprovalVM {
 	return out
 }
 
+// Approve routes a tool-approval decision to the owning Monitor. reqID has
+// the form "<raw>:<workspaceID>". decision is "allow", "deny", or "always".
+// On "always", Approve persists an AlwaysRule to Settings.
 func (a *App) Approve(reqID, decision string) error {
 	sep := strings.LastIndex(reqID, ":")
 	if sep < 0 {
@@ -1979,11 +2103,12 @@ func (a *App) Approve(reqID, decision string) error {
 		return err
 	}
 
-	// Consume the pending approval for this exact reqID. tool+input come from
-	// the backend's record of what was actually surfaced — never from the
-	// frontend — so an always-rule cannot be forged to grant something the user
-	// did not see. Resolving by reqID (not a racy "last approval" accessor) is
-	// correct even when multiple approvals are pending across workspaces.
+	// This consumes the pending approval for this exact reqID. tool and input
+	// come from the backend's record of what was actually surfaced, never
+	// from the frontend, so an always-rule cannot be forged to grant
+	// something the user did not see. Resolving by reqID, not a racy "last
+	// approval" accessor, stays correct even when many approvals are pending
+	// across workspaces.
 	a.mu.Lock()
 	req, hadPending := a.pending[reqID]
 	delete(a.pending, reqID)
@@ -1994,9 +2119,10 @@ func (a *App) Approve(reqID, decision string) error {
 		if w, ok := a.store.Get(workspaceID); ok && w.Agent != "" {
 			agentName = w.Agent
 		}
-		// Hold settingsMu across the entire read-modify-write so that concurrent
-		// Approve(always) calls cannot interleave and lose rules.
-		// DEADLOCK GUARD: a.mu is released above before settingsMu is taken.
+		// Approve holds settingsMu across the entire read-modify-write, so
+		// concurrent Approve(always) calls cannot interleave and lose rules.
+		// DEADLOCK GUARD: Approve releases a.mu above, before it takes
+		// settingsMu.
 		a.settingsMu.Lock()
 		s, err := a.GetSettings()
 		if err != nil {
@@ -2005,7 +2131,7 @@ func (a *App) Approve(reqID, decision string) error {
 		}
 		dup := false
 		for _, r := range s.AlwaysRules {
-			// Dedup on the same authoritative key used for matching (the hash).
+			// This dedups on the same authoritative key used for matching: the hash.
 			if r.Agent == agentName && r.Tool == req.Tool && r.Hash != "" && r.Hash == req.InputHash {
 				dup = true
 				break
@@ -2018,8 +2144,9 @@ func (a *App) Approve(reqID, decision string) error {
 				Pattern: req.Input,     // truncated display value
 				Hash:    req.InputHash, // hash of full input, authoritative match key
 			})
-			// settingsMu is already held here; call the unlocked inner helper to
-			// avoid a re-entrant deadlock (SaveSettings would re-take settingsMu).
+			// settingsMu is already held here, so this calls the unlocked
+			// inner helper to avoid a re-entrant deadlock; SaveSettings would
+			// otherwise re-take settingsMu.
 			_ = a.saveSettingsLocked(s)
 		}
 		a.settingsMu.Unlock()
@@ -2051,8 +2178,8 @@ func (a *App) Hunks(worktree, file string) ([]gitpkg.Hunk, error) {
 }
 
 // StageHunk applies hunk `index` of file to the index (git apply --cached).
-// index is relative to the current Hunks(worktree, file) output; the frontend
-// re-fetches hunks after each call so indices stay fresh.
+// index is relative to the current Hunks(worktree, file) output. The
+// frontend re-fetches hunks after each call, so indices stay fresh.
 func (a *App) StageHunk(worktree, file string, index int) error {
 	if err := validateWorktreeUnderRoots(worktree, a.roots); err != nil {
 		return err
@@ -2078,12 +2205,13 @@ func (a *App) DiscardHunk(worktree, file string, index int) error {
 	return gitpkg.DiscardHunk(ctx, a.runner(), worktree, file, index)
 }
 
-// UnstageHunk moves the staged hunk at merged Hunks(worktree, file) index `index`
-// back to the working tree (git apply --reverse --cached). `index` is the same
-// merged-Hunks() index StageHunk/DiscardHunk take — NOT a `git diff --cached`
-// position — and MUST identify a Staged==true hunk. It is the inverse of StageHunk
-// and touches the index only, never the working-tree content; the frontend
-// re-fetches hunks after each call so indices stay fresh.
+// UnstageHunk moves the staged hunk at merged Hunks(worktree, file) index
+// `index` back to the working tree (git apply --reverse --cached). `index`
+// is the same merged-Hunks() index that StageHunk and DiscardHunk take, not
+// a `git diff --cached` position, and it must identify a Staged==true hunk.
+// UnstageHunk is the inverse of StageHunk, and it touches the index only,
+// never the working-tree content. The frontend re-fetches hunks after each
+// call, so indices stay fresh.
 func (a *App) UnstageHunk(worktree, file string, index int) error {
 	if err := validateWorktreeUnderRoots(worktree, a.roots); err != nil {
 		return err
@@ -2097,7 +2225,7 @@ func (a *App) UnstageHunk(worktree, file string, index int) error {
 }
 
 // RepoInfo is a frontend-friendly summary of a discovered git repository.
-// JSON tags are frozen — do not rename.
+// The JSON tags are frozen; do not rename them.
 type RepoInfo struct {
 	// Path is the absolute path to the repository root (main worktree).
 	Path string `json:"path"`
@@ -2106,22 +2234,24 @@ type RepoInfo struct {
 	// Branch is the branch checked out in the main worktree, or "" when
 	// the repository has no commits yet.
 	Branch string `json:"branch"`
-	// Worktrees lists all non-bare working trees (main + linked worktrees).
-	// Head is always "" because model.Tree does not carry the commit SHA;
-	// the dialog does not need it for a fresh-install selection list.
+	// Worktrees lists all non-bare working trees (the main tree and linked
+	// worktrees). Head is always "", because model.Tree does not carry the
+	// commit SHA. The dialog does not need Head for a fresh-install
+	// selection list.
 	Worktrees []gitpkg.WorktreeInfo `json:"worktrees"`
 }
 
 // DiscoverRepos discovers git repositories under all configured roots and
-// returns a deduplicated, frontend-ready slice ordered by frecency (cold
-// start → alphabetical). It is intended for the New Session dialog on a
-// fresh install when there are no existing workspaces.
+// returns a deduplicated, frontend-ready slice. It orders the slice by
+// frecency, falling back to alphabetical order on a cold start. DiscoverRepos
+// is for the New Session dialog on a fresh install, when there are no
+// existing workspaces.
 //
-// Best-effort: per-root errors are silently skipped. An error is returned only
-// when every root failed. An empty (non-nil) slice is returned when no
-// repositories are found.
+// DiscoverRepos runs best-effort: it silently skips per-root errors, and it
+// returns an error only when every root fails. It returns an empty, non-nil
+// slice when it finds no repositories.
 func (a *App) DiscoverRepos() ([]RepoInfo, error) {
-	// byPath deduplicates across multiple roots.
+	// byPath deduplicates across many roots.
 	byPath := make(map[string]struct{})
 	out := make([]RepoInfo, 0)
 
@@ -2151,7 +2281,7 @@ func (a *App) DiscoverRepos() ([]RepoInfo, error) {
 			}
 			byPath[pt.Project.Path] = struct{}{}
 
-			// Extract the branch from the main working tree.
+			// This extracts the branch from the main working tree.
 			var branch string
 			for _, tr := range pt.Trees {
 				if tr.IsMain {
@@ -2160,8 +2290,8 @@ func (a *App) DiscoverRepos() ([]RepoInfo, error) {
 				}
 			}
 
-			// Map model.Tree → gitpkg.WorktreeInfo (Head is not available
-			// from ProjectTrees; it is left as the zero value "").
+			// This maps model.Tree to gitpkg.WorktreeInfo. Head is not
+			// available from ProjectTrees, so it is left as the zero value "".
 			wts := make([]gitpkg.WorktreeInfo, 0, len(pt.Trees))
 			for _, tr := range pt.Trees {
 				wts = append(wts, gitpkg.WorktreeInfo{
