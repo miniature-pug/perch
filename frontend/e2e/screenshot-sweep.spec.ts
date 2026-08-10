@@ -276,7 +276,9 @@ test("07-diff-view-with-hunks: multi-file diff expanded", async ({ browser }) =>
   });
   const layoutJSON = JSON.stringify({ view: "diff", split: false, sidebarW: 240, shellH: 200, collapsed: {} });
   const initScript = buildDiffInitScript([WORKSPACE_FIXTURE]);
-  // This patch also overrides GetLayout to return the diff view, and sets activeId through the session-attach event.
+  // This patch also overrides GetLayout to return the diff view. The
+  // activateWorkspace call below sets activeId. It clicks the session in the
+  // sidebar. That click triggers onSelect and confirms the resume preview.
   const layoutPatch = `
 (function() {
   var _origLayout = window.go.app.App.GetLayout;

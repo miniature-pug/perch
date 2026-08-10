@@ -46,8 +46,11 @@ quick-start buttons on the empty screen. You choose:
 
 Branch names must match `A-Z a-z 0-9 . _ / -`. If you ask for a branch that a
 perch session already owns, perch opens that session instead of creating a
-duplicate. If perch cannot create the worktree because the tree has
-uncommitted changes, perch tells you and keeps the dialog open.
+duplicate. A worktree session fails to create only if the branch already
+exists outside perch, such as a branch already checked out in another
+worktree. An in-repo session (no worktree) switches your repository checkout
+to the branch instead. If that checkout has uncommitted changes, perch
+refuses the switch. Either way, perch tells you and keeps the dialog open.
 
 When you create a session, perch registers it and spawns its terminal. To
 rename a session later, double-click or right-click its name in the sidebar

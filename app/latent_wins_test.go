@@ -22,7 +22,8 @@ func TestApp_ListWorkspaces_WillResumeAndBaseRef(t *testing.T) {
 
 	// Deterministic ordering: List() sorts by LastActive descending, then ID
 	// ascending. Both records share the zero LastActive, so the records
-	// order by ID ascending. The "resume-*" id sorts before the "fresh-*" id.
+	// order by ID ascending. The id "resume-ws" sorts before "zfresh-ws"
+	// because "r" precedes "z", not because of the "resume" or "fresh" words.
 	_ = store.Upsert(registry.Workspace{
 		ID:            "resume-ws",
 		WorktreePath:  t.TempDir(),

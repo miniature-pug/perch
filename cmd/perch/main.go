@@ -209,6 +209,7 @@ func printUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "Usage: perch [path]")
 	_, _ = fmt.Fprintln(w, "       perch attach <query>")
 	_, _ = fmt.Fprintln(w, "       perch doctor")
+	_, _ = fmt.Fprintln(w, "       perch reload")
 	_, _ = fmt.Fprintln(w, "       perch version")
 }
 
