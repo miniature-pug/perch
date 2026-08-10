@@ -1,0 +1,61 @@
+# perch-dev: the one pinned dev/test environment.
+#
+# This image holds only the toolchain. It does not bake in any application
+# source. The repo is bind-mounted live at run time, through
+# containers/run.sh, so editing code never invalidates a layer. Every
+# version arrives as a build-arg, sourced from its one authoritative home:
+# .tool-versions, the lockfile, or the Makefile. Nothing is hardcoded here.
+# Build the image with `make image`. Never run `podman build` by hand, or
+# the ARGs stay unset.
+FROM ubuntu:24.04
+
+ARG GO_VERSION
+ARG NODE_VERSION
+ARG GOLANGCI_VERSION
+ARG GOVULN_VERSION
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# System and GUI build libraries. The GTK3, WebKit2GTK-4.1, and xvfb set
+# lets this one image cover `gui-build` (cgo) and the future headless GUI
+# smoke test. Noble ships only the -4.1 dev package; the -4.0 package was
+# dropped. This is why production builds carry `-tags webkit2_41`. The
+# libwebkit2gtk-4.1-dev package also pulls in libsoup-3.0-dev.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl git xz-utils \
+      build-essential pkg-config \
+      libgtk-3-dev libwebkit2gtk-4.1-dev \
+      xvfb \
+ && rm -rf /var/lib/apt/lists/*
+
+# Go: the official tarball, pinned by .tool-versions.
+RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" \
+      | tar -C /usr/local -xz
+ENV GOPATH=/root/go
+ENV PATH=/usr/local/go/bin:/root/go/bin:$PATH
+
+# Node: the official tarball, pinned by .tool-versions.
+RUN curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
+      | tar -C /usr/local --strip-components=1 -xJ
+
+# The go-tools are baked in as pinned versions, so lint and vulncheck run an
+# offline, prebuilt binary on PATH, not `go run …@version` per call. GOFLAGS
+# is unset here so the install step can reach the network. The runtime
+# GOFLAGS=-mod=vendor value is set below.
+RUN GOFLAGS= go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_VERSION}" \
+ && GOFLAGS= go install "golang.org/x/vuln/cmd/govulncheck@${GOVULN_VERSION}"
+
+# Playwright browsers and their system libraries, version-matched to the
+# lockfile. The temporary `npm ci` step exists only to drive
+# `playwright install`. The browsers land baked into
+# /root/.cache/ms-playwright, so e2e never downloads them again at run time.
+# The temporary node_modules directory is then discarded; the runtime install
+# step installs it again into a masked volume.
+COPY frontend/package.json frontend/package-lock.json /tmp/pw/
+RUN apt-get update && cd /tmp/pw && npm ci \
+ && npx --yes playwright install --with-deps chromium \
+ && cd / && rm -rf /tmp/pw /var/lib/apt/lists/*
+
+# Follow the same rule as the Makefile for every run-time call: vendored, hermetic.
+ENV GOFLAGS=-mod=vendor
+WORKDIR /work

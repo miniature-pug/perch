@@ -1,0 +1,38 @@
+sequenceDiagram
+    participant Agent as claude agent
+    participant HL as hooklistener (127.0.0.1:ephemeral)
+    participant App as app.App (backend)
+    participant FE as Frontend (Svelte)
+    participant User as User
+
+    Note over Agent,HL: ClaudeMonitor writes the hook config (URL + Bearer token) to .claude/settings.json
+
+    Agent->>HL: POST PreToolUse (Bearer token), blocks until a verdict
+    HL->>App: agent:event (approval, reqID)
+    App->>FE: agent:event (ApprovalCard)
+    FE->>User: show Allow / Always / Deny
+
+    User->>FE: click Allow
+    FE->>App: App.Approve(reqID, "allow")
+    App->>HL: Monitor.Approve → hooklistener.Decide(reqID, allow)
+    HL-->>Agent: permissionDecision allow (unblocks the POST)
+    Agent->>Agent: continues the tool call
+
+    Note over Agent,HL: lifecycle hooks (SessionStart / Stop / StopFailure) POST non-blocking
+    Agent->>HL: POST lifecycle event
+    HL->>App: agent:event (state: running / idle / done / errored)
+    App->>FE: agent:event → re-render state glyph
+
+    Note over Agent,HL: the agent runs INSIDE the pane shell, so its exit fires no pty:exit. The launch line's exit sentinel captures $? and POSTs AgentExit (token via the pane env, not the echoed line)
+    Agent->>HL: POST AgentExit (error_type=$?) on agent exit
+    HL->>App: agent:event (state: exited), distinct from errored; a graceful /exit is not a failure
+    App->>FE: agent:event → "exited" glyph + "session ended / Reopen" overlay + blocking "Agent exited" notification
+
+    Note over Agent,User: AskUserQuestion (opencode question.asked) is an attention SIGNAL, not an approval
+    Agent->>HL: POST PreToolUse AskUserQuestion
+    HL->>HL: auto-allow immediately, never blocks. ExitPlanMode stays on the approval path
+    HL->>App: agent:event (kind question, state awaiting-input)
+    App->>FE: agent:event → sidebar "asking you" feel, cyan pulse. User answers in the agent's own pane TUI
+
+    Note over App,FE: opencode lifecycle events arrive over the opencode serve SSE /event stream. Only claude uses the approval loop above
+    Note over App,User: opencode permission.asked is a passive SIGNAL like a question: caps.approvals=false, no card, no Approval payload, no reply. opencode's attach TUI owns the prompt; perch only lights the sidebar awaiting-approval feel + blocking notification

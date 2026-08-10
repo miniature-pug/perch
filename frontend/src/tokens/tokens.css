@@ -1,0 +1,93 @@
+/* These are the perch design tokens: structure, type, spacing, and motion. The color palette lives in themes.css. */
+:root {
+  --perch-font-sans: "Geist", "IBM Plex Sans", "Inter", system-ui, sans-serif;
+  --perch-font-mono: "Geist Mono", "IBM Plex Mono", "Fira Code", ui-monospace, monospace;
+  --perch-fs-h1: 24px;       --perch-lh-h1: 1.3;
+  --perch-fs-h2: 20px;       --perch-lh-h2: 1.35;
+  --perch-fs-code: 14px;    --perch-lh-code: 1.55;
+  --perch-fs-shell: 13px;   --perch-lh-shell: 1.5;
+  --perch-fs-body: 13px;    --perch-fs-caption: 12px;   --perch-fs-label: 11px;
+  /* This is an 8pt spacing grid. Each use multiplies the value by --perch-density-scale. */
+  --perch-density-scale: 1;
+  --perch-sp-1: 8px;  --perch-sp-2: 16px; --perch-sp-3: 24px; --perch-sp-4: 32px;
+  --perch-sp-5: 40px; --perch-sp-6: 48px; --perch-sp-7: 56px; --perch-sp-8: 64px;
+  /* Motion */
+  --perch-dur: 120ms;
+  --perch-ease: cubic-bezier(.4,0,.2,1);
+  /* Elevation: the single source for the repeated float shadow and the modal scrim */
+  --perch-shadow-float: 0 8px 32px rgba(0, 0, 0, 0.45);
+  --perch-shadow-toast: 0 4px 16px rgba(0, 0, 0, 0.3);
+  --perch-scrim: rgba(0, 0, 0, 0.5);
+  /* Interaction feedback */
+  --perch-hover-lift: -1px;
+  --perch-ring-w: 2px;
+  --perch-ring-color: color-mix(in srgb, var(--perch-accent) 55%, transparent);
+  /* Engagement motion: small feedback effects, count-up, and emphasis */
+  --perch-dur-flash: 220ms;
+  --perch-dur-pop: 240ms;
+  --perch-dur-countup: 380ms;
+  --perch-pop-scale: 1.18;
+  /* This is the attention pulse: the looping "needs you" / "asking you" sidebar
+     signal. The approval pulse runs at a calm 1.6s cadence (a busier 1s cadence
+     was used before) so the "needs you" signal reads as steady attention, not
+     an urgent flicker. */
+  --perch-dur-attn-approval: 1.6s;
+  --perch-dur-attn-input: 1.6s;
+  --perch-attn-opacity-min: 0.45;
+  /* This is the row-level attention breath: the slow pulse of the whole sidebar
+     row when a BACKGROUND session needs a look. It runs slower than the 1.6s
+     icon pulse. The glow covers a large area, so a gentler cadence stays
+     glanceable, not busy. */
+  --perch-dur-attn-row: 2s;
+  /* This is the running spinner: the ongoing, slow rotation of a session's ◐ status
+     icon while its agent works. It makes "running" read as alive at a glance,
+     since a static icon looks the same as a frozen one. Reduced-motion falls
+     back to a static icon. */
+  --perch-dur-spin: 1.4s;
+  /* Interaction feedback: state */
+  --perch-opacity-disabled: 0.4;
+  /* Glass + radius */
+  --perch-radius-sm: 4px;
+  --perch-radius-md: 6px;
+  --perch-radius-lg: 10px;
+  /* Scrollbar */
+  --perch-scrollbar-w: 6px;
+  --perch-scrollbar-radius: 3px;
+  --perch-glass-filter: blur(10px) saturate(1.4);
+  --perch-glass-shadow: 0 8px 32px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.08);
+  /* This is the stacking order: one named scale, so layer relationships are
+     explicit. command-palette sits above undo-toast, so a transient toast never
+     covers the focused palette (both were at 300 before). */
+  --perch-z-sidebar-rail: 1;
+  --perch-z-editor-send: 10;
+  --perch-z-editor-dirty: 20;
+  --perch-z-drop-overlay: 50;
+  --perch-z-notify: 90;
+  --perch-z-approval: 100;
+  --perch-z-menu-dropdown: 150;
+  --perch-z-modal: 200;
+  --perch-z-context-menu: 250;
+  --perch-z-undo-toast: 300;
+  --perch-z-command-palette: 310;
+}
+[data-density="dense"]       { --perch-density-scale: 0.75; }
+[data-density="comfortable"] { --perch-density-scale: 1; }
+[data-density="ultra"]       { --perch-density-scale: 1.25; }
+
+/* These are the engagement keyframes. They are global, so component-scoped styles
+   can reference them by name. Colors and durations resolve from the tokens above
+   at the point of use. */
+@keyframes perch-stage-flash {
+  0%   { background: color-mix(in srgb, var(--perch-ok) 40%, transparent); }
+  100% { background: transparent; }
+}
+@keyframes perch-settle-pop {
+  0%   { transform: scale(1); }
+  45%  { transform: scale(var(--perch-pop-scale)); }
+  100% { transform: scale(1); }
+}
+/* #4: a brief ring pulse that draws the eye to the agent pane when the agent wants input. */
+@keyframes perch-emphasis {
+  0%   { box-shadow: inset 0 0 0 var(--perch-ring-w) var(--perch-accent); }
+  100% { box-shadow: inset 0 0 0 var(--perch-ring-w) transparent; }
+}

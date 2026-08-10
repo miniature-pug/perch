@@ -1,0 +1,57 @@
+flowchart TD
+    subgraph Create["CREATE path"]
+        w_start(["user creates a session\n(GUI New Session dialog)"])
+        w_pick["pick repo / branch / agent\n(repos discovered across configured roots)"]
+        w_validate["validate:\nrepoPath under a configured root,\nbranch via git.ValidRef,\nagent known (claude / opencode)"]
+        w_derive["derive linked-worktree path\n(repo + slugified branch),\nre-check it stays under roots"]
+        w_git_add["git worktree add\n(new branch: -b, fails if the branch exists;\nexisting branch: no -b)"]
+        w_state["record workspace\nin workspaces.json"]
+        w_launch["open workspace:\nspawn direct pty + login shell,\nstart agent Monitor"]
+
+        w_start --> w_pick
+        w_pick --> w_validate
+        w_validate --> w_derive
+        w_derive --> w_git_add
+        w_git_add --> w_state
+        w_state --> w_launch
+    end
+
+    subgraph Remove["REMOVE path"]
+        d_start(["user removes a session\n(GUI remove action)"])
+        d_confirm["confirm modal,\nthen deferred removal\nwith an undo window"]
+        d_undo{"undo before\nthe window closes?"}
+        d_cancel["cancel: session restored,\nnothing torn down"]
+        d_teardown["tear down pty Bridge + Monitor\n(Monitor.Teardown removes hook entries,\ncloses hooklistener)"]
+        d_state2["remove workspace record\nfrom workspaces.json"]
+        d_worktree_check{"worktree session?"}
+        d_dirty_check{"tree dirty?\n(uncommitted changes)"}
+        d_force_confirm["force-confirm required\n(ErrWorktreeDirty path;\nForceRemoveWorkspace)"]
+        d_git_rm["git worktree remove\n(tree deleted from disk;\nbranch kept)"]
+        d_record_only["record-only removal\n(repo root + branch untouched)"]
+
+        d_start --> d_confirm
+        d_confirm --> d_undo
+        d_undo -->|"yes"| d_cancel
+        d_undo -->|"no, window elapsed"| d_teardown
+        d_teardown --> d_state2
+        d_state2 --> d_worktree_check
+        d_worktree_check -->|"yes (worktree session)"| d_dirty_check
+        d_worktree_check -->|"no (in-repo session)"| d_record_only
+        d_dirty_check -->|"clean"| d_git_rm
+        d_dirty_check -->|"dirty"| d_force_confirm
+        d_force_confirm -->|"user confirms force"| d_git_rm
+        d_force_confirm -->|"cancel"| d_cancel
+    end
+
+    subgraph Stale["STALE CLEANUP path (CleanupPanel)"]
+        s_banner["launch banner: N sessions\nunused > StaleThresholdDays"]
+        s_panel["CleanupPanel:\none row per stale worktree session\n(non-worktree sessions excluded)"]
+        s_select["Select-all / per-row checkbox;\nsafe rows (clean+merged) default-checked;\ndirty/unmerged rows unchecked + ⚠"]
+        s_confirm["Remove selected → confirm"]
+        s_delete["per row: git worktree remove\n+ git branch -d (or -D force)"]
+
+        s_banner --> s_panel
+        s_panel --> s_select
+        s_select --> s_confirm
+        s_confirm --> s_delete
+    end

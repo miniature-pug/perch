@@ -1,0 +1,5 @@
+data: {"id":"evt_1","type":"session.status","properties":{"sessionID":"ses-1","status":{"type":"busy"}}}
+
+data: {"id":"evt_3","type":"permission.asked","properties":{"id":"perm-1","sessionID":"ses-1","permission":"bash","patterns":["ls -la"],"metadata":{},"always":[]}}
+
+data: {"id":"evt_4","type":"session.error","properties":{"sessionID":"ses-1","error":{"name":"TimeoutError","message":"timeout"}}}

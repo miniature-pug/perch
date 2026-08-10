@@ -1,0 +1,129 @@
+# CI: the same gate a contributor runs, nothing more.
+#
+# Approach: container-first. This matches the project's philosophy that "the
+# same bits run everywhere" (see containers/README.md). This workflow builds
+# the pinned `perch-dev` image and runs `make test-all`, exactly as a
+# contributor does. It does NOT reinstall Go, Node, golangci-lint,
+# govulncheck, or a Playwright browser on the runner. The image already
+# bakes these in, pinned from .tool-versions and the Makefile. So there are
+# no runtime tool fetches, and no version drift between local, container,
+# and CI.
+#
+# `make test-all` runs with the default CONTAINERIZE=1. Each gate re-enters
+# `perch-dev` in its own `podman run`, with the correct frontend/dist masks
+# (test-e2e masks dist for `vite build`; the Go gates keep the committed
+# //go:embed stub). That per-target dispatch is the reason the framework
+# exists, so CI honors it instead of flattening the gates into one
+# container.
+#
+# `make verify` (go mod verify) is not a containerized DZ target. A
+# contributor runs it natively, so CI runs it on the runner with the pinned
+# host Go.
+#
+# The only host prerequisites are podman (preinstalled on the GitHub
+# ubuntu-24.04 runner) and Go (the Makefile guards every call on
+# `command -v go`, and `make verify` needs it). The Go version is read from
+# .tool-versions, the same source the image reads, so it is never
+# duplicated here.
+#
+# Make this a required check through branch protection on `main` (Settings
+# -> Branches): the check appears as "CI / gate".
+
+name: CI
+
+on:
+  # This runs post-merge verification on the default branch, plus a run on
+  # every pull request (the required check). Scoping push to main avoids a
+  # second, redundant run when a branch with an open PR is pushed.
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege: CI reads the repository only.
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref to save runner minutes. This
+# cancels pull-request runs only. A push to main always runs to completion,
+# so every merged commit keeps a recorded CI result.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  gate:
+    # ubuntu-24.04 (noble) matches the perch-dev base image, and it ships podman.
+    runs-on: ubuntu-24.04
+    # Fail fast on a hung step. A cache-miss run that rebuilds the image takes
+    # about 16 minutes, so 40 gives ample headroom below the 6-hour default.
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # CI never pushes, so do not leave the token in the git config.
+          persist-credentials: false
+
+      # The perch-dev image, its cached tarball, and the Go build caches can
+      # exceed the runner's default free space, which fails the image build
+      # with "no space left on device". Remove preinstalled toolchains the gate
+      # never uses. This runs before Set up Go, which then repopulates the Go
+      # tool cache. It reclaims about 25 GB.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /opt/hostedtoolcache /usr/local/lib/android /usr/share/dotnet /usr/local/.ghcup
+          df -h /
+
+      # Single source of truth: the pinned Go version comes from
+      # .tool-versions, the same file the Containerfile reads. This file has
+      # no duplicate literal version.
+      - name: Resolve pinned Go version
+        id: tools
+        run: echo "go=$(awk '$1=="golang"{print $2}' .tool-versions)" >> "$GITHUB_OUTPUT"
+
+      # The host Go satisfies the Makefile's `command -v go` guard, for every
+      # `make` call including `make image`, and it runs `make verify`.
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ steps.tools.outputs.go }}
+
+      # Cache the built perch-dev image as a tarball. The cache rebuilds the
+      # image only when the Containerfile, the pinned versions, the frontend
+      # lockfile, or the Makefile change. On a cache hit, the loaded image
+      # already satisfies `make image`: its `podman image exists` guard skips
+      # the build, so the gate reuses the loaded image instead of rebuilding
+      # it. On a cache miss, the image builds fresh and saves for next time.
+      # Caching affects speed only, never correctness.
+      - name: Cache perch-dev image
+        id: img-cache
+        uses: actions/cache@v6
+        with:
+          path: /tmp/perch-dev-image.tar
+          key: perch-dev-${{ runner.os }}-${{ hashFiles('containers/dev/Containerfile', '.tool-versions', 'frontend/package-lock.json', 'Makefile') }}
+
+      - name: Load cached perch-dev image
+        if: steps.img-cache.outputs.cache-hit == 'true'
+        run: |
+          podman load -i /tmp/perch-dev-image.tar
+          # The tarball is redundant once loaded. Remove it to reclaim disk.
+          # The cache key already exists, so actions/cache does not re-save it.
+          rm -f /tmp/perch-dev-image.tar
+
+      # The full contributor gate: test, test-integration, test-front, lint,
+      # vet, vulncheck, test-e2e. Each runs in its own perch-dev container
+      # with the right masks. `make test-all` builds the image, through its
+      # `make image` order-only prerequisite, if the image is not already
+      # present.
+      - name: make test-all
+        run: make test-all
+
+      # This runs `go mod verify` against go.sum directly, like a contributor's `make verify`.
+      - name: make verify
+        run: make verify
+
+      # On a cache miss, save the freshly built image, so the cache post-step
+      # uploads it under the key computed above.
+      - name: Save perch-dev image for cache
+        if: steps.img-cache.outputs.cache-hit != 'true'
+        run: podman save -o /tmp/perch-dev-image.tar perch-dev:latest

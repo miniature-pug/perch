@@ -1,0 +1,27 @@
+/* This is the global reset. It cancels the browser defaults that leak the
+   WebKit webview's white background: body's 8px margin shows a white
+   border, and it also pushes the 100vh .app-root past the viewport, which
+   creates a phantom scrollbar. Load this file first, so component styles
+   apply on top of it. */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--perch-bg);
+  overflow: hidden;
+}

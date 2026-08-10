@@ -1,0 +1,337 @@
+<!-- frontend/src/lib/NotificationHub.svelte -->
+<script lang="ts">
+  import type { Notification } from "./stores/notifications.svelte";
+  import { worktreeColor } from "./constants";
+
+  let {
+    items, dnd, onDismiss, onToggleDnd, onClearRead, onSelect, onClose,
+  }: {
+    items: Notification[];
+    dnd: boolean;
+    onDismiss: (id: string) => void;
+    onToggleDnd: () => void;
+    onClearRead: () => void;
+    onSelect?: (workspaceId: string) => void;
+    onClose?: () => void;
+  } = $props();
+
+  type Filter = "all" | "approvals" | "errors" | "done";
+  let filter = $state<Filter>("all");
+
+  let hubEl = $state<HTMLElement>();
+
+  // Filter on the explicit kind tagged at creation, not on tier/title heuristics.
+  // An error ("Stage failed") and an approval are both tier "blocking", so only
+  // the kind tells them apart.
+  let visible = $derived(
+    filter === "all"       ? items :
+    filter === "approvals" ? items.filter((n) => n.kind === "approval") :
+    filter === "errors"    ? items.filter((n) => n.kind === "error") :
+                             items.filter((n) => n.kind === "done")
+  );
+
+  // Filter-aware empty state: names what is absent under the active filter,
+  // instead of always claiming "No notifications".
+  let emptyText = $derived(
+    filter === "approvals" ? "No approvals" :
+    filter === "errors"    ? "No errors" :
+    filter === "done"      ? "No completed notifications" :
+                             "No notifications"
+  );
+
+  // Self-close (F40): App renders the hub as a docked panel, conditionally, so
+  // the hub owns its own dismissal. Escape or a click outside the panel asks the
+  // parent to close it through onClose. This does not depend on App's global
+  // modal Escape handling; the dock is intentionally excluded from modalOpen.
+  function onWindowKey(e: KeyboardEvent) {
+    if (e.key === "Escape") { e.stopPropagation(); onClose?.(); }
+  }
+  function onWindowClick(e: MouseEvent) {
+    if (hubEl && !hubEl.contains(e.target as Node)) onClose?.();
+  }
+</script>
+
+<svelte:window onkeydown={onWindowKey} onclick={onWindowClick} />
+
+<section bind:this={hubEl} aria-label="notification hub" class="notif-hub">
+  <div class="hub-toolbar">
+    <button onclick={() => (filter = "all")}       aria-pressed={filter === "all"}>All</button>
+    <button onclick={() => (filter = "approvals")} aria-pressed={filter === "approvals"}>Approvals</button>
+    <button onclick={() => (filter = "errors")}    aria-pressed={filter === "errors"}>Errors</button>
+    <button onclick={() => (filter = "done")}      aria-pressed={filter === "done"}>Done</button>
+    <button onclick={onToggleDnd}  aria-pressed={dnd} class="dnd-btn">Do not disturb</button>
+    <button onclick={onClearRead} class="clear-btn" aria-label="clear read notifications">Clear read</button>
+  </div>
+  <ul class="notif-list scrollable">
+    {#each visible as n (n.id)}
+      <li class="notif-item tier-{n.tier}" class:read={n.read} style:--item-color={worktreeColor(n.workspaceId)}>
+        {#if n.workspaceId}
+          <button
+            class="notif-nav"
+            onclick={() => onSelect?.(n.workspaceId)}
+            aria-label="open session for {n.title}"
+          >
+            <span class="notif-title" title={n.title}>{n.title}</span>
+            <span class="notif-body" title={n.body}>{n.body}</span>
+          </button>
+        {:else}
+          <span class="notif-title" title={n.title}>{n.title}</span>
+          <span class="notif-body" title={n.body}>{n.body}</span>
+        {/if}
+        <button class="dismiss-btn" onclick={(e) => { e.stopPropagation(); onDismiss(n.id); }} aria-label="dismiss notification">✕</button>
+      </li>
+    {/each}
+    {#if visible.length === 0}<li class="notif-empty">{emptyText}</li>{/if}
+  </ul>
+</section>
+
+<style>
+  /* Panel: App positions this; NotificationHub owns bg, border, and overflow. */
+  .notif-hub {
+    display: flex;
+    flex-direction: column;
+    /* Solid, never glass. This panel can overlap the agent pane's terminal,
+       where WebKitGTK paints backdrop-filter surfaces transparent over the
+       composited terminal subtree (mirrors the fix in ApprovalCard). */
+    background: var(--perch-glass-bg-solid);
+    border-left: 1px solid var(--perch-glass-border);
+    box-shadow: var(--perch-shadow-float);
+    width: 320px;
+    max-height: 60vh;
+    font-family: var(--perch-font-sans);
+    font-size: var(--perch-fs-body);
+    color: var(--perch-text);
+  }
+
+  /* Filter toolbar strip */
+  .hub-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px var(--perch-sp-1);
+    background: var(--perch-surface);
+    border-bottom: 1px solid var(--perch-border);
+    flex-shrink: 0;
+    flex-wrap: wrap;
+  }
+
+  /* All toolbar buttons share this base */
+  .hub-toolbar button {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    background: var(--perch-bg);
+    color: var(--perch-text-dim);
+    border: 1px solid var(--perch-border-strong);
+    border-radius: var(--perch-radius-sm);
+    font-family: var(--perch-font-sans);
+    font-size: var(--perch-fs-caption);
+    cursor: pointer;
+    transition: border-color var(--perch-dur) var(--perch-ease),
+                color var(--perch-dur) var(--perch-ease),
+                background var(--perch-dur) var(--perch-ease);
+  }
+
+  .hub-toolbar button:hover {
+    border-color: var(--perch-accent);
+    color: var(--perch-accent);
+  }
+
+  .hub-toolbar button:focus-visible {
+    outline: var(--perch-ring-w) solid var(--perch-accent);
+    outline-offset: 2px;
+  }
+
+  /* Active filter button (aria-pressed=true) */
+  .hub-toolbar button[aria-pressed="true"] {
+    background: color-mix(in srgb, var(--perch-accent) 18%, var(--perch-bg));
+    color: var(--perch-accent);
+    border-color: var(--perch-accent);
+  }
+
+  /* DND button when active */
+  .dnd-btn[aria-pressed="true"] {
+    background: color-mix(in srgb, var(--perch-warn) 18%, var(--perch-bg));
+    color: var(--perch-warn);
+    border-color: var(--perch-warn);
+  }
+
+  /* Clear read: subtle, text-dim */
+  .clear-btn {
+    margin-left: auto;
+  }
+
+  /* Scrollable list */
+  .notif-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    flex: 1;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--perch-border) transparent;
+  }
+
+  .notif-list::-webkit-scrollbar { width: var(--perch-scrollbar-w); }
+  .notif-list::-webkit-scrollbar-track { background: transparent; }
+  .notif-list::-webkit-scrollbar-thumb { background: var(--perch-border); border-radius: var(--perch-scrollbar-radius); }
+  .notif-list::-webkit-scrollbar-thumb:hover { background: var(--perch-text-dim); }
+
+  /* Base notification row. Grid: [icon] [title dismiss] / [icon] [body]. */
+  .notif-item {
+    display: grid;
+    grid-template-columns: 16px 1fr auto;
+    grid-template-rows: auto auto;
+    column-gap: var(--perch-sp-1);
+    row-gap: 2px;
+    padding: calc(var(--perch-sp-1) * var(--perch-density-scale)) calc(var(--perch-sp-1) * var(--perch-density-scale) * 1.5);
+    border-bottom: 1px solid var(--perch-border);
+    border-left: 3px solid transparent;
+    /* Inset worktree-color stripe, overlaid atop the tier border, so the tier signal stays visible */
+    box-shadow: inset 3px 0 0 var(--item-color, transparent);
+    transition: background var(--perch-dur) var(--perch-ease),
+                border-color var(--perch-dur) var(--perch-ease),
+                transform var(--perch-dur) var(--perch-ease),
+                box-shadow var(--perch-dur) var(--perch-ease);
+  }
+
+  .notif-item:last-child {
+    border-bottom: none;
+  }
+
+  .notif-item:hover {
+    background: color-mix(in srgb, var(--perch-accent) 8%, transparent);
+    transform: translateY(var(--perch-hover-lift));
+    box-shadow: inset 3px 0 0 var(--item-color, transparent), var(--perch-shadow-toast);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .notif-item { transition: none; }
+    .notif-item:hover { transform: none; }
+  }
+
+  /* Unread = slightly elevated bg */
+  .notif-item:not(.read) {
+    background: color-mix(in srgb, var(--perch-text) 4%, transparent);
+  }
+
+  /* Tier: a left accent border plus a ::before icon in column 1, row 1.
+     This meets the color+icon+label rule: border = color, ::before = icon,
+     .notif-title = label. */
+  .tier-blocking { border-left-color: var(--perch-err); }
+  .tier-ambient  { border-left-color: var(--perch-info); }
+  .tier-routine  { border-left-color: var(--perch-text-dim); }
+
+  /* ::before occupies grid column 1 and spans both rows. */
+  .notif-item::before {
+    grid-column: 1;
+    grid-row: 1 / 3;
+    align-self: center;
+    font-size: var(--perch-fs-caption);
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .tier-blocking::before { content: "⚠"; color: var(--perch-err); }
+  .tier-ambient::before  { content: "ℹ"; color: var(--perch-info); }
+  .tier-routine::before  { content: "·"; color: var(--perch-text-dim); font-size: var(--perch-fs-body); }
+
+  /* Navigable title/body area: column 2, spans both rows. A bare button reset,
+     so it reads as plain text but stays focusable by keyboard or click to
+     focus its session. */
+  .notif-nav {
+    grid-column: 2;
+    grid-row: 1 / 3;
+    display: grid;
+    grid-template-rows: auto auto;
+    align-content: center;
+    row-gap: 2px;
+    min-width: 0;
+    padding: 0;
+    background: transparent;
+    border: none;
+    text-align: left;
+    font-family: inherit;
+    cursor: pointer;
+  }
+
+  .notif-nav:focus-visible {
+    outline: var(--perch-ring-w) solid var(--perch-accent);
+    outline-offset: 2px;
+    border-radius: var(--perch-radius-sm);
+  }
+
+  /* Title: column 2, row 1 (or row 1 inside .notif-nav) */
+  .notif-title {
+    grid-column: 2;
+    grid-row: 1;
+    font-size: var(--perch-fs-body);
+    color: var(--perch-text);
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Body: column 2, row 2 (or row 2 inside .notif-nav) */
+  .notif-body {
+    grid-column: 2;
+    grid-row: 2;
+    font-size: var(--perch-fs-caption);
+    color: var(--perch-text-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* When the title and body live inside the .notif-nav button, they use its own
+     two-row grid instead of the outer item grid. This resets the outer
+     column/row placement. */
+  .notif-nav .notif-title { grid-column: 1; grid-row: 1; }
+  .notif-nav .notif-body  { grid-column: 1; grid-row: 2; }
+
+  /* Dismiss icon button: column 3, spans both rows */
+  .dismiss-btn {
+    grid-column: 3;
+    grid-row: 1 / 3;
+    align-self: center;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    background: transparent;
+    color: var(--perch-text-dim);
+    border: 1px solid transparent;
+    border-radius: var(--perch-radius-sm);
+    cursor: pointer;
+    font-size: var(--perch-fs-caption);
+    transition: color var(--perch-dur) var(--perch-ease),
+                border-color var(--perch-dur) var(--perch-ease),
+                background var(--perch-dur) var(--perch-ease);
+  }
+
+  .dismiss-btn:hover {
+    color: var(--perch-text);
+    border-color: var(--perch-border);
+    background: color-mix(in srgb, var(--perch-text) 8%, transparent);
+  }
+
+  .dismiss-btn:focus-visible {
+    outline: var(--perch-ring-w) solid var(--perch-accent);
+    outline-offset: 2px;
+  }
+
+  /* Empty state */
+  .notif-empty {
+    padding: var(--perch-sp-2);
+    color: var(--perch-text-dim);
+    font-size: var(--perch-fs-caption);
+    font-style: italic;
+    text-align: center;
+    list-style: none;
+  }
+</style>

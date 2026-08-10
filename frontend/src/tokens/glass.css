@@ -1,0 +1,22 @@
+/* This file centralizes the glass fallbacks and the in-app toggle. Components use the
+   --perch-glass-* tokens directly. These rules redefine the tokens, so the toggle and
+   the fallback need no per-component CSS. */
+
+/* @supports fallback: if backdrop-filter is unavailable, for example when compositing
+   is disabled, drop the blur and use the solid tint, so the chrome stays readable. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root { --perch-glass-bg: var(--perch-glass-bg-solid); --perch-glass-filter: none;
+          --perch-glass-shadow: var(--perch-shadow-float); }
+}
+
+/* This is the in-app glass off-switch, an accessibility substitute for
+   prefers-reduced-transparency, which WebKitGTK does not support. Set [data-glass="off"]
+   on <html> to force solid, opaque chrome. */
+[data-glass="off"] { --perch-glass-bg: var(--perch-glass-bg-solid); --perch-glass-filter: none;
+                     --perch-glass-shadow: var(--perch-shadow-float); }
+
+/* This rule is for the future: it honors the OS query if WebKitGTK ever supports it. */
+@media (prefers-reduced-transparency: reduce) {
+  :root { --perch-glass-bg: var(--perch-glass-bg-solid); --perch-glass-filter: none;
+          --perch-glass-shadow: var(--perch-shadow-float); }
+}
