@@ -23,6 +23,13 @@ type Bridge struct {
 	closer  func() error
 	setsize func(cols, rows uint16) error
 	writeFn func([]byte) (int, error)
+	// suppressExit, when set, DISARMS the reaper goroutine's exitEvent emit: the
+	// process is still killed and reaped, but no pty:exit is emitted. Set via
+	// SuppressExit under mu; read by the reaper under mu before it emits. Used only
+	// for a DISPLACED pane whose bridge shares its exitEvent name with the pane's
+	// replacement (see app.OpenWorkspace) — a genuine exit must still emit, so this
+	// stays false on every normally-closed bridge.
+	suppressExit bool
 }
 
 func (b *Bridge) Write(p []byte) (int, error) {
@@ -62,6 +69,25 @@ func (b *Bridge) Close() error {
 	b.closer = nil
 	b.ptyFile = nil
 	return c()
+}
+
+// SuppressExit disarms the reaper's exitEvent emit for this bridge: after this
+// call the process is still killed and reaped by Close (or by ctx cancellation),
+// but no pty:exit event is ever emitted. It is idempotent and safe to call on a
+// bridge with no reaper (a test bridge).
+//
+// It exists for the pane-displacement path in app.OpenWorkspace: on Reopen the
+// displaced login shell SURVIVES the agent's /exit, and its bridge shares the
+// exitEvent name ("pty:exit:pane-<id>") with the freshly-remounted Terminal, so a
+// stray reaper emit would re-latch the "session has ended" overlay. The disarm
+// MUST run BEFORE the pane context is cancelled: that cancellation reaps the shell
+// via exec.CommandContext and can wake the reaper, so a combined "close-and-
+// suppress" performed later would race the emit. Hence suppression is separable
+// from Close. Genuine agent/shell exits never call this, so they still emit.
+func (b *Bridge) SuppressExit() {
+	b.mu.Lock()
+	b.suppressExit = true
+	b.mu.Unlock()
 }
 
 const (
@@ -142,6 +168,16 @@ func Spawn(ctx context.Context, cwd string, argv []string, env []string, dataEve
 		code := -1 // signal death (forced Close / ctx kill) reports -1
 		if cmd.ProcessState != nil {
 			code = cmd.ProcessState.ExitCode()
+		}
+		// Re-check the disarm under the same mutex SuppressExit writes: a displaced
+		// pane suppresses its exit emit before the process is reaped, so the reaper
+		// observes the flag here and stays silent (see SuppressExit). The lock is
+		// released before emit so a full events consumer can never block a mutex.
+		b.mu.Lock()
+		suppressed := b.suppressExit
+		b.mu.Unlock()
+		if suppressed {
+			return
 		}
 		emit(exitEvent, map[string]any{"code": code})
 	}()

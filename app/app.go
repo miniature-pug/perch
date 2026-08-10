@@ -803,6 +803,15 @@ func (a *App) WorkspaceForBranch(repoPath, branch string) (id string, found bool
 	return "", false
 }
 
+// hookRewriter is implemented by monitors whose Prepare installs SHARED,
+// sentinel-keyed hooks in the worktree settings.json (ClaudeMonitor). On Reopen,
+// OpenWorkspace re-asserts the live monitor's hooks through this seam AFTER the
+// displaced monitor's Teardown stripped every perch hook group (see the call site
+// for why). Monitors with per-instance side channels (opencode's SSE serve, which
+// self-assigns a fresh port + listener on every Prepare) do NOT implement it —
+// there is no shared settings.json state to lose, so nothing to re-assert.
+type hookRewriter interface{ RewriteHooks() error }
+
 // OpenWorkspace spawns a login-shell pty for the workspace, calls Monitor.Prepare
 // to obtain the agent launch command and install the side-channel, starts the
 // monitor's event pump, writes the launch command into the pty, and forwards
@@ -931,6 +940,19 @@ func (a *App) OpenWorkspace(id string) error {
 	}
 	a.mu.Unlock()
 
+	// DISARM the displaced shell's pty:exit emit BEFORE oldCancel(). On Reopen the
+	// old login shell SURVIVED the agent's /exit and its bridge shares the
+	// "pty:exit:pane-<id>" event name with the freshly-remounted Terminal, so a
+	// stray reaper emit would delete openIds and re-latch the "session has ended"
+	// overlay. The disarm must precede oldCancel() because that cancellation reaps
+	// the shell (spawned via exec.CommandContext(wctx,…)) and can wake its reaper
+	// during oldMon.Teardown()'s file I/O — before oldBr.Close() below would run.
+	// This mirrors, for the BRIDGE, the OLD-monitor exit-sentinel suppression the
+	// Teardown-before-kill order already provides. A genuine agent/shell exit still
+	// emits — CloseWorkspace uses the normal Close() with no suppression.
+	if oldBr != nil {
+		oldBr.SuppressExit()
+	}
 	if oldCancel != nil {
 		oldCancel()
 	}
@@ -939,6 +961,23 @@ func (a *App) OpenWorkspace(id string) error {
 	// nowhere to land and cannot surface a spurious "Agent exited" on reopen.
 	if oldMon != nil {
 		_ = oldMon.Teardown()
+		// oldMon.Teardown() just stripped EVERY perch hook group from the worktree
+		// settings.json — they share one sentinel, so removeMonitorHooks cannot tell
+		// the new monitor's group from the old one. The new monitor's Prepare above
+		// ALREADY tried to write its group, but its merge is idempotent by that same
+		// shared sentinel: while the old group was still present it added nothing, so
+		// the file now carries the OLD (dead) listener addr/token — or none at all.
+		// Re-assert the new monitor's hooks now that settings.json is clean, so the
+		// reopened agent POSTs SessionStart to a listener perch is actually watching.
+		// Without this the reopened session is a silent zombie: no SessionStart fires,
+		// so no live event ever heals the overlay and perch observes no state. Done
+		// HERE, after teardown, rather than by reordering teardown before Prepare, so
+		// a failed new-agent spawn above still rolls back to the OLD session — the
+		// env-sync `perch reload` relaunch (onEnvSync) calls OpenWorkspace on a LIVE
+		// agent, so the displaced monitor is not always a dead one.
+		if hr, ok := mon.(hookRewriter); ok {
+			_ = hr.RewriteHooks()
+		}
 	}
 	if oldBr != nil {
 		_ = oldBr.Close()

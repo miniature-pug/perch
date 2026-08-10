@@ -327,6 +327,26 @@ func (m *ClaudeMonitor) PaneEnv() []string {
 	return exitPaneEnv(m.listener)
 }
 
+// RewriteHooks re-installs this monitor's hook group into the worktree
+// settings.json. It exists for the Reopen path in app.OpenWorkspace: a displaced
+// monitor's Teardown strips EVERY perch hook group (they share one sentinel),
+// including the group this monitor's Prepare tried to install. Prepare's merge is
+// idempotent by that shared sentinel, so while the old group was still present it
+// added nothing — the file ends up carrying the OLD listener's addr/token, or none
+// at all. Calling this AFTER the old Teardown, when settings.json no longer holds a
+// perch group, writes THIS monitor's LIVE listener addr/token so the reopened
+// agent's hooks POST to a listener perch is actually watching (which is what emits
+// SessionStart → StateRunning and heals the "session has ended" overlay).
+//
+// No-op before Prepare has run (no cwd/listener yet). Idempotent thereafter: if
+// this monitor's group is somehow already present, mergeMonitorHooks adds nothing.
+func (m *ClaudeMonitor) RewriteHooks() error {
+	if m.cwd == "" || m.listener == nil {
+		return nil
+	}
+	return m.writeHooks(m.cwd)
+}
+
 func (m *ClaudeMonitor) writeHooks(cwd string) error {
 	dir := filepath.Join(cwd, ".claude")
 	path := filepath.Join(dir, "settings.json")

@@ -206,6 +206,75 @@ func TestSpawn_EmitsExitEvent(t *testing.T) {
 	}
 }
 
+// TestBridge_SuppressExit_DisarmsExitEmit proves the displaced-pane fix: after
+// SuppressExit the reaper reaps the (killed) process but emits NO exitEvent, so a
+// remounted Terminal sharing the exitEvent name cannot re-latch its overlay from a
+// stale exit. Spawns a long-lived process so it never exits on its own within the
+// window — only SuppressExit + Close reaps it.
+func TestBridge_SuppressExit_DisarmsExitEmit(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	fired := make(chan struct{}, 4)
+	emit := func(name string, _ ...any) {
+		if name == "pty:exit:silent" {
+			fired <- struct{}{}
+		}
+	}
+	b, err := Spawn(context.Background(), t.TempDir(),
+		[]string{"sleep", "30"}, nil, "pty:data:silent", "pty:exit:silent", emit, 80, 24)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	// Disarm BEFORE closing (the app disarms before the ctx cancel that reaps the
+	// shell), then force the close.
+	b.SuppressExit()
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	select {
+	case <-fired:
+		t.Fatal("pty:exit emitted after SuppressExit — the reaper must stay silent for a displaced pane")
+	case <-time.After(2 * time.Second):
+		// No emit within a generous window (the buggy path emits well under this) —
+		// suppression held.
+	}
+}
+
+// TestBridge_Close_WithoutSuppress_StillEmits is the positive control for the
+// suppression test: a normal (unsuppressed) forced Close MUST still emit the exit
+// event — a genuine agent/shell exit is exactly what CloseWorkspace relies on.
+func TestBridge_Close_WithoutSuppress_StillEmits(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	fired := make(chan int, 4)
+	emit := func(name string, data ...any) {
+		if name != "pty:exit:loud" {
+			return
+		}
+		if m, ok := data[0].(map[string]any); ok {
+			if code, ok := m["code"].(int); ok {
+				fired <- code
+				return
+			}
+		}
+		fired <- -999
+	}
+	b, err := Spawn(context.Background(), t.TempDir(),
+		[]string{"sleep", "30"}, nil, "pty:data:loud", "pty:exit:loud", emit, 80, 24)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	select {
+	case code := <-fired:
+		if code != -1 {
+			t.Fatalf("forced-close exit code = %d, want -1 (signal death)", code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no pty:exit emitted after a normal Close — a genuine exit MUST still emit")
+	}
+}
+
 // TestSpawn_CloseKillsProcessGroup proves Close reaps children the login
 // shell forks, not just the shell itself. Spawns a shell that backgrounds a
 // long sleep and prints the child PID; after Close, that PID must be gone.
