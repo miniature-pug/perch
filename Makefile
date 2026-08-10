@@ -69,8 +69,8 @@ desktop:              ## Install a user .desktop entry and icon. GNOME on Waylan
 	@command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database $(HOME)/.local/share/applications >/dev/null 2>&1 || true
 	@echo "==> installed perch.desktop (StartupWMClass=perch). Log out/in if the icon does not refresh."
 
-image:                ## Build the pinned perch-dev image. Versions come from .tool-versions and the Makefile.
-	@podman build \
+image:                ## Build the pinned perch-dev image when it is absent. Versions come from .tool-versions and the Makefile. Run `podman rmi $(IMAGE):latest` to force a rebuild after a Containerfile change.
+	@podman image exists $(IMAGE):latest || podman build \
 	  --build-arg GO_VERSION=$(GO_VERSION) \
 	  --build-arg NODE_VERSION=$(NODE_VERSION) \
 	  --build-arg GOLANGCI_VERSION=$(GOLANGCI) \

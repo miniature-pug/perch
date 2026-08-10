@@ -64,6 +64,16 @@ jobs:
           # CI never pushes, so do not leave the token in the git config.
           persist-credentials: false
 
+      # The perch-dev image, its cached tarball, and the Go build caches can
+      # exceed the runner's default free space, which fails the image build
+      # with "no space left on device". Remove preinstalled toolchains the gate
+      # never uses. This runs before Set up Go, which then repopulates the Go
+      # tool cache. It reclaims about 25 GB.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /opt/hostedtoolcache /usr/local/lib/android /usr/share/dotnet /usr/local/.ghcup
+          df -h /
+
       # Single source of truth: the pinned Go version comes from
       # .tool-versions, the same file the Containerfile reads. This file has
       # no duplicate literal version.
@@ -81,9 +91,9 @@ jobs:
       # Cache the built perch-dev image as a tarball. The cache rebuilds the
       # image only when the Containerfile, the pinned versions, the frontend
       # lockfile, or the Makefile change. On a cache hit, the loaded image
-      # seeds podman's layer store, so the `make image` step that
-      # `make test-all` triggers becomes a near-instant layer-cache reuse.
-      # On a cache miss, the image builds fresh and saves for next time.
+      # already satisfies `make image`: its `podman image exists` guard skips
+      # the build, so the gate reuses the loaded image instead of rebuilding
+      # it. On a cache miss, the image builds fresh and saves for next time.
       # Caching affects speed only, never correctness.
       - name: Cache perch-dev image
         id: img-cache
@@ -94,7 +104,11 @@ jobs:
 
       - name: Load cached perch-dev image
         if: steps.img-cache.outputs.cache-hit == 'true'
-        run: podman load -i /tmp/perch-dev-image.tar
+        run: |
+          podman load -i /tmp/perch-dev-image.tar
+          # The tarball is redundant once loaded. Remove it to reclaim disk.
+          # The cache key already exists, so actions/cache does not re-save it.
+          rm -f /tmp/perch-dev-image.tar
 
       # The full contributor gate: test, test-integration, test-front, lint,
       # vet, vulncheck, test-e2e. Each runs in its own perch-dev container
