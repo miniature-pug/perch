@@ -112,6 +112,11 @@ tagged a release yet, so everything to date sits under Unreleased.
   silent reconnect, a repeated status snapshot), and any trailing idle clobbered the
   fresh ✓. The monitor now treats a redundant idle as a no-op, so the done ✓ persists
   until the next turn, the way claude already holds it.
+- A "Question" notification lingered on the bell after the agent moved on. When an
+  agent asked a question and then its next tool needed approval, the answered
+  question still showed as unread beside the fresh "Approval needed". Leaving
+  awaiting-input now clears the superseded question, while any pending approval
+  (claude may have several queued at once) is left untouched.
 - Tool-approval notifications that never fired because of an event-kind mismatch.
 - A new-branch session that silently persisted a broken record when the branch
   already existed; the error now surfaces and nothing is saved.

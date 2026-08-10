@@ -12,6 +12,12 @@ export type Kind = "approval" | "error" | "done" | "info";
 export interface Notification {
   id: string; workspaceId: string; tier: Tier; kind: Kind;
   title: string; body: string; read: boolean; ts: number;
+  // The agent State that produced this notification (e.g. "awaiting-input" for a
+  // "Question", "awaiting-approval" for an "Approval needed"). Tagged so a later
+  // transition can supersede exactly the notification its source state made moot,
+  // without re-deriving intent from tier/title. Optional: locally-authored
+  // notifications (open errors, branch-switch warnings) carry no source state.
+  state?: string;
 }
 
 // Hard cap on retained notifications. The hub is prepended to on every agent
@@ -41,7 +47,7 @@ function defaultKind(tier: Tier, title: string): Kind {
   return "info";
 }
 
-function add(tier: Tier, workspaceId: string, title: string, body: string, kind?: Kind) {
+function add(tier: Tier, workspaceId: string, title: string, body: string, kind?: Kind, state?: string) {
   const id = `notif-${++_seq}`;
   // DND silences tiers 2-3: it does NOT drop them. They are still logged to the
   // hub so the away catch-up stays complete, but recorded as already-read so they
@@ -49,7 +55,7 @@ function add(tier: Tier, workspaceId: string, title: string, body: string, kind?
   // notifications fire for blocking only). Blocking (tier 1) is never silenced.
   // DND mutes tiers 2-3: mute = silence the interruption, keep the record.
   const silenced = dnd && tier !== "blocking";
-  items = [{ id, workspaceId, tier, kind: kind ?? defaultKind(tier, title), title, body, read: silenced, ts: Date.now() }, ...items];
+  items = [{ id, workspaceId, tier, kind: kind ?? defaultKind(tier, title), title, body, read: silenced, ts: Date.now(), state }, ...items];
   trimToCap();
 
   // No auto-dismiss timer: the hub is a docked panel, not a transient toast, so
@@ -81,9 +87,9 @@ function trimToCap() {
   items = items.filter((n) => keep.has(n.id));
 }
 
-export function addBlocking(w: string, t: string, b: string, kind?: Kind) { add("blocking", w, t, b, kind); }
-export function addAmbient (w: string, t: string, b: string, kind?: Kind) { add("ambient",  w, t, b, kind); }
-export function addRoutine (w: string, t: string, b: string, kind?: Kind) { add("routine",  w, t, b, kind); }
+export function addBlocking(w: string, t: string, b: string, kind?: Kind, state?: string) { add("blocking", w, t, b, kind, state); }
+export function addAmbient (w: string, t: string, b: string, kind?: Kind, state?: string) { add("ambient",  w, t, b, kind, state); }
+export function addRoutine (w: string, t: string, b: string, kind?: Kind, state?: string) { add("routine",  w, t, b, kind, state); }
 
 export function markRead(id: string) {
   items = items.map((n) => n.id === id ? { ...n, read: true } : n);
@@ -111,6 +117,19 @@ export function markReadForWorkspace(wsId: string) {
 // Drop every notification belonging to a removed workspace.
 export function dropForWorkspace(wsId: string) {
   items = items.filter((n) => n.workspaceId !== wsId);
+}
+
+// Drop a workspace's still-unread "Question" notification once the agent has left
+// awaiting-input. Scoped to blocking notifications whose SOURCE STATE was
+// awaiting-input, so a pending "Approval needed" — of which claude may have SEVERAL
+// queued for one session (state "awaiting-approval") — is never touched. Gated on
+// !read so a question the user already saw stays in the hub history. This is the
+// targeted cousin of dropForWorkspace, used on the awaiting-input → (other) edge
+// that the resolved-state dropForWorkspace clear does not cover.
+export function dropAwaitingInputForWorkspace(wsId: string) {
+  items = items.filter(
+    (n) => !(n.workspaceId === wsId && n.tier === "blocking" && n.state === "awaiting-input" && !n.read),
+  );
 }
 
 export function clearRead() { items = items.filter((n) => !n.read); }

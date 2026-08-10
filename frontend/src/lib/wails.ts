@@ -178,7 +178,7 @@ export function onFsChanged(cb: (p: { workspaceId: string; path: string }) => vo
   return window.runtime.EventsOn(EVT_FS_CHANGED, cb);
 }
 export function onNotify(
-  cb: (p: { tier: "blocking"|"ambient"|"routine"; title: string; body: string; workspaceId: string }) => void,
+  cb: (p: { tier: "blocking"|"ambient"|"routine"; title: string; body: string; workspaceId: string; state?: string }) => void,
 ): () => void {
   return window.runtime.EventsOn(EVT_NOTIFY, cb);
 }

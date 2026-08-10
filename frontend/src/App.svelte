@@ -29,7 +29,7 @@
   import { settings }       from "./lib/stores/settings.svelte";
   import ApprovalCard       from "./lib/ApprovalCard.svelte";
   import NotificationHub    from "./lib/NotificationHub.svelte";
-  import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead, markAllRead, markReadForWorkspace, dropForWorkspace } from "./lib/stores/notifications.svelte";
+  import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead, markAllRead, markReadForWorkspace, dropForWorkspace, dropAwaitingInputForWorkspace } from "./lib/stores/notifications.svelte";
   import CleanupPanel from "./lib/CleanupPanel.svelte";
   import { listWorkspaces, createWorkspace, setWorkspaceTitle, workspaceForBranch, removeWorkspace, openWorkspace, closeWorkspace, closeShell, revealInFiles, onAgentEvent, onNotify, onFsChanged, onWorkspaceAttach, onWorkspaceRelaunch, approve, pendingApprovals, branches, readFile, setWindowFocus, writeToPty, discoverRepos, diffStat, listStaleSessions, forceRemoveWorkspace, clipboardSetText, homeShellCwd as fetchHomeShellCwd } from "./lib/wails";
   import type { WorkspaceVM, ApprovalReq, StaleSessionVM, AgentState, RepoInfo } from "./lib/wails";
@@ -485,6 +485,20 @@
         openIds.add(ev.workspaceId);
         dropForWorkspace(ev.workspaceId);
       }
+      // Leaving awaiting-input for any OTHER state supersedes this session's
+      // still-unread "Question" blocking notification: the ask is moot once the
+      // agent moves on (classically straight into awaiting-approval for its next
+      // tool, so dropForWorkspace above — scoped to running/idle/done — never fires
+      // and the stale Question would linger next to the fresh "Approval needed").
+      // Drops ONLY the awaiting-input-sourced notif; a pending "Approval needed"
+      // (claude may have SEVERAL queued, all state awaiting-approval) is untouched.
+      // Runs on the LEAVING edge: the new state's own notif rides a later "notify"
+      // event, so it is added AFTER this drop and is never caught. Gated on
+      // ev.state !== "awaiting-input" so a SECOND question in the same turn (state
+      // unchanged) keeps its notif.
+      if (prev === "awaiting-input" && ev.state && ev.state !== "awaiting-input") {
+        dropAwaitingInputForWorkspace(ev.workspaceId);
+      }
       // A FRESH question un-acknowledges the session so its left-pane "asking
       // you" badge re-raises even on a backgrounded, already-acked session. We
       // key on the QUESTION EVENT itself (kind === "question"), NOT on the
@@ -512,9 +526,9 @@
     });
 
     offNotify = onNotify((n) => {
-      if      (n.tier === "blocking") addBlocking(n.workspaceId, n.title, n.body);
-      else if (n.tier === "ambient")  addAmbient (n.workspaceId, n.title, n.body);
-      else                            addRoutine (n.workspaceId, n.title, n.body);
+      if      (n.tier === "blocking") addBlocking(n.workspaceId, n.title, n.body, undefined, n.state);
+      else if (n.tier === "ambient")  addAmbient (n.workspaceId, n.title, n.body, undefined, n.state);
+      else                            addRoutine (n.workspaceId, n.title, n.body, undefined, n.state);
       // Deliberately NOT auto-read on arrival, even for the session on screen: a turn
       // completing (or an approval landing) while the user is watching SHOULD still bump
       // the bell, so the live signal is never swallowed. Auto-read happens only on an

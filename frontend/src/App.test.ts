@@ -1176,6 +1176,52 @@ describe("App.svelte live event wiring", () => {
     expect(getItems().some(n => n.workspaceId === "ws-2" && n.tier === "blocking")).toBe(true);
   });
 
+  // STALE-QUESTION FIX: the agent asks a question (awaiting-input → blocking
+  // "Question" notif) and its NEXT tool needs approval (awaiting-input →
+  // awaiting-approval). The resolved-state clear only fires on running/idle/done,
+  // so this edge left the superseded "Question" lingering unread beside the fresh
+  // "Approval needed". Leaving awaiting-input must drop ONLY that question notif —
+  // and MUST NOT touch a pending "Approval needed" (claude can have SEVERAL queued
+  // at once). Fails on revert: without the drop the Question notif survives.
+  it("leaving awaiting-input clears the stale Question notif but keeps every pending Approval", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await screen.findByRole("button", { name: /^Beta\b/ });
+
+    const { getItems, dropForWorkspace } = await import("./lib/stores/notifications.svelte");
+    // Isolate ws-2 (the store is a module singleton shared across tests).
+    dropForWorkspace("ws-2");
+
+    const agentCb  = captured.agent.at(-1)!;
+    const notifyCb = captured.notify.at(-1)!;
+
+    // The agent asks a question → state awaiting-input → blocking "Question" notif.
+    agentCb({ workspaceId: "ws-2", kind: "question", state: "awaiting-input" });
+    await tick();
+    notifyCb({ tier: "blocking", title: "Question", body: "Which option?", workspaceId: "ws-2", state: "awaiting-input" });
+    // TWO approvals queue for the same session (claude approve-all semantics), each
+    // arriving as its own blocking "Approval needed" notif tagged awaiting-approval.
+    notifyCb({ tier: "blocking", title: "Approval needed", body: "run bash",  workspaceId: "ws-2", state: "awaiting-approval" });
+    notifyCb({ tier: "blocking", title: "Approval needed", body: "write file", workspaceId: "ws-2", state: "awaiting-approval" });
+    await tick();
+
+    // Precondition: the Question and both approvals coexist for ws-2.
+    expect(getItems().filter(n => n.workspaceId === "ws-2" && n.title === "Question")).toHaveLength(1);
+    expect(getItems().filter(n => n.workspaceId === "ws-2" && n.title === "Approval needed")).toHaveLength(2);
+
+    // The agent leaves awaiting-input straight into awaiting-approval for its next
+    // tool — the edge the resolved-state (running/idle/done) clear never covers.
+    agentCb({ workspaceId: "ws-2", kind: "approval", state: "awaiting-approval" });
+    await tick();
+
+    // The superseded Question notif is gone…
+    expect(getItems().some(n => n.workspaceId === "ws-2" && n.title === "Question")).toBe(false);
+    // …and BOTH pending approvals survive untouched (the hard multi-approval invariant).
+    expect(getItems().filter(n => n.workspaceId === "ws-2" && n.title === "Approval needed")).toHaveLength(2);
+  });
+
   it("onNotify: ambient tier routes to addAmbient in the store", async () => {
     const { listWorkspaces } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);

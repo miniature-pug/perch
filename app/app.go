@@ -1200,12 +1200,18 @@ func (a *App) dispatchNotify(evt agent.Event) {
 		return
 	}
 
-	// Always emit the in-app Wails notification event unconditionally.
+	// Always emit the in-app Wails notification event unconditionally. The source
+	// State rides along so the frontend can identify which blocking notification a
+	// later transition supersedes (e.g. a "Question" from awaiting-input) WITHOUT
+	// re-deriving intent from the title — kind alone cannot separate a question
+	// from a real approval (both classify as "approval"). It never distinguishes a
+	// pending "Approval needed" (state awaiting-approval), which must never be cleared.
 	a.emit("notify", map[string]any{
 		"tier":        tier,
 		"title":       title,
 		"body":        body,
 		"workspaceId": evt.WorkspaceID,
+		"state":       string(evt.State),
 	})
 
 	// OS desktop notification: only for blocking-tier events and only when the

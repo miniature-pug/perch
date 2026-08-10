@@ -265,6 +265,11 @@ WebKit and cannot be checked headlessly.
       marks it read.
 - [ ] Notifications that land while the window is unfocused, or for a session you
       are not currently on, still accumulate on the bell until you switch to them.
+- [ ] A question superseded by an approval does not double up on the bell. Prompt an
+      agent to ask a question, then let its next step need a tool approval: once the
+      agent moves on, the "Question" notification clears and only the fresh "Approval
+      needed" remains. A claude session with several approvals queued keeps all of
+      them.
 
 ## Live status (both agents, across sessions)
 
