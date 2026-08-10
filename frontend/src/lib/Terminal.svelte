@@ -45,6 +45,12 @@
   let lastCols = -1;
   let lastRows = -1;
 
+  // Pending frames for the deferred initial fit (double rAF, mirrors the
+  // become-visible effect). Tracked so onDestroy can cancel a still-queued fit and
+  // it never runs after teardown.
+  let initRaf1: number | undefined;
+  let initRaf2: number | undefined;
+
   // Right-click Copy/Paste menu (modelled on FileTree's context menu). `canCopy`
   // is snapshotted at open time from term.hasSelection() so the Copy item's
   // enabled state is stable while the menu is up. Approx dims clamp the menu
@@ -117,6 +123,20 @@
     }, PTY_RESIZE_DEBOUNCE_MS);
   }
 
+  // Window-resize backstop. The host ResizeObserver only fires when the .terminal
+  // BOX changes size, and under WebKitGTK a shrink/settle notification can be
+  // coalesced or never delivered — leaving an oversized grid that xterm thinks is
+  // fully visible, so it never scrolls to the cursor during typing. A window
+  // 'resize' catches those. It coalesces through the SAME rafId guard the
+  // ResizeObserver uses, so the two never double-schedule a fit within one frame.
+  function onWindowResize() {
+    if (rafId !== undefined) return;
+    rafId = requestAnimationFrame(() => {
+      rafId = undefined;
+      refit();
+    });
+  }
+
   onMount(() => {
     term = new Terminal({
       convertEol: false,
@@ -129,7 +149,17 @@
     fit  = new FitAddon();
     term.loadAddon(fit);
     term.open(host);
-    fit.fit();
+    // Defer the first fit across a double rAF (mirrors the become-visible effect).
+    // A synchronous fit() here runs before layout and cell metrics settle, which
+    // can freeze the grid too tall so xterm never scrolls to the cursor during
+    // typing; the bare call also never told the pty. Deferring measures a settled
+    // box + a non-zero cell metric and, via refit(), sends the first resizePty.
+    // Frames are cancelled in onDestroy.
+    initRaf1 = requestAnimationFrame(() => {
+      initRaf2 = requestAnimationFrame(() => {
+        if (!disposed) refit();
+      });
+    });
 
     offData = onPtyData(paneId, (bytes) => term.write(bytes));
     offExit = onPtyExit(paneId, (code) => {
@@ -169,6 +199,10 @@
       });
     });
     obs.observe(host);
+
+    // Backstop for window shrinks the host ResizeObserver may coalesce or drop
+    // under WebKitGTK. Coalesced via the shared rafId guard inside onWindowResize.
+    window.addEventListener("resize", onWindowResize);
 
     // Right-click Copy/Paste menu. Attached here (not inline) to keep the host div
     // role-less; removed on teardown below.
@@ -235,7 +269,10 @@
   onDestroy(() => {
     disposed = true;
     if (rafId !== undefined) cancelAnimationFrame(rafId);
+    if (initRaf1 !== undefined) cancelAnimationFrame(initRaf1);
+    if (initRaf2 !== undefined) cancelAnimationFrame(initRaf2);
     if (resizeTimer !== undefined) clearTimeout(resizeTimer);
+    window.removeEventListener("resize", onWindowResize);
     host?.removeEventListener("contextmenu", openTermMenu);
     offData?.();
     offExit?.();

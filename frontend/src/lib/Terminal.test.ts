@@ -12,6 +12,10 @@ const onDataCbs: Array<(d: string) => void> = [];
 // copy/paste chord and context-menu tests can drive the real handler directly.
 let keyHandler: ((e: KeyboardEvent) => boolean) | null = null;
 let selectionText = "";
+// Grid dimensions the mock reports. Default 80x24 (what every existing test pins);
+// a test can change them mid-run to prove a resize actually re-sends new dims.
+let mockCols = 80;
+let mockRows = 24;
 
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
@@ -24,8 +28,8 @@ vi.mock("@xterm/xterm", () => ({
     hasSelection() { return selectionText.length > 0; }
     getSelection() { return selectionText; }
     paste(t: string) { pasteSpy(t); }
-    get cols() { return 80; }
-    get rows() { return 24; }
+    get cols() { return mockCols; }
+    get rows() { return mockRows; }
     dispose() { disposeSpy(); }
   },
 }));
@@ -64,7 +68,7 @@ afterEach(async () => {
   writeSpy.mockClear(); disposeSpy.mockClear(); focusSpy.mockClear();
   pasteSpy.mockClear(); fitSpy.mockClear();
   ptyCbs.length = 0; onDataCbs.length = 0; exitCbs.length = 0;
-  keyHandler = null; selectionText = "";
+  keyHandler = null; selectionText = ""; mockCols = 80; mockRows = 24;
   const w = await import("./wails");
   vi.mocked(w.clipboardSetText).mockClear();
   vi.mocked(w.clipboardText).mockClear();
@@ -289,6 +293,82 @@ describe("Terminal.svelte", () => {
 
     flushRaf();
     vi.advanceTimersByTime(200);
+    expect(w.resizePty).not.toHaveBeenCalled();
+  });
+
+  // ── Initial fit is deferred across a double rAF (A1) ─────────────────────────
+  it("defers the initial fit to a double rAF and sends the first resize (was a bare synchronous no-op)", async () => {
+    vi.useFakeTimers();
+    const rafQueue: FrameRequestCallback[] = [];
+    globalThis.requestAnimationFrame = ((fn: FrameRequestCallback) => rafQueue.push(fn)) as any;
+    const flushRaf = () => { rafQueue.splice(0).forEach((fn) => fn(0)); };
+
+    const { default: Terminal } = await import("./Terminal.svelte");
+    const w = await import("./wails");
+    render(Terminal, { props: { paneId: "paneInit", cwd: "/repo" } });
+
+    // Deferred: nothing is fitted synchronously at mount time (the old code ran a
+    // bare fit.fit() here before layout/cell-metrics settled and never resized).
+    expect(fitSpy).not.toHaveBeenCalled();
+
+    flushRaf(); // outer rAF -> schedules inner
+    flushRaf(); // inner rAF -> refit() -> fit()
+    expect(fitSpy).toHaveBeenCalled();
+
+    // ...and the first resizePty is now sent (the bare fit never told the pty).
+    vi.advanceTimersByTime(200);
+    expect(w.resizePty).toHaveBeenCalledWith("paneInit", 80, 24);
+  });
+
+  // ── Window-resize backstop (A3) ─────────────────────────────────────────────
+  it("re-fits on a window 'resize' even when the host ResizeObserver stays silent (backstop)", async () => {
+    vi.useFakeTimers();
+    const rafQueue: FrameRequestCallback[] = [];
+    globalThis.requestAnimationFrame = ((fn: FrameRequestCallback) => rafQueue.push(fn)) as any;
+    const flushRaf = () => { rafQueue.splice(0).forEach((fn) => fn(0)); };
+
+    const { default: Terminal } = await import("./Terminal.svelte");
+    const w = await import("./wails");
+    render(Terminal, { props: { paneId: "paneWin", cwd: "/repo" } });
+    // Settle the deferred mount fit so we isolate the resize-driven refit.
+    flushRaf(); flushRaf();
+    vi.advanceTimersByTime(200);
+    expect(w.resizePty).toHaveBeenCalledWith("paneWin", 80, 24);
+    fitSpy.mockClear();
+    vi.mocked(w.resizePty).mockClear();
+
+    // The box actually shrank. The default beforeEach ResizeObserver stub never
+    // invokes its callback (observe() is a no-op), so ONLY the window 'resize'
+    // backstop can drive a refit here — exactly the WebKitGTK dropped-notification case.
+    mockRows = 20;
+    window.dispatchEvent(new Event("resize"));
+    flushRaf(); // coalesced rAF (shared rafId guard) -> refit() -> fit()
+    expect(fitSpy).toHaveBeenCalled();
+
+    vi.advanceTimersByTime(200);
+    expect(w.resizePty).toHaveBeenCalledWith("paneWin", 80, 20);
+  });
+
+  // ── Teardown cleans up the deferred frames + the resize listener (A4) ────────
+  it("does not re-fit after unmount (pending frames guarded, resize listener removed)", async () => {
+    vi.useFakeTimers();
+    const rafQueue: FrameRequestCallback[] = [];
+    globalThis.requestAnimationFrame = ((fn: FrameRequestCallback) => rafQueue.push(fn)) as any;
+    const flushRaf = () => { rafQueue.splice(0).forEach((fn) => fn(0)); };
+
+    const { default: Terminal } = await import("./Terminal.svelte");
+    const w = await import("./wails");
+    const { unmount } = render(Terminal, { props: { paneId: "paneDes", cwd: "/repo" } });
+
+    // Tear down BEFORE the mount's double-rAF fires: the pending frames must not refit.
+    unmount();
+    flushRaf(); flushRaf();
+    // And the window-resize backstop must be unregistered.
+    window.dispatchEvent(new Event("resize"));
+    flushRaf();
+    vi.advanceTimersByTime(200);
+
+    expect(fitSpy).not.toHaveBeenCalled();
     expect(w.resizePty).not.toHaveBeenCalled();
   });
 });
