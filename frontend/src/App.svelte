@@ -4,6 +4,8 @@
   import Sidebar            from "./lib/Sidebar.svelte";
   import Stage              from "./lib/Stage.svelte";
   import ShellDrawer        from "./lib/ShellDrawer.svelte";
+  import ShellPanel         from "./lib/ShellPanel.svelte";
+  import { initShellState, addShell, addSplitPartner, selectShell, removeShell, planToggleSplit, type ShellState } from "./lib/shellPanes";
   import Terminal           from "./lib/Terminal.svelte";
   import Editor             from "./lib/Editor.svelte";
   import Preview            from "./lib/Preview.svelte";
@@ -29,7 +31,7 @@
   import NotificationHub    from "./lib/NotificationHub.svelte";
   import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead, markAllRead, markReadForWorkspace, dropForWorkspace } from "./lib/stores/notifications.svelte";
   import CleanupPanel from "./lib/CleanupPanel.svelte";
-  import { listWorkspaces, createWorkspace, setWorkspaceTitle, workspaceForBranch, removeWorkspace, openWorkspace, closeWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, onWorkspaceAttach, onWorkspaceRelaunch, approve, pendingApprovals, branches, readFile, setWindowFocus, writeToPty, discoverRepos, diffStat, listStaleSessions, forceRemoveWorkspace, clipboardSetText, homeShellCwd as fetchHomeShellCwd } from "./lib/wails";
+  import { listWorkspaces, createWorkspace, setWorkspaceTitle, workspaceForBranch, removeWorkspace, openWorkspace, closeWorkspace, closeShell, revealInFiles, onAgentEvent, onNotify, onFsChanged, onWorkspaceAttach, onWorkspaceRelaunch, approve, pendingApprovals, branches, readFile, setWindowFocus, writeToPty, discoverRepos, diffStat, listStaleSessions, forceRemoveWorkspace, clipboardSetText, homeShellCwd as fetchHomeShellCwd } from "./lib/wails";
   import type { WorkspaceVM, ApprovalReq, StaleSessionVM, AgentState, RepoInfo } from "./lib/wails";
   import { UNDO_REMOVE_DELAY_MS, GCHORD_TIMEOUT_MS, SIDEBAR_MIN_W, SIDEBAR_MAX_W, SHELL_MIN_H, SHELL_MAX_H, RESIZE_STEP_PX, THEMES, MIME_SESSION, MENTION_PREFIX, AGENT_CLAUDE, AGENT_OPENCODE } from "./lib/constants";
 
@@ -54,6 +56,11 @@
   // interleave over a stale buffer). A view switch or focus does NOT bump it,
   // so the scroll buffer survives those.
   let termEpoch       = $state<Record<string, number>>({});
+  // Per-session shell-terminal state: the tab list, the active (primary) shell, and
+  // the split partner (right pane, null = no split). Per-run/in-memory (ptys die on
+  // restart), keyed by session id. Seeded/pruned by the effect below; mutated only
+  // through the shell* callbacks, which drive the pure transitions in shellPanes.ts.
+  let shellStatesFor  = $state<Record<string, ShellState>>({});
   // Per-session code-view file selection. Each open session keeps its own
   // FileTree/Editor/Preview mounted (hidden via display), so its currently-open
   // file must be tracked independently — a single top-level value would load one
@@ -177,6 +184,49 @@
     const id = activeId;
     if (id != null && windowFocused) untrack(() => markReadForWorkspace(id));
   });
+
+  // Seed a default shell for every mounted session (so its ShellPanel has a tab to
+  // render — the cell's mount is what calls openShell), and prune shell state for
+  // sessions that no longer exist (removed). Keyed on mountedWorkspaces + workspaces;
+  // the mutations run untracked so writing shellStatesFor never re-invalidates this
+  // effect (it converges once all mounted sessions are seeded and no stale ids remain).
+  $effect(() => {
+    const mountedIds = mountedWorkspaces.map(w => w.id);
+    const liveIds = new Set(workspaces.map(w => w.id));
+    untrack(() => {
+      for (const id of mountedIds) if (!shellStatesFor[id]) shellStatesFor[id] = initShellState(id);
+      for (const id of Object.keys(shellStatesFor)) if (!liveIds.has(id)) delete shellStatesFor[id];
+    });
+  });
+
+  // Shell-tab actions (ShellPanel callbacks). All list/active/split logic is the pure
+  // shellPanes.ts transitions; here we apply the new state and do the pty side effects
+  // (closeShell on close; openShell is driven by the freshly-mounted cell). A closed
+  // tab that empties the drawer is replaced with a fresh shell — never empty.
+  function shellNew(wsId: string) {
+    const st = shellStatesFor[wsId];
+    if (st) shellStatesFor[wsId] = addShell(st, wsId).state;
+  }
+  function shellSelect(wsId: string, id: string) {
+    const st = shellStatesFor[wsId];
+    if (st) shellStatesFor[wsId] = selectShell(st, id);
+  }
+  function shellClose(wsId: string, id: string) {
+    const st = shellStatesFor[wsId];
+    if (!st) return;
+    closeShell(id).catch(() => {}); // reap the pty (idempotent even if it already exited)
+    let { state, empty } = removeShell(st, id);
+    if (empty) state = addShell(state, wsId).state; // replacement cell mounts → openShell
+    shellStatesFor[wsId] = state;
+  }
+  function shellToggleSplit(wsId: string) {
+    const st = shellStatesFor[wsId];
+    if (!st) return;
+    const plan = planToggleSplit(st);
+    if (plan.off) shellStatesFor[wsId] = { ...st, splitId: null };
+    else if (plan.partnerId) shellStatesFor[wsId] = { ...st, splitId: plan.partnerId };
+    else shellStatesFor[wsId] = addSplitPartner(st, wsId).state; // new partner cell mounts → openShell
+  }
 
   // Invariant: the active session is never ALSO the split session. Each open
   // session keeps exactly one Terminal bound to its paneId, mounted once in the
@@ -1531,18 +1581,29 @@
         <div data-zone="shell-drawer" class="shell-drawer-zone" data-terminal-zone role="group" aria-label="shell drawer"
              onpointerdown={() => { if (mode.current === "normal") mode.enterTerminal(); }}
              style:height={layout.collapsed["shell"] ? undefined : `${layout.shellH}px`}>
-          <!-- One ShellDrawer per MOUNTED session, kept mounted (hidden via display)
-               so openShell runs once per session and switching never displaces or
-               SIGKILLs the previous session's shell pty. display:contents keeps
-               each ShellDrawer a direct child of the zone (its layout is unchanged).
-               Gated on mountedWorkspaces (not openWorkspaces) so an AGENT pty exit
-               does not unmount the independent shell pty — the shell is its own pty
-               and outlives the agent; reopening it would SIGKILL the live shell (F20a). -->
+          <!-- One ShellPanel per MOUNTED session (its N shell terminals live inside),
+               kept mounted (hidden via display) so each shell's openShell runs once and
+               switching sessions never displaces or SIGKILLs another session's shells.
+               display:contents keeps the ShellPanel a direct flex child of the zone (its
+               layout is unchanged). Gated on mountedWorkspaces (not openWorkspaces) so an
+               AGENT pty exit does not unmount the independent shell ptys — the shells are
+               their own ptys and outlive the agent (F20a). The panel renders only once
+               its shell state is seeded (the effect above), so the {#if} guards that. -->
           {#each mountedWorkspaces as ws (ws.id)}
             <div style:display={ws.id === activeId ? "contents" : "none"}>
-              <ShellDrawer paneId="shell-{ws.id}" cwd={ws.worktreePath}
-                collapsed={layout.collapsed["shell"] ?? false}
-                onToggleCollapse={() => layout.setCollapsed("shell", !layout.collapsed["shell"])} />
+              {#if shellStatesFor[ws.id]}
+                <ShellPanel
+                  cwd={ws.worktreePath}
+                  panes={shellStatesFor[ws.id].panes}
+                  activeId={shellStatesFor[ws.id].activeId}
+                  splitId={shellStatesFor[ws.id].splitId}
+                  collapsed={layout.collapsed["shell"] ?? false}
+                  onSelect={(id) => shellSelect(ws.id, id)}
+                  onNew={() => shellNew(ws.id)}
+                  onClose={(id) => shellClose(ws.id, id)}
+                  onToggleSplit={() => shellToggleSplit(ws.id)}
+                  onToggleCollapse={() => layout.setCollapsed("shell", !layout.collapsed["shell"])} />
+              {/if}
             </div>
           {/each}
         </div>

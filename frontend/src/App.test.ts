@@ -87,6 +87,8 @@ vi.mock("./lib/wails", () => ({
   workspaceForBranch: vi.fn(async (_repoPath: string, _branch: string) => ({ id: "", found: false })),
   removeWorkspace: vi.fn(async () => {}),
   writeToPty:      vi.fn(async () => {}),
+  closeShell:      vi.fn(async () => {}),
+  reloadAgentEnv:  vi.fn(async () => {}),
   branches:        vi.fn(async (_repo: string) => ["main", "feat/x"]),
   discoverRepos:   vi.fn(async () => [
     { path: "/discovered/repo-a", name: "repo-a", branch: "main", worktrees: [] },
@@ -1445,6 +1447,84 @@ describe("App.svelte approval card + notification hub", () => {
     // Unread count is now 0; items remain in the hub (still shown, just read).
     await waitFor(() => expect(getItems().filter((n) => !n.read).length).toBe(0));
     expect(getItems().some((n) => n.title === "Unread thing")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Multi-terminal shell drawer (tabs / +, × / split)
+// ShellDrawer is mocked to a probe, but ShellPanel (which hosts the tabs, +, ×,
+// split) is REAL — so these assert the App ↔ ShellPanel ↔ shellPanes wiring end to
+// end. The probe surfaces its paneId as data-pane-id.
+// ---------------------------------------------------------------------------
+describe("App.svelte multi-terminal shell drawer", () => {
+  async function openAlpha(): Promise<HTMLElement> {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
+    await fireEvent.click(alphaBtn);
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    return document.querySelector('[data-zone="shell-drawer"]') as HTMLElement;
+  }
+  const paneIds = (zone: HTMLElement) =>
+    Array.from(zone.querySelectorAll('[data-testid="shell-drawer-probe"]'))
+      .map((p) => p.getAttribute("data-pane-id"));
+  const shownCells = (zone: HTMLElement) =>
+    Array.from(zone.querySelectorAll(".shell-cell"))
+      .filter((c) => (c as HTMLElement).style.display !== "none");
+
+  it("opens a session with exactly one default shell tab and cell", async () => {
+    const zone = await openAlpha();
+    await waitFor(() => expect(within(zone).getAllByRole("tab")).toHaveLength(1));
+    expect(paneIds(zone)).toEqual(["shell-ws-1"]);
+    expect(shownCells(zone)).toHaveLength(1);
+  });
+
+  it("+ adds a terminal with a fresh backend-recoverable id; a tab click switches the shown cell", async () => {
+    const zone = await openAlpha();
+    await waitFor(() => expect(within(zone).getAllByRole("tab")).toHaveLength(1));
+
+    await fireEvent.click(within(zone).getByRole("button", { name: "new terminal" }));
+    await waitFor(() => expect(within(zone).getAllByRole("tab")).toHaveLength(2));
+    expect(paneIds(zone)).toEqual(["shell-ws-1", "shell-ws-1_1"]);
+    expect(shownCells(zone)).toHaveLength(1); // tabs mode: one shown at a time
+
+    // Switch back to the first tab — the shown cell is now the default shell.
+    await fireEvent.click(within(zone).getAllByRole("tab")[0]);
+    await tick();
+    const shown = shownCells(zone)[0].querySelector('[data-testid="shell-drawer-probe"]');
+    expect(shown?.getAttribute("data-pane-id")).toBe("shell-ws-1");
+  });
+
+  it("× on the last remaining tab reaps it AND spawns a fresh replacement (never empty)", async () => {
+    const { closeShell } = await import("./lib/wails");
+    const zone = await openAlpha();
+    await waitFor(() => expect(within(zone).getAllByRole("tab")).toHaveLength(1));
+
+    await fireEvent.click(within(zone).getByRole("button", { name: /^close / }));
+    await tick();
+
+    expect(closeShell).toHaveBeenCalledWith("shell-ws-1"); // the closed pty is reaped
+    // Never empty: one tab remains, with a NEW (unreused) id.
+    await waitFor(() => expect(within(zone).getAllByRole("tab")).toHaveLength(1));
+    expect(paneIds(zone)).toEqual(["shell-ws-1_1"]);
+  });
+
+  it("split shows two cells side by side; closing back below two clears the split", async () => {
+    const zone = await openAlpha();
+    await waitFor(() => expect(within(zone).getAllByRole("tab")).toHaveLength(1));
+
+    // Splitting with a single shell mints a partner → two tabs, two shown cells.
+    await fireEvent.click(within(zone).getByRole("button", { name: "split terminals side by side" }));
+    await waitFor(() => expect(within(zone).getAllByRole("tab")).toHaveLength(2));
+    await waitFor(() => expect(shownCells(zone)).toHaveLength(2));
+
+    // Close one → only one shell remains → split clears → one shown cell.
+    await fireEvent.click(within(zone).getAllByRole("button", { name: /^close / })[1]);
+    await waitFor(() => expect(within(zone).getAllByRole("tab")).toHaveLength(1));
+    expect(shownCells(zone)).toHaveLength(1);
   });
 });
 

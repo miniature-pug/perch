@@ -16,44 +16,62 @@
 
   // collapsed is driven by layout.collapsed['shell'] via App.svelte;
   // onToggleCollapse lets the in-drawer button call back to the authoritative store.
+  //
+  // chrome=false turns this into a bare terminal CELL (no header): ShellPanel uses it
+  // for each per-session shell tab and owns the tab strip / split / collapse / reload
+  // chrome itself. The home shell keeps chrome=true (its own header). onExit fires
+  // when the shell pty exits so a panel can auto-close that tab.
   let {
     paneId,
     cwd,
     collapsed = false,
+    chrome = true,
+    visible,
     onToggleCollapse,
+    onExit,
   }: {
     paneId: string;
     cwd: string;
     collapsed?: boolean;
+    chrome?: boolean;
+    visible?: boolean;
     onToggleCollapse?: () => void;
+    onExit?: () => void;
   } = $props();
+
+  // When a panel drives visibility (cell mode) it passes `visible` explicitly;
+  // otherwise (home shell) visibility follows the collapse state.
+  const termVisible = $derived(visible ?? !collapsed);
 
   onMount(() => { openShell(paneId, cwd); });
 </script>
 
-<div class="shell-drawer" class:collapsed>
-  <div class="shell-header">
-    <span class="shell-title">Shell — {cwd}</span>
-    {#if paneId !== HOME_SHELL_PANE_ID}
-      <button
-        onclick={() => { reloadAgentEnv(paneId).catch(() => {}); }}
-        aria-label="Reload agent with this terminal's environment"
-        title={RELOAD_HINT}
-      >↻ env → agent</button>
-    {/if}
-    {#if collapsed}
-      <button onclick={() => onToggleCollapse?.()} aria-label="expand shell">▲ Expand</button>
-    {:else}
-      <button onclick={() => onToggleCollapse?.()} aria-label="collapse shell">▼ Collapse</button>
-    {/if}
-  </div>
+<div class="shell-drawer" class:collapsed class:no-chrome={!chrome}>
+  {#if chrome}
+    <div class="shell-header">
+      <span class="shell-title">Shell — {cwd}</span>
+      {#if paneId !== HOME_SHELL_PANE_ID}
+        <button
+          onclick={() => { reloadAgentEnv(paneId).catch(() => {}); }}
+          aria-label="Reload agent with this terminal's environment"
+          title={RELOAD_HINT}
+        >↻ env → agent</button>
+      {/if}
+      {#if collapsed}
+        <button onclick={() => onToggleCollapse?.()} aria-label="expand shell">▲ Expand</button>
+      {:else}
+        <button onclick={() => onToggleCollapse?.()} aria-label="collapse shell">▼ Collapse</button>
+      {/if}
+    </div>
+  {/if}
   <!-- Keep the Terminal mounted across collapse/expand (hide, do not unmount) so the
        xterm buffer and its pty subscription survive; unmounting rebuilt a blank xterm
-       that stayed empty until the next pty output. -->
-  <section aria-label="shell" class="shell-body" style:display={collapsed ? "none" : undefined}>
-    <!-- visible drives the Terminal's re-fit on un-collapse: the drawer hides it via
-         an ancestor display:none, which never fires the terminal's own ResizeObserver. -->
-    <Terminal {paneId} {cwd} visible={!collapsed} />
+       that stayed empty until the next pty output. In cell mode the panel hides us via
+       an ancestor, so the body itself is never display:none-d here. -->
+  <section aria-label="shell" class="shell-body" style:display={collapsed && chrome ? "none" : undefined}>
+    <!-- visible drives the Terminal's re-fit when it is un-hidden: the drawer/panel
+         hides it via an ancestor display:none, which never fires xterm's ResizeObserver. -->
+    <Terminal {paneId} {cwd} visible={termVisible} {onExit} />
   </section>
 </div>
 
@@ -79,6 +97,12 @@
 
   .shell-drawer.collapsed {
     flex: none;
+  }
+
+  /* Cell mode: the tab strip above already provides the top border, so the bare
+     cell must not add a second line. */
+  .shell-drawer.no-chrome {
+    border-top: none;
   }
 
   /* ── Header strip ─────────────────────────────────────────────── */

@@ -56,6 +56,8 @@ vi.mock("./lib/wails", () => ({
   setWorkspaceTitle: vi.fn(async (_id: string, _title: string) => {}),
   removeWorkspace: vi.fn(async () => {}),
   writeToPty:      vi.fn(async () => {}),
+  closeShell:      vi.fn(async () => {}),
+  reloadAgentEnv:  vi.fn(async () => {}),
   branches:        vi.fn(async (_repo: string) => ["main", "feat/x"]),
   onAgentEvent:    vi.fn((cb) => { captured.agent.push(cb);     return () => {}; }),
   onNotify:        vi.fn((cb) => { captured.notify.push(cb);    return () => {}; }),

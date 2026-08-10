@@ -74,7 +74,26 @@ This is the one path no automated test covers.
 
 - [ ] The shell drawer at the bottom shows a live shell. Run a command and
       confirm output renders. This is a separate pty from the agent pane, keyed
-      `shell-<id>`.
+      `shell-<id>` for the first terminal.
+
+## Multiple terminals per session
+
+The per-session shell drawer is a multi-terminal panel: a tab strip over N shell
+terminals. Real-pty territory the mock gate cannot fully exercise.
+
+- [ ] The drawer opens with one shell tab. `+` adds another (a fresh
+      `shell-<id>_<n>` pty). Clicking a tab switches to it; each tab keeps its own
+      scrollback and running processes across switches, and the shown grid reflows to
+      the drawer height (cursor never clipped).
+- [ ] The split button (⊟) shows two terminals side by side; each grid reflows to its
+      half width. Toggling split off returns to a single VISIBLE terminal (the second
+      tab remains in the strip, it is just no longer shown alongside).
+- [ ] `×` on a tab closes that terminal. Closing the LAST one does not leave an empty
+      drawer — a fresh terminal takes its place.
+- [ ] A shell that exits on its own (type `exit`) closes its tab the same way, and the
+      drawer is never left empty.
+- [ ] Closing or removing the whole session reaps every one of its terminals — no
+      leftover shell process against a deleted worktree.
 
 ## Session environment reload
 
@@ -85,10 +104,10 @@ real-agent territory the mock gate cannot exercise.
 - [ ] Run `aws sso login` (or an equivalent file-based credential refresh) in the
       session terminal. With no reload, confirm the running agent's next call
       uses the fresh credentials.
-- [ ] Export a new environment variable in the session terminal and click the
-      reload button in the drawer header. Confirm the agent relaunches, the
-      conversation is intact (not a fresh session), and the agent can see the
-      new variable.
+- [ ] Export a new environment variable in the session terminal and click the ↻
+      reload button in the terminal tab strip (it reloads from the ACTIVE tab's
+      environment). Confirm the agent relaunches, the conversation is intact (not a
+      fresh session), and the agent can see the new variable.
 - [ ] After the relaunch, the AGENT pane redraws cleanly into a fresh terminal:
       no garbled or overlapping harness UI painted over the old frame, and no
       wrong-width wrapping (the respawned agent is sized to the pane).

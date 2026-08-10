@@ -60,6 +60,7 @@ interface App {
   WriteToPty(paneId: string, data: number[]): Promise<void>;
   ResizePty(paneId: string, cols: number, rows: number): Promise<void>;
   OpenShell(paneId: string, cwd: string): Promise<void>;
+  CloseShell(paneId: string): Promise<void>;
   ReloadAgentEnv(paneID: string): Promise<void>;
   Approve(reqId: string, decision: string): Promise<void>;
   PendingApprovals(): Promise<{ workspaceId: string; req: ApprovalReq }[]>;
@@ -118,6 +119,7 @@ export const cleanupSessions      = (ids: string[], force: boolean)             
 export const writeToPty = (paneId: string, data: number[])                        => app().WriteToPty(paneId, data);
 export const resizePty  = (paneId: string, cols: number, rows: number)            => app().ResizePty(paneId, cols, rows);
 export const openShell  = (paneId: string, cwd: string)                           => app().OpenShell(paneId, cwd);
+export const closeShell = (paneId: string)                                        => app().CloseShell(paneId);
 // Captures the drawer shell's current environment and relaunches the agent with
 // it, conversation preserved (perch reload). paneID is the per-workspace drawer
 // pane, "shell-{workspaceID}"; rejected on the home drawer, which has no workspace.

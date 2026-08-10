@@ -479,6 +479,22 @@ func paneIDFor(workspaceID string) string {
 	return "pane-" + workspaceID
 }
 
+// workspaceIDForShellPane recovers the workspace ID from a shell drawer pane ID.
+// A session's default shell is "shell-<id>"; additional shell tabs are
+// "shell-<id>_<n>" (the workspace UUID is hex + hyphens and never contains '_', so
+// cutting on the first '_' after the "shell-" prefix isolates the id). Returns ""
+// for a non-shell pane; callers guard the home shell ("shell-home") separately
+// before calling. Keeping the id recoverable from any shell pane is what lets one
+// session own N shells while OpenShell / ReloadAgentEnv still resolve its env-sync
+// token and overlay.
+func workspaceIDForShellPane(paneID string) string {
+	if !strings.HasPrefix(paneID, "shell-") {
+		return ""
+	}
+	id, _, _ := strings.Cut(strings.TrimPrefix(paneID, "shell-"), "_")
+	return id
+}
+
 // ListWorkspaces returns all known workspaces from the registry. State and
 // Caps come from a live Monitor when one is active; otherwise State=Idle.
 func (a *App) ListWorkspaces() []WorkspaceVM {
@@ -1258,15 +1274,23 @@ func (a *App) CloseWorkspace(id string) error {
 		return fmt.Errorf("invalid workspace id: %w", err)
 	}
 	paneID := paneIDFor(id)
-	shellPaneID := "shell-" + id
+	shellPrefix := "shell-" + id
 	a.mu.Lock()
 	br := a.bridges[paneID]
 	delete(a.bridges, paneID)
-	// The workspace shell drawer registers its own pty under "shell-<id>" (see
-	// OpenShell). Close and drop it here too — otherwise it leaks until shutdown,
-	// left running against a now-deleted worktree cwd after RemoveWorkspace.
-	shellBr := a.bridges[shellPaneID]
-	delete(a.bridges, shellPaneID)
+	// The workspace's shell drawer registers its ptys under "shell-<id>" (the default
+	// terminal) and "shell-<id>_<n>" (additional tabs — see OpenShell / CloseShell).
+	// Close and drop ALL of them here — otherwise a tab leaks until shutdown, left
+	// running against a now-deleted worktree cwd after RemoveWorkspace. delete during
+	// range is allowed in Go; the exact-or-"_"-delimited match never touches another
+	// workspace's shells (UUID ids differ) or the home shell.
+	var shellBrs []*internalpty.Bridge
+	for k, sb := range a.bridges {
+		if k == shellPrefix || strings.HasPrefix(k, shellPrefix+"_") {
+			shellBrs = append(shellBrs, sb)
+			delete(a.bridges, k)
+		}
+	}
 	mon := a.monitors[id]
 	delete(a.monitors, id)
 	var cancel context.CancelFunc
@@ -1311,8 +1335,8 @@ func (a *App) CloseWorkspace(id string) error {
 	if br != nil {
 		_ = br.Close()
 	}
-	if shellBr != nil {
-		_ = shellBr.Close()
+	for _, sb := range shellBrs {
+		_ = sb.Close()
 	}
 	// WIN #6: closing a session removes its monitor from the attention set, but its
 	// event pump is now cancelled and can no longer fire the state-change hook, so
@@ -1561,7 +1585,7 @@ func (a *App) OpenShell(paneID, cwd string) error {
 	// any overlay already captured for the workspace (so a reopen carries it too).
 	var env []string
 	if paneID != homeShellPaneID {
-		workspaceID := strings.TrimPrefix(paneID, "shell-")
+		workspaceID := workspaceIDForShellPane(paneID)
 		var injected []string
 		if a.envsync != nil {
 			if tok, terr := a.envsync.TokenFor(workspaceID); terr == nil {
@@ -1587,6 +1611,25 @@ func (a *App) OpenShell(paneID, cwd string) error {
 		return fmt.Errorf("OpenShell spawn: %w", err)
 	}
 	a.putBridge(paneID, br)
+	return nil
+}
+
+// CloseShell tears down one shell pane's pty and drops it from the bridge registry.
+// It is what a drawer's per-tab × calls to close a single terminal without closing
+// the whole session. Idempotent: an unknown pane id is a no-op (the tab may already
+// have been reaped by CloseWorkspace). Unlike CloseWorkspace it touches only the one
+// pane, so the session's other shells and its agent keep running.
+func (a *App) CloseShell(paneID string) error {
+	if err := validateSessionID(paneID); err != nil {
+		return fmt.Errorf("invalid pane id: %w", err)
+	}
+	a.mu.Lock()
+	br := a.bridges[paneID]
+	delete(a.bridges, paneID)
+	a.mu.Unlock()
+	if br != nil {
+		_ = br.Close()
+	}
 	return nil
 }
 

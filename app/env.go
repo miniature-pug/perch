@@ -138,8 +138,8 @@ func (a *App) ReloadAgentEnv(paneID string) error {
 	if paneID == homeShellPaneID {
 		return fmt.Errorf("reload is not available on the home shell")
 	}
-	workspaceID := strings.TrimPrefix(paneID, "shell-")
-	if workspaceID == paneID || workspaceID == "" {
+	workspaceID := workspaceIDForShellPane(paneID)
+	if workspaceID == "" {
 		return fmt.Errorf("not a workspace drawer pane: %q", paneID)
 	}
 	a.mu.Lock()

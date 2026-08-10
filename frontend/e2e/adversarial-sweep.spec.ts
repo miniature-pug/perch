@@ -324,14 +324,15 @@ test("A4-view-roundtrip-and-shell-drawer", async ({ page }) => {
   });
 
   await test.step("toggle shell drawer via Ctrl+` twice", async () => {
-    // With a session active there are two `.shell-drawer` nodes in the DOM (a
-    // hidden home-shell one and the visible session one); scope to the visible.
+    // The active session's shell drawer is a `.shell-panel` (its tab strip stays
+    // visible even when collapsed); the hidden home shell is a plain `.shell-drawer`.
+    // Target the panel so the check holds in both the expanded and collapsed states.
     await page.locator(".app-root").click().catch(() => {});
     await page.keyboard.press("Control+`");
     await page.waitForTimeout(400);
     await shot(page, "A4-shell-open");
-    const drawerVisible = await page.locator(".shell-drawer:visible").first().isVisible().catch(() => false);
-    expect.soft(drawerVisible, "a shell drawer should be visible in the DOM").toBe(true);
+    const drawerVisible = await page.locator(".shell-panel:visible").first().isVisible().catch(() => false);
+    expect.soft(drawerVisible, "the session shell drawer (panel) should be visible").toBe(true);
     await page.keyboard.press("Control+`");
     await page.waitForTimeout(400);
     await shot(page, "A4-shell-closed");
