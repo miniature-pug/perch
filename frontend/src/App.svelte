@@ -27,7 +27,7 @@
   import { settings }       from "./lib/stores/settings.svelte";
   import ApprovalCard       from "./lib/ApprovalCard.svelte";
   import NotificationHub    from "./lib/NotificationHub.svelte";
-  import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead, markAllRead, dropForWorkspace } from "./lib/stores/notifications.svelte";
+  import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead, markAllRead, markReadForWorkspace, dropForWorkspace } from "./lib/stores/notifications.svelte";
   import CleanupPanel from "./lib/CleanupPanel.svelte";
   import { listWorkspaces, createWorkspace, setWorkspaceTitle, workspaceForBranch, removeWorkspace, openWorkspace, closeWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, onWorkspaceAttach, onWorkspaceRelaunch, approve, pendingApprovals, branches, readFile, setWindowFocus, writeToPty, discoverRepos, diffStat, listStaleSessions, forceRemoveWorkspace, clipboardSetText, homeShellCwd as fetchHomeShellCwd } from "./lib/wails";
   import type { WorkspaceVM, ApprovalReq, StaleSessionVM, AgentState, RepoInfo } from "./lib/wails";
@@ -162,6 +162,22 @@
     if (viewing) untrack(() => attnAck.add(id!));
   });
 
+  // Auto-read the hub notifications for the workspace the user is now looking at.
+  // Switching to a session — or refocusing the window while it is already active —
+  // IS the catch-up for its events, so they stop bumping the bell badge (the user
+  // asked for "auto-read on switch"). Mirrors the attnAck effect above (same pattern
+  // for the sidebar's own awaiting-input badge). untrack the call so
+  // markReadForWorkspace's internal `items` read does not make this effect re-run on
+  // every unrelated notification — it should fire only on an active/focus CHANGE.
+  // The already-active case (a notif arriving while its session is on screen) is
+  // handled in the onNotify handler, which this effect cannot see. Gated on
+  // windowFocused so notifications that land while the user is alt-tabbed away still
+  // accumulate (and still OS-toast) until they actually return.
+  $effect(() => {
+    const id = activeId;
+    if (id != null && windowFocused) untrack(() => markReadForWorkspace(id));
+  });
+
   // Invariant: the active session is never ALSO the split session. Each open
   // session keeps exactly one Terminal bound to its paneId, mounted once in the
   // primary keep-alive loop; the split session's node is relocated into the
@@ -290,10 +306,15 @@
   let offWorkspaceRelaunch: (() => void) | null = null;
   let offOsFileDrop:        (() => void) | null = null;
 
+  // Whether the OS window currently has focus. Reported to the backend (which gates
+  // OS desktop notifications) AND read locally to auto-read a workspace's hub
+  // notifications only while the user is actually looking at the app.
+  let windowFocused = $state(true);
+
   // Window focus/blur handlers — report focus state to the backend so it can gate
   // OS desktop notifications (only fire when the window is unfocused).
-  function onWindowFocus() { setWindowFocus(true).catch(() => {}); }
-  function onWindowBlur()  { setWindowFocus(false).catch(() => {}); }
+  function onWindowFocus() { windowFocused = true;  setWindowFocus(true).catch(() => {}); }
+  function onWindowBlur()  { windowFocused = false; setWindowFocus(false).catch(() => {}); }
 
   // Aggregate +N −N diffstat per workspace.
   // A missing or non-git worktree must not throw; catch suppresses errors silently.
@@ -352,6 +373,7 @@
 
   onMount(async () => {
     // Report initial focus state and register focus/blur listeners.
+    windowFocused = document.hasFocus();
     setWindowFocus(document.hasFocus()).catch(() => {});
     window.addEventListener("focus", onWindowFocus);
     window.addEventListener("blur",  onWindowBlur);
@@ -442,6 +464,12 @@
       if      (n.tier === "blocking") addBlocking(n.workspaceId, n.title, n.body);
       else if (n.tier === "ambient")  addAmbient (n.workspaceId, n.title, n.body);
       else                            addRoutine (n.workspaceId, n.title, n.body);
+      // If the event is for the session the user is already looking at (window
+      // focused), they are watching it happen — mark it read at once so it never
+      // bumps the bell for a workspace that is on screen. The activeId $effect above
+      // only fires on an active/focus CHANGE, so this covers the already-active case
+      // it cannot see.
+      if (n.workspaceId === activeId && windowFocused) markReadForWorkspace(n.workspaceId);
     });
 
     offFsChanged = onFsChanged((p) => {

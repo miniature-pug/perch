@@ -1077,6 +1077,74 @@ describe("App.svelte live event wiring", () => {
     expect(items[0].title).toBe("Build complete");
   });
 
+  // The user asked for notifications to "auto-read" when they switch to the session
+  // the event was about. Switching to a session (activeId change, window focused) is
+  // the catch-up, so its hub notifications go read — non-destructively (kept in the
+  // hub history, just cleared from the unread bell badge).
+  it("switching to a session auto-reads its hub notifications (bell badge clears on view)", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await screen.findByRole("button", { name: /^Beta\b/ });
+
+    const { getItems, dropForWorkspace } = await import("./lib/stores/notifications.svelte");
+    // The store is a shared singleton across tests — start these ids clean.
+    dropForWorkspace("ws-1");
+    dropForWorkspace("ws-2");
+    // Auto-read is gated on the window having focus.
+    window.dispatchEvent(new Event("focus"));
+    await tick();
+
+    // A BACKGROUND session (ws-2, not active) finishes a turn → its notif is unread.
+    const notifyCb = captured.notify.at(-1)!;
+    notifyCb({ tier: "ambient", title: "Turn complete", body: "Agent finished a turn.", workspaceId: "ws-2" });
+    await tick();
+    expect(getItems().filter((n) => n.workspaceId === "ws-2" && !n.read).length).toBe(1);
+
+    // Switch to ws-2 (cold → confirm the resume preview) → viewing it auto-reads it.
+    await fireEvent.click(screen.getByRole("button", { name: /^Beta\b/ }));
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    await tick();
+
+    await waitFor(() =>
+      expect(getItems().filter((n) => n.workspaceId === "ws-2" && !n.read).length).toBe(0)
+    );
+    // Non-destructive: the entry stays in the hub history (read, not dropped).
+    expect(getItems().some((n) => n.workspaceId === "ws-2" && n.title === "Turn complete")).toBe(true);
+  });
+
+  // The activeId $effect only fires on an active/focus CHANGE, so the onNotify handler
+  // covers the already-active case: an event for the session already on screen is
+  // marked read the instant it arrives, so it never bumps the bell.
+  it("a turn-done notification for the session already on screen is auto-read on arrival", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await screen.findByRole("button", { name: /^Beta\b/ });
+
+    const { getItems, dropForWorkspace } = await import("./lib/stores/notifications.svelte");
+    dropForWorkspace("ws-2");
+    window.dispatchEvent(new Event("focus"));
+    await tick();
+
+    // Make ws-2 the active, on-screen session.
+    await fireEvent.click(screen.getByRole("button", { name: /^Beta\b/ }));
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    await tick();
+
+    // A turn completes on the session the user is watching → the notif arrives read.
+    const notifyCb = captured.notify.at(-1)!;
+    notifyCb({ tier: "ambient", title: "Turn complete", body: "Agent finished a turn.", workspaceId: "ws-2" });
+    await tick();
+
+    expect(getItems().some((n) => n.workspaceId === "ws-2" && n.title === "Turn complete")).toBe(true);
+    expect(getItems().filter((n) => n.workspaceId === "ws-2" && !n.read).length).toBe(0);
+  });
+
   it("onFsChanged: refreshes DiffView IN PLACE (node identity preserved, not remounted) (F4)", async () => {
     const { listWorkspaces } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);

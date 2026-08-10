@@ -96,6 +96,18 @@ export function markAllRead() {
   items = items.map((n) => n.read ? n : { ...n, read: true });
 }
 
+// Mark read every unread notification for a workspace the user is now looking at.
+// Non-destructive (mirrors markAllRead, NOT dropForWorkspace): the entries stay in
+// the hub history so the away catch-up remains complete, they just stop bumping the
+// unread bell badge — visiting a session IS the catch-up for its events. An
+// unresolved approval/error therefore also keeps its state-driven sidebar signal
+// (that is keyed off ws.state, not on notification read-state). Callers gate this
+// on "the session is active AND the window is focused" so events that arrive while
+// the user is away still accumulate (and still OS-toast) until they return.
+export function markReadForWorkspace(wsId: string) {
+  items = items.map((n) => n.workspaceId === wsId && !n.read ? { ...n, read: true } : n);
+}
+
 // Drop every notification belonging to a removed workspace.
 export function dropForWorkspace(wsId: string) {
   items = items.filter((n) => n.workspaceId !== wsId);

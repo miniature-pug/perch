@@ -50,6 +50,15 @@ type OpencodeMonitor struct {
 	// StateExited back to running/idle, so translateSSE and emit early-return once
 	// it is set. Guarded by mu.
 	exited bool
+	// turnRunning records that the agent is in an active turn (set on session.status
+	// busy and on question.replied). The terminating idle reports StateDone — the
+	// turn-done ✓ and the ambient "Turn complete" toast — only when this is set,
+	// INSTEAD of testing the prior m.state. A mid-turn permission.asked /
+	// question.asked overwrites m.state to an awaiting state, and opencode emits NO
+	// permission-resolved frame, so by the time the idle frame arrives the prior
+	// state is no longer StateRunning; tracking the turn separately is what lets a
+	// turn that used a tool (i.e. every real turn) still show done. Guarded by mu.
+	turnRunning bool
 }
 
 const (
@@ -419,14 +428,36 @@ type sseEnvelope struct {
 	Properties json.RawMessage `json:"properties"`
 }
 
-// idleTransition maps an opencode idle signal to a lifecycle state given the
-// prior state: a busy→idle transition is a completed turn (StateDone, drives the
-// ambient toast); any other idle is a steady idle (StateIdle, no toast).
-func idleTransition(prev State) Event {
-	if prev == StateRunning {
-		return Event{Kind: "state", State: StateDone}
+// markTurnRunning records that a turn is in progress, so a subsequent idle
+// reports StateDone. Set on the busy status and on question.replied (the turn
+// resumes). Deliberately NOT called for the passive attention signals
+// (permission.asked / question.asked) so a mid-turn approval or question does
+// not erase the fact that a turn is running.
+func (m *OpencodeMonitor) markTurnRunning() {
+	m.mu.Lock()
+	m.turnRunning = true
+	m.mu.Unlock()
+}
+
+// takeTurnRunning reports whether a turn was in progress and clears the flag, so
+// the busy→idle edge yields StateDone exactly once — a duplicate/steady idle (or
+// an idle at connect) reads false and stays StateIdle, firing no spurious toast.
+func (m *OpencodeMonitor) takeTurnRunning() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r := m.turnRunning
+	m.turnRunning = false
+	return r
+}
+
+// idleState maps the turn-in-progress flag to the lifecycle state an idle signal
+// should emit: a busy→idle transition is a completed turn (StateDone, drives the
+// ✓ + ambient toast, and clears the flag); any other idle is steady (StateIdle).
+func (m *OpencodeMonitor) idleState() State {
+	if m.takeTurnRunning() {
+		return StateDone
 	}
-	return Event{Kind: "state", State: StateIdle}
+	return StateIdle
 }
 
 func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
@@ -434,8 +465,9 @@ func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
 	if json.Unmarshal(data, &env) != nil {
 		return
 	}
-	// translateSSE is called serially from the single SSE-reader goroutine, so
-	// reading the prior state here is race-free w.r.t. the write in commitSSE.
+	// translateSSE is called serially from the single SSE-reader goroutine, so the
+	// turn-in-progress flag (read/cleared under mu in takeTurnRunning) is race-free
+	// w.r.t. commitSSE's state write.
 	m.mu.Lock()
 	// exited is terminal: once the exit sentinel has fired, a straggling
 	// session.status frame from the backgrounded `opencode serve` must NOT clobber
@@ -448,7 +480,6 @@ func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
 		m.mu.Unlock()
 		return
 	}
-	prev := m.state
 	m.mu.Unlock()
 
 	var ev Event
@@ -473,21 +504,26 @@ func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
 		}
 		switch p.Status.Type {
 		case "idle":
-			// A busy→idle transition means the agent finished a turn → StateDone
-			// so dispatchNotify fires the ambient toast. An idle that does NOT
-			// follow a running state (e.g. the session reporting idle at connect, or
-			// a duplicate idle / the deprecated session.idle alias firing too) is a
-			// steady idle → StateIdle, no spurious "Turn complete" toast.
-			ev = idleTransition(prev)
-			ev.SessionID = p.SessionID
+			// A busy→idle transition means the agent finished a turn → StateDone so
+			// dispatchNotify fires the ambient toast and the sidebar shows the ✓.
+			// idleState reads the turn-in-progress flag (set on busy, preserved across
+			// a mid-turn permission.asked/question.asked) rather than the prior
+			// m.state, which a passive attention signal overwrites — without that, any
+			// turn that used a tool would degrade to a steady StateIdle (no ✓, no
+			// toast), the "opencode never shows done" bug. An idle that does NOT follow
+			// a running turn (idle at connect, a duplicate idle, the deprecated
+			// session.idle alias firing too) reads the flag false → StateIdle.
+			ev = Event{Kind: "state", State: m.idleState(), SessionID: p.SessionID}
 		case "busy":
+			m.markTurnRunning()
 			ev = Event{Kind: "state", State: StateRunning, SessionID: p.SessionID}
 		default:
 			return
 		}
 	case "session.idle":
-		// Deprecated alias of session.status{type:idle}; same transition rule.
-		ev = idleTransition(prev)
+		// Deprecated alias of session.status{type:idle}; same turn-done rule via the
+		// turn-in-progress flag.
+		ev = Event{Kind: "state", State: m.idleState()}
 	case "session.error":
 		// opencode's default-emitted error event. (session.next.step.failed also
 		// carries errors but is gated behind OPENCODE_EXPERIMENTAL_EVENT_SYSTEM,
@@ -499,6 +535,7 @@ func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
 			Error     json.RawMessage `json:"error"`
 		}
 		_ = json.Unmarshal(env.Properties, &p)
+		_ = m.takeTurnRunning() // an errored turn must not phantom-complete on a later idle
 		ev = Event{Kind: "state", State: StateErrored, Err: errMessage(p.Error), SessionID: p.SessionID}
 	case "question.asked":
 		// The agent asks the USER a free-form choice — distinct from permission.asked
@@ -515,13 +552,16 @@ func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
 		ev = Event{Kind: "question", State: StateAwaitingInput, SessionID: p.SessionID}
 	case "question.replied", "question.rejected":
 		// The question was resolved in the TUI — clear the awaiting-input feel.
-		// replied → the agent resumes working (StateRunning); rejected → no active
-		// turn, so fall back to a steady idle (idleTransition from awaiting-input is
-		// never StateDone, so this fires no spurious "Turn complete" toast).
+		// replied → the agent resumes working (StateRunning), so the turn is (still)
+		// in progress. rejected → the turn is abandoned: clear the turn-in-progress
+		// flag and fall back to a steady StateIdle (never StateDone, so no spurious
+		// "Turn complete" toast, and a later idle does not phantom-complete it).
 		if env.Type == "question.replied" {
+			m.markTurnRunning()
 			ev = Event{Kind: "state", State: StateRunning}
 		} else {
-			ev = idleTransition(prev)
+			_ = m.takeTurnRunning()
+			ev = Event{Kind: "state", State: StateIdle}
 		}
 	case "permission.asked":
 		// A tool-run permission request. Unlike claude (whose PreToolUse hook BLOCKS

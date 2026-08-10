@@ -345,6 +345,36 @@ func TestOpencodeMonitorSSE_SessionStatusDrivesIdle(t *testing.T) {
 	}
 }
 
+// TestOpencodeMonitorSSE_PermissionMidTurnStillEmitsDone is the regression guard
+// for the "opencode never shows the turn-done ✓" bug. A real turn calls a tool, so
+// a permission.asked frame lands mid-turn; opencode emits NO permission-resolved
+// frame, so m.state stays StateAwaitingApproval for the rest of the turn. The
+// terminating idle must STILL report StateDone — driven by the turn-in-progress
+// flag (set on busy, preserved across permission.asked), not the clobbered prior
+// state. Before the fix this degraded to StateIdle (no ✓, no toast) for every turn
+// that used a tool, which is every real turn.
+func TestOpencodeMonitorSSE_PermissionMidTurnStillEmitsDone(t *testing.T) {
+	om, done := serveSSE(t,
+		`data: {"type":"session.status","properties":{"sessionID":"s","status":{"type":"busy"}}}`+"\n\n"+
+			`data: {"type":"permission.asked","properties":{"id":"perm-1","sessionID":"s"}}`+"\n\n"+
+			`data: {"type":"session.status","properties":{"sessionID":"s","status":{"type":"idle"}}}`+"\n\n")
+	defer done()
+
+	if ev := nextEvent(t, om); ev.State != agent.StateRunning {
+		t.Fatalf("ev[0]: busy → want running, got %+v", ev)
+	}
+	if ev := nextEvent(t, om); ev.Kind != "approval" || ev.State != agent.StateAwaitingApproval {
+		t.Fatalf("ev[1]: permission.asked → want approval/awaiting-approval, got %+v", ev)
+	}
+	ev := nextEvent(t, om)
+	if ev.State != agent.StateDone {
+		t.Errorf("ev[2]: busy→permission.asked→idle → want StateDone (turn complete ✓), got %+v", ev)
+	}
+	if om.CurrentState() != agent.StateDone {
+		t.Errorf("CurrentState = %q, want done", om.CurrentState())
+	}
+}
+
 // TestOpencodeMonitorSSE_SessionIdleEmitsDone verifies the deprecated
 // session.idle alias: a busy→idle transition (running then session.idle) is a
 // completed turn and must produce State==StateDone.
@@ -534,8 +564,8 @@ func TestOpencodeMonitorSSE_QuestionReplied(t *testing.T) {
 
 // TestOpencodeMonitorSSE_QuestionRejected verifies that a question.rejected from
 // a non-running prior state (asked → rejected: AwaitingInput, never Running) maps
-// to a steady StateIdle — no spurious "Turn complete" toast (idleTransition only
-// yields StateDone from StateRunning).
+// to a steady StateIdle — no spurious "Turn complete" toast (a rejected question
+// clears the turn-in-progress flag, so it never yields StateDone).
 func TestOpencodeMonitorSSE_QuestionRejected(t *testing.T) {
 	om, done := serveSSE(t,
 		`data: {"type":"question.asked","properties":{"sessionID":"ses-1"}}`+"\n\n"+

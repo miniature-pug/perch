@@ -136,12 +136,18 @@ there is no automated real-binary test. Verify against a real `opencode`.
 - [ ] A new `opencode` session runs `opencode serve` then attaches; the TUI
       appears and accepts input.
 - [ ] While the agent works, the sidebar shows running; when the turn ends it
-      shows done, and an ambient completion notification fires.
+      shows done (a ✓), and an ambient completion notification fires.
+- [ ] The done ✓ appears even for a turn that involved a tool-permission prompt.
+      Run a turn that edits a file or runs a command (so opencode asks permission
+      in its TUI), approve it there, and let the turn finish: the sidebar still
+      lands on done, not a plain idle. This is the class of turn that used to never
+      show the ✓ (opencode emits no permission-resolved frame, so the turn-done was
+      being lost to a steady idle).
 - [ ] Opening a session fires no completion toast before any turn runs.
-- [ ] A tool call surfaces an approval card, and Allow lets it proceed.
-- [ ] "Always allow" a tool input. The same input auto-approves next time, and a
-      different input to the same tool still prompts.
-- [ ] Deny a tool call and the agent reports the rejection.
+- [ ] A tool call raises the amber "needs you" signal on the sidebar row plus a
+      blocking "Approval needed" notification. You approve or reject in opencode's
+      own attach TUI — perch pops no card and posts no reply, because opencode owns
+      the prompt. When the turn ends the signal clears to done.
 - [ ] Resume: run a turn, close the session, reopen it. It resumes the same
       conversation, not a fresh session. This proves the session id was captured
       and passed back.
@@ -214,6 +220,21 @@ WebKit and cannot be checked headlessly.
       are ambient and do not notify.
 - [ ] With do-not-disturb on, ambient and routine events are silenced but still
       appear in the hub, recorded as read; blocking events still surface.
+- [ ] Auto-read on view: with the window focused, switch to (or click into) a
+      session that has unread notifications. Its notifications go read and the bell
+      badge drops by that session's share — without opening the hub. They stay
+      listed in the hub (read), not deleted. A turn that completes on the session
+      you are already looking at never bumps the bell at all.
+- [ ] Notifications that land while the window is unfocused, or for a session you
+      are not currently on, still accumulate on the bell until you switch to them.
+
+## Live status (both agents, across sessions)
+
+- [ ] With two or more sessions open, watch a BACKGROUND session's sidebar row
+      (verify for claude AND opencode). Its status icon updates live — running
+      while it works, ✓ done when its turn ends, amber when it needs you — even
+      while you are focused on a different session, a different view, or the window
+      is unfocused. The row never goes stale waiting for you to click into it.
 
 ## Accessibility (keyboard)
 
