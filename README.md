@@ -94,6 +94,14 @@ chmod +x perch-linux-amd64
 ./perch-linux-amd64
 ```
 
+Each release also ships a signed build provenance attestation. To check that
+GitHub built the binary from this repository's release workflow, use the
+[GitHub CLI](https://cli.github.com/):
+
+```sh
+gh attestation verify perch-linux-amd64 --repo miniature-pug/perch
+```
+
 The binary links WebKit2GTK and GTK3 dynamically, so the
 [Requirements](#requirements) above still hold: those libraries must be present
 to run it. To learn about a new version, watch the repository on GitHub and

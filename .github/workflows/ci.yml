@@ -43,18 +43,26 @@ on:
 permissions:
   contents: read
 
-# Cancel superseded runs on the same ref, to save runner minutes.
+# Cancel superseded runs on the same ref to save runner minutes. This
+# cancels pull-request runs only. A push to main always runs to completion,
+# so every merged commit keeps a recorded CI result.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   gate:
     # ubuntu-24.04 (noble) matches the perch-dev base image, and it ships podman.
     runs-on: ubuntu-24.04
+    # Fail fast on a hung step. A cache-miss run that rebuilds the image takes
+    # about 16 minutes, so 40 gives ample headroom below the 6-hour default.
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # CI never pushes, so do not leave the token in the git config.
+          persist-credentials: false
 
       # Single source of truth: the pinned Go version comes from
       # .tool-versions, the same file the Containerfile reads. This file has

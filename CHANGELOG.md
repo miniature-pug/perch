@@ -67,6 +67,9 @@ tagged a release yet, so everything to date sits under Unreleased.
   longer leaves a blank window.
 - A container-first test framework: one `perch-dev` image that every check runs
   in, toggled by `CONTAINERIZE`, leaving the working tree untouched.
+- The production release binary builds inside that same pinned `perch-dev`
+  image, so the release and the test gates share one toolchain. The release
+  runner installs no GUI libraries or Node of its own.
 - A window and taskbar icon embedded in the binary, and a `.desktop` entry
   installed on Linux so the app switcher shows it too.
 - One-key session actions in NORMAL mode: `n` for a new session, `x` to remove
@@ -194,3 +197,9 @@ tagged a release yet, so everything to date sits under Unreleased.
   repository does carry committed agent-config hooks (`.claude/settings.json`, an
   opencode config) whose entries the agent runtime executes ungated on session
   start, distinct from `.git/hooks`, which clone and fetch do not carry.
+- Release binaries ship a signed SLSA build provenance attestation. A download
+  verifies against this repository with `gh attestation verify`. The release
+  workflow pins its third-party action to a full commit SHA.
+- Hardened both CI workflows: checkout runs with `persist-credentials: false`,
+  each job sets a timeout, and run cancellation is limited to pull requests, so
+  a push to `main` always keeps a recorded CI result.

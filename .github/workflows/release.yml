@@ -1,21 +1,20 @@
 # Release: minimal, linux/amd64 only.
 #
 # This is deliberately the smallest correct path, per the maintainer's
-# decision: one production GUI binary for linux/amd64, a SHA256SUMS file,
-# and a GitHub Release. No arm64, no other OS, no signing, no AppImage.
+# decision: one production GUI binary for linux/amd64, a SHA256SUMS file, a
+# build provenance attestation, and a GitHub Release. No arm64, no other OS,
+# no code signing, no AppImage.
 #
-# A push of a tag matching v* triggers this workflow (for example,
-# `git tag v1.0.0 && git push --tags`). The Makefile LDFLAGS stamps the
-# binary's version from `git describe --tags`, so the tag itself drives
-# `perch version`. This is why the checkout below fetches full history and
-# tags.
+# A push of a tag that matches v* triggers this workflow (for example,
+# `git tag v1.0.0 && git push --tags`). The build stamps the binary version
+# from the tag, so the tag drives `perch version`. This is why the checkout
+# below fetches full history and tags.
 #
-# The production GUI binary needs Node (for the frontend build), the
-# WebKitGTK 4.1 and GTK3 dev libraries, and a C toolchain (cgo).
-# `make gui-build` is not a containerized DZ target, so it runs directly
-# here, on the same pinned toolchain versions the perch-dev image uses
-# (read from .tool-versions), with the same GUI libraries the image
-# installs.
+# The GUI binary builds inside the pinned perch-dev image, the same image the
+# test gates use. The image bakes in Node, the WebKitGTK 4.1 and GTK3 dev
+# libraries, and the C toolchain, all pinned from .tool-versions and the
+# Containerfile. So the release binary and the test gates share one
+# toolchain, and the runner installs no build libraries of its own.
 
 name: Release
 
@@ -24,59 +23,78 @@ on:
     tags:
       - "v*"
 
-# Creating the release and uploading assets needs write access to the repository contents.
+# contents: write creates the release and uploads the assets. id-token: write
+# and attestations: write let the provenance step sign and store the
+# attestation.
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   release:
     runs-on: ubuntu-24.04
+    # Fail fast on a hung step instead of running to the 6-hour default.
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          # Fetch full history and tags, so the Makefile's `git describe --tags`
-          # resolves the pushed tag into main.version.
+          # Fetch full history and tags, so `git describe --tags` resolves the
+          # pushed tag into the binary version below.
           fetch-depth: 0
+          # The release action uses GITHUB_TOKEN through its own input, not the
+          # git config, so do not persist the token.
+          persist-credentials: false
 
-      # The pinned Go and Node versions come from .tool-versions, the same source the image reads.
-      - name: Resolve pinned toolchain versions
+      # The pinned Go version comes from .tool-versions, the same source the
+      # image reads. The host Go satisfies the Makefile's `command -v go` guard
+      # for `make image`.
+      - name: Resolve pinned Go version
         id: tools
-        run: |
-          echo "go=$(awk '$1=="golang"{print $2}' .tool-versions)" >> "$GITHUB_OUTPUT"
-          echo "node=$(awk '$1=="nodejs"{print $2}' .tool-versions)" >> "$GITHUB_OUTPUT"
+        run: echo "go=$(awk '$1=="golang"{print $2}' .tool-versions)" >> "$GITHUB_OUTPUT"
 
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
           go-version: ${{ steps.tools.outputs.go }}
 
-      - name: Set up Node
-        uses: actions/setup-node@v7
-        with:
-          node-version: ${{ steps.tools.outputs.node }}
+      # Build the perch-dev image once, so the GUI build below runs inside it.
+      - name: Build perch-dev image
+        run: make image
 
-      # These are the same GUI build libraries the perch-dev image installs,
-      # minus xvfb (xvfb is needed only for a headless GUI smoke test, not to
-      # compile). Noble ships the WebKit2GTK 4.1 dev package.
-      # libwebkit2gtk-4.1-dev also pulls in libsoup-3.0-dev. Production
-      # builds link 4.1 through -tags "production webkit2_41".
-      - name: Install GUI build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
-
-      # Build the frontend and the cgo GUI binary -> bin/perch, version stamped from the tag.
+      # Build the frontend and the cgo GUI binary inside perch-dev, into
+      # bin/perch. The host computes the version from the tag and passes it as
+      # a make override. A command-line VERSION overrides the Makefile default,
+      # so the build never depends on git ownership inside the container.
+      # PERCH_MASK_DIST keeps the build off the checked-out frontend/dist stub.
+      # The real frontend still builds into the masked volume and embeds into
+      # the binary.
       - name: Build production GUI binary (linux/amd64)
-        run: make gui-build
+        env:
+          PERCH_MASK_DIST: 1
+        run: |
+          bash containers/run.sh dev make CONTAINERIZE=0 gui-build \
+            VERSION="$(git describe --tags --always --dirty)"
 
       - name: Package binary and checksums
         run: |
           install -m 0755 bin/perch perch-linux-amd64
           sha256sum perch-linux-amd64 > SHA256SUMS
-          # Check that the tag flowed into the binary's version string.
-          ./perch-linux-amd64 version
+          # Check that the tag flowed into the binary version. Run inside
+          # perch-dev, which has the WebKitGTK runtime libraries the binary
+          # links against.
+          bash containers/run.sh dev ./bin/perch version
+
+      # Build provenance is a signed SLSA attestation. It proves this workflow
+      # built these files. It is not code signing. `gh attestation verify`
+      # checks a downloaded artifact against this repository.
+      - name: Generate build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            perch-linux-amd64
+            SHA256SUMS
 
       # This third-party action is pinned to a full commit SHA, for
       # supply-chain hardening. The trailing comment records the
