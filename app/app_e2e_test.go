@@ -63,21 +63,31 @@ type capturedEmit struct {
 }
 
 func TestE2E_HeadlessFullLoop(t *testing.T) {
-	// ── 30-second overall guard ──────────────────────────────────────────────
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	// ── build fake-agent binary ──────────────────────────────────────────────
+	// Build before the HOME sandbox below. The go build cache (GOCACHE)
+	// defaults to $HOME/.cache/go-build. A sandboxed HOME points GOCACHE at an
+	// empty directory and forces a cold recompile on every run. A separate
+	// build deadline also stops a cold CI compile from spending the loop
+	// guard's 30-second budget.
+	fakeAgentBin := filepath.Join(t.TempDir(), "fake-agent")
+	buildCtx, buildCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer buildCancel()
+	buildCmd := exec.CommandContext(buildCtx, "go", "build", "-o", fakeAgentBin,
+		"github.com/miniature-pug/perch/cmd/fake-agent")
+	if out, err := buildCmd.CombinedOutput(); err != nil {
+		t.Fatalf("build fake-agent: %v: %s", err, out)
+	}
 
 	// ── sandbox HOME and XDG_CONFIG_HOME BEFORE NewApp (so settingsPath is sandboxed) ──
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
-	// ── build fake-agent binary ──────────────────────────────────────────────
-	fakeAgentBin := filepath.Join(t.TempDir(), "fake-agent")
-	buildCmd := exec.CommandContext(ctx, "go", "build", "-o", fakeAgentBin,
-		"github.com/miniature-pug/perch/cmd/fake-agent")
-	if out, err := buildCmd.CombinedOutput(); err != nil {
-		t.Fatalf("build fake-agent: %v: %s", err, out)
-	}
+	// ── 30-second guard for the loop ─────────────────────────────────────────
+	// This deadline bounds the fake-agent runtime and the event polling. The
+	// build above has its own deadline, so a slow build never spends this
+	// budget.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
 	// ── set up git repo ──────────────────────────────────────────────────────
 	// root is the configured root. The repo lives inside root.
