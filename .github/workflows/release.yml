@@ -89,7 +89,13 @@ jobs:
       # Build provenance is a signed SLSA attestation. It proves this workflow
       # built these files. It is not code signing. `gh attestation verify`
       # checks a downloaded artifact against this repository.
+      #
+      # GitHub offers artifact attestations free on public repositories. A
+      # private repository needs a Team or Enterprise plan for the attestation
+      # API, so this step runs only when the repository is public. It activates
+      # on its own when perch goes public for its first tagged release.
       - name: Generate build provenance
+        if: ${{ !github.event.repository.private }}
         uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
