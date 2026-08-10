@@ -94,6 +94,16 @@
   // never touches this set). SvelteSet so .add()/.delete()/.has() are reactive.
   let attnAck = new SvelteSet<string>();
 
+  // Acknowledged done/errored signals. The left-pane row-level BEGGING (bar +
+  // glow) for a finished/failed session is a background eye-pull; once the user
+  // OPENS that session (makes it active), the ask is answered, so its id is added
+  // here and the Sidebar stops begging for it — while its persistent ✓/✗ status
+  // word stays. Unlike awaiting-input, just VIEWING the row acknowledges it (a
+  // finish needs no agent-pane interaction). A FRESH done/errored event in the
+  // agent:event handler deletes the id so a NEW finish re-begs even on a session
+  // the user already looked at. SvelteSet so .add()/.delete()/.has() are reactive.
+  let attnDoneAck = new SvelteSet<string>();
+
   // Awaiting-input auto-focus: a per-session ref map to each open agent terminal
   // so we can route the keyboard to the ACTIVE one without a click, plus a
   // transient emphasis flag pulsed when the ACTIVE agent asks for input. Keyed
@@ -167,6 +177,23 @@
     active?.state; // track: re-ack a fresh awaiting-input on the viewed session
     const viewing = id != null && isViewingAgentPane(id, activeId, layout.view);
     if (viewing) untrack(() => attnAck.add(id!));
+  });
+
+  // Acknowledge a done/errored session the moment the user opens it (makes it
+  // active). Unlike awaiting-input's ack, just VIEWING the row counts — a finished
+  // or failed turn needs no agent-pane interaction to be "seen". Tracks activeId +
+  // the active session's state; when that state is done/errored, records its id so
+  // the Sidebar drops the row's begging (the ✓/✗ status word stays). A fresh
+  // done/errored deletes the id first (in the agent:event handler), so if the user
+  // is watching a session finish this effect re-acks it immediately (no beg when
+  // they leave), while a finish that lands on a BACKGROUND session stays un-acked
+  // and begs until opened. untrack the mutation so it does not feed back.
+  $effect(() => {
+    const id = activeId;
+    const st = active?.state;
+    if (id != null && (st === "done" || st === "errored")) {
+      untrack(() => attnDoneAck.add(id));
+    }
   });
 
   // Auto-read the hub notifications for the workspace the user is now looking at.
@@ -498,6 +525,16 @@
       // unchanged) keeps its notif.
       if (prev === "awaiting-input" && ev.state && ev.state !== "awaiting-input") {
         dropAwaitingInputForWorkspace(ev.workspaceId);
+      }
+      // A FRESH finish (done/errored) un-acknowledges the session so its row begs
+      // again even if the user had already seen a PREVIOUS finish. Gated on a real
+      // transition (prev !== ev.state) so a redundant done frame (a reconnect
+      // snapshot) never re-begs an already-seen finish. If the session is the one
+      // the user is actively viewing, the ack $effect above immediately re-acks it
+      // (watching it finish IS seeing it); a backgrounded finish stays un-acked and
+      // begs until opened.
+      if ((ev.state === "done" || ev.state === "errored") && prev !== ev.state) {
+        attnDoneAck.delete(ev.workspaceId);
       }
       // A FRESH question un-acknowledges the session so its left-pane "asking
       // you" badge re-raises even on a backgrounded, already-acked session. We
@@ -1346,7 +1383,7 @@
             }}
           />
         {/if}
-        <Sidebar workspaces={shownWorkspaces} {activeId} onSelect={onSelect} onNew={openNewSession} onReorder={handleReorder} diffStats={wsDiffStats} openIds={openIds} ackedInputIds={attnAck}
+        <Sidebar workspaces={shownWorkspaces} {activeId} onSelect={onSelect} onNew={openNewSession} onReorder={handleReorder} diffStats={wsDiffStats} openIds={openIds} ackedInputIds={attnAck} ackedDoneIds={attnDoneAck}
           onRename={(id, title) => { const ws = workspaces.find(w => w.id === id); if (ws) ws.title = title; setWorkspaceTitle(id, title); }}
           onEditStart={() => { previewWs = null; }}
           requestRemove={(id) => { const ws = workspaces.find(w => w.id === id); if (ws) requestRemove(ws); }} />

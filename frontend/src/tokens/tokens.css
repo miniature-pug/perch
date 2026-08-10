@@ -37,6 +37,10 @@
      BACKGROUND session begs for a look. Slower than the 1.6s icon pulse: the
      glow covers a large area, so a gentler cadence stays glanceable, not busy. */
   --perch-dur-attn-row: 2s;
+  /* Running spinner — the persistent slow rotation of a session's ◐ status icon
+     while its agent is working, so "running" reads as alive at a glance (a static
+     icon can't be told from a frozen one). Reduced-motion falls back to static. */
+  --perch-dur-spin: 1.4s;
   /* Interaction feedback — state */
   --perch-opacity-disabled: 0.4;
   /* Glass + radius */

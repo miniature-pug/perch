@@ -1069,6 +1069,62 @@ describe("App.svelte live event wiring", () => {
     );
   });
 
+  // -------------------------------------------------------------------------
+  // USER BUG REPRO: "the begging never goes away even after I switch the
+  // tab/session." A finished (done/errored) session's row-level begging must
+  // stop once the user has OPENED it — and stay stopped when they switch away —
+  // while its persistent ✓/✗ status stays. A FRESH finish re-begs.
+  // -------------------------------------------------------------------------
+  it("USER REPRO: a done session you already opened stops begging after you switch away; a FRESH done re-begs", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    // Open Alpha (ws-1), then open Beta (ws-2) → Beta active, Alpha background+open.
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
+    await fireEvent.click(alphaBtn);
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    await tick();
+    const betaBtn = screen.getByRole("button", { name: /^Beta\b/ });
+    await fireEvent.click(betaBtn);
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    await tick();
+
+    const cb = captured.agent.at(-1)!;
+
+    // Alpha finishes while BACKGROUND → its row begs (attn-done).
+    cb({ workspaceId: "ws-1", kind: "state", state: "done" });
+    await tick();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Alpha\b/ }).classList.contains("attn-done")).toBe(true)
+    );
+
+    // The user OPENS Alpha (already open → pure focus path, activeId = ws-1). While
+    // active it never begs, and being viewed records it as seen (attnDoneAck).
+    await fireEvent.click(screen.getByRole("button", { name: /^Alpha\b/ }));
+    await tick();
+    expect(screen.getByRole("button", { name: /^Alpha\b/ }).classList.contains("attn-done")).toBe(false);
+
+    // Switch AWAY to Beta: Alpha is background + still done, but SEEN → no more beg…
+    await fireEvent.click(screen.getByRole("button", { name: /^Beta\b/ }));
+    await tick();
+    expect(screen.getByRole("button", { name: /^Alpha\b/ }).classList.contains("attn-done")).toBe(false);
+    // …and its persistent status stays: the row still reads "done".
+    expect(screen.getByRole("button", { name: /^Alpha\b/ })).toHaveTextContent("done");
+
+    // A FRESH turn on Alpha (running → done) while BACKGROUND re-raises the beg.
+    cb({ workspaceId: "ws-1", kind: "state", state: "running" });
+    await tick();
+    cb({ workspaceId: "ws-1", kind: "state", state: "done" });
+    await tick();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Alpha\b/ }).classList.contains("attn-done")).toBe(true)
+    );
+  });
+
   it("awaiting-APPROVAL is never suppressed by the ack path (stays 'needs you' when active+viewed)", async () => {
     const { listWorkspaces } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);

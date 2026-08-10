@@ -6,7 +6,7 @@
 
   let {
     workspaces, activeId, onSelect, onNew, onReorder,
-    diffStats = {}, openIds, ackedInputIds, onRename, onEditStart, requestRemove,
+    diffStats = {}, openIds, ackedInputIds, ackedDoneIds, onRename, onEditStart, requestRemove,
   }: {
     workspaces: WorkspaceVM[];
     activeId: string | null;
@@ -22,6 +22,12 @@
     // suppressed so a seen question does not nag forever; a fresh question in App
     // removes the id, re-raising the badge.
     ackedInputIds?: Set<string>;
+    // Ids whose CURRENT done/errored the user has already seen (opened the session
+    // while it was finished/failed). Suppresses only the row-level BEGGING for
+    // those rows — the persistent ✓/✗ status icon and word still show — so a
+    // finished session stops nagging once looked at while its status stays put. A
+    // fresh done/errored event in App removes the id, so a NEW finish re-begs.
+    ackedDoneIds?: Set<string>;
     // Inline rename: onRename commits a new title; onEditStart lets the parent
     // dismiss any transient overlay (e.g. resume preview) when editing begins.
     onRename?: (id: string, title: string) => void;
@@ -128,31 +134,30 @@
     }
   }
 
-  // States that warrant a visible compact status word beside the colored icon.
-  // Attention/terminal states (and the active row, whatever its state) get the
-  // visible word; calm background rows (idle/running) keep it screen-reader-only
-  // so the list stays quiet where nothing needs the user.
-  const STATE_TEXT_SHOWN = new Set<WorkspaceVM["state"]>([
-    "awaiting-approval", "awaiting-input", "done", "errored", "exited",
-  ]);
-  function showStateText(ws: WorkspaceVM, rowState: WorkspaceVM["state"]): boolean {
-    return ws.id === activeId || STATE_TEXT_SHOWN.has(rowState);
-  }
+  // The compact status word beside the colored icon shows on EVERY row, always.
+  // Persistent, glanceable per-session status is the point of the left pane: the
+  // user reads "running" / "done" / "idle" across all sessions without switching,
+  // and a background session's status stays put (it is not a transient flash).
+  // Calm states (idle/exited) render dim so active states (running/done/awaiting/
+  // errored) still stand out; the word doubles as the accessible state label.
 
-  // Row-level attention signal. A BACKGROUND (non-active) session that needs the
-  // user or has just finished begs for a glanceable look: the whole row gets a
-  // color-coded left bar + slow pulsing tint (see the .attn CSS), far stronger
-  // than the tiny status icon alone. Gated purely on rowState + whether this row
-  // is the active one — opening the session (making it active) IS the
-  // acknowledgement, so the signal clears with no extra state machine. Because
-  // it keys off rowState, an awaiting-input question the user already saw
-  // (displayState → "idle" via ackedInputIds) also stops begging, for free.
-  // Returns the urgency state to color by, or null for no treatment.
+  // Row-level attention signal — the BEGGING, distinct from the always-on status
+  // word above. A BACKGROUND (non-active) session that needs the user or has just
+  // finished begs for a glanceable look: the whole row gets a color-coded left bar
+  // + slow pulsing tint (see the .attn CSS), far stronger than the tiny icon.
+  // Suppressed when: (a) this is the active row — opening the session IS the
+  // acknowledgement; (b) an awaiting-input question was already seen (displayState
+  // → "idle" via ackedInputIds); or (c) a done/errored the user already opened is
+  // in ackedDoneIds — a finished/failed turn nags until looked at, then goes quiet
+  // (its ✓/✗ status word stays). awaiting-approval is never suppressible here: it
+  // is a pending action that must beg until decided. Returns the urgency state to
+  // color by, or null for no treatment.
   const ATTENTION_STATES = new Set<WorkspaceVM["state"]>([
     "awaiting-approval", "awaiting-input", "errored", "done",
   ]);
   function attentionState(ws: WorkspaceVM, rowState: WorkspaceVM["state"]): WorkspaceVM["state"] | null {
     if (ws.id === activeId) return null;
+    if ((rowState === "done" || rowState === "errored") && ackedDoneIds?.has(ws.id)) return null;
     return ATTENTION_STATES.has(rowState) ? rowState : null;
   }
 
@@ -252,9 +257,7 @@
                 ondblclick={(e) => startEdit(e, ws)}
               >{primaryLabel(ws)}</span>
             {/if}
-            {#if showStateText(ws, rowState)}
-              <span class="status-text st-{rowState}">{st.label}</span>
-            {/if}
+            <span class="status-text st-{rowState}">{st.label}</span>
           </span>
 
           <!-- Line 2: dim meta — repo · branch · agent · age · diffstat -->
@@ -273,11 +276,6 @@
               {/if}
             {/if}
           </span>
-          <!-- When the compact word is shown visibly (attention/active rows),
-               drop this duplicate so screen readers announce the state once. -->
-          {#if !showStateText(ws, rowState)}
-            <span class="status-label">{st.label}</span>
-          {/if}
         </button>
         {#if requestRemove}
           <button
@@ -508,14 +506,23 @@
   .status-icon {
     font-size: var(--perch-fs-caption);
     flex-shrink: 0;
+    /* inline-block so the running spinner's rotate transform applies (transforms
+       are ignored on non-replaced inline elements). width keeps the glyph boxed. */
+    display: inline-block;
     width: 16px;
     text-align: center;
     color: var(--perch-text-dim); /* default / idle */
   }
 
+  /* "running" spins its ◐ slowly and forever while the agent works, so a live
+     session reads as alive at a glance — a static icon can't be told from a
+     frozen one. This is the ONLY motion on a running row (running is not an
+     attention state), so it never competes with the begging pulse. */
   .status-running {
     color: var(--perch-ok);
+    animation: perch-spin var(--perch-dur-spin) linear infinite;
   }
+  @keyframes perch-spin { to { transform: rotate(360deg); } }
 
   .status-idle {
     color: var(--perch-text-dim);
@@ -557,6 +564,8 @@
   @media (prefers-reduced-motion: reduce) {
     .status-awaiting-approval, .status-awaiting-input { animation: none; }
     .status-icon.status-done { animation: none; }
+    /* No spin: a running row falls back to a static ◐ (still colored ok-green). */
+    .status-icon.status-running { animation: none; }
     .workspace-row { transition: none; }
     .workspace-row:hover { transform: none; }
     .row-remove { transition: none; }
@@ -567,9 +576,10 @@
   }
 
   /* ── Compact visible status word ─────────────────────────────── */
-  /* Shown on attention/terminal states and the active row (see showStateText);
-     colored to match the state so the word reinforces the icon. Sits at the
-     right of line 1, left of the reserved remove-(×) gutter. */
+  /* Shown on EVERY row so each session's status is readable at a glance without
+     switching; colored to match the state so the word reinforces the icon, and
+     it is the accessible state label. Sits at the right of line 1, left of the
+     reserved remove-(×) gutter. */
   .status-text {
     flex-shrink: 0;
     font-size: var(--perch-fs-caption);
@@ -689,25 +699,6 @@
     font-family: var(--perch-font-mono);
     color: var(--perch-accent);
     flex-shrink: 0;
-  }
-
-  /* ── Status label ─────────────────────────────────────────────── */
-  /* Visually hidden, but kept in the DOM + accessibility tree. The colored,
-     shaped, pulsing status icon already conveys state to sighted users (hover
-     its title for the word), so the text label was redundant chrome that
-     clipped on narrow rows. Screen readers still announce it and it stays in
-     the row's textContent. Absolute positioning removes it from the flex row
-     so it no longer consumes width. */
-  .status-label {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    white-space: nowrap;
-    border: 0;
   }
 
   /* ── Row remove (×) — hover/focus revealed ───────────────────── */

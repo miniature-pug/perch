@@ -523,21 +523,88 @@ test("F38: done and running status icons resolve to different color tokens", asy
   expect(done).not.toBe(running);
 });
 
-test("F38: attention rows show a visible compact status word; calm rows keep it sr-only", async () => {
+test("persistent status word shows on EVERY row (background calm rows included), not just attention/active", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  // ws_b (idle) is the active row, so ws_a (running) is a BACKGROUND calm row.
+  render(Sidebar, { props: { workspaces, activeId: "ws_b", onSelect: () => {}, onNew: () => {} } });
+
+  // A background RUNNING row now shows its word (was screen-reader-only before) —
+  // the whole point of glanceable per-session status without switching.
+  const runBtn = screen.getByRole("button", { name: /feat-auth/ });
+  expect(runBtn.querySelector(".status-text")!.textContent).toBe("running");
+
+  // A background awaiting-approval (attention) row still shows its word.
+  const approvalBtn = screen.getByRole("button", { name: /bug-fix/ });
+  expect(approvalBtn.querySelector(".status-text")!.textContent).toBe("needs you");
+
+  // The old sr-only-only .status-label element is gone everywhere (the visible
+  // word is the accessible label now).
+  expect(document.querySelector(".status-label")).toBeNull();
+});
+
+test("status-running carries a persistent spin (alive), disabled under reduced motion", async () => {
   const { default: Sidebar } = await import("./Sidebar.svelte");
   render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {} } });
+  const styleText = [...document.querySelectorAll("style")].map((s) => s.textContent).join("\n");
 
-  // ws_c is awaiting-approval (attention) → visible .status-text "needs you".
-  const approvalBtn = screen.getByRole("button", { name: /bug-fix/ });
-  const stateText = approvalBtn.querySelector(".status-text");
-  expect(stateText).toBeInTheDocument();
-  expect(stateText!.textContent).toBe("needs you");
-  expect(approvalBtn.querySelector(".status-label")).toBeNull();
+  // The running icon spins forever while the agent works (Svelte scopes the
+  // keyframe name, but the original suffix survives, so substring checks hold).
+  const runRule = /\.status-running[^{}]*\{([^}]*)\}/.exec(styleText)?.[1] ?? "";
+  expect(runRule).toContain("perch-spin");
+  expect(runRule).toContain("infinite");
+  expect(styleText).toMatch(/@keyframes\s+[\w-]*perch-spin/);
+  // Reduced motion turns the spin off (static ◐ fallback). [^{}]* swallows the
+  // Svelte scope class (.svelte-hash) appended after .status-running.
+  expect(styleText).toMatch(/\.status-icon\.status-running[^{}]*\{\s*animation:\s*none/);
+});
 
-  // ws_b is idle + not active → no visible word, sr-only label retained.
-  const idleBtn = screen.getByRole("button", { name: /feat-core/ });
-  expect(idleBtn.querySelector(".status-text")).toBeNull();
-  expect(idleBtn.querySelector(".status-label")).toBeInTheDocument();
+// ---------------------------------------------------------------------------
+// ackedDoneIds: a done/errored the user already opened stops BEGGING (but its
+// persistent ✓/✗ status stays). Scoped to done/errored only — awaiting-approval
+// /-input are pending actions and keep begging regardless.
+// ---------------------------------------------------------------------------
+
+test("attn: a background done row in ackedDoneIds stops begging but keeps its ✓ status", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  render(Sidebar, {
+    props: {
+      workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {},
+      ackedDoneIds: new Set(["ws_d"]),
+    },
+  });
+  const doneRow = screen.getByRole("button", { name: /done-work/ });
+  expect(doneRow.classList.contains("attn")).toBe(false);
+  expect(doneRow.classList.contains("attn-done")).toBe(false);
+  // Status persists so the user still sees it finished.
+  expect(doneRow.querySelector(".status-icon")!.textContent).toContain("✓");
+  expect(doneRow.querySelector(".status-text")!.textContent).toBe("done");
+});
+
+test("attn: a background errored row in ackedDoneIds stops begging (still shows ✗)", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  render(Sidebar, {
+    props: {
+      workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {},
+      ackedDoneIds: new Set(["ws_e"]),
+    },
+  });
+  const errRow = screen.getByRole("button", { name: /errored-work/ });
+  expect(errRow.classList.contains("attn")).toBe(false);
+  expect(errRow.classList.contains("attn-errored")).toBe(false);
+  expect(errRow.querySelector(".status-icon")!.textContent).toContain("✗");
+});
+
+test("attn: ackedDoneIds does NOT suppress awaiting-approval or awaiting-input (pending actions keep begging)", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  // Even with their ids in ackedDoneIds, pending-action states must still beg.
+  render(Sidebar, {
+    props: {
+      workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {},
+      ackedDoneIds: new Set(["ws_c", "ws_q"]),
+    },
+  });
+  expect(screen.getByRole("button", { name: /bug-fix/ }).classList.contains("attn-awaiting-approval")).toBe(true);
+  expect(screen.getByRole("button", { name: /asking-work/ }).classList.contains("attn-awaiting-input")).toBe(true);
 });
 
 test("F38: the active row shows its state as a visible compact word", async () => {
