@@ -480,3 +480,73 @@ func TestOnEnvSync_StoresOverlayAndRelaunchesAsync(t *testing.T) {
 		t.Errorf("relaunched agent pane missing synced var API_TOKEN=fresh; got %v", got)
 	}
 }
+
+// A reload respawns the agent pty under the same paneID; the frontend must remount
+// a fresh xterm so the new `claude --resume` does not redraw over the stale buffer
+// (the garble seen after a reload). onEnvSync signals that remount by emitting
+// workspace:relaunch with the workspace id, and it must fire SYNCHRONOUSLY — before
+// the async respawn — so the fresh, correctly-sized pane is ready as the agent draws.
+func TestOnEnvSync_EmitsWorkspaceRelaunchSynchronously(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	store, _ := registry.Load(t.TempDir())
+	wt := t.TempDir()
+	_ = store.Upsert(registry.Workspace{ID: "ws-relaunch", WorktreePath: wt, Agent: "claude", Title: "t"})
+
+	fm := agent.NewFakeMonitor(nil)
+	fm.SetLaunchCmd("claude --resume abc\n")
+
+	var mu sync.Mutex
+	var relaunchIDs []string
+	spawned := make(chan struct{}, 1)
+	a := &App{
+		store: store,
+		roots: []string{wt},
+		emit: func(event string, data ...any) {
+			if event != evtWorkspaceRelaunch {
+				return // ignore the agent:event/etc. the async relaunch also emits
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if len(data) > 0 {
+				if m, ok := data[0].(map[string]any); ok {
+					if id, ok := m["workspaceId"].(string); ok {
+						relaunchIDs = append(relaunchIDs, id)
+					}
+				}
+			}
+		},
+		bridges:    map[string]*internalpty.Bridge{},
+		monitors:   map[string]agent.Monitor{},
+		cancels:    map[string]context.CancelFunc{},
+		envOverlay: map[string][]string{},
+		spawnPty: func(_ context.Context, _ string, _ []string, _ []string, _, _ string,
+			_ internalpty.EmitFunc, _, _ uint16) (*internalpty.Bridge, error) {
+			select {
+			case spawned <- struct{}{}:
+			default:
+			}
+			return internalpty.NewBridgeForTest(func() error { return nil }), nil
+		},
+		newMonitor: func(_ string, _ agent.Adapter) (agent.Monitor, error) { return fm, nil },
+		newAdapter: fakeAdapterSeam(&fakeAdapter{name: "claude", detect: true}),
+	}
+
+	a.onEnvSync("ws-relaunch", []string{"API_TOKEN=fresh"})
+
+	// The remount signal must already be recorded the instant onEnvSync returns —
+	// it is emitted before the goroutine, so no waiting is needed for THIS check.
+	mu.Lock()
+	gotSync := append([]string(nil), relaunchIDs...)
+	mu.Unlock()
+	if len(gotSync) != 1 || gotSync[0] != "ws-relaunch" {
+		t.Fatalf("workspace:relaunch not emitted synchronously with the workspace id; got %v", gotSync)
+	}
+
+	// Drain the async relaunch so CloseWorkspace has a live pane to tear down cleanly.
+	select {
+	case <-spawned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("onEnvSync did not dispatch the async relaunch")
+	}
+	t.Cleanup(func() { _ = a.CloseWorkspace("ws-relaunch") })
+}

@@ -62,6 +62,7 @@ const captured = {
   notify:          [] as Array<(n: any)  => void>,
   fsChanged:       [] as Array<(p: any)  => void>,
   workspaceAttach: [] as Array<(p: any)  => void>,
+  workspaceRelaunch: [] as Array<(p: any) => void>,
 };
 
 vi.mock("./lib/wails", () => ({
@@ -94,6 +95,7 @@ vi.mock("./lib/wails", () => ({
   onNotify:        vi.fn((cb) => { captured.notify.push(cb);    return () => {}; }),
   onFsChanged:     vi.fn((cb) => { captured.fsChanged.push(cb); return () => {}; }),
   onWorkspaceAttach: vi.fn((cb) => { captured.workspaceAttach.push(cb); return () => {}; }),
+  onWorkspaceRelaunch: vi.fn((cb) => { captured.workspaceRelaunch.push(cb); return () => {}; }),
   diffStat:        vi.fn(async (worktreePath: string) => {
     // Return 2 files summing to +5 −2 for /tmp/alpha; empty for all others.
     // This keeps existing tests unaffected (they don't assert on diffstat values)
@@ -152,6 +154,7 @@ beforeEach(async () => {
   captured.notify.length          = 0;
   captured.fsChanged.length       = 0;
   captured.workspaceAttach.length = 0;
+  captured.workspaceRelaunch.length = 0;
   // Reset the real layout singleton to default values before each test.
   const { layout } = await import("./lib/stores/layout.svelte");
   layout.setView("agent");
@@ -640,6 +643,44 @@ describe("App.svelte Stage content routing", () => {
     });
     expect(within(secondaryPane()!).getByTestId("terminal")).toBe(splitNode);
     expect(terminalMountCounts["p2"] ?? 0).toBe(baseline + 1);
+  });
+
+  // A backend-initiated conversation-preserving relaunch (perch reload / the drawer's
+  // env→agent button) respawns the agent pty under the same paneId. The app must
+  // remount that workspace's agent terminal so the new `claude --resume` redraws into
+  // a FRESH xterm instead of over the stale buffer (the post-reload garble). The
+  // signal is the workspace:relaunch event; it bumps the session's terminal epoch,
+  // which re-keys the {#each} and remounts the TerminalProbe exactly once.
+  it("workspace:relaunch remounts ONLY that workspace's agent terminal (fresh xterm)", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { terminalMountCounts } = await import("./lib/__stubs__/terminalExit");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    // Open ws-1 (paneId p1) so its agent terminal is mounted.
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
+    await fireEvent.click(alphaBtn);
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    await waitFor(() =>
+      expect(within(document.body).getAllByTestId("terminal").some(n => n.dataset.paneId === "p1")).toBe(true),
+    );
+
+    // The app must have registered a relaunch listener on mount.
+    expect(captured.workspaceRelaunch.length).toBeGreaterThan(0);
+    const baseline = terminalMountCounts["p1"] ?? 0;
+
+    // Relaunch ws-1 → its agent terminal remounts exactly once (fresh xterm).
+    captured.workspaceRelaunch.forEach(cb => cb({ workspaceId: "ws-1" }));
+    await tick();
+    await waitFor(() => expect(terminalMountCounts["p1"] ?? 0).toBe(baseline + 1));
+
+    // A relaunch for a DIFFERENT workspace must NOT remount ws-1's terminal.
+    const afterOwn = terminalMountCounts["p1"] ?? 0;
+    captured.workspaceRelaunch.forEach(cb => cb({ workspaceId: "ws-2" }));
+    await tick();
+    expect(terminalMountCounts["p1"] ?? 0).toBe(afterOwn);
   });
 
   // The shell drawer pane key must be a safe shape. It was

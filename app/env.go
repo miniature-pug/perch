@@ -14,6 +14,11 @@ import (
 // environment.
 const perchEnvPrefix = "PERCH_"
 
+// evtWorkspaceRelaunch tells the frontend to remount a workspace's agent terminal
+// (a fresh xterm) for a conversation-preserving relaunch. MUST match
+// EVT_WORKSPACE_RELAUNCH in frontend/src/lib/wails.ts.
+const evtWorkspaceRelaunch = "workspace:relaunch"
+
 // envsyncPaneEnv returns the KEY=VALUE process-environment entries a per-workspace
 // drawer needs so `perch reload` can authenticate to the env-sync endpoint by
 // name (never inlined into any typed line). The variable names are single-sourced
@@ -97,6 +102,15 @@ func (a *App) onEnvSync(workspaceID string, delta []string) {
 	}
 	a.envOverlay[workspaceID] = delta
 	a.mu.Unlock()
+
+	// Tell the frontend to remount this workspace's agent terminal (a fresh xterm)
+	// BEFORE the relaunch respawns the pty. The respawn reuses the same paneID, so
+	// with no remount the new `claude --resume` redraws over the old buffer and
+	// inherits a stale grid size — the garble seen after a reload. Bumping the
+	// terminal epoch (as the user-reopen path already does) rebuilds an empty xterm
+	// whose fresh mount re-sends resizePty, so the agent redraws clean at the right
+	// size. Emitted before the goroutine so the fresh pane is ready as the agent draws.
+	a.emit(evtWorkspaceRelaunch, map[string]any{"workspaceId": workspaceID})
 
 	go func() {
 		defer safe.Recover("envsync-relaunch")

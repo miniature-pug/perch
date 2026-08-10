@@ -61,6 +61,7 @@ vi.mock("./lib/wails", () => ({
   onNotify:        vi.fn((cb) => { captured.notify.push(cb);    return () => {}; }),
   onFsChanged:     vi.fn((cb) => { captured.fsChanged.push(cb); return () => {}; }),
   onWorkspaceAttach: vi.fn(() => () => {}),
+  onWorkspaceRelaunch: vi.fn(() => () => {}),
   diffStat:        vi.fn(async () => []),
   setWindowFocus:  vi.fn(async () => {}),
 }));

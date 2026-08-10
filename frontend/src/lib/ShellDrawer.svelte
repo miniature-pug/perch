@@ -62,9 +62,18 @@
   .shell-drawer {
     display: flex;
     flex-direction: column;
+    /* Fill the height the parent zone gives us (JS-driven shellH, or the home
+       shell's fixed height). flex:1 + min-height:0 is what makes .shell-body —
+       and the xterm host inside it — resolve to the zone's ACTUAL visible height
+       instead of xterm's content-driven default (~24 rows). Without it FitAddon
+       measures the tall content box, keeps too many rows, and the grid's bottom
+       (the cursor) is clipped by the zone's overflow:hidden with no way to scroll
+       to it. The parent zone MUST be a flex column for this to take (see
+       .shell-drawer-zone / .home-shell-zone in App.svelte). */
+    flex: 1;
+    min-height: 0;
     background: var(--perch-bg);
     border-top: 1px solid var(--perch-border);
-    /* Height is JS-driven via parent; we fill what we're given */
     overflow: hidden;
   }
 

@@ -63,6 +63,10 @@ This is the one path no automated test covers.
       and resize the window and the shell drawer. The cursor stays in view and
       typing `clear` fully clears to an empty prompt, with no grey band and no
       lost cursor.
+- [ ] In the bottom shell drawer specifically, run many commands (or `ls -al` in
+      a large directory) so output overflows the drawer. It scrolls naturally to
+      the newest prompt at the very bottom, the cursor is never clipped below the
+      fold, and dragging the drawer taller or shorter reflows the grid to match.
 - [ ] After a session ends, click Reopen: the "session has ended" overlay clears
       and stays gone, even if a late or stale exit arrives right after the reopen.
 
@@ -85,6 +89,9 @@ real-agent territory the mock gate cannot exercise.
       reload button in the drawer header. Confirm the agent relaunches, the
       conversation is intact (not a fresh session), and the agent can see the
       new variable.
+- [ ] After the relaunch, the AGENT pane redraws cleanly into a fresh terminal:
+      no garbled or overlapping harness UI painted over the old frame, and no
+      wrong-width wrapping (the respawned agent is sized to the pane).
 - [ ] Repeat by running `perch reload` by hand in the session terminal instead
       of clicking the button. Confirm the same outcome.
 - [ ] Neither the reload button nor a typed `perch reload` prints "command not

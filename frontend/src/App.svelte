@@ -29,7 +29,7 @@
   import NotificationHub    from "./lib/NotificationHub.svelte";
   import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead, markAllRead, dropForWorkspace } from "./lib/stores/notifications.svelte";
   import CleanupPanel from "./lib/CleanupPanel.svelte";
-  import { listWorkspaces, createWorkspace, setWorkspaceTitle, workspaceForBranch, removeWorkspace, openWorkspace, closeWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, onWorkspaceAttach, approve, pendingApprovals, branches, readFile, setWindowFocus, writeToPty, discoverRepos, diffStat, listStaleSessions, forceRemoveWorkspace, clipboardSetText, homeShellCwd as fetchHomeShellCwd } from "./lib/wails";
+  import { listWorkspaces, createWorkspace, setWorkspaceTitle, workspaceForBranch, removeWorkspace, openWorkspace, closeWorkspace, revealInFiles, onAgentEvent, onNotify, onFsChanged, onWorkspaceAttach, onWorkspaceRelaunch, approve, pendingApprovals, branches, readFile, setWindowFocus, writeToPty, discoverRepos, diffStat, listStaleSessions, forceRemoveWorkspace, clipboardSetText, homeShellCwd as fetchHomeShellCwd } from "./lib/wails";
   import type { WorkspaceVM, ApprovalReq, StaleSessionVM, AgentState, RepoInfo } from "./lib/wails";
   import { UNDO_REMOVE_DELAY_MS, GCHORD_TIMEOUT_MS, SIDEBAR_MIN_W, SIDEBAR_MAX_W, SHELL_MIN_H, SHELL_MAX_H, RESIZE_STEP_PX, THEMES, MIME_SESSION, MENTION_PREFIX, AGENT_CLAUDE, AGENT_OPENCODE } from "./lib/constants";
 
@@ -287,6 +287,7 @@
   let offNotify:            (() => void) | null = null;
   let offFsChanged:         (() => void) | null = null;
   let offWorkspaceAttach:   (() => void) | null = null;
+  let offWorkspaceRelaunch: (() => void) | null = null;
   let offOsFileDrop:        (() => void) | null = null;
 
   // Window focus/blur handlers — report focus state to the backend so it can gate
@@ -472,6 +473,18 @@
       if (target) onSelect(target.id);
     });
 
+    offWorkspaceRelaunch = onWorkspaceRelaunch((p) => {
+      // A backend-initiated conversation-preserving relaunch (perch reload /
+      // env→agent) respawned the agent pty under the same paneId. Bump the terminal
+      // epoch so the agent terminal-zone {#key} remounts a FRESH xterm — otherwise
+      // the new `claude --resume` redraws over the old buffer (garble) and keeps a
+      // stale grid size. Mirrors openSession's remount; no active-selection / openIds
+      // change, since the session is already open and active (the reload came from
+      // its own drawer). The fresh mount's deferred fit re-sends resizePty, so the
+      // pty is resized to the pane's real dimensions as the agent redraws.
+      if (p.workspaceId) termEpoch[p.workspaceId] = (termEpoch[p.workspaceId] ?? 0) + 1;
+    });
+
     await Promise.all([settings.load(), layout.restore()]);
     workspaces = await listWorkspaces();
     // Seed the approval queue from the backend's authoritative pending set: an
@@ -498,6 +511,7 @@
     offNotify?.();
     offFsChanged?.();
     offWorkspaceAttach?.();
+    offWorkspaceRelaunch?.();
     offOsFileDrop?.();
     window.removeEventListener("focus", onWindowFocus);
     window.removeEventListener("blur",  onWindowBlur);
@@ -1713,7 +1727,11 @@
   @media (prefers-reduced-motion: reduce) {
     .terminal-zone.input-emphasis { animation: none; }
   }
-  .shell-drawer-zone { flex-shrink: 0; overflow: hidden; border-top: 1px solid var(--perch-border);
+  /* display:flex + column gives the JS-driven height a flex context to distribute,
+     so the ShellDrawer inside (a display:contents wrapper's child) stretches to the
+     zone's real height and its xterm fits the visible window (scroll correctness). */
+  .shell-drawer-zone { display: flex; flex-direction: column; flex-shrink: 0; overflow: hidden;
+                       border-top: 1px solid var(--perch-border);
                        transition: outline-color var(--perch-dur) var(--perch-ease); }
   /* Active-zone accent ring (you-are-here cue, not a focus indicator).
      Uses outline (not inset box-shadow) so it paints over opaque child panes and
@@ -1870,7 +1888,9 @@
   /* Home view: vertical split — welcome card above, persistent shell below */
   .home-view { display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; width: 100%; height: 100%; overflow: hidden; }
   .home-welcome { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-  .home-shell-zone { flex: none; height: 220px; border-top: 1px solid var(--perch-border); overflow: hidden; }
+  /* Same flex-column context as .shell-drawer-zone so the home ShellDrawer fills
+     the fixed height and its xterm fits the visible window (scroll correctness). */
+  .home-shell-zone { display: flex; flex-direction: column; flex: none; height: 220px; border-top: 1px solid var(--perch-border); overflow: hidden; }
 
   /* Split secondary host: adopts the split session's relocated terminal-zone
      (see lib/portal.ts). Mirrors the primary pane's flex so the adopted zone

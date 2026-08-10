@@ -160,6 +160,7 @@ export const EVT_NOTIFY           = "notify";
 export const EVT_PTY_DATA_PREFIX  = "pty:data:"; // append paneId to form full event name
 export const EVT_PTY_EXIT_PREFIX  = "pty:exit:"; // append paneId to form full event name
 export const EVT_WORKSPACE_ATTACH = "workspace:attach";
+export const EVT_WORKSPACE_RELAUNCH = "workspace:relaunch";
 
 // Event helpers — colon-separated names match the frozen Wails event table.
 export function onPtyData(paneId: string, cb: (bytes: Uint8Array) => void): () => void {
@@ -181,4 +182,11 @@ export function onNotify(
 }
 export function onWorkspaceAttach(cb: (p: { query: string }) => void): () => void {
   return window.runtime.EventsOn(EVT_WORKSPACE_ATTACH, cb);
+}
+// A conversation-preserving relaunch (perch reload / the drawer's env→agent button)
+// respawns the agent pty under the same paneId. The app remounts that workspace's
+// agent terminal so the new agent redraws into a fresh xterm instead of over the
+// stale buffer.
+export function onWorkspaceRelaunch(cb: (p: { workspaceId: string }) => void): () => void {
+  return window.runtime.EventsOn(EVT_WORKSPACE_RELAUNCH, cb);
 }
