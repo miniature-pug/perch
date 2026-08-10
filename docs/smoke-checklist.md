@@ -85,7 +85,7 @@ terminals. Real-pty territory the mock gate cannot fully exercise.
       `shell-<id>_<n>` pty). Clicking a tab switches to it; each tab keeps its own
       scrollback and running processes across switches, and the shown grid reflows to
       the drawer height (cursor never clipped).
-- [ ] The split button (⊟) shows two terminals side by side; each grid reflows to its
+- [ ] The split button (⊟ Split) shows two terminals side by side; each grid reflows to its
       half width. Toggling split off returns to a single VISIBLE terminal (the second
       tab remains in the strip, it is just no longer shown alongside).
 - [ ] `×` on a tab closes that terminal. Closing the LAST one does not leave an empty
@@ -104,10 +104,11 @@ real-agent territory the mock gate cannot exercise.
 - [ ] Run `aws sso login` (or an equivalent file-based credential refresh) in the
       session terminal. With no reload, confirm the running agent's next call
       uses the fresh credentials.
-- [ ] Export a new environment variable in the session terminal and click the ↻
-      reload button in the terminal tab strip (it reloads from the ACTIVE tab's
-      environment). Confirm the agent relaunches, the conversation is intact (not a
-      fresh session), and the agent can see the new variable.
+- [ ] Export a new environment variable in the session terminal and click the
+      labelled reload button (↻ env → agent) in the terminal tab strip; it reloads
+      from the ACTIVE tab's environment. Confirm the agent relaunches, the
+      conversation is intact (not a fresh session), and the agent can see the new
+      variable.
 - [ ] After the relaunch, the AGENT pane redraws cleanly into a fresh terminal:
       no garbled or overlapping harness UI painted over the old frame, and no
       wrong-width wrapping (the respawned agent is sized to the pane).
@@ -119,6 +120,12 @@ real-agent territory the mock gate cannot exercise.
 - [ ] After the relaunch, confirm the session terminal is left in a clean state,
       not mid-command or showing stray output from the reload.
 - [ ] The reload button is absent from the home shell drawer.
+- [ ] With more than one shell open, the reload button names the active shell
+      (↻ env → agent · shell N) so its target is unambiguous, and a ▾ caret beside
+      it opens a picker listing every shell. Open two shells, confirm the button
+      names the active one, then use the caret menu to reload a specific chosen
+      shell (not the focused tab) and confirm THAT shell's environment reaches the
+      agent.
 
 ## Tool-call approval
 
@@ -156,12 +163,14 @@ there is no automated real-binary test. Verify against a real `opencode`.
       appears and accepts input.
 - [ ] While the agent works, the sidebar shows running; when the turn ends it
       shows done (a ✓), and an ambient completion notification fires.
-- [ ] The done ✓ appears even for a turn that involved a tool-permission prompt.
-      Run a turn that edits a file or runs a command (so opencode asks permission
-      in its TUI), approve it there, and let the turn finish: the sidebar still
-      lands on done, not a plain idle. This is the class of turn that used to never
-      show the ✓ (opencode emits no permission-resolved frame, so the turn-done was
-      being lost to a steady idle).
+- [ ] The done ✓ appears AND STAYS for a turn that involved a tool-permission
+      prompt. Run a turn that edits a file or runs a command (so opencode asks
+      permission in its TUI), approve it there, and let the turn finish: the
+      sidebar settles on done (a ✓) and holds it, never slipping back to the idle
+      dot. opencode publishes more than one idle frame for a single transition (a
+      `session.status{idle}` then a deprecated `session.idle` alias, plus a repeated
+      snapshot on a silent reconnect), and any trailing idle used to revert the fresh
+      ✓. The monitor now treats a redundant idle as a no-op, so the turn-done survives.
 - [ ] Opening a session fires no completion toast before any turn runs.
 - [ ] A tool call raises the amber "needs you" signal on the sidebar row plus a
       blocking "Approval needed" notification. You approve or reject in opencode's
@@ -228,6 +237,14 @@ WebKit and cannot be checked headlessly.
       motion on, the lift is suppressed.
 - [ ] A session reaching done gives its status icon a one-shot settle pop; with
       reduced motion on, no pop.
+- [ ] A BACKGROUND session that is awaiting your approval, awaiting an answer, or
+      that errored or finished draws a color-coded left bar and a soft glow across
+      its whole row that persists until you open it: amber for approval, info for a
+      question, red for an error, calm green for done. Awaiting and errored pulse
+      slowly; done gives a gentler settle. The active (open) session never begs,
+      and opening a begging session clears its signal. With reduced motion on, the
+      row shows a static colored bar and steady tint, no pulse. Confirm a finished,
+      asking, or errored background row draws the eye without your switching to it.
 - [ ] Each session has a stable color, a stripe on its row and the same color on
       its notifications, the same across restarts.
 
@@ -241,9 +258,11 @@ WebKit and cannot be checked headlessly.
       appear in the hub, recorded as read; blocking events still surface.
 - [ ] Auto-read on view: with the window focused, switch to (or click into) a
       session that has unread notifications. Its notifications go read and the bell
-      badge drops by that session's share — without opening the hub. They stay
+      badge drops by that session's share, without opening the hub. They stay
       listed in the hub (read), not deleted. A turn that completes on the session
-      you are already looking at never bumps the bell at all.
+      you are already watching now bumps the bell too (the live signal is no
+      longer swallowed on arrival); switching away and back, or opening the hub,
+      marks it read.
 - [ ] Notifications that land while the window is unfocused, or for a session you
       are not currently on, still accumulate on the bell until you switch to them.
 

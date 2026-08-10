@@ -36,6 +36,11 @@ tagged a release yet, so everything to date sits under Unreleased.
   in the agent's own pane.
 - A notification hub and OS desktop notifications in tiers, with do-not-disturb
   that silences the quieter tiers while still recording them.
+- A row-level attention signal in the sidebar. A background session that is
+  awaiting approval, awaiting an answer, errored, or done draws a color-coded
+  left bar and a soft glow across its whole row until you open it. Awaiting and
+  errored rows pulse; done gives a calmer settle; reduced motion renders a
+  static bar. The active session never begs.
 - A diff view with per-hunk staging, unstaging, and discarding, a reversible
   discard with an undo toast, and sending a hunk to the agent as context.
 - A CodeMirror editor with a git gutter, search, and save, a gitignore-aware
@@ -73,6 +78,10 @@ tagged a release yet, so everything to date sits under Unreleased.
   controls match.
 - Creating a session spawns its terminal immediately, rather than waiting for a
   second click.
+- The shell drawer's tab-strip actions are labelled again (⊟ Split, ↻ env →
+  agent, ▼ Collapse), not bare icons. With more than one shell open the reload
+  button names the active shell (↻ env → agent · shell N), and a ▾ caret opens a
+  picker to reload any chosen shell rather than only the focused tab.
 - The approval card shows the tool's input, scrollable when it runs long, rather
   than a blind summary that truncated a large input.
 - Creating a session suggests a unique branch name from the session name and
@@ -97,6 +106,12 @@ tagged a release yet, so everything to date sits under Unreleased.
   `approvals: false`; its `permission.asked` becomes a passive attention signal
   (sidebar state plus a blocking notification) with no card and no reply, exactly
   as opencode questions are already handled. Claude's card is unchanged.
+- An opencode turn that used a tool settled on done and then reverted to idle.
+  opencode publishes more than one idle frame for a single transition, a
+  `session.status{idle}` followed by a deprecated `session.idle` alias (and, on a
+  silent reconnect, a repeated status snapshot), and any trailing idle clobbered the
+  fresh ✓. The monitor now treats a redundant idle as a no-op, so the done ✓ persists
+  until the next turn, the way claude already holds it.
 - Tool-approval notifications that never fired because of an event-kind mismatch.
 - A new-branch session that silently persisted a broken record when the branch
   already existed; the error now surfaces and nothing is saved.
@@ -120,6 +135,10 @@ tagged a release yet, so everything to date sits under Unreleased.
 - Clicking a notification did nothing. It now navigates to the session it belongs
   to, and opening the hub marks its notifications read so the badge clears.
 - Notifications for a removed session are now pruned.
+- A turn completing on the session you were watching was marked read on arrival,
+  which swallowed the bell badge. A live event now bumps the bell even for the
+  session on screen; auto-read fires only when you switch to a session and catch
+  up on what accumulated while you were elsewhere.
 - A crashed or exited agent kept a stale `running` look. It now flips to a
   distinct `exited` state with a Reopen button, while a perch-initiated close
   stays silent and fires no exited notification.

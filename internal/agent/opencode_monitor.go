@@ -450,12 +450,31 @@ func (m *OpencodeMonitor) takeTurnRunning() bool {
 	return r
 }
 
-// idleState maps the turn-in-progress flag to the lifecycle state an idle signal
-// should emit: a busy→idle transition is a completed turn (StateDone, drives the
-// ✓ + ambient toast, and clears the flag); any other idle is steady (StateIdle).
+// idleState decides the lifecycle state an opencode idle signal should emit, or ""
+// for a no-op. It reads and clears the turn-in-progress flag AND the current state
+// under one lock so the decision is atomic against a concurrent handleExit.
+//
+// opencode's SessionStatus.set() is LEVEL-triggered with no dedup, and a single idle
+// transition publishes BOTH session.status{idle} AND the deprecated session.idle
+// alias (v1.15.12 status.ts). So redundant idle frames are all protocol-legal — the
+// alias sibling, a repeated status{idle}, or a status snapshot replayed on a silent
+// SSE reconnect — and NONE of them may revert a completed turn:
+//   - turn flag set → the busy→idle edge completed a turn → StateDone (clears flag).
+//   - flag clear, already StateDone → "" (no-op): a redundant idle keeps the ✓ and the
+//     "Turn complete" notification instead of clobbering them to a steady StateIdle
+//     (which the frontend's done→idle edge would additionally treat as "resolved" and
+//     drop the notification). This makes opencode's done sticky until the next turn,
+//     matching claude (whose Stop hook holds StateDone the same way).
+//   - flag clear, not already done (idle at connect, post-reject) → steady StateIdle.
 func (m *OpencodeMonitor) idleState() State {
-	if m.takeTurnRunning() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.turnRunning {
+		m.turnRunning = false
 		return StateDone
+	}
+	if m.state == StateDone {
+		return ""
 	}
 	return StateIdle
 }
@@ -510,10 +529,15 @@ func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
 			// a mid-turn permission.asked/question.asked) rather than the prior
 			// m.state, which a passive attention signal overwrites — without that, any
 			// turn that used a tool would degrade to a steady StateIdle (no ✓, no
-			// toast), the "opencode never shows done" bug. An idle that does NOT follow
-			// a running turn (idle at connect, a duplicate idle, the deprecated
-			// session.idle alias firing too) reads the flag false → StateIdle.
-			ev = Event{Kind: "state", State: m.idleState(), SessionID: p.SessionID}
+			// toast), the "opencode never shows done" bug. A redundant idle after the
+			// turn already completed (flag clear, already StateDone: the deprecated
+			// alias, a repeated status{idle}, or a reconnect snapshot) is a NO-OP
+			// (idleState returns "") so it never reverts the ✓.
+			st := m.idleState()
+			if st == "" {
+				return
+			}
+			ev = Event{Kind: "state", State: st, SessionID: p.SessionID}
 		case "busy":
 			m.markTurnRunning()
 			ev = Event{Kind: "state", State: StateRunning, SessionID: p.SessionID}
@@ -521,9 +545,18 @@ func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
 			return
 		}
 	case "session.idle":
-		// Deprecated alias of session.status{type:idle}; same turn-done rule via the
-		// turn-in-progress flag.
-		ev = Event{Kind: "state", State: m.idleState()}
+		// Deprecated alias of session.status{type:idle}; opencode's SessionStatus.set()
+		// publishes BOTH for one idle transition (v1.15.12 status.ts: Bus.publish(
+		// Event.Status,...) then Bus.publish(Event.Idle,...)). The same idle rule applies
+		// via idleState(): if this alias is ITSELF the turn-completing edge (an alias-only
+		// build, flag still set) it reports StateDone; if it is the redundant sibling after
+		// session.status{idle} (flag clear, already StateDone) idleState returns "" and it
+		// is suppressed so it cannot clobber the done marker.
+		st := m.idleState()
+		if st == "" {
+			return
+		}
+		ev = Event{Kind: "state", State: st}
 	case "session.error":
 		// opencode's default-emitted error event. (session.next.step.failed also
 		// carries errors but is gated behind OPENCODE_EXPERIMENTAL_EVENT_SYSTEM,

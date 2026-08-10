@@ -158,6 +158,14 @@ Pulses are suppressed when your system asks for reduced motion. Each session
 also carries a stable color, shown as a stripe on its row and on its
 notifications, so you can track one agent across the window.
 
+A background session (one you are not currently viewing) that needs you, is
+asking you, errored, or has just finished also raises a row-level signal: a
+color-coded left bar and a soft glow across the whole row, in that state's
+color. It persists until you open the session, so a finished or waiting agent
+catches your eye without your switching to it. Awaiting and errored rows pulse;
+a finished row settles; reduced motion renders a static bar. The session you are
+viewing never begs.
+
 ## The diff view
 
 Switch to the diff view to see what a session changed. The file list shows

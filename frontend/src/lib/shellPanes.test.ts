@@ -2,7 +2,8 @@
 import { describe, it, expect } from "vitest";
 import {
   shellPaneId, shellTabTitle, initShellState, addShell, addSplitPartner,
-  selectShell, removeShell, planToggleSplit, type ShellState,
+  selectShell, removeShell, planToggleSplit, reloadMenuItems, activeShellTitle,
+  type ShellState,
 } from "./shellPanes";
 
 describe("shellPaneId", () => {
@@ -123,5 +124,35 @@ describe("addSplitPartner", () => {
     expect(id).toBe("shell-ws1_1");
     expect(state.activeId).toBe("shell-ws1"); // active unchanged
     expect(state.splitId).toBe("shell-ws1_1");
+  });
+});
+
+describe("reloadMenuItems", () => {
+  it("lists every pane in tab order with its title and active flag", () => {
+    let st = initShellState("ws1");
+    st = addShell(st, "ws1").state; // panes: default, _1 (active _1 at index 1)
+    expect(reloadMenuItems(st.panes, st.activeId)).toEqual([
+      { id: "shell-ws1", title: "shell", active: false },
+      { id: "shell-ws1_1", title: "shell 2", active: true },
+    ]);
+  });
+  it("marks no item active when activeId is null", () => {
+    const items = reloadMenuItems([{ id: "a" }, { id: "b" }], null);
+    expect(items.every((i) => !i.active)).toBe(true);
+  });
+});
+
+describe("activeShellTitle", () => {
+  it("returns the position-based title of the active pane", () => {
+    let st = initShellState("ws1");
+    st = addShell(st, "ws1").state; // active _1 at index 1
+    expect(activeShellTitle(st.panes, st.activeId)).toBe("shell 2");
+  });
+  it("returns the first title when the default shell is active", () => {
+    const st = initShellState("ws1");
+    expect(activeShellTitle(st.panes, st.activeId)).toBe("shell");
+  });
+  it("returns empty string when no pane is active", () => {
+    expect(activeShellTitle([{ id: "a" }], null)).toBe("");
   });
 });

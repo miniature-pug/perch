@@ -139,6 +139,23 @@
     return ws.id === activeId || STATE_TEXT_SHOWN.has(rowState);
   }
 
+  // Row-level attention signal. A BACKGROUND (non-active) session that needs the
+  // user or has just finished begs for a glanceable look: the whole row gets a
+  // color-coded left bar + slow pulsing tint (see the .attn CSS), far stronger
+  // than the tiny status icon alone. Gated purely on rowState + whether this row
+  // is the active one — opening the session (making it active) IS the
+  // acknowledgement, so the signal clears with no extra state machine. Because
+  // it keys off rowState, an awaiting-input question the user already saw
+  // (displayState → "idle" via ackedInputIds) also stops begging, for free.
+  // Returns the urgency state to color by, or null for no treatment.
+  const ATTENTION_STATES = new Set<WorkspaceVM["state"]>([
+    "awaiting-approval", "awaiting-input", "errored", "done",
+  ]);
+  function attentionState(ws: WorkspaceVM, rowState: WorkspaceVM["state"]): WorkspaceVM["state"] | null {
+    if (ws.id === activeId) return null;
+    return ATTENTION_STATES.has(rowState) ? rowState : null;
+  }
+
   let dragOverId = $state<string | null>(null);
 
   function handleSessionDragStart(e: DragEvent, id: string) {
@@ -182,6 +199,7 @@
       {@const st = STATUS[rowState as keyof typeof STATUS] ?? { icon: "·", label: rowState }}
       {@const ds = diffStats[ws.id]}
       {@const closed = openIds ? !openIds.has(ws.id) : false}
+      {@const attn = attentionState(ws, rowState)}
       <li
         class:active={ws.id === activeId}
         class:drag-over={dragOverId === ws.id}
@@ -192,7 +210,7 @@
         ondragleave={handleSessionDragLeave}
         ondrop={(e) => handleSessionDrop(e, ws.id)}
       >
-        <button class="workspace-row"
+        <button class="workspace-row{attn ? ` attn attn-${attn}` : ''}"
           class:closed={closed}
           class:has-remove={requestRemove != null}
           aria-current={ws.id === activeId ? "page" : undefined}
@@ -413,6 +431,58 @@
     outline-offset: -2px;
   }
 
+  /* ── Row-level attention signal ───────────────────────────────── */
+  /* A BACKGROUND (non-active) session that needs you or just finished begs for
+     a glanceable look: a color-coded left bar + soft, slow pulsing tint over
+     the WHOLE row, not just the tiny status icon. --attn-color drives the bar,
+     tint, and glow; it is set per urgency below. Painted as a non-interactive
+     ::before so it never disturbs layout, click targets, or the row's own hover
+     shadow. The active row never gets .attn (attentionState() returns null for
+     it), so viewing a session clears its signal. */
+  .workspace-row.attn                   { position: relative; isolation: isolate; --attn-color: var(--perch-accent); }
+  .workspace-row.attn-awaiting-approval { --attn-color: var(--perch-warn); }  /* blocking: amber */
+  .workspace-row.attn-awaiting-input    { --attn-color: var(--perch-info); }  /* a question: info/accent */
+  .workspace-row.attn-errored           { --attn-color: var(--perch-err); }   /* failed: danger red */
+  .workspace-row.attn-done              { --attn-color: var(--perch-ok); }    /* finished: calm green */
+
+  .workspace-row.attn::before {
+    content: "";
+    position: absolute;
+    /* Fill only the padding box (inset:0), NOT the 3px border, so the per-worktree
+       --row-color left edge stays visible; the urgency bar sits just inside it. */
+    inset: 0;
+    /* Paint BEHIND the row's text/icon but ABOVE the row's own background/border:
+       the row is isolated (isolation:isolate above), so a negative z-index puts the
+       tint + inset glow under the in-flow content — it can no longer wash over the
+       text/icon and lower contrast (the app holds WCAG AA across all 9 themes). */
+    z-index: -1;
+    pointer-events: none;
+    border-left: 3px solid var(--attn-color);
+    background: color-mix(in srgb, var(--attn-color) 10%, transparent);
+    box-shadow: inset 0 0 10px -2px color-mix(in srgb, var(--attn-color) 45%, transparent);
+    animation: perch-attn-row var(--perch-dur-attn-row) ease-in-out infinite;
+  }
+
+  /* "done" is informational, not blocking — a calmer, less naggy treatment:
+     a low steady tint with a single gentle breath on appear (finite, not the
+     continuous pulse of the awaiting/errored rows), then it settles. */
+  .workspace-row.attn-done::before {
+    background: color-mix(in srgb, var(--attn-color) 8%, transparent);
+    box-shadow: inset 0 0 8px -3px color-mix(in srgb, var(--attn-color) 28%, transparent);
+    animation: perch-attn-row var(--perch-dur-attn-row) ease-in-out 2;
+  }
+
+  @keyframes perch-attn-row {
+    0%, 100% {
+      background: color-mix(in srgb, var(--attn-color) 7%, transparent);
+      box-shadow: inset 0 0 8px -3px color-mix(in srgb, var(--attn-color) 28%, transparent);
+    }
+    50% {
+      background: color-mix(in srgb, var(--attn-color) 16%, transparent);
+      box-shadow: inset 0 0 12px -1px color-mix(in srgb, var(--attn-color) 58%, transparent);
+    }
+  }
+
   /* ── Row line 1: status icon + bold name ─────────────────────── */
   .workspace-row-primary {
     display: flex;
@@ -490,6 +560,10 @@
     .workspace-row { transition: none; }
     .workspace-row:hover { transform: none; }
     .row-remove { transition: none; }
+    /* No pulsing: the row-level signal falls back to a STATIC colored bar +
+       steady tint + glow (the ::before's non-animated declarations). */
+    .workspace-row.attn::before,
+    .workspace-row.attn-done::before { animation: none; }
   }
 
   /* ── Compact visible status word ─────────────────────────────── */

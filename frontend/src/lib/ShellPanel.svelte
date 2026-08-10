@@ -9,7 +9,7 @@
      The home shell is a single terminal and keeps using ShellDrawer directly. -->
 <script lang="ts">
   import ShellDrawer from "./ShellDrawer.svelte";
-  import { shellTabTitle, type ShellPane } from "./shellPanes";
+  import { shellTabTitle, reloadMenuItems, activeShellTitle, type ShellPane } from "./shellPanes";
   import { reloadAgentEnv } from "./wails";
 
   const RELOAD_HINT =
@@ -40,10 +40,65 @@
     onToggleCollapse: () => void;
   } = $props();
 
+  // With more than one shell open, "reload the active tab" is ambiguous, so the
+  // reload control becomes a split-button: the labelled main button reloads the
+  // active shell (its title is shown), and a caret opens a menu that reloads ANY
+  // chosen shell. A single shell keeps the plain, picker-free button.
+  const multi = $derived(panes.length > 1);
+  const activeTitle = $derived(activeShellTitle(panes, activeId));
+  const reloadItems = $derived(reloadMenuItems(panes, activeId));
+
+  let menuOpen = $state(false);
+  let menuEl = $state<HTMLDivElement | undefined>();
+  let caretEl = $state<HTMLButtonElement | undefined>();
+
   function reloadActive() {
     if (activeId) reloadAgentEnv(activeId).catch(() => {});
   }
+
+  // reloadPane reloads a specific chosen shell (any pane id — the backend resolves it
+  // independently of which tab is focused), then closes the picker. Focus is returned
+  // to the caret (mirrors the Escape path) so keyboard focus doesn't fall to <body>
+  // when the chosen menu item is removed from the DOM.
+  function reloadPane(id: string) {
+    reloadAgentEnv(id).catch(() => {});
+    menuOpen = false;
+    caretEl?.focus();
+  }
+
+  // Focus the active item when the picker opens so keyboard users land on the shell a
+  // plain reload would target; arrow keys then rove from there.
+  $effect(() => {
+    if (menuOpen && menuEl) {
+      const active = menuEl.querySelector<HTMLElement>('[data-active="true"]');
+      (active ?? menuEl.querySelector<HTMLElement>('[role="menuitem"]'))?.focus();
+    }
+  });
+
+  function onMenuKeydown(e: KeyboardEvent) {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      menuOpen = false;
+      caretEl?.focus();
+      return;
+    }
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const items = menuEl ? [...menuEl.querySelectorAll<HTMLElement>('[role="menuitem"]')] : [];
+      if (items.length === 0) return;
+      const cur = items.indexOf(document.activeElement as HTMLElement);
+      const next = e.key === "ArrowDown"
+        ? (cur + 1) % items.length
+        : (cur - 1 + items.length) % items.length;
+      items[next]?.focus();
+    }
+  }
 </script>
+
+<!-- Close the reload picker on any outside click. The menu container, caret, and
+     menu-item handlers all stopPropagation, so clicks anywhere inside the picker
+     (including its padding chrome) never reach this. -->
+<svelte:window onclick={() => (menuOpen = false)} />
 
 <div class="shell-panel" class:collapsed>
   <div class="shell-tabs">
@@ -75,19 +130,67 @@
         aria-pressed={splitId != null}
         title="Split side by side"
         onclick={onToggleSplit}
-      >⊟</button>
-      <button
-        class="tab-action"
-        aria-label="Reload agent with this terminal's environment"
-        title={RELOAD_HINT}
-        onclick={reloadActive}
-      >↻</button>
+      >⊟ Split</button>
+
+      {#if multi}
+        <!-- Multiple shells: a split-button. The main button reloads the active shell
+             (named so the target is unambiguous); the caret opens a picker to reload
+             any shell. -->
+        <div class="reload-group">
+          <button
+            class="tab-action reload-main"
+            aria-label="Reload agent with this terminal's environment"
+            title={RELOAD_HINT}
+            onclick={reloadActive}
+          >↻ env → agent · {activeTitle}</button>
+          <button
+            bind:this={caretEl}
+            class="tab-action reload-caret"
+            class:on={menuOpen}
+            aria-label="choose which shell to reload"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            title="Reload a specific shell's environment"
+            onclick={(e) => { e.stopPropagation(); menuOpen = !menuOpen; }}
+          >▾</button>
+          {#if menuOpen}
+            <!-- stopPropagation on the container so a click on the menu's own padding
+                 chrome (between/around the item buttons) doesn't bubble to the
+                 svelte:window handler and close the picker. This onclick is a
+                 mouse-only propagation guard, not an interactive surface — focus and
+                 keyboard roving live on the child menuitems (see onMenuKeydown) — so
+                 the interactive-role focus/keydown a11y rules don't apply here. -->
+            <!-- svelte-ignore a11y_click_events_have_key_events, a11y_interactive_supports_focus -->
+            <div bind:this={menuEl} class="reload-menu" role="menu" aria-label="reload agent from shell"
+              onclick={(e) => e.stopPropagation()}>
+              {#each reloadItems as it (it.id)}
+                <button
+                  class="reload-menu-item"
+                  class:active={it.active}
+                  role="menuitem"
+                  data-active={it.active}
+                  onclick={(e) => { e.stopPropagation(); reloadPane(it.id); }}
+                  onkeydown={onMenuKeydown}
+                >{it.title}{it.active ? " (active)" : ""}</button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {:else}
+        <button
+          class="tab-action"
+          aria-label="Reload agent with this terminal's environment"
+          title={RELOAD_HINT}
+          onclick={reloadActive}
+        >↻ env → agent</button>
+      {/if}
+
       <button
         class="tab-action"
         aria-label={collapsed ? "expand shell" : "collapse shell"}
         title={collapsed ? "Expand" : "Collapse"}
         onclick={onToggleCollapse}
-      >{collapsed ? "▲" : "▼"}</button>
+      >{collapsed ? "▲ Expand" : "▼ Collapse"}</button>
     </div>
   </div>
 
@@ -173,7 +276,11 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    height: 20px;
+    /* 22px + 4px icon/label gap matches the old labelled ShellDrawer header chrome
+       (the home shell still renders it via ShellDrawer chrome=true) so the labelled
+       Split / reload / Collapse actions read the same in both drawers. */
+    height: 22px;
+    gap: 4px;
     padding: 0 var(--perch-sp-1);
     background: transparent;
     color: var(--perch-text-dim);
@@ -208,7 +315,7 @@
 
   .shell-tabs button:focus-visible {
     outline: var(--perch-ring-w) solid var(--perch-accent);
-    outline-offset: 1px;
+    outline-offset: 2px;
   }
 
   .tab-action.on {
@@ -222,6 +329,53 @@
     gap: 2px;
     margin-left: auto;
     flex-shrink: 0;
+  }
+
+  /* ── Reload split-button + shell picker ───────────────────────── */
+  .reload-group {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  /* Join the labelled main button and its caret into one control by squaring the
+     corners where they meet (the two-class selectors clear .shell-tabs button). */
+  .reload-group .reload-main {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+  .reload-group .reload-caret {
+    padding: 0 3px;
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+  }
+
+  .reload-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    min-width: 100%;
+    display: flex;
+    flex-direction: column;
+    padding: var(--perch-sp-1);
+    gap: 2px;
+    /* Solid, never glass: this menu overlaps the agent terminal, where WebKitGTK
+       paints backdrop-filter surfaces transparent over the composited terminal
+       subtree (mirrors the MenuBar dropdown + ApprovalCard fix). */
+    background: var(--perch-glass-bg-solid);
+    border: 1px solid var(--perch-glass-border);
+    border-radius: var(--perch-radius-md);
+    box-shadow: var(--perch-shadow-float);
+    z-index: var(--perch-z-menu-dropdown);
+  }
+
+  .reload-menu .reload-menu-item {
+    justify-content: flex-start;
+    width: 100%;
+    white-space: nowrap;
+  }
+  .reload-menu .reload-menu-item.active {
+    color: var(--perch-accent);
   }
 
   /* ── Body: one row of cells (one shown in tabs mode, two in split) ── */

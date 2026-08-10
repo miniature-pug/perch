@@ -176,10 +176,11 @@
   // for the sidebar's own awaiting-input badge). untrack the call so
   // markReadForWorkspace's internal `items` read does not make this effect re-run on
   // every unrelated notification — it should fire only on an active/focus CHANGE.
-  // The already-active case (a notif arriving while its session is on screen) is
-  // handled in the onNotify handler, which this effect cannot see. Gated on
-  // windowFocused so notifications that land while the user is alt-tabbed away still
-  // accumulate (and still OS-toast) until they actually return.
+  // A notif that arrives while its session is ALREADY on screen is intentionally left
+  // unread (it bumps the bell) — auto-read is a catch-up for a CHANGE of session/focus,
+  // not for live events on the session you are already watching (see onNotify below).
+  // Gated on windowFocused so notifications that land while the user is alt-tabbed away
+  // still accumulate (and still OS-toast) until they actually return.
   $effect(() => {
     const id = activeId;
     if (id != null && windowFocused) untrack(() => markReadForWorkspace(id));
@@ -514,12 +515,13 @@
       if      (n.tier === "blocking") addBlocking(n.workspaceId, n.title, n.body);
       else if (n.tier === "ambient")  addAmbient (n.workspaceId, n.title, n.body);
       else                            addRoutine (n.workspaceId, n.title, n.body);
-      // If the event is for the session the user is already looking at (window
-      // focused), they are watching it happen — mark it read at once so it never
-      // bumps the bell for a workspace that is on screen. The activeId $effect above
-      // only fires on an active/focus CHANGE, so this covers the already-active case
-      // it cannot see.
-      if (n.workspaceId === activeId && windowFocused) markReadForWorkspace(n.workspaceId);
+      // Deliberately NOT auto-read on arrival, even for the session on screen: a turn
+      // completing (or an approval landing) while the user is watching SHOULD still bump
+      // the bell, so the live signal is never swallowed. Auto-read happens only on an
+      // active/focus CHANGE (the $effect above) — i.e. when the user switches TO a
+      // session and catches up on what accumulated while they were elsewhere. Marking a
+      // fresh event read here is what silently ate the opencode "Turn complete" signal
+      // for the session being watched; do not re-add it.
     });
 
     offFsChanged = onFsChanged((p) => {

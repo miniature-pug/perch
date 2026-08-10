@@ -36,6 +36,30 @@ export function shellTabTitle(index: number): string {
   return index <= 0 ? "shell" : `shell ${index + 1}`;
 }
 
+// A reload target for the multi-shell reload picker: a pane id, its current
+// position-based title, and whether it is the active (primary) tab.
+export interface ShellReloadItem {
+  id: string;
+  title: string;
+  active: boolean;
+}
+
+// reloadMenuItems lists every shell as a reload target, in tab order, each carrying
+// its position-based title (shellTabTitle) and whether it is the active tab. Every
+// pane is a valid target: the backend (ReloadAgentEnv) resolves any pane id on its
+// own, so the picker can reload a shell that is not the focused tab.
+export function reloadMenuItems(panes: ShellPane[], activeId: string | null): ShellReloadItem[] {
+  return panes.map((p, i) => ({ id: p.id, title: shellTabTitle(i), active: p.id === activeId }));
+}
+
+// activeShellTitle is the position-based title of the active pane, or "" when there
+// is no active pane. Used to label the reload split-button ("↻ env → agent · shell
+// 2") so a plain reload's target shell is visible when several shells are open.
+export function activeShellTitle(panes: ShellPane[], activeId: string | null): string {
+  const i = panes.findIndex((p) => p.id === activeId);
+  return i < 0 ? "" : shellTabTitle(i);
+}
+
 // initShellState is the state for a freshly opened session: one default shell, active,
 // no split. seq starts at 1 because seq 0 (the default id) has just been consumed.
 export function initShellState(wsId: string): ShellState {

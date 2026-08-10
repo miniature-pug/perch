@@ -950,6 +950,125 @@ describe("App.svelte live event wiring", () => {
     );
   });
 
+  // -------------------------------------------------------------------------
+  // USER BUG REPRO: "If I switch to a different session, all non-highlighted
+  // sessions in the left pane stop giving their status updates."
+  //
+  // The existing background test above fires an event on a session that was
+  // NEVER made active. This block reproduces the reported flow exactly: OPEN
+  // two sessions so the user has ACTIVELY SWITCHED between them, THEN fire a
+  // stream of agent:event state frames at the now-BACKGROUND session and assert
+  // its sidebar row reflects every new state live. Exercises BOTH switch paths
+  // in App.svelte onSelect: the openSession() path (App.svelte:632, which does
+  // `workspaces = await listWorkspaces()`, replacing the reactive array) and the
+  // pure focus path `if (openIds.has(id)) { activeId = id; return; }`
+  // (App.svelte:619, no refetch).
+  // -------------------------------------------------------------------------
+  it("USER REPRO: after switching active session, the now-BACKGROUND session keeps updating its status live (both switch paths)", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    // Open Alpha (ws-1) → becomes the active + open session.
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
+    await fireEvent.click(alphaBtn);
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    await tick();
+
+    // SWITCH to Beta (ws-2): opening it makes Beta active and pushes Alpha into
+    // the BACKGROUND. openSession() ran `workspaces = await listWorkspaces()`,
+    // so the reactive array was replaced right before we fire background frames.
+    const betaBtn = screen.getByRole("button", { name: /^Beta\b/ });
+    await fireEvent.click(betaBtn);
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    await tick();
+
+    const cb = captured.agent.at(-1)!;
+
+    // --- Background session A (Alpha, ws-1) must update live across frames. ---
+    cb({ workspaceId: "ws-1", kind: "state", state: "running" });
+    await tick();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Alpha\b/ })).toHaveTextContent("running")
+    );
+
+    cb({ workspaceId: "ws-1", kind: "state", state: "done" });
+    await tick();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Alpha\b/ })).toHaveTextContent("done")
+    );
+
+    // A SECOND idle frame after done (the shape opencode can emit): still applied.
+    cb({ workspaceId: "ws-1", kind: "state", state: "idle" });
+    await tick();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Alpha\b/ })).toHaveTextContent("idle")
+    );
+
+    // --- Now SWITCH back to Alpha via the pure focus path (no refetch), which
+    // backgrounds Beta (ws-2). Alpha is already open so onSelect takes the
+    // `activeId = id; return;` branch (App.svelte:619). Beta must then keep
+    // updating live too. ---
+    await fireEvent.click(screen.getByRole("button", { name: /^Alpha\b/ }));
+    await tick();
+
+    cb({ workspaceId: "ws-2", kind: "state", state: "done" });
+    await tick();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Beta\b/ })).toHaveTextContent("done")
+    );
+
+    cb({ workspaceId: "ws-2", kind: "state", state: "running" });
+    await tick();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Beta\b/ })).toHaveTextContent("running")
+    );
+  });
+
+  // -------------------------------------------------------------------------
+  // USER BUG REPRO — array-replacement variant. Step 3 of the diagnostic: when a
+  // switch to a not-yet-open session triggers `workspaces = await listWorkspaces()`
+  // and the backend returns BRAND-NEW object instances (the real Wails case, not
+  // the shared-reference fixture), the previous reactive proxy elements are
+  // orphaned. Verify a subsequent background agent:event still finds the session
+  // in the fresh array and mutates it reactively.
+  // -------------------------------------------------------------------------
+  it("USER REPRO: background reactivity survives a listWorkspaces() refetch that returns FRESH objects", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    // Every call returns a brand-new array of brand-new objects — a genuine array
+    // replacement, unlike mockResolvedValue(fakeWorkspaces)'s shared reference.
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockImplementation(async () =>
+      fakeWorkspaces.map(w => ({ ...w, caps: { ...w.caps } })),
+    );
+    const { default: App } = await import("./App.svelte");
+    render(App);
+
+    // Open Alpha, then switch to Beta (each openSession replaces the array).
+    const alphaBtn = await screen.findByRole("button", { name: /^Alpha\b/ });
+    await fireEvent.click(alphaBtn);
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    await tick();
+
+    const betaBtn = screen.getByRole("button", { name: /^Beta\b/ });
+    await fireEvent.click(betaBtn);
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    await tick();
+
+    // Background Alpha (ws-1) must still update after the array was replaced with
+    // fresh objects.
+    const cb = captured.agent.at(-1)!;
+    cb({ workspaceId: "ws-1", kind: "state", state: "done" });
+    await tick();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Alpha\b/ })).toHaveTextContent("done")
+    );
+  });
+
   it("awaiting-APPROVAL is never suppressed by the ack path (stays 'needs you' when active+viewed)", async () => {
     const { listWorkspaces } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
@@ -1117,10 +1236,11 @@ describe("App.svelte live event wiring", () => {
     expect(getItems().some((n) => n.workspaceId === "ws-2" && n.title === "Turn complete")).toBe(true);
   });
 
-  // The activeId $effect only fires on an active/focus CHANGE, so the onNotify handler
-  // covers the already-active case: an event for the session already on screen is
-  // marked read the instant it arrives, so it never bumps the bell.
-  it("a turn-done notification for the session already on screen is auto-read on arrival", async () => {
+  // A live event on the session the user is ALREADY watching must still bump the bell —
+  // otherwise the completion signal is silently swallowed (the opencode "finished a turn
+  // but no notification" regression). Auto-read is only a catch-up on an active/focus
+  // CHANGE (the test above), never for a fresh event on the current session.
+  it("a turn-done notification for the session already on screen still bumps the bell (not swallowed on arrival)", async () => {
     const { listWorkspaces } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
     const { default: App } = await import("./App.svelte");
@@ -1138,13 +1258,14 @@ describe("App.svelte live event wiring", () => {
     await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
     await tick();
 
-    // A turn completes on the session the user is watching → the notif arrives read.
+    // A turn completes on the session the user is watching → the notif stays UNREAD so
+    // the bell bumps (the user still wants to know the turn finished).
     const notifyCb = captured.notify.at(-1)!;
     notifyCb({ tier: "ambient", title: "Turn complete", body: "Agent finished a turn.", workspaceId: "ws-2" });
     await tick();
 
     expect(getItems().some((n) => n.workspaceId === "ws-2" && n.title === "Turn complete")).toBe(true);
-    expect(getItems().filter((n) => n.workspaceId === "ws-2" && !n.read).length).toBe(0);
+    expect(getItems().filter((n) => n.workspaceId === "ws-2" && !n.read).length).toBe(1);
   });
 
   it("onFsChanged: refreshes DiffView IN PLACE (node identity preserved, not remounted) (F4)", async () => {

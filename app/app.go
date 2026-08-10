@@ -1164,6 +1164,11 @@ func (a *App) dispatchNotify(evt agent.Event) {
 		tier, title, body = "ambient", "Turn complete", "Agent finished a turn."
 	case evt.Kind == "state" && evt.State == agent.StateErrored:
 		tier, title, body = "blocking", "Agent error", evt.Err
+		if body == "" {
+			// opencode's session.error can carry an empty payload; never surface a
+			// blocking notification with a blank body (mirrors the exited default).
+			body = "The agent reported an error."
+		}
 	case evt.Kind == "state" && evt.State == agent.StateExited:
 		// Prune any pending approval for the exited workspace: a PreToolUse-time
 		// crash leaves an unresolved a.pending entry whose reqID's agent is gone;

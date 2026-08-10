@@ -412,6 +412,86 @@ func TestOpencodeMonitorSSE_SessionIdleEmitsDone(t *testing.T) {
 	}
 }
 
+// TestOpencodeMonitorSSE_SessionIdleAliasDoesNotClobberDone is the FAIL-ON-REVERT
+// guard for the "opencode turn-done ✓ never persists" bug. opencode's
+// SessionStatus.set() publishes TWO SSE frames for a single idle transition
+// (v1.15.12 status.ts: Event.Status{idle} then the deprecated Event.Idle alias).
+// The REAL sequence for a finished turn is therefore:
+//
+//	session.status{busy} → session.status{idle} → session.idle
+//
+// The session.status{idle} frame is the turn-completing edge (StateDone, the ✓ and
+// the "Turn complete" toast). The trailing deprecated session.idle alias is pure
+// redundancy — it must emit NOTHING, because emitting StateIdle would be applied in
+// arrival order by the frontend and CLOBBER the StateDone (the sidebar ✓ reverts to
+// idle). Before the fix the alias fell through idleState()→commitSSE and emitted
+// StateIdle, so this test's "no trailing event" assertion FAILS on the un-fixed code.
+func TestOpencodeMonitorSSE_SessionIdleAliasDoesNotClobberDone(t *testing.T) {
+	om, done := serveSSE(t,
+		`data: {"type":"session.status","properties":{"sessionID":"s","status":{"type":"busy"}}}`+"\n\n"+
+			`data: {"type":"session.status","properties":{"sessionID":"s","status":{"type":"idle"}}}`+"\n\n"+
+			`data: {"type":"session.idle","properties":{}}`+"\n\n")
+	defer done()
+
+	if ev := nextEvent(t, om); ev.State != agent.StateRunning {
+		t.Fatalf("ev[0]: busy → want running, got %+v", ev)
+	}
+	if ev := nextEvent(t, om); ev.State != agent.StateDone {
+		t.Fatalf("ev[1]: session.status{idle} → want done (turn complete ✓), got %+v", ev)
+	}
+	// The trailing deprecated session.idle alias is redundant after session.status{idle};
+	// it must produce NO further state event (emitting StateIdle would clobber StateDone).
+	select {
+	case ev := <-om.Events():
+		t.Fatalf("trailing session.idle emitted a clobbering event: %+v", ev)
+	case <-time.After(300 * time.Millisecond):
+		// good — the redundant alias was suppressed, StateDone persists
+	}
+	if om.CurrentState() != agent.StateDone {
+		t.Errorf("final state clobbered by redundant session.idle: CurrentState = %q, want done", om.CurrentState())
+	}
+}
+
+// TestOpencodeMonitorSSE_RedundantStatusIdleDoesNotClobberDone guards the GENERAL
+// form of the turn-done clobber. opencode's SessionStatus.set() is level-triggered
+// with no dedup, so a redundant PRIMARY session.status{idle} frame (a repeated idle,
+// or a status snapshot replayed on a silent SSE reconnect) is protocol-legal. Like
+// the deprecated session.idle alias, it must NOT revert a completed turn. Sequence:
+//
+//	session.status{busy} → session.status{idle} → session.status{idle}
+//
+// The first idle completes the turn (StateDone); the second, with the turn flag
+// already cleared and the state already StateDone, must emit NOTHING (idleState
+// returns ""). Before the general fix the second frame emitted StateIdle and
+// clobbered the done marker (and the frontend's done→idle edge would additionally
+// drop the "Turn complete" notification), so the "no trailing event" assertion FAILS
+// on the un-generalized code.
+func TestOpencodeMonitorSSE_RedundantStatusIdleDoesNotClobberDone(t *testing.T) {
+	om, done := serveSSE(t,
+		`data: {"type":"session.status","properties":{"sessionID":"s","status":{"type":"busy"}}}`+"\n\n"+
+			`data: {"type":"session.status","properties":{"sessionID":"s","status":{"type":"idle"}}}`+"\n\n"+
+			`data: {"type":"session.status","properties":{"sessionID":"s","status":{"type":"idle"}}}`+"\n\n")
+	defer done()
+
+	if ev := nextEvent(t, om); ev.State != agent.StateRunning {
+		t.Fatalf("ev[0]: busy → want running, got %+v", ev)
+	}
+	if ev := nextEvent(t, om); ev.State != agent.StateDone {
+		t.Fatalf("ev[1]: session.status{idle} → want done (turn complete ✓), got %+v", ev)
+	}
+	// The second session.status{idle} is redundant after the turn already completed;
+	// it must produce NO further state event (emitting StateIdle would clobber done).
+	select {
+	case ev := <-om.Events():
+		t.Fatalf("redundant session.status{idle} emitted a clobbering event: %+v", ev)
+	case <-time.After(300 * time.Millisecond):
+		// good — the redundant idle was suppressed, StateDone persists
+	}
+	if om.CurrentState() != agent.StateDone {
+		t.Errorf("final state clobbered by redundant session.status{idle}: CurrentState = %q, want done", om.CurrentState())
+	}
+}
+
 // TestOpencodeMonitorSSE_IdleAtConnectIsSteady verifies the no-spurious-toast
 // rule: an idle that does NOT follow a running state (e.g. the session reporting
 // idle at connect) maps to StateIdle, not StateDone — so dispatchNotify does not

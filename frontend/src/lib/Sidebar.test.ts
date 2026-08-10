@@ -578,6 +578,126 @@ test("F49a: sidebar last-active renders the shared formatRelativeAge output", as
   expect(ageSpan.textContent).toBe("3d ago");
 });
 
+// ---------------------------------------------------------------------------
+// Row-level attention signal: a BACKGROUND (non-active) row in an
+// awaiting/errored/done state begs for a look via .attn + a per-urgency class.
+// The active row never gets it (opening the session IS the acknowledgement).
+//
+// NOTE: the actual bar/tint/glow + the slow pulse are pure CSS on a ::before
+// pseudo-element. jsdom has no layout or animation engine, so these tests
+// verify only the class/marker wiring and the injected CSS text — the visible
+// treatment and its motion are manual-smoke-only.
+// ---------------------------------------------------------------------------
+
+test("attn: background rows in awaiting/errored/done states get .attn + the per-urgency class", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  // ws_a active → every other attention-state row is a background row.
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {} } });
+
+  const cases: Array<[RegExp, string]> = [
+    [/bug-fix/,       "attn-awaiting-approval"], // ws_c awaiting-approval
+    [/asking-work/,   "attn-awaiting-input"],    // ws_q awaiting-input
+    [/errored-work/,  "attn-errored"],           // ws_e errored
+    [/done-work/,     "attn-done"],              // ws_d done
+  ];
+  for (const [name, urgencyClass] of cases) {
+    const row = screen.getByRole("button", { name });
+    expect(row.classList.contains("attn")).toBe(true);
+    expect(row.classList.contains(urgencyClass)).toBe(true);
+  }
+});
+
+test("attn: the ACTIVE row never gets the attention treatment, even in an attention state", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  // Make the awaiting-approval session the active one — viewing it clears the beg.
+  render(Sidebar, { props: { workspaces, activeId: "ws_c", onSelect: () => {}, onNew: () => {} } });
+
+  const activeRow = screen.getByRole("button", { name: /bug-fix/ });
+  expect(activeRow.classList.contains("attn")).toBe(false);
+  expect(activeRow.classList.contains("attn-awaiting-approval")).toBe(false);
+});
+
+test("attn: calm background rows (idle/running) do NOT get the attention treatment", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {} } });
+
+  const idleRow = screen.getByRole("button", { name: /feat-core/ }); // ws_b idle, background
+  expect(idleRow.classList.contains("attn")).toBe(false);
+});
+
+test("attn: an already-seen awaiting-input row (in ackedInputIds) stops begging", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  // ws_q is awaiting-input and backgrounded, but its question was acknowledged →
+  // displayState collapses it to "idle", so it should not carry .attn.
+  render(Sidebar, {
+    props: {
+      workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {},
+      ackedInputIds: new Set(["ws_q"]),
+    },
+  });
+  const acked = screen.getByRole("button", { name: /asking-work/ });
+  expect(acked.classList.contains("attn")).toBe(false);
+  expect(acked.classList.contains("attn-awaiting-input")).toBe(false);
+});
+
+test("attn CSS: each urgency maps to its color token; done is calmer (finite, not infinite)", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {} } });
+  const styleText = [...document.querySelectorAll("style")].map((s) => s.textContent).join("\n");
+
+  const attnColorOf = (cls: string) =>
+    new RegExp(`\\.${cls}[^{}]*\\{[^{}]*?--attn-color:\\s*(var\\(--perch-[a-z0-9-]+\\))`).exec(styleText)?.[1];
+  expect(attnColorOf("attn-awaiting-approval")).toBe("var(--perch-warn)");
+  expect(attnColorOf("attn-awaiting-input")).toBe("var(--perch-info)");
+  expect(attnColorOf("attn-errored")).toBe("var(--perch-err)");
+  expect(attnColorOf("attn-done")).toBe("var(--perch-ok)");
+
+  // The base pulse (awaiting/errored) runs continuously until viewed…
+  // ([^{}]* swallows Svelte's injected .svelte-hash scope class before ::before;
+  //  (?=[.:]) keeps this off the .attn-done rule, whose next char is '-'.)
+  const base = /\.workspace-row\.attn(?=[.:])[^{}]*::before[^{}]*\{([^}]*)\}/.exec(styleText)?.[1] ?? "";
+  expect(base).toContain("perch-attn-row");
+  expect(base).toContain("infinite");
+  // …but "done" settles after a finite, gentler breath (never infinite).
+  const doneRule = /\.workspace-row\.attn-done[^{}]*::before[^{}]*\{([^}]*)\}/.exec(styleText)?.[1] ?? "";
+  expect(doneRule).toContain("perch-attn-row");
+  expect(doneRule).not.toContain("infinite");
+});
+
+test("attn contrast: the wash sits BEHIND row content (isolated context + negative-z pseudo) and no longer overlays the --row-color edge", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {} } });
+  const styleText = [...document.querySelectorAll("style")].map((s) => s.textContent).join("\n");
+
+  // The row establishes its own stacking context so the tint pseudo can be pushed
+  // behind the in-flow text/icon without escaping behind the row's own background.
+  const rowRule = /\.workspace-row\.attn(?=[.:])[^{}]*\{([^}]*)\}/.exec(styleText)?.[1] ?? "";
+  expect(rowRule).toMatch(/isolation:\s*isolate/);
+
+  // The ::before tint/glow paints at a negative z-index — above the row background
+  // but BELOW the text/icon, which keep full contrast. jsdom has no compositor, so
+  // this asserts the wiring only; the RENDERED contrast is manual-smoke.
+  const beforeRule = /\.workspace-row\.attn(?=[.:])[^{}]*::before[^{}]*\{([^}]*)\}/.exec(styleText)?.[1] ?? "";
+  expect(beforeRule).toMatch(/z-index:\s*-1/);
+  // inset:0 fills only the padding box, so the 3px per-worktree --row-color border
+  // is never covered by the attn wash (the old `inset: 0 0 0 -3px` overlaid it).
+  expect(beforeRule).not.toContain("-3px");
+});
+
+test("attn CSS: prefers-reduced-motion disables the row pulse (static bar/tint fallback)", async () => {
+  const { default: Sidebar } = await import("./Sidebar.svelte");
+  render(Sidebar, { props: { workspaces, activeId: "ws_a", onSelect: () => {}, onNew: () => {} } });
+  const styleText = [...document.querySelectorAll("style")].map((s) => s.textContent).join("\n");
+
+  // The grouped attn::before + attn-done::before selector with animation:none
+  // appears ONLY in the reduced-motion guard (the standalone base rule uses a
+  // single selector), so matching the comma-joined pair is a robust proxy.
+  expect(styleText).toMatch(/prefers-reduced-motion/);
+  expect(styleText).toMatch(
+    /\.workspace-row\.attn[^{}]*::before\s*,\s*\.workspace-row\.attn-done[^{}]*::before\s*\{[^}]*animation:\s*none/,
+  );
+});
+
 test("F32: exited state renders the ⏻ icon with status-exited class + 'exited' label (dim, NOT error)", async () => {
   const { default: Sidebar } = await import("./Sidebar.svelte");
   const ws: WorkspaceVM[] = [{
