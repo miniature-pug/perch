@@ -38,9 +38,17 @@ tagged a release yet, so everything to date sits under Unreleased.
   that silences the quieter tiers while still recording them.
 - A row-level attention signal in the sidebar. A background session that is
   awaiting approval, awaiting an answer, errored, or done draws a color-coded
-  left bar and a soft glow across its whole row until you open it. Awaiting and
-  errored rows pulse; done gives a calmer settle; reduced motion renders a
-  static bar. The active session never begs.
+  left bar and a soft glow across its whole row. A finished or errored row goes
+  quiet once you open the session and stays quiet when you switch away, until it
+  finishes or errors again. An awaiting-approval or awaiting-answer row is a
+  pending action, so it keeps begging until you act on it. Awaiting and errored
+  rows pulse; done gives a calmer settle; reduced motion renders a static bar.
+  The active session never begs.
+- A live status board in the sidebar. Every session row shows its status word at
+  all times (running, done, idle, needs you, asking you, error, exited), so you
+  read all sessions' status from the left pane without switching between them. A
+  running session's disc icon spins so working reads as alive at a glance;
+  reduced motion keeps it static.
 - A diff view with per-hunk staging, unstaging, and discarding, a reversible
   discard with an undo toast, and sending a hunk to the agent as context.
 - A CodeMirror editor with a git gutter, search, and save, a gitignore-aware

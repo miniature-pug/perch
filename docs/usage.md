@@ -147,24 +147,28 @@ color alone.
 | `done` | ✓ | done | green, steady |
 | `errored` | ✗ | error | red, steady |
 | `exited` | ⏻ | exited | dim, steady |
-| `running` | ◐ | running | dim, steady |
+| `running` | ◐ | running | green, spinning |
 | `idle` | ◯ | idle | dim, steady |
 
 The `exited` state means the agent process ended, gracefully or by a crash, while
 its shell stayed alive; the session shows the in-pane "session has ended" overlay
 with a Reopen button, and its sidebar row reads dim rather than as a red error.
 
-Pulses are suppressed when your system asks for reduced motion. Each session
-also carries a stable color, shown as a stripe on its row and on its
-notifications, so you can track one agent across the window.
+Every row shows its status word at all times, so you can read all sessions'
+status from the left pane without switching between them. Pulses and the running
+spin are suppressed when your system asks for reduced motion. Each session also
+carries a stable color, shown as a stripe on its row and on its notifications, so
+you can track one agent across the window.
 
 A background session (one you are not currently viewing) that needs you, is
 asking you, errored, or has just finished also raises a row-level signal: a
-color-coded left bar and a soft glow across the whole row, in that state's
-color. It persists until you open the session, so a finished or waiting agent
-catches your eye without your switching to it. Awaiting and errored rows pulse;
-a finished row settles; reduced motion renders a static bar. The session you are
-viewing never begs.
+color-coded left bar and a soft glow across the whole row, in that state's color,
+so a finished or waiting agent catches your eye without your switching to it.
+Once you open a finished or errored session the signal goes quiet and stays quiet
+when you switch away, until that session finishes or errors again. A session
+awaiting your approval or an answer is a pending action, so its row keeps begging
+until you act on it. Awaiting and errored rows pulse; a finished row settles;
+reduced motion renders a static bar. The session you are viewing never begs.
 
 ## The diff view
 

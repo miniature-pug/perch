@@ -239,12 +239,16 @@ WebKit and cannot be checked headlessly.
       reduced motion on, no pop.
 - [ ] A BACKGROUND session that is awaiting your approval, awaiting an answer, or
       that errored or finished draws a color-coded left bar and a soft glow across
-      its whole row that persists until you open it: amber for approval, info for a
-      question, red for an error, calm green for done. Awaiting and errored pulse
-      slowly; done gives a gentler settle. The active (open) session never begs,
-      and opening a begging session clears its signal. With reduced motion on, the
+      its whole row: amber for approval, info for a question, red for an error,
+      calm green for done. Awaiting and errored pulse slowly; done gives a gentler
+      settle. The active (open) session never begs. With reduced motion on, the
       row shows a static colored bar and steady tint, no pulse. Confirm a finished,
       asking, or errored background row draws the eye without your switching to it.
+- [ ] Finish-signal persistence. Let a BACKGROUND session finish (or error) so its
+      row begs, then open it: the beg goes quiet. Switch away to another session and
+      confirm the row stays quiet, its ✓ (or ✗) status word still showing. Then let
+      that session finish a fresh turn: its row begs again. An awaiting-approval or
+      awaiting-answer row, by contrast, keeps begging until you act on it.
 - [ ] Each session has a stable color, a stripe on its row and the same color on
       its notifications, the same across restarts.
 
@@ -278,6 +282,10 @@ WebKit and cannot be checked headlessly.
       while it works, ✓ done when its turn ends, amber when it needs you — even
       while you are focused on a different session, a different view, or the window
       is unfocused. The row never goes stale waiting for you to click into it.
+- [ ] Every session row shows its status word at all times (running, done, idle,
+      needs you, asking you, error, exited), so you read all sessions' status from
+      the left pane without switching between them. A running row's ◐ icon spins
+      while it works; with reduced motion on, the icon holds still.
 
 ## Accessibility (keyboard)
 
