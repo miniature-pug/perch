@@ -28,14 +28,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       xvfb \
  && rm -rf /var/lib/apt/lists/*
 
-# Go: the official tarball, pinned by .tool-versions.
-RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" \
+# Go: the official tarball, pinned by .tool-versions. The architecture comes
+# from the build host (amd64 or arm64), so the image builds natively on both.
+# Go names the tarballs linux-amd64 and linux-arm64, which match dpkg's arch.
+RUN GOARCH="$(dpkg --print-architecture)"; \
+    curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${GOARCH}.tar.gz" \
       | tar -C /usr/local -xz
 ENV GOPATH=/root/go
 ENV PATH=/usr/local/go/bin:/root/go/bin:$PATH
 
-# Node: the official tarball, pinned by .tool-versions.
-RUN curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
+# Node: the official tarball, pinned by .tool-versions. Node names the amd64
+# build "x64", so map dpkg's "amd64" to it; arm64 matches directly.
+RUN A="$(dpkg --print-architecture)"; case "$A" in amd64) NODE_ARCH=x64;; *) NODE_ARCH="$A";; esac; \
+    curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" \
       | tar -C /usr/local --strip-components=1 -xJ
 
 # The go-tools are baked in as pinned versions, so lint and vulncheck run an

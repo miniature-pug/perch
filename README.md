@@ -81,12 +81,13 @@ is the minimum. Anything newer on the 4.1 line works.
 
 ### Download a release
 
-Once perch tags `v0.1.0`, each
-[GitHub Release](https://github.com/miniature-pug/perch/releases) attaches a
-prebuilt `perch-linux-amd64` binary and a `SHA256SUMS` file. Download both
-files, then run:
+Each [GitHub Release](https://github.com/miniature-pug/perch/releases) attaches
+a prebuilt binary for each linux architecture, `perch-linux-amd64` and
+`perch-linux-arm64`, plus a `SHA256SUMS` file. Download the binary for your
+architecture and the checksums, then run:
 
 ```sh
+# Pick perch-linux-amd64 (Intel or AMD) or perch-linux-arm64 (ARM).
 curl -LO https://github.com/miniature-pug/perch/releases/latest/download/perch-linux-amd64
 curl -LO https://github.com/miniature-pug/perch/releases/latest/download/SHA256SUMS
 sha256sum --check --ignore-missing SHA256SUMS
