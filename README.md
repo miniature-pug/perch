@@ -327,4 +327,4 @@ repositories you open. It does not target macOS or Windows. It integrates
 
 ## License
 
-[MIT](LICENSE). Copyright 2026 Manjot Singh Randhawa.
+[MIT](LICENSE). Copyright 2026 miniature-pug.
