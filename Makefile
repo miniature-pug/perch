@@ -35,7 +35,7 @@ ifeq (, $(shell command -v go))
 $(error 'go' not found on PATH)
 endif
 
-.PHONY: build install run gui-build gui-install gui-run desktop image shell test test-integration test-front test-e2e test-all coverage lint fmt vet tidy vendor verify vulncheck verify-all doctor clean cross
+.PHONY: build install run gui-build gui-install gui-run desktop image shell test test-integration test-front test-e2e test-all gui-check coverage lint fmt vet tidy vendor verify vulncheck verify-all doctor clean cross
 
 # build: only the backend binary. It embeds the committed
 # frontend/dist/index.html stub and does not rebuild the frontend. For a full
@@ -85,7 +85,7 @@ shell: | image        ## Open an interactive shell in perch-dev.
 # directly, inside the image. test-e2e is the only dispatched target that
 # runs `vite build`, so it alone masks frontend/dist. The Go targets keep the
 # committed go:embed stub.
-DZ := test test-integration test-front test-e2e lint vet vulncheck
+DZ := test test-integration test-front test-e2e lint vet vulncheck gui-check
 ifeq ($(CONTAINERIZE),1)
 gui-build: export PERCH_MASK_DIST = 1
 test-e2e: export PERCH_MASK_DIST = 1
@@ -99,9 +99,15 @@ test-e2e:         ; npm --prefix frontend ci && npm --prefix frontend run test:e
 lint:             ; golangci-lint run
 vet:              ; go vet $(PKG)
 vulncheck:        ; govulncheck ./...
+# Compile-only check of the production GUI binary (cgo + WebKitGTK, the '$(TAGS)'
+# build). The other Go gates build without these tags, so a production-only
+# break (for example a vendored file dropped by .gitignore) reaches them never.
+# This gate compiles ./cmd/perch exactly as the release does, and discards the
+# output. It uses the committed frontend/dist go:embed stub, not a vite build.
+gui-check:        ; go build -tags '$(TAGS)' -o /dev/null ./cmd/perch
 endif
 
-test-all: test test-integration test-front lint vet vulncheck test-e2e ## Run every gate. Each one runs in its own container with the right masks.
+test-all: test test-integration test-front lint vet vulncheck test-e2e gui-check ## Run every gate. Each one runs in its own container with the right masks.
 	@echo "==> test-all: ALL gates PASSED."
 
 coverage:             ## Show a coverage report for the internal/ packages.
