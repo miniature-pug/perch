@@ -353,8 +353,10 @@
     const current = () => gen === loadGen && !destroyed;
 
     if (!p) {
-      // The host is gone. Save a dirty buffer, then drop the view.
-      if (view && isDirty) await save();
+      // The host is gone. Save a dirty buffer, then drop the view. If the save
+      // fails, keep the (detached) view and its edits: a later path re-attaches
+      // it, and teardown tries the save again.
+      if (view && isDirty && !(await save())) return;
       if (!current()) return;
       view?.destroy();
       view = null;

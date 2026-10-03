@@ -585,6 +585,18 @@ describe("audit: Editor switch and save safety", () => {
     await waitFor(() => expect(w.writeFile).toHaveBeenCalledWith("/wt/a.ts", "EDIT content of /wt/a.ts"));
   });
 
+  test("FEX-31: a failed save when the path goes null keeps the edits for when the file returns", async () => {
+    const { w, type, setPath, shown } = await setup();
+    vi.mocked(w.writeFile).mockRejectedValueOnce(new Error("disk full"));
+    type("EDIT ");
+    setPath(null);
+    await waitFor(() => expect(w.writeFile).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 10));
+    setPath("/wt/a.ts");
+    await waitFor(() => expect(shown()).toBe("EDIT content of /wt/a.ts"));
+    expect(document.querySelector(".dirty-dot")).not.toBeNull();
+  });
+
   test("FEX-12: the git gutter asks for hunks with the worktree-relative path", async () => {
     const { w } = await setup("/wt/src/main.go");
     await waitFor(() => expect(w.hunks).toHaveBeenCalledWith("/wt", "src/main.go"));
