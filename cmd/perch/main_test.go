@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -464,5 +466,87 @@ func TestRun_ValidPath_LaunchesGUI(t *testing.T) {
 	}
 	if len(gotRoots) == 0 {
 		t.Error("expected guiRoots to supply at least one root")
+	}
+}
+
+// ── guiRoots ──────────────────────────────────────────────────────────────────
+
+// TestGuiRoots_ConfigErrorReported is the MSC-10 regression guard: a broken
+// config.toml is reported on stderr, not silently replaced by the cwd.
+func TestGuiRoots_ConfigErrorReported(t *testing.T) {
+	cfgHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfgHome)
+	if err := os.MkdirAll(filepath.Join(cfgHome, "perch"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgHome, "perch", "config.toml"), []byte("roots = [unterminated"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	var stderr bytes.Buffer
+	roots := guiRoots(dir, false, &stderr)
+	if !strings.Contains(stderr.String(), "config") {
+		t.Errorf("stderr = %q, want a config error", stderr.String())
+	}
+	if len(roots) != 1 || roots[0] != dir {
+		t.Errorf("roots = %v, want [%s]", roots, dir)
+	}
+}
+
+// TestGuiRoots_RepoAddsSiblingWorktreeDir is the APP-3 regression guard: a
+// launch inside a repo with no configured roots also covers the sibling
+// <repo>__worktrees directory, where worktree sessions are created.
+func TestGuiRoots_RepoAddsSiblingWorktreeDir(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	repo := filepath.Join(t.TempDir(), "myrepo")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	roots := guiRoots(repo, false, io.Discard)
+	want := []string{repo, repo + "__worktrees"}
+	if strings.Join(roots, "|") != strings.Join(want, "|") {
+		t.Errorf("roots = %v, want %v", roots, want)
+	}
+	plain := t.TempDir()
+	if roots := guiRoots(plain, false, io.Discard); len(roots) != 1 || roots[0] != plain {
+		t.Errorf("non-repo roots = %v, want [%s]", roots, plain)
+	}
+}
+
+// TestGuiRoots_ExplicitPathJoinsConfiguredRoots is the APP-22c regression
+// guard: `perch <path>` covers <path> even when config.toml sets roots.
+func TestGuiRoots_ExplicitPathJoinsConfiguredRoots(t *testing.T) {
+	cfgHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfgHome)
+	configured := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cfgHome, "perch"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgHome, "perch", "config.toml"), []byte(fmt.Sprintf("roots = [%q]\n", configured)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	named := t.TempDir()
+	if roots := guiRoots(named, true, io.Discard); strings.Join(roots, "|") != named+"|"+configured {
+		t.Errorf("explicit roots = %v, want [%s %s]", roots, named, configured)
+	}
+	if roots := guiRoots(named, false, io.Discard); strings.Join(roots, "|") != configured {
+		t.Errorf("implicit roots = %v, want [%s]", roots, configured)
+	}
+}
+
+// TestRun_RelativePath_PassesAbsoluteRoot is the APP-4 regression guard.
+func TestRun_RelativePath_PassesAbsoluteRoot(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	orig := launchGUI
+	t.Cleanup(func() { launchGUI = orig })
+	var gotRoots []string
+	launchGUI = func(roots []string) error { gotRoots = roots; return nil }
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if code := run([]string{"."}, io.Discard, io.Discard); code != 0 {
+		t.Fatalf("exit code = %d", code)
+	}
+	if len(gotRoots) == 0 || !filepath.IsAbs(gotRoots[0]) {
+		t.Errorf("roots = %v, want an absolute first root", gotRoots)
 	}
 }

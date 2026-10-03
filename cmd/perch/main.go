@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"strings"
@@ -68,6 +69,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 // is no terminal TUI.
 func handleLaunch(root string, stdout, stderr io.Writer) int {
 	_ = stdout
+	explicit := root != ""
 	if root == "" {
 		cwd, err := os.Getwd()
 		if err != nil {
@@ -76,7 +78,14 @@ func handleLaunch(root string, stdout, stderr io.Writer) int {
 		}
 		root = cwd
 	}
-	if err := launchGUI(guiRoots(root)); err != nil {
+	// Every path check in the app compares absolute paths, so a relative
+	// argument (perch ., perch ../code) must become absolute here.
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "perch: cannot resolve %q: %v\n", root, err)
+		return 1
+	}
+	if err := launchGUI(guiRoots(abs, explicit, stderr)); err != nil {
 		_, _ = fmt.Fprintf(stderr, "perch: %v\n", err)
 		return 1
 	}
@@ -225,7 +234,7 @@ func handleDebug(args []string, stdout, stderr io.Writer) int {
 
 // handleDebugDiscover implements `perch debug discover [path]`.
 // It lists all git projects under root (defaulting to cwd) with their
-// worktrees, ordered by frecency (cold start → alphabetical).
+// worktrees, alphabetically by path (it passes no frecency stats).
 func handleDebugDiscover(args []string, stdout, stderr io.Writer) int {
 	var root string
 	if len(args) >= 1 {
