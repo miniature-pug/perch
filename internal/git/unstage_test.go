@@ -44,7 +44,7 @@ func TestUnstageHunk_GoesToRunnerSeam(t *testing.T) {
 	// The apply must be `git apply --reverse --cached -`.
 	r.Respond(proc.FakeResult{}, "git", "apply", "--whitespace=nowarn", "--reverse", "--cached", "-")
 
-	if err := git.UnstageHunk(ctx, r, "/repo", "f.txt", 0); err != nil {
+	if err := unstageAt(ctx, r, "/repo", "f.txt", 0); err != nil {
 		t.Fatalf("UnstageHunk: %v", err)
 	}
 
@@ -75,7 +75,7 @@ func TestUnstageHunk_GoesToRunnerSeam(t *testing.T) {
 func TestUnstageHunk_RejectsNewlineInPath(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	r := proc.ExecRunner{}
-	if err := git.UnstageHunk(context.Background(), r, t.TempDir(), "evil\nname.txt", 0); err == nil {
+	if err := git.UnstageHunkChecked(context.Background(), r, t.TempDir(), "evil\nname.txt", 0, "any-id"); err == nil {
 		t.Fatal("expected error for path containing newline")
 	}
 }
@@ -101,7 +101,7 @@ func TestUnstageHunk_MovesStagedHunkBackToWorktree(t *testing.T) {
 	}
 
 	// Stage only the first working-tree hunk (TOP_CHANGE).
-	if err := git.StageHunk(ctx, r, repo, "target.txt", 0); err != nil {
+	if err := stageAt(ctx, r, repo, "target.txt", 0); err != nil {
 		t.Fatalf("StageHunk: %v", err)
 	}
 
@@ -131,7 +131,7 @@ func TestUnstageHunk_MovesStagedHunkBackToWorktree(t *testing.T) {
 	if stagedIdx < 0 {
 		t.Fatalf("expected a staged hunk after StageHunk; hunks=%+v", hunks)
 	}
-	if err := git.UnstageHunk(ctx, r, repo, "target.txt", stagedIdx); err != nil {
+	if err := unstageAt(ctx, r, repo, "target.txt", stagedIdx); err != nil {
 		t.Fatalf("UnstageHunk(index=%d): %v", stagedIdx, err)
 	}
 
@@ -205,10 +205,10 @@ func mixedStagedFile(t *testing.T, r proc.Runner) string {
 
 	// Stage the top two hunks. Staging shifts the working-tree indices, so after
 	// staging the current topmost hunk (index 0) the next one becomes index 0.
-	if err := git.StageHunk(ctx, r, repo, "mixed.txt", 0); err != nil { // TOP_HUNK
+	if err := stageAt(ctx, r, repo, "mixed.txt", 0); err != nil { // TOP_HUNK
 		t.Fatalf("StageHunk TOP: %v", err)
 	}
-	if err := git.StageHunk(ctx, r, repo, "mixed.txt", 0); err != nil { // MID_HUNK
+	if err := stageAt(ctx, r, repo, "mixed.txt", 0); err != nil { // MID_HUNK
 		t.Fatalf("StageHunk MID: %v", err)
 	}
 	return repo
@@ -274,7 +274,7 @@ func TestUnstageHunk_MixedDiff_UnstageFirstStaged(t *testing.T) {
 	}
 
 	// Unstage the FIRST staged hunk by its merged index.
-	if err := git.UnstageHunk(ctx, r, repo, "mixed.txt", firstStaged); err != nil {
+	if err := unstageAt(ctx, r, repo, "mixed.txt", firstStaged); err != nil {
 		t.Fatalf("UnstageHunk(index=%d): %v", firstStaged, err)
 	}
 

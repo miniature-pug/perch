@@ -45,7 +45,7 @@ func initRepo(t *testing.T) string {
 	return dir
 }
 
-func TestDiffStat_ModifiedAddedDeleted(t *testing.T) {
+func TestChangedFiles_ModifiedAddedDeleted(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	repo := initRepo(t)
 
@@ -80,9 +80,9 @@ func TestDiffStat_ModifiedAddedDeleted(t *testing.T) {
 
 	r := proc.ExecRunner{}
 	ctx := context.Background()
-	diffs, err := git.DiffStat(ctx, r, repo)
+	diffs, err := git.ChangedFiles(ctx, r, repo)
 	if err != nil {
-		t.Fatalf("DiffStat: %v", err)
+		t.Fatalf("ChangedFiles: %v", err)
 	}
 
 	byPath := make(map[string]git.FileDiff)
@@ -93,7 +93,7 @@ func TestDiffStat_ModifiedAddedDeleted(t *testing.T) {
 	// a.txt: modified (unstaged). Should show as "M".
 	a, ok := byPath["a.txt"]
 	if !ok {
-		t.Fatal("a.txt missing from DiffStat")
+		t.Fatal("a.txt missing from ChangedFiles")
 	}
 	if a.Status != "M" {
 		t.Errorf("a.txt status = %q, want M", a.Status)
@@ -105,7 +105,7 @@ func TestDiffStat_ModifiedAddedDeleted(t *testing.T) {
 	// c.txt: deleted (unstaged)
 	c, ok := byPath["c.txt"]
 	if !ok {
-		t.Fatal("c.txt missing from DiffStat")
+		t.Fatal("c.txt missing from ChangedFiles")
 	}
 	if c.Status != "D" {
 		t.Errorf("c.txt status = %q, want D", c.Status)

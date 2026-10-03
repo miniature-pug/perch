@@ -186,7 +186,7 @@ func TestHunks_SameHeaderStagedAndUnstaged(t *testing.T) {
 	if hs[0].Header != hs[1].Header {
 		t.Fatalf("test premise: headers should match, got %q vs %q", hs[0].Header, hs[1].Header)
 	}
-	if err := git.UnstageHunk(ctx, r, d, "f.txt", 1); err != nil {
+	if err := unstageAt(ctx, r, d, "f.txt", 1); err != nil {
 		t.Fatalf("UnstageHunk: %v", err)
 	}
 	hs, _ = git.Hunks(ctx, r, d, "f.txt")
@@ -276,7 +276,7 @@ func TestHunks_GlobCharactersAreLiteral(t *testing.T) {
 	if len(hs) != 1 || !hunkTouches(hs[0], "2b") {
 		t.Fatalf("Hunks(a[bc].txt) = %+v; want only its own hunk", hs)
 	}
-	if err := git.StageHunk(ctx, r, d, "a[bc].txt", 1); err == nil {
+	if err := stageAt(ctx, r, d, "a[bc].txt", 1); err == nil {
 		t.Error("StageHunk(index 1) should be out of range for a one-hunk file")
 	}
 }

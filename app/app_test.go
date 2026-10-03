@@ -1923,13 +1923,13 @@ func TestApp_StageHunk_RejectsPathTraversal(t *testing.T) {
 
 	for _, bad := range []string{"../etc/passwd", "../../secret", "/etc/passwd", "a/../../../etc/passwd"} {
 		t.Run(bad, func(t *testing.T) {
-			if err := a.StageHunk(wt, bad, 0); err == nil {
+			if err := a.StageHunk(wt, bad, 0, "id"); err == nil {
 				t.Errorf("StageHunk(file=%q) = nil, want rejection (path escapes worktree)", bad)
 			}
 			if _, err := a.Hunks(wt, bad); err == nil {
 				t.Errorf("Hunks(file=%q) returned nil err, want rejection", bad)
 			}
-			if err := a.DiscardHunk(wt, bad, 0); err == nil {
+			if err := a.DiscardHunk(wt, bad, 0, "id"); err == nil {
 				t.Errorf("DiscardHunk(file=%q) = nil, want rejection", bad)
 			}
 		})
@@ -1969,7 +1969,7 @@ func TestApp_StageHunk_HappyPath(t *testing.T) {
 		t.Fatal("Hunks must return at least one hunk before staging")
 	}
 
-	if err := a.StageHunk(repo, "file.txt", 0); err != nil {
+	if err := a.StageHunk(repo, "file.txt", hunks[0].Index, hunks[0].ID); err != nil {
 		t.Fatalf("StageHunk: %v", err)
 	}
 
@@ -2008,7 +2008,11 @@ func TestApp_DiscardHunk_HappyPath(t *testing.T) {
 		monitors: map[string]agent.Monitor{},
 	}
 
-	if err := a.DiscardHunk(repo, "file.txt", 0); err != nil {
+	hunks, err := a.Hunks(repo, "file.txt")
+	if err != nil || len(hunks) == 0 {
+		t.Fatalf("Hunks: %v (%d hunks)", err, len(hunks))
+	}
+	if err := a.DiscardHunk(repo, "file.txt", hunks[0].Index, hunks[0].ID); err != nil {
 		t.Fatalf("DiscardHunk: %v", err)
 	}
 
@@ -3278,14 +3282,12 @@ func TestApp_ListStaleSessions_FiltersThresholdAndWorktreeOnly(t *testing.T) {
 		LastActive: now.Add(-60 * 24 * time.Hour),
 	})
 	r := proc.NewFakeRunner()
-	// DiffStat command 1: status --porcelain (also consumed by WorktreeDirty)
-	r.Respond(proc.FakeResult{Stdout: []byte("")}, "git", "-C", treeA, "status", "--porcelain")
+	// ChangedFiles: status --porcelain=v2 (no entries = clean)
+	r.Respond(proc.FakeResult{Stdout: []byte("# branch.oid 1111111\x00# branch.head x\x00")}, "git", "-C", treeA, "status", "--porcelain=v2", "-z", "--branch", "--renames")
 	// BranchMerged uses --format=%(refname:short)
 	r.Respond(proc.FakeResult{Stdout: []byte("feat/old\nmain\n")}, "git", "-C", repoA, "branch", "--merged", "main", "--format=%(refname:short)")
-	// DiffStat command 2: diff --numstat
-	r.Respond(proc.FakeResult{Stdout: []byte("")}, "git", "-C", treeA, "diff", "--numstat")
-	// DiffStat command 3: diff --cached --numstat
-	r.Respond(proc.FakeResult{Stdout: []byte("")}, "git", "-C", treeA, "diff", "--cached", "--numstat")
+	// ChangedFiles: diff HEAD --numstat -z
+	r.Respond(proc.FakeResult{Stdout: []byte("")}, "git", "-C", treeA, "diff", "HEAD", "--numstat", "-z", "-M")
 	settingsPath := filepath.Join(cfgDir, "settings.json")
 	a := &App{
 		store: store, roots: []string{repoA, repoB, treeA, freshTree}, run: r,
@@ -3318,14 +3320,12 @@ func TestApp_ListStaleSessions_SafeFlag(t *testing.T) {
 		BaseRef: "main", LastActive: now.Add(-31 * 24 * time.Hour),
 	})
 	r := proc.NewFakeRunner()
-	// DiffStat command 1 / WorktreeDirty: status --porcelain (empty = clean)
-	r.Respond(proc.FakeResult{Stdout: []byte("")}, "git", "-C", tree, "status", "--porcelain")
+	// ChangedFiles: status --porcelain=v2 (no entries = clean)
+	r.Respond(proc.FakeResult{Stdout: []byte("# branch.oid 1111111\x00# branch.head x\x00")}, "git", "-C", tree, "status", "--porcelain=v2", "-z", "--branch", "--renames")
 	// BranchMerged
 	r.Respond(proc.FakeResult{Stdout: []byte("feat/s\n")}, "git", "-C", repo, "branch", "--merged", "main", "--format=%(refname:short)")
-	// DiffStat command 2 (diff --numstat) returns 3 added, 1 removed for feat/s.go
-	r.Respond(proc.FakeResult{Stdout: []byte("3\t1\tfeat/s.go\n")}, "git", "-C", tree, "diff", "--numstat")
-	// DiffStat command 3: diff --cached --numstat
-	r.Respond(proc.FakeResult{Stdout: []byte("")}, "git", "-C", tree, "diff", "--cached", "--numstat")
+	// ChangedFiles: diff HEAD --numstat -z
+	r.Respond(proc.FakeResult{Stdout: []byte("")}, "git", "-C", tree, "diff", "HEAD", "--numstat", "-z", "-M")
 	a := &App{
 		store: store, roots: []string{repo, tree}, run: r,
 		emit: func(string, ...any) {}, bridges: map[string]*internalpty.Bridge{},
@@ -3342,11 +3342,38 @@ func TestApp_ListStaleSessions_SafeFlag(t *testing.T) {
 	if !stale[0].Clean || !stale[0].Merged || !stale[0].Safe {
 		t.Errorf("expected Clean+Merged+Safe, got %+v", stale[0])
 	}
-	if stale[0].Added != 3 {
-		t.Errorf("expected Added=3, got %d", stale[0].Added)
+}
+
+// TestApp_ListStaleSessions_DirtyCountsLines checks that one ChangedFiles
+// call yields both Clean==false and the uncommitted line counts.
+func TestApp_ListStaleSessions_DirtyCountsLines(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	store, _ := registry.Load(cfgDir)
+	repo := t.TempDir()
+	tree := linkedWorktreeDir(t)
+	_ = store.Upsert(registry.Workspace{
+		ID: "ws-s", RepoPath: repo, WorktreePath: tree,
+		Worktree: true, Agent: "claude", Title: "t", Branch: "feat/s",
+		BaseRef: "main", LastActive: time.Now().Add(-31 * 24 * time.Hour),
+	})
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Stdout: []byte("# branch.oid 1111111\x001 .M N... 100644 100644 100644 abc abc feat/s.go\x00")},
+		"git", "-C", tree, "status", "--porcelain=v2", "-z", "--branch", "--renames")
+	r.Respond(proc.FakeResult{Stdout: []byte("3\t1\tfeat/s.go\x00")}, "git", "-C", tree, "diff", "HEAD", "--numstat", "-z", "-M")
+	r.Respond(proc.FakeResult{Stdout: []byte("feat/s\n")}, "git", "-C", repo, "branch", "--merged", "main", "--format=%(refname:short)")
+	a := &App{
+		store: store, roots: []string{repo, tree}, run: r,
+		emit: func(string, ...any) {}, bridges: map[string]*internalpty.Bridge{},
+		monitors: map[string]agent.Monitor{}, cancels: map[string]context.CancelFunc{},
+		settingsPath: filepath.Join(cfgDir, "settings.json"),
 	}
-	if stale[0].Removed != 1 {
-		t.Errorf("expected Removed=1, got %d", stale[0].Removed)
+	stale, err := a.ListStaleSessions()
+	if err != nil || len(stale) != 1 {
+		t.Fatalf("ListStaleSessions = %+v, %v", stale, err)
+	}
+	if s := stale[0]; s.Clean || s.Safe || !s.Merged || s.Added != 3 || s.Removed != 1 {
+		t.Errorf("row = %+v, want Clean=false Merged=true Safe=false Added=3 Removed=1", s)
 	}
 }
 
@@ -3368,14 +3395,12 @@ func TestApp_ListStaleSessions_UnmergedNotSafe(t *testing.T) {
 		BaseRef: "main", LastActive: now.Add(-31 * 24 * time.Hour),
 	})
 	r := proc.NewFakeRunner()
-	// WorktreeDirty: status --porcelain returns empty → clean
-	r.Respond(proc.FakeResult{Stdout: []byte("")}, "git", "-C", tree, "status", "--porcelain")
+	// ChangedFiles: status --porcelain=v2 (no entries = clean)
+	r.Respond(proc.FakeResult{Stdout: []byte("# branch.oid 1111111\x00# branch.head x\x00")}, "git", "-C", tree, "status", "--porcelain=v2", "-z", "--branch", "--renames")
 	// BranchMerged: branch --merged lists a different branch, not feat/unmerged → Merged==false
 	r.Respond(proc.FakeResult{Stdout: []byte("other-branch\n")}, "git", "-C", repo, "branch", "--merged", "main", "--format=%(refname:short)")
-	// DiffStat: diff --numstat (no changes)
-	r.Respond(proc.FakeResult{Stdout: []byte("")}, "git", "-C", tree, "diff", "--numstat")
-	// DiffStat: diff --cached --numstat (no changes)
-	r.Respond(proc.FakeResult{Stdout: []byte("")}, "git", "-C", tree, "diff", "--cached", "--numstat")
+	// ChangedFiles: diff HEAD --numstat -z
+	r.Respond(proc.FakeResult{Stdout: []byte("")}, "git", "-C", tree, "diff", "HEAD", "--numstat", "-z", "-M")
 	a := &App{
 		store: store, roots: []string{repo, tree}, run: r,
 		emit: func(string, ...any) {}, bridges: map[string]*internalpty.Bridge{},
@@ -3578,7 +3603,8 @@ func TestApp_RemoveWorkspace_MissingWorktreePath_DropsRecord(t *testing.T) {
 	// The code must not call git worktree remove or status on the missing
 	// path. A best-effort `worktree prune` in the repo is expected (APP-7).
 	for _, c := range r.Calls {
-		if c.Name == "git" && !(len(c.Args) == 4 && c.Args[2] == "worktree" && c.Args[3] == "prune") {
+		isPrune := len(c.Args) == 4 && c.Args[2] == "worktree" && c.Args[3] == "prune"
+		if c.Name == "git" && !isPrune {
 			t.Errorf("unexpected git call for missing worktree path: %v", c.Args)
 		}
 	}

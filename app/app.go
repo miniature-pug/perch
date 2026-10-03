@@ -40,9 +40,6 @@ const (
 	defaultPtyCols = 220
 	defaultPtyRows = 50
 
-	// fsChangeChanBuf is the buffer size of the internal fs-change signal channel.
-	fsChangeChanBuf = 64
-
 	// Persistent-file names relative to the config directory.
 	perchSettingsFile = "settings.json"
 	perchLayoutFile   = "layout.json"
@@ -747,7 +744,8 @@ func (a *App) CreateWorkspace(agentName, repoPath, baseRef, branch, title string
 		return WorkspaceVM{}, fmt.Errorf("unknown agent %q", agentName)
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), uiGitTimeout)
+	defer cancel()
 
 	// Every mode needs a commit to branch from or check out. On an unborn HEAD
 	// (a freshly created repo with no commits), git produces a cryptic error
@@ -768,14 +766,23 @@ func (a *App) CreateWorkspace(agentName, repoPath, baseRef, branch, title string
 			return WorkspaceVM{}, fmt.Errorf("create worktree: %w", gitpkg.ErrBranchInUse)
 		}
 
+		// SlugifyBranch is lossy ("feat/x" and "feat-x" share a handle), so
+		// the path is the first free one, never a directory that already
+		// exists. AddWorktree still returns ErrWorktreePathExists if one
+		// appears in between.
 		handle := gitpkg.SlugifyBranch(branch)
-		treePath, err := gitpkg.WorktreePath(repoPath, handle, "")
+		treePath, err := gitpkg.AvailableWorktreePath(repoPath, handle, "")
 		if err != nil {
 			return WorkspaceVM{}, err
 		}
 		if !containedUnderRoots(treePath, a.roots) {
 			return WorkspaceVM{}, fmt.Errorf("derived worktree path %q escapes all configured roots", treePath)
 		}
+		// A worktree deleted outside perch stays registered in git until it
+		// is pruned: its branch reads as "already used by worktree" and its
+		// path as "a missing but already registered worktree". Prune first,
+		// best-effort; prune never touches a worktree that still exists.
+		_ = gitpkg.PruneWorktrees(ctx, a.runner(), repoPath)
 
 		if baseRef != "" {
 			// New-branch mode: git worktree add -b <branch> <tree> <baseRef>.
@@ -1273,16 +1280,75 @@ func (a *App) forwardEvent(id string, mon agent.Monitor, evt agent.Event) {
 	a.scheduleTitleUpdate()
 }
 
+// fsChangedMaxPaths caps the paths one fs:changed event lists. The watcher
+// reports every file inside a newly created or moved-in directory, so a git
+// switch, a tar x or a scaffold can touch thousands of files in one window.
+// Past the cap the event carries no paths and truncated=true, and the
+// frontend reloads everything it shows.
+const fsChangedMaxPaths = 200
+
+// fsBatch collects the paths changed during one debounce window.
+type fsBatch struct {
+	mu        sync.Mutex
+	paths     map[string]struct{}
+	truncated bool
+}
+
+// add records p, switching to truncated once more than fsChangedMaxPaths
+// distinct paths arrive.
+func (b *fsBatch) add(p string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.truncated {
+		return
+	}
+	if b.paths == nil {
+		b.paths = map[string]struct{}{}
+	}
+	if _, ok := b.paths[p]; ok {
+		return
+	}
+	if len(b.paths) >= fsChangedMaxPaths {
+		b.truncated = true
+		b.paths = nil
+		return
+	}
+	b.paths[p] = struct{}{}
+}
+
+// take returns the window's sorted paths (never nil) and the truncated flag,
+// and starts a new window.
+func (b *fsBatch) take() ([]string, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]string, 0, len(b.paths))
+	for p := range b.paths {
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	truncated := b.truncated
+	b.paths, b.truncated = nil, false
+	return out, truncated
+}
+
 // startWatcher starts the fs watcher for root, bound to wctx, and returns it,
 // or nil when there is no watcher seam or the watcher fails to start.
+//
+// Changes are coalesced into one fs:changed event per debounce window:
+//
+//	{workspaceId, path: <root>, paths: [<absolute changed paths>], truncated}
+//
+// paths lists each distinct changed path once (sorted). When more than
+// fsChangedMaxPaths changed, paths is empty and truncated is true.
 func (a *App) startWatcher(wctx context.Context, id, root string) *fspkg.Watcher {
 	if a.newWatcher == nil {
 		return nil
 	}
-	changes := make(chan string, fsChangeChanBuf)
+	batch := &fsBatch{}
+	// signal wakes the debounce goroutine; one pending wake-up is enough,
+	// because the batch, not the channel, carries the paths.
+	signal := make(chan struct{}, 1)
 
-	// This debounce goroutine coalesces raw onChange signals into a single
-	// fs:changed emit per debounce window. wctx bounds its lifetime.
 	go func() {
 		defer safe.Recover("fs-debounce")
 		var timer *time.Timer
@@ -1294,23 +1360,33 @@ func (a *App) startWatcher(wctx context.Context, id, root string) *fspkg.Watcher
 					timer.Stop()
 				}
 				return
-			case <-changes:
+			case <-signal:
 				if timer == nil {
 					timer = time.NewTimer(a.debounce)
 					timerC = timer.C
 				}
 				// else: within the window, so coalesce (do nothing)
 			case <-timerC:
-				a.emit("fs:changed", map[string]any{"workspaceId": id, "path": root})
 				timer = nil
 				timerC = nil
+				paths, truncated := batch.take()
+				if len(paths) == 0 && !truncated {
+					continue
+				}
+				a.emit("fs:changed", map[string]any{
+					"workspaceId": id,
+					"path":        root,
+					"paths":       paths,
+					"truncated":   truncated,
+				})
 			}
 		}
 	}()
 
-	onChange := func(_ string) {
+	onChange := func(p string) {
+		batch.add(p)
 		select {
-		case changes <- "":
+		case signal <- struct{}{}:
 		default:
 		}
 	}
@@ -1748,64 +1824,89 @@ type StaleSessionVM struct {
 	Safe       bool      `json:"safe"`
 }
 
+// staleWorkers bounds how many sessions ListStaleSessions inspects at once.
+// Each inspection costs three short git processes.
+const staleWorkers = 4
+
 // ListStaleSessions returns Worktree==true sessions whose LastActive is older
-// than the configured threshold. It always excludes non-worktree sessions.
-// For each session it computes clean (no uncommitted changes), merged
-// (branch merged into BaseRef, falling back to "HEAD" for old records), and
-// diffstat. When an error occurs computing any of these, ListStaleSessions
-// treats the value conservatively (dirty, unmerged, or zero), so the row
-// shows as unchecked.
+// than the configured threshold and that are not open right now (an open
+// session is in use, however old its LastActive). It always excludes
+// non-worktree sessions. For each session it computes clean (no uncommitted
+// changes, untracked files included), merged (branch merged into BaseRef,
+// falling back to "HEAD" for old records), and the added and removed line
+// counts of the uncommitted changes. When an error occurs computing any of
+// these, ListStaleSessions treats the value conservatively (dirty, unmerged,
+// or zero), so the row shows as unchecked.
+//
+// The sessions are inspected concurrently (at most staleWorkers at a time),
+// and the whole call shares one uiGitTimeout deadline, so a hung git cannot
+// wedge the cleanup panel. Rows keep the registry order.
 func (a *App) ListStaleSessions() ([]StaleSessionVM, error) {
 	days, err := a.staleThreshold()
 	if err != nil {
 		return nil, fmt.Errorf("ListStaleSessions: read settings: %w", err)
 	}
 	cutoff := time.Now().Add(-time.Duration(days) * 24 * time.Hour)
-	ws := a.store.List()
-	ctx := context.Background()
-	out := make([]StaleSessionVM, 0)
-	for _, w := range ws {
-		if !w.Worktree {
+	var cands []registry.Workspace
+	for _, w := range a.store.List() {
+		if !w.Worktree || !w.LastActive.Before(cutoff) || a.isOpen(w.ID) {
 			continue
 		}
-		if !w.LastActive.Before(cutoff) {
-			continue
-		}
-		dirty, err := gitpkg.WorktreeDirty(ctx, a.runner(), w.WorktreePath)
-		if err != nil {
-			dirty = true
-		}
-		clean := !dirty
-		base := w.BaseRef
-		if base == "" {
-			base = "HEAD"
-		}
-		merged, err := gitpkg.BranchMerged(ctx, a.runner(), w.RepoPath, w.Branch, base)
-		if err != nil {
-			merged = false
-		}
-		diffs, err := gitpkg.DiffStat(ctx, a.runner(), w.WorktreePath)
-		var added, removed int
-		if err == nil {
-			for _, d := range diffs {
-				added += d.Added
-				removed += d.Removed
-			}
-		}
-		out = append(out, StaleSessionVM{
-			ID:         w.ID,
-			Title:      w.Title,
-			Branch:     w.Branch,
-			Agent:      w.Agent,
-			LastActive: w.LastActive,
-			Added:      added,
-			Removed:    removed,
-			Clean:      clean,
-			Merged:     merged,
-			Safe:       clean && merged,
-		})
+		cands = append(cands, w)
 	}
+	out := make([]StaleSessionVM, len(cands))
+	ctx, cancel := context.WithTimeout(context.Background(), uiGitTimeout)
+	defer cancel()
+	sem := make(chan struct{}, staleWorkers)
+	var wg sync.WaitGroup
+	for i, w := range cands {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer safe.Recover("stale-session-row")
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			out[i] = a.staleRow(ctx, w)
+		}()
+	}
+	wg.Wait()
 	return out, nil
+}
+
+// isOpen reports whether workspace id has a live agent pane.
+func (a *App) isOpen(id string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	_, ok := a.bridges[paneIDFor(id)]
+	return ok
+}
+
+// staleRow inspects one stale session. One ChangedFiles call answers both
+// "clean" (its status pass lists untracked files too) and the line counts.
+func (a *App) staleRow(ctx context.Context, w registry.Workspace) StaleSessionVM {
+	row := StaleSessionVM{
+		ID:         w.ID,
+		Title:      w.Title,
+		Branch:     w.Branch,
+		Agent:      w.Agent,
+		LastActive: w.LastActive,
+	}
+	if diffs, err := gitpkg.ChangedFiles(ctx, a.runner(), w.WorktreePath); err == nil {
+		row.Clean = len(diffs) == 0
+		for _, d := range diffs {
+			row.Added += d.Added
+			row.Removed += d.Removed
+		}
+	}
+	base := w.BaseRef
+	if base == "" {
+		base = "HEAD"
+	}
+	if merged, err := gitpkg.BranchMerged(ctx, a.runner(), w.RepoPath, w.Branch, base); err == nil {
+		row.Merged = merged
+	}
+	row.Safe = row.Clean && row.Merged
+	return row
 }
 
 // CleanupSessions removes the given sessions. For each session it stops the
@@ -2392,17 +2493,20 @@ func (a *App) Approve(reqID, decision string) error {
 	return nil
 }
 
-// DiffStat returns per-file diff summary for worktree, validated against roots.
+// DiffStat returns the per-file summary of every uncommitted change in
+// worktree (gitpkg.ChangedFiles), validated against roots. Paths are never
+// quoted, renames carry oldPath, and line counts are net against HEAD.
 func (a *App) DiffStat(worktree string) ([]gitpkg.FileDiff, error) {
 	if err := validateWorktreeUnderRoots(worktree, a.roots); err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), uiGitTimeout)
 	defer cancel()
-	return gitpkg.DiffStat(ctx, a.runner(), worktree)
+	return gitpkg.ChangedFiles(ctx, a.runner(), worktree)
 }
 
-// Hunks returns the unified hunks for a single file in worktree.
+// Hunks returns the unified hunks for a single file in worktree. Each hunk
+// carries its content id, which the hunk mutators take back.
 func (a *App) Hunks(worktree, file string) ([]gitpkg.Hunk, error) {
 	if err := validateWorktreeUnderRoots(worktree, a.roots); err != nil {
 		return nil, err
@@ -2415,51 +2519,57 @@ func (a *App) Hunks(worktree, file string) ([]gitpkg.Hunk, error) {
 	return gitpkg.Hunks(ctx, a.runner(), worktree, file)
 }
 
-// StageHunk applies hunk `index` of file to the index (git apply --cached).
-// index is relative to the current Hunks(worktree, file) output. The
-// frontend re-fetches hunks after each call, so indices stay fresh.
-func (a *App) StageHunk(worktree, file string, index int) error {
+// validateHunkArgs gates the arguments every hunk mutator shares.
+func (a *App) validateHunkArgs(worktree, file, id string) error {
 	if err := validateWorktreeUnderRoots(worktree, a.roots); err != nil {
 		return err
 	}
 	if err := validateRelFile(file); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), uiGitTimeout)
-	defer cancel()
-	return gitpkg.StageHunk(ctx, a.runner(), worktree, file, index)
+	if id == "" {
+		return fmt.Errorf("hunk id must not be empty")
+	}
+	return nil
 }
 
-// DiscardHunk reverses hunk `index` of file in the working tree (git apply --reverse).
-func (a *App) DiscardHunk(worktree, file string, index int) error {
-	if err := validateWorktreeUnderRoots(worktree, a.roots); err != nil {
-		return err
-	}
-	if err := validateRelFile(file); err != nil {
+// StageHunk stages the working-tree hunk of file whose content id is id
+// (Hunk.id from Hunks) with `git apply --cached`. index is the Hunk.index the
+// user saw; it only breaks a tie between identical hunks. When that content
+// is no longer in the diff (the agent edited the file meanwhile), StageHunk
+// changes nothing and returns an error wrapping gitpkg.ErrHunkChanged; the
+// frontend re-fetches hunks and tells the user.
+func (a *App) StageHunk(worktree, file string, index int, id string) error {
+	if err := a.validateHunkArgs(worktree, file, id); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), uiGitTimeout)
 	defer cancel()
-	return gitpkg.DiscardHunk(ctx, a.runner(), worktree, file, index)
+	return gitpkg.StageHunkChecked(ctx, a.runner(), worktree, file, index, id)
 }
 
-// UnstageHunk moves the staged hunk at merged Hunks(worktree, file) index
-// `index` back to the working tree (git apply --reverse --cached). `index`
-// is the same merged-Hunks() index that StageHunk and DiscardHunk take, not
-// a `git diff --cached` position, and it must identify a Staged==true hunk.
-// UnstageHunk is the inverse of StageHunk, and it touches the index only,
-// never the working-tree content. The frontend re-fetches hunks after each
-// call, so indices stay fresh.
-func (a *App) UnstageHunk(worktree, file string, index int) error {
-	if err := validateWorktreeUnderRoots(worktree, a.roots); err != nil {
-		return err
-	}
-	if err := validateRelFile(file); err != nil {
+// DiscardHunk reverts the working-tree hunk of file whose content id is id
+// (`git apply --reverse`), with the same matching rules as StageHunk. It
+// never reverts a change the user did not see.
+func (a *App) DiscardHunk(worktree, file string, index int, id string) error {
+	if err := a.validateHunkArgs(worktree, file, id); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), uiGitTimeout)
 	defer cancel()
-	return gitpkg.UnstageHunk(ctx, a.runner(), worktree, file, index)
+	return gitpkg.DiscardHunkChecked(ctx, a.runner(), worktree, file, index, id)
+}
+
+// UnstageHunk moves the staged hunk of file whose content id is id back to
+// the working tree (`git apply --reverse --cached`), with the same matching
+// rules as StageHunk. It touches the index only, never the working tree.
+func (a *App) UnstageHunk(worktree, file string, index int, id string) error {
+	if err := a.validateHunkArgs(worktree, file, id); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), uiGitTimeout)
+	defer cancel()
+	return gitpkg.UnstageHunkChecked(ctx, a.runner(), worktree, file, index, id)
 }
 
 // RepoInfo is a frontend-friendly summary of a discovered git repository.
