@@ -60,7 +60,7 @@ func TestStageHunk_OneOfTwo(t *testing.T) {
 	}
 
 	// Stage only the first hunk (index 0).
-	if err := git.StageHunk(ctx, r, repo, "target.txt", 0); err != nil {
+	if err := stageAt(ctx, r, repo, "target.txt", 0); err != nil {
 		t.Fatalf("StageHunk: %v", err)
 	}
 
@@ -93,7 +93,7 @@ func TestDiscardHunk_RevertsWorktreeLines(t *testing.T) {
 		t.Fatalf("Hunks setup: err=%v count=%d", err, len(hunks))
 	}
 
-	if err := git.DiscardHunk(ctx, r, repo, "target.txt", 0); err != nil {
+	if err := discardAt(ctx, r, repo, "target.txt", 0); err != nil {
 		t.Fatalf("DiscardHunk: %v", err)
 	}
 
@@ -137,7 +137,7 @@ func TestStageHunk_NoTrailingNewline(t *testing.T) {
 	if err != nil || len(hunks) < 1 {
 		t.Fatalf("Hunks: err=%v count=%d", err, len(hunks))
 	}
-	if err := git.StageHunk(ctx, r, repo, "nonl.txt", 0); err != nil {
+	if err := stageAt(ctx, r, repo, "nonl.txt", 0); err != nil {
 		t.Fatalf("StageHunk: %v", err)
 	}
 
@@ -182,7 +182,7 @@ func TestStageHunk_Deletion(t *testing.T) {
 	if err != nil || len(hunks) < 1 {
 		t.Fatalf("Hunks on deletion: err=%v count=%d", err, len(hunks))
 	}
-	if err := git.StageHunk(ctx, r, repo, "del.txt", 0); err != nil {
+	if err := stageAt(ctx, r, repo, "del.txt", 0); err != nil {
 		t.Fatalf("StageHunk deletion: %v", err)
 	}
 
@@ -201,7 +201,7 @@ func TestStageHunk_IndexOutOfRange(t *testing.T) {
 	repo := twoHunkFile(t)
 	r := proc.ExecRunner{}
 	ctx := context.Background()
-	if err := git.StageHunk(ctx, r, repo, "target.txt", 99); err == nil {
+	if err := stageAt(ctx, r, repo, "target.txt", 99); err == nil {
 		t.Fatal("expected error for out-of-range hunk index, got nil")
 	}
 }
@@ -212,7 +212,7 @@ func TestStageHunk_RejectsNewlineInPath(t *testing.T) {
 	repo := initRepo(t)
 	r := proc.ExecRunner{}
 	ctx := context.Background()
-	if err := git.StageHunk(ctx, r, repo, "evil\nname.txt", 0); err == nil {
+	if err := git.StageHunkChecked(ctx, r, repo, "evil\nname.txt", 0, "any-id"); err == nil {
 		t.Fatal("expected error for path containing newline")
 	}
 }
@@ -237,11 +237,16 @@ func TestStageHunk_GoesToRunnerSeam(t *testing.T) {
 	r := proc.NewFakeRunner()
 	// git diff call returns the canned diff.
 	r.Respond(proc.FakeResult{Stdout: []byte(diffOut)},
-		"git", "-C", "/repo", "diff", "--unified=3", "--no-color", "--", "f.txt")
+		"git", "-C", "/repo", "diff", "--unified=3", "--no-color", "--no-ext-diff", "--no-textconv",
+		"--src-prefix=a/", "--dst-prefix=b/", "--", ":(literal)f.txt")
+	// The staged diff is empty (Hunks reads both diffs to find the hunk id).
+	r.Respond(proc.FakeResult{},
+		"git", "-C", "/repo", "diff", "--cached", "--unified=3", "--no-color", "--no-ext-diff", "--no-textconv",
+		"--src-prefix=a/", "--dst-prefix=b/", "--", ":(literal)f.txt")
 	// git apply call succeeds (empty stdout/stderr, no error).
-	r.Respond(proc.FakeResult{}, "git", "apply", "--cached", "-")
+	r.Respond(proc.FakeResult{}, "git", "apply", "--whitespace=nowarn", "--cached", "-")
 
-	err := git.StageHunk(ctx, r, "/repo", "f.txt", 0)
+	err := stageAt(ctx, r, "/repo", "f.txt", 0)
 	if err != nil {
 		t.Fatalf("StageHunk: %v", err)
 	}
@@ -281,7 +286,7 @@ func TestStageHunk_ExecRunnerStdinWired(t *testing.T) {
 	}
 
 	// Stage only the first hunk (TOP_CHANGE) via the runner-backed path.
-	if err := git.StageHunk(ctx, r, repo, "target.txt", 0); err != nil {
+	if err := stageAt(ctx, r, repo, "target.txt", 0); err != nil {
 		t.Fatalf("StageHunk (ExecRunner.RunStdin): %v", err)
 	}
 

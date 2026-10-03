@@ -3,29 +3,34 @@ package fs
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/fsnotify/fsnotify"
 
+	"github.com/miniature-pug/perch/internal/proc"
 	"github.com/miniature-pug/perch/internal/safe"
 )
 
 const (
-	// gitStatusTimeout sets the deadline for git subprocess calls: rev-parse and status --porcelain.
+	// gitStatusTimeout sets the deadline for the git subprocess calls in
+	// enrichGitStatus: rev-parse and status.
 	gitStatusTimeout = 5 * time.Second
-	// gitPorcelainMinLen is the minimum valid line length in git status --porcelain output.
-	gitPorcelainMinLen = 4
 	// defaultFileMode is the permission bits that WriteFile applies to new files.
 	defaultFileMode = 0o644
 	// MaxReadFileBytes caps how much data ReadFile loads into memory.
@@ -33,7 +38,19 @@ const (
 	// /dev/zero would otherwise exhaust memory. A huge regular file would
 	// overload the editor.
 	MaxReadFileBytes = 10 << 20 // 10 MiB
+	// binarySniffBytes is how much of a file ReadFile scans for a NUL byte.
+	binarySniffBytes = 8 << 10
 )
+
+// ErrBinaryFile is returned (wrapped) by ReadFile for content that is not
+// UTF-8 text. Such content cannot survive the trip to the editor: the JSON
+// bridge replaces invalid UTF-8 with U+FFFD, so saving it back would corrupt
+// the file.
+var ErrBinaryFile = errors.New("binary or non-UTF-8 file")
+
+// gitRunner runs the git calls in this package. It is the production
+// runner; the variable keeps those calls behind the proc.Runner seam.
+var gitRunner proc.Runner = proc.ExecRunner{}
 
 // Node is one entry in a directory listing.
 // JSON tags are frozen. Do not rename them.
@@ -50,29 +67,42 @@ type Node struct {
 // true, ListDir excludes entries that match a pattern in absDir/.gitignore.
 // This filter covers single-level patterns only; ListDir does not walk
 // nested .gitignore files.
+//
+// A symlink to a directory is listed as a directory (IsDir true). The
+// caller is responsible for checking that its target is somewhere the user
+// may browse before listing it.
 func ListDir(absDir string, gitignoreAware bool) ([]Node, error) {
 	entries, err := os.ReadDir(absDir)
 	if err != nil {
 		return nil, err
 	}
 
-	var patterns []string
+	var rules []ignoreRule
 	if gitignoreAware {
-		patterns = loadGitignorePatterns(filepath.Join(absDir, ".gitignore"))
+		rules = parseIgnoreRules(loadGitignorePatterns(filepath.Join(absDir, ".gitignore")))
 	}
 
 	var dirs, files []Node
 	for _, e := range entries {
 		name := e.Name()
-		if gitignoreAware && matchesAny(name, patterns) {
+		full := filepath.Join(absDir, name)
+		isDir := e.IsDir()
+		if e.Type()&os.ModeSymlink != 0 {
+			// DirEntry describes the link itself; follow it to list a linked
+			// directory as a directory.
+			if fi, statErr := os.Stat(full); statErr == nil {
+				isDir = fi.IsDir()
+			}
+		}
+		if gitignoreAware && ignored(name, isDir, rules) {
 			continue
 		}
 		n := Node{
 			Name:  name,
-			Path:  filepath.Join(absDir, name),
-			IsDir: e.IsDir(),
+			Path:  full,
+			IsDir: isDir,
 		}
-		if e.IsDir() {
+		if isDir {
 			dirs = append(dirs, n)
 		} else {
 			files = append(files, n)
@@ -87,66 +117,82 @@ func ListDir(absDir string, gitignoreAware bool) ([]Node, error) {
 }
 
 // enrichGitStatus queries git status for absDir. It marks each node's
-// Modified and Untracked fields from the result. enrichGitStatus is
+// Modified and Untracked fields from the result. A directory node is marked
+// when anything under it is modified or untracked. enrichGitStatus is
 // best-effort: if git fails, both flags stay false and ListDir still
 // returns the listing.
+//
+// The status is limited to absDir (pathspec "."), so a listing costs a
+// scan of that subtree, not of the whole repository. Paths are matched by
+// absDir's prefix inside the repository (rev-parse --show-prefix), which
+// git computes from the resolved directory, so a symlinked absDir still
+// matches. The -z output is never quoted, so names with spaces or
+// non-ASCII bytes match too.
 func enrichGitStatus(absDir string, nodes []Node) {
+	if len(nodes) == 0 {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), gitStatusTimeout)
 	defer cancel()
 
-	// Determine the repo root. This also acts as the "is a git repo?" check.
-	rootCmd := exec.CommandContext(ctx, "git", "-C", absDir, "rev-parse", "--show-toplevel")
-	rootOut, err := rootCmd.Output()
+	// The prefix is absDir relative to the repo root ("" at the root, else
+	// "dir/sub/"). This also acts as the "is a git repo?" check.
+	prefixOut, _, err := gitRunner.Run(ctx, "git", "-C", absDir, "rev-parse", "--show-prefix")
 	if err != nil {
-		return // not a git repo or git not available
+		return // not a git repo, or git not available
 	}
-	repoRoot := strings.TrimSpace(string(rootOut))
+	prefix := strings.TrimSuffix(string(prefixOut), "\n")
 
-	// Run git status --porcelain from the repo root so paths are always
-	// relative to repoRoot (no ambiguity about cwd vs repo root).
-	statusCmd := exec.CommandContext(ctx, "git", "-C", repoRoot, "status", "--porcelain")
-	statusOut, err := statusCmd.Output()
+	statusOut, _, err := gitRunner.Run(ctx, "git", "-C", absDir, "status", "--porcelain=v2", "-z", "--", ".")
 	if err != nil {
 		return
 	}
 
-	// Build a set of relative paths that are modified or untracked.
-	type gitEntry struct{ modified, untracked bool }
-	entries := make(map[string]gitEntry)
-	sc := bufio.NewScanner(strings.NewReader(string(statusOut)))
-	for sc.Scan() {
-		line := sc.Text()
-		if len(line) < gitPorcelainMinLen {
-			continue
-		}
-		xy := line[0:2]   // two status chars
-		rel := line[3:]   // path relative to repo root
-		e := entries[rel] // zero-value if not present
-		if xy == "??" {
-			e.untracked = true
-		} else {
-			e.modified = true
-		}
-		entries[rel] = e
-	}
-
-	// Match each node against the porcelain entries.
+	byName := make(map[string]int, len(nodes))
 	for i := range nodes {
-		rel, err := filepath.Rel(repoRoot, nodes[i].Path)
-		if err != nil {
+		byName[nodes[i].Name] = i
+	}
+	recs := strings.Split(string(statusOut), "\x00")
+	for i := 0; i < len(recs); i++ {
+		rec := recs[i]
+		if rec == "" {
 			continue
 		}
-		if e, ok := entries[rel]; ok {
-			nodes[i].Modified = e.modified
-			nodes[i].Untracked = e.untracked
-			continue
-		}
-		// git emits untracked directories with a trailing slash in porcelain output.
-		if nodes[i].IsDir {
-			if e, ok := entries[rel+"/"]; ok {
-				nodes[i].Modified = e.modified
-				nodes[i].Untracked = e.untracked
+		var p string
+		untracked := false
+		switch rec[0] {
+		case '1': // 1 XY sub mH mI mW hH hI path
+			if f := strings.SplitN(rec, " ", 9); len(f) == 9 {
+				p = f[8]
 			}
+		case '2': // 2 XY sub mH mI mW hH hI Xscore path NUL origPath
+			if f := strings.SplitN(rec, " ", 10); len(f) == 10 {
+				p = f[9]
+			}
+			i++ // skip origPath
+		case 'u': // u XY sub m1 m2 m3 mW h1 h2 h3 path
+			if f := strings.SplitN(rec, " ", 11); len(f) == 11 {
+				p = f[10]
+			}
+		case '?':
+			p, untracked = strings.TrimPrefix(rec, "? "), true
+		}
+		rest, ok := strings.CutPrefix(p, prefix)
+		if !ok || rest == "" {
+			continue
+		}
+		// Mark the child of absDir that contains this path: the entry
+		// itself, or the directory it lives under. An untracked directory
+		// is reported as "dir/", which lands on the "dir" node.
+		child, _, _ := strings.Cut(rest, "/")
+		idx, ok := byName[child]
+		if !ok {
+			continue
+		}
+		if untracked {
+			nodes[idx].Untracked = true
+		} else {
+			nodes[idx].Modified = true
 		}
 	}
 }
@@ -171,33 +217,97 @@ func loadGitignorePatterns(path string) []string {
 	return patterns
 }
 
-// matchesAny reports whether name matches any gitignore pattern using
-// doublestar glob matching. Trailing-slash patterns (dir patterns) match
-// the name without the slash.
-func matchesAny(name string, patterns []string) bool {
-	for _, p := range patterns {
-		p = strings.TrimSuffix(p, "/")
-		if ok, _ := doublestar.Match(p, name); ok {
-			return true
-		}
-	}
-	return false
+// ignoreRule is one parsed .gitignore pattern.
+type ignoreRule struct {
+	// pattern is the doublestar glob, without the "!", leading "/" and
+	// trailing "/" markers.
+	pattern string
+	// negate is true for a "!pattern" line, which re-includes a match.
+	negate bool
+	// dirOnly is true for a "pattern/" line, which matches directories only.
+	dirOnly bool
+	// anchored is true when the pattern contains a "/" before its end. git
+	// then matches it against the path relative to the .gitignore's
+	// directory, instead of against the base name at any depth.
+	anchored bool
 }
 
-// ShouldExclude reports whether a directory base name must not be watched:
-// always ".git", plus anything matching the root .gitignore patterns.
+// parseIgnoreRules turns raw .gitignore lines into rules, following the
+// gitignore(5) rules for "!", leading and inner "/", and trailing "/".
+func parseIgnoreRules(patterns []string) []ignoreRule {
+	rules := make([]ignoreRule, 0, len(patterns))
+	for _, p := range patterns {
+		var r ignoreRule
+		if strings.HasPrefix(p, "!") {
+			r.negate = true
+			p = p[1:]
+		} else if strings.HasPrefix(p, `\!`) || strings.HasPrefix(p, `\#`) {
+			p = p[1:]
+		}
+		if strings.HasSuffix(p, "/") {
+			r.dirOnly = true
+			p = strings.TrimRight(p, "/")
+		}
+		if strings.Contains(p, "/") {
+			r.anchored = true
+			p = strings.TrimPrefix(p, "/")
+		}
+		if p == "" {
+			continue
+		}
+		r.pattern = p
+		rules = append(rules, r)
+	}
+	return rules
+}
+
+// ignored reports whether rel, a slash-separated path relative to the
+// directory of the .gitignore the rules came from, is ignored. As in git,
+// the last matching rule wins, so a later "!pattern" re-includes a path.
+func ignored(rel string, isDir bool, rules []ignoreRule) bool {
+	base := path.Base(rel)
+	result := false
+	for _, r := range rules {
+		if r.dirOnly && !isDir {
+			continue
+		}
+		subject := base
+		if r.anchored {
+			subject = rel
+		}
+		if ok, _ := doublestar.Match(r.pattern, subject); ok {
+			result = !r.negate
+		}
+	}
+	return result
+}
+
+// ShouldExclude reports whether a directory directly under the watch root
+// must not be watched: always ".git", plus anything the root .gitignore
+// patterns ignore. name is the directory's path relative to the root.
 func ShouldExclude(name string, patterns []string) bool {
-	if name == ".git" {
+	if path.Base(name) == ".git" {
 		return true
 	}
-	return matchesAny(name, patterns)
+	return ignored(name, true, parseIgnoreRules(patterns))
 }
 
 // Watcher watches a directory tree for filesystem changes.
 type Watcher struct {
 	fw       *fsnotify.Watcher
 	onChange func(string)
-	patterns []string
+	root     string
+	// rules are the root .gitignore patterns. They decide what to skip only
+	// when git cannot answer (the root is not a repository, or git fails).
+	rules []ignoreRule
+	// addFailed records that an inotify watch could not be added, so the
+	// failure is logged once instead of once per directory.
+	addFailed atomic.Bool
+	// ctx is cancelled by Close; it stops background walks and their git calls.
+	ctx      context.Context
+	cancel   context.CancelFunc
+	walks    sync.WaitGroup
+	loopDone chan struct{}
 	once     sync.Once
 	done     chan struct{}
 }
@@ -205,8 +315,15 @@ type Watcher struct {
 // Watch creates a Watcher for absRoot. Watch calls onChange with the
 // absolute path of any changed file or directory. Watch returns an error if
 // fsnotify fails to start, or if Watch cannot add the root.
-// The watcher is recursive: it watches all subdirectories, except .git and
-// any directory that matches a pattern in absRoot/.gitignore.
+//
+// The watcher is recursive: it watches all subdirectories except .git and
+// the directories git ignores. git decides (`git check-ignore`), so nested
+// .gitignore files, .git/info/exclude, core.excludesFile and later edits
+// to any of them all count. When git cannot answer, the patterns in
+// absRoot/.gitignore decide instead. When a new directory appears, the
+// watcher adds it and every directory below it in the background, and
+// reports the files already inside them, since those were created before
+// any watch could see them (mkdir -p, git checkout, tar x).
 func Watch(absRoot string, onChange func(absPath string)) (*Watcher, error) {
 	fw, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -217,28 +334,148 @@ func Watch(absRoot string, onChange func(absPath string)) (*Watcher, error) {
 		_ = fw.Close()
 		return nil, err
 	}
-	patterns := loadGitignorePatterns(filepath.Join(absRoot, ".gitignore"))
-	// Walk the subdirectories and add them. Best-effort: skip any error on a single subdirectory.
-	_ = filepath.WalkDir(absRoot, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if !d.IsDir() {
-			return nil
-		}
-		if ShouldExclude(d.Name(), patterns) {
-			return filepath.SkipDir
-		}
-		// The root is already added. Adding it again is safe.
-		_ = fw.Add(path)
-		return nil
-	})
-	w := &Watcher{fw: fw, onChange: onChange, patterns: patterns, done: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	w := &Watcher{
+		fw:       fw,
+		onChange: onChange,
+		root:     absRoot,
+		rules:    parseIgnoreRules(loadGitignorePatterns(filepath.Join(absRoot, ".gitignore"))),
+		ctx:      ctx,
+		cancel:   cancel,
+		loopDone: make(chan struct{}),
+		done:     make(chan struct{}),
+	}
+	w.addTree(absRoot, false)
 	go w.loop()
 	return w, nil
 }
 
+// addTree adds a watch for dir and every non-ignored directory below it,
+// one directory level at a time, so that a single git call per level (and
+// per repository) decides what to skip. When reportFiles is true, it also
+// calls onChange for every file it finds. Best-effort: an unreadable
+// directory is skipped, and the first failed watch is logged (inotify
+// watch limits are the usual cause). addTree stops early once the watcher
+// is closed.
+func (w *Watcher) addTree(dir string, reportFiles bool) {
+	level := []string{dir}
+	if dir != w.root {
+		level = w.notIgnored(level)
+	}
+	for len(level) > 0 {
+		var next []string
+		for _, d := range level {
+			if w.ctx.Err() != nil {
+				return
+			}
+			if addErr := w.fw.Add(d); addErr != nil && !w.addFailed.Swap(true) {
+				log.Printf("fs.Watcher: cannot watch %s (further failures not logged): %v", d, addErr)
+			}
+			entries, err := os.ReadDir(d)
+			if err != nil {
+				continue
+			}
+			for _, e := range entries {
+				p := filepath.Join(d, e.Name())
+				switch {
+				case e.IsDir(): // never follows a symlink
+					if e.Name() != ".git" {
+						next = append(next, p)
+					}
+				case reportFiles:
+					w.onChange(p)
+				}
+			}
+		}
+		level = w.notIgnored(next)
+	}
+}
+
+// notIgnored returns the directories in dirs that git does not ignore.
+// Directories are grouped by the repository that contains them (a nested
+// repository answers for its own contents), and each group costs one
+// `git check-ignore --stdin -z`. If git cannot answer for a group, the
+// root .gitignore rules decide for it.
+func (w *Watcher) notIgnored(dirs []string) []string {
+	if len(dirs) == 0 {
+		return nil
+	}
+	groups := make(map[string][]string) // repo root -> dirs
+	repoOf := make(map[string]string)   // parent dir -> repo root (cache)
+	for _, d := range dirs {
+		parent := filepath.Dir(d)
+		repo, ok := repoOf[parent]
+		if !ok {
+			repo = w.repoRootOf(parent)
+			repoOf[parent] = repo
+		}
+		groups[repo] = append(groups[repo], d)
+	}
+	var keep []string
+	for repo, ds := range groups {
+		ignoredSet, ok := w.checkIgnore(repo, ds)
+		for _, d := range ds {
+			skip := false
+			if ok {
+				skip = ignoredSet[d]
+			} else if rel, err := filepath.Rel(w.root, d); err == nil {
+				skip = ignored(filepath.ToSlash(rel), true, w.rules)
+			}
+			if !skip {
+				keep = append(keep, d)
+			}
+		}
+	}
+	return keep
+}
+
+// repoRootOf returns the nearest directory at or above dir, but not above
+// the watch root, that contains a .git entry. It returns the watch root
+// when there is none.
+func (w *Watcher) repoRootOf(dir string) string {
+	for d := dir; d != w.root; {
+		if _, err := os.Lstat(filepath.Join(d, ".git")); err == nil {
+			return d
+		}
+		parent := filepath.Dir(d)
+		if parent == d || !strings.HasPrefix(parent, w.root) {
+			break
+		}
+		d = parent
+	}
+	return w.root
+}
+
+// checkIgnore asks git which of dirs (all inside repo) are ignored. ok is
+// false when git could not answer.
+func (w *Watcher) checkIgnore(repo string, dirs []string) (set map[string]bool, ok bool) {
+	var in bytes.Buffer
+	for _, d := range dirs {
+		rel, err := filepath.Rel(repo, d)
+		if err != nil {
+			return nil, false
+		}
+		in.WriteString(rel)
+		in.WriteByte(0)
+	}
+	ctx, cancel := context.WithTimeout(w.ctx, gitStatusTimeout)
+	defer cancel()
+	out, errOut, err := gitRunner.RunStdin(ctx, repo, in.Bytes(), "git", "check-ignore", "--stdin", "-z")
+	// Exit status 1 means "nothing is ignored"; anything else is a failure.
+	if err != nil && (proc.ExitCode(err) != 1 || len(bytes.TrimSpace(errOut)) > 0) {
+		return nil, false
+	}
+	set = make(map[string]bool)
+	for _, rel := range strings.Split(string(out), "\x00") {
+		if rel != "" {
+			set[filepath.Join(repo, rel)] = true
+		}
+	}
+	return set, true
+}
+
 func (w *Watcher) loop() {
+	defer close(w.loopDone)
 	defer safe.Recover("fs-watcher")
 	for {
 		select {
@@ -247,11 +484,19 @@ func (w *Watcher) loop() {
 				return
 			}
 			w.onChange(event.Name)
-			// On a create event, watch newly-created subdirectories.
+			// On a create event, watch the new directory and everything
+			// already below it. The walk runs in the background, so a large
+			// tree (npm install, tar x) cannot stall event handling and let
+			// the kernel queue overflow.
 			if event.Op&fsnotify.Create != 0 {
-				info, statErr := os.Stat(event.Name)
-				if statErr == nil && info.IsDir() && !ShouldExclude(filepath.Base(event.Name), w.patterns) {
-					_ = w.fw.Add(event.Name)
+				info, statErr := os.Lstat(event.Name)
+				if statErr == nil && info.IsDir() && filepath.Base(event.Name) != ".git" {
+					w.walks.Add(1)
+					go func(dir string) {
+						defer w.walks.Done()
+						defer safe.Recover("fs-watcher-walk")
+						w.addTree(dir, true)
+					}(event.Name)
 				}
 			}
 		case werr, ok := <-w.fw.Errors:
@@ -265,12 +510,17 @@ func (w *Watcher) loop() {
 	}
 }
 
-// Close stops the watcher. Close is safe to call more than once.
+// Close stops the watcher and waits for any background walk to stop. Close
+// is safe to call more than once. After Close returns, onChange is not
+// called again.
 func (w *Watcher) Close() error {
 	var err error
 	w.once.Do(func() {
 		close(w.done)
+		w.cancel()
 		err = w.fw.Close()
+		<-w.loopDone
+		w.walks.Wait()
 	})
 	return err
 }
@@ -279,7 +529,8 @@ func (w *Watcher) Close() error {
 // file that is not a regular file: a device, FIFO, socket, or character
 // device. A FIFO or socket would otherwise block forever, and a device such
 // as /dev/zero would read without end. ReadFile also enforces
-// MaxReadFileBytes.
+// MaxReadFileBytes, and returns an error wrapping ErrBinaryFile for content
+// that is not UTF-8 text (invalid UTF-8, or a NUL byte near the start).
 //
 // The Lstat guard on the final path component rejects a symlink whose
 // target is a special file. io.LimitReader gives a second size check in
@@ -329,6 +580,9 @@ func ReadFile(absPath string) ([]byte, error) {
 	if int64(len(data)) > MaxReadFileBytes {
 		return nil, fmt.Errorf("ReadFile: %q is too large to open (max %d MiB)", absPath, MaxReadFileBytes>>20)
 	}
+	if bytes.IndexByte(data[:min(len(data), binarySniffBytes)], 0) >= 0 || !utf8.Valid(data) {
+		return nil, fmt.Errorf("ReadFile: %q: %w", absPath, ErrBinaryFile)
+	}
 	return data, nil
 }
 
@@ -372,12 +626,27 @@ func RevealInFiles(absPath string) error {
 // WriteFile writes data to absPath atomically, using a temporary file and a
 // rename. If absPath already exists, WriteFile preserves its permission
 // bits. A new file gets mode 0o644.
+//
+// When absPath is a symlink, WriteFile writes through it: the link stays a
+// link, and its target gets the new content. Renaming over the link itself
+// would turn it into a plain file and leave the target stale (for example a
+// CLAUDE.md -> AGENTS.md link). A dangling link is an error. The caller is
+// responsible for checking that the link's target is somewhere it may
+// write (app.WriteFile resolves and validates it).
 func WriteFile(absPath string, data []byte) error {
+	target := absPath
+	if li, err := os.Lstat(absPath); err == nil && li.Mode()&os.ModeSymlink != 0 {
+		resolved, err := filepath.EvalSymlinks(absPath)
+		if err != nil {
+			return fmt.Errorf("WriteFile: resolve symlink %q: %w", absPath, err)
+		}
+		target = resolved
+	}
 	mode := os.FileMode(defaultFileMode)
-	if info, err := os.Stat(absPath); err == nil {
+	if info, err := os.Stat(target); err == nil {
 		mode = info.Mode().Perm()
 	}
-	dir := filepath.Dir(absPath)
+	dir := filepath.Dir(target)
 	tmp, err := os.CreateTemp(dir, ".write-*.tmp")
 	if err != nil {
 		return err
@@ -393,11 +662,18 @@ func WriteFile(absPath string, data []byte) error {
 		_ = os.Remove(tmpName)
 		return err
 	}
+	// Flush the data before the rename publishes it, so a crash cannot leave
+	// an empty file in place of the old content.
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmpName)
 		return err
 	}
-	if err := os.Rename(tmpName, absPath); err != nil {
+	if err := os.Rename(tmpName, target); err != nil {
 		_ = os.Remove(tmpName)
 		return err
 	}

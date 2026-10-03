@@ -16,6 +16,7 @@
 // handles that drag, and this file does not touch it.
 
 import { writeToPty } from "./wails";
+import { addBlocking } from "./stores/notifications.svelte";
 
 // Attribute that a fileDrop-enabled DragDrop sets on its .drop-zone, so the
 // code can route an OS file drop to the pane under the drop point.
@@ -29,11 +30,20 @@ export function shellQuote(p: string): string {
   return `'${p.replace(/'/g, "'\\''")}'`;
 }
 
-// Encode a single dropped path as a shell-quoted @mention with a trailing
-// space, as UTF-8 bytes ready for writeToPty. This matches the @'<path>'
-// convention the file tree and editor already use.
-export function mentionBytes(path: string): number[] {
-  return Array.from(new TextEncoder().encode(`@${shellQuote(path)} `));
+// The one @mention format for every entry point: an OS file drop, a
+// file-tree drag, and "Send to agent" (FEX-27, FEC-35). A plain path stays
+// bare (@/repo/src/main.go), the form the agent CLIs resolve; a path with a
+// space or a shell metacharacter is single-quoted so it stays one token.
+// The trailing space ends the mention.
+const PLAIN_PATH = /^[A-Za-z0-9._\/@+=:,%~-]+$/;
+export function mentionText(path: string): string {
+  return `@${PLAIN_PATH.test(path) ? path : shellQuote(path)} `;
+}
+
+// Encode a single dropped path as an @mention (see mentionText), as UTF-8
+// bytes ready for writeToPty.
+export function mentionBytes(path: string): Uint8Array {
+  return new TextEncoder().encode(mentionText(path));
 }
 
 // Resolve which pane sits under the drop point (x, y in viewport CSS
@@ -66,6 +76,10 @@ export function registerOsFileDrop(): () => void {
   // useDropTarget=false: the code hit-tests the coordinates itself against
   // [data-drop-pane], so it does not depend on the --wails-drop-target CSS
   // marker.
-  rt.OnFileDrop((x, y, paths) => { void routeOsFileDrop(x, y, paths); }, false);
+  rt.OnFileDrop((x, y, paths) => {
+    routeOsFileDrop(x, y, paths).catch((e) => {
+      addBlocking("", "Could not send the dropped file", String(e), "error");
+    });
+  }, false);
   return () => { rt.OnFileDropOff?.(); };
 }

@@ -20,12 +20,16 @@ ENV DEBIAN_FRONTEND=noninteractive
 # lets this one image cover `gui-build` (cgo) and the future headless GUI
 # smoke test. Noble ships only the -4.1 dev package; the -4.0 package was
 # dropped. This is why production builds carry `-tags webkit2_41`. The
-# libwebkit2gtk-4.1-dev package also pulls in libsoup-3.0-dev.
+# libwebkit2gtk-4.1-dev package also pulls in libsoup-3.0-dev. zsh, fish and
+# python3 let the internal/pty shell-readiness tests run against every shell
+# they cover (bash and dash ship in the base image); python3, not
+# python3-minimal, because the rc-file helpers need the termios module.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl git xz-utils \
       build-essential pkg-config \
       libgtk-3-dev libwebkit2gtk-4.1-dev \
       xvfb \
+      zsh fish python3 \
  && rm -rf /var/lib/apt/lists/*
 
 # Go: the official tarball, pinned by .tool-versions. The architecture comes

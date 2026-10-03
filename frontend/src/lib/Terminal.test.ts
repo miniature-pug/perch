@@ -94,7 +94,9 @@ describe("Terminal.svelte", () => {
     const w = await import("./wails");
     render(Terminal, { props: { paneId: "pane3", cwd: "/repo" } });
     onDataCbs[onDataCbs.length - 1]("x");
-    expect(w.writeToPty).toHaveBeenCalledWith("pane3", [120]);
+    const [id, bytes] = vi.mocked(w.writeToPty).mock.calls.at(-1)!;
+    expect(id).toBe("pane3");
+    expect(new TextDecoder().decode(bytes as Uint8Array)).toBe("x");
   });
   it("disposes xterm on unmount (leak guard)", async () => {
     const { default: Terminal } = await import("./Terminal.svelte");
@@ -204,6 +206,8 @@ describe("Terminal.svelte", () => {
 
   it("passes ordinary keys and bare ctrl-c through to the pty (handler returns true)", async () => {
     const { default: Terminal } = await import("./Terminal.svelte");
+    const { mode } = await import("./stores/mode.svelte");
+    mode.enterTerminal();
     render(Terminal, { props: { paneId: "paneK", cwd: "/repo" } });
     // A plain key must reach the pty.
     expect(keyHandler!({ type: "keydown", ctrlKey: false, shiftKey: false, key: "a" } as unknown as KeyboardEvent)).toBe(true);
@@ -212,6 +216,83 @@ describe("Terminal.svelte", () => {
     // ctrl+shift+c with no selection is not a copy. The handler passes it through.
     selectionText = "";
     expect(keyHandler!({ type: "keydown", ctrlKey: true, shiftKey: true, key: "c" } as unknown as KeyboardEvent)).toBe(true);
+    mode.leaveTerminal();
+  });
+
+  // FEC-2: xterm hands app keys back to the window keymap.
+  it("FEC-2: hands every key to the app outside TERMINAL mode, and the leave sequence inside it", async () => {
+    const { default: Terminal } = await import("./Terminal.svelte");
+    const { mode } = await import("./stores/mode.svelte");
+    render(Terminal, { props: { paneId: "paneL", cwd: "/repo" } });
+    const kd = (key: string, ctrlKey = false) =>
+      keyHandler!({ type: "keydown", ctrlKey, shiftKey: false, altKey: false, metaKey: false, key } as unknown as KeyboardEvent);
+    // NORMAL mode: the terminal is passive.
+    mode.leaveTerminal();
+    expect(kd("j")).toBe(false);
+    expect(kd("1")).toBe(false);
+    // TERMINAL mode: ordinary keys reach the pty, the leave sequence does not.
+    mode.enterTerminal();
+    expect(kd("j")).toBe(true);
+    expect(kd("n", true)).toBe(true);        // readline Ctrl-n still works when not armed
+    expect(kd(String.fromCharCode(92), true)).toBe(false); // Ctrl-backslash goes to the app
+    mode.leavePending = true;                  // the window keymap armed the prefix
+    expect(kd("Control")).toBe(true);          // re-pressing Ctrl keeps it armed
+    expect(mode.leavePending).toBe(true);
+    expect(kd("n", true)).toBe(false);         // Ctrl-n completes it in the app
+    mode.leavePending = true;
+    expect(kd("x")).toBe(true);                // any other key disarms it
+    expect(mode.leavePending).toBe(false);
+    mode.leaveTerminal();
+  });
+
+  // FEX-14: an A -> B -> A wiggle inside the debounce window must not leave the pty at B.
+  it("FEX-14: a resize that returns to the sent size cancels the pending intermediate resize", async () => {
+    vi.useFakeTimers();
+    const w = await import("./wails");
+    const { default: Terminal } = await import("./Terminal.svelte");
+    let rafCbs: FrameRequestCallback[] = [];
+    globalThis.requestAnimationFrame = ((cb: FrameRequestCallback) => { rafCbs.push(cb); return rafCbs.length; }) as any;
+    globalThis.cancelAnimationFrame = (() => {}) as any;
+    const flush = () => { const cbs = rafCbs; rafCbs = []; cbs.forEach((cb) => cb(0)); };
+    render(Terminal, { props: { paneId: "paneR", cwd: "/repo" } });
+    flush(); flush();                       // initial double-rAF fit at 80x24
+    vi.advanceTimersByTime(200);
+    expect(vi.mocked(w.resizePty)).toHaveBeenLastCalledWith("paneR", 80, 24);
+    vi.mocked(w.resizePty).mockClear();
+    mockCols = 120;
+    window.dispatchEvent(new Event("resize")); flush();   // B scheduled
+    mockCols = 80;
+    window.dispatchEvent(new Event("resize")); flush();   // back to A
+    vi.advanceTimersByTime(200);
+    expect(vi.mocked(w.resizePty)).not.toHaveBeenCalled();
+  });
+
+  // FEX-15: a rejected resize is forgotten, so resync() sends it again.
+  it("FEX-15: a rejected resizePty is retried by resync()", async () => {
+    vi.useFakeTimers();
+    const w = await import("./wails");
+    const { default: Terminal } = await import("./Terminal.svelte");
+    let rafCbs: FrameRequestCallback[] = [];
+    globalThis.requestAnimationFrame = ((cb: FrameRequestCallback) => { rafCbs.push(cb); return rafCbs.length; }) as any;
+    globalThis.cancelAnimationFrame = (() => {}) as any;
+    const flush = () => { const cbs = rafCbs; rafCbs = []; cbs.forEach((cb) => cb(0)); };
+    vi.mocked(w.resizePty).mockRejectedValueOnce(new Error("unknown pane"));
+    const { component } = render(Terminal, { props: { paneId: "paneS", cwd: "/repo" } });
+    flush(); flush();
+    vi.advanceTimersByTime(200);
+    await Promise.resolve(); await Promise.resolve();
+    expect(vi.mocked(w.resizePty)).toHaveBeenCalledTimes(1);
+    (component as any).resync();
+    vi.advanceTimersByTime(200);
+    expect(vi.mocked(w.resizePty)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(w.resizePty)).toHaveBeenLastCalledWith("paneS", 80, 24);
+  });
+
+  it("FEX-28: paste() routes text through xterm's paste (bracketed-paste aware)", async () => {
+    const { default: Terminal } = await import("./Terminal.svelte");
+    const { component } = render(Terminal, { props: { paneId: "paneP", cwd: "/repo" } });
+    expect((component as any).paste("line1\nline2")).toBe(true);
+    expect(pasteSpy).toHaveBeenCalledWith("line1\nline2");
   });
 
   // ── Right-click context menu ────────────────────────────────────────────────
@@ -270,7 +351,7 @@ describe("Terminal.svelte", () => {
     vi.mocked(w.resizePty).mockClear();
 
     // Flip the state from hidden to visible: the effect schedules a double rAF, then a debounced resize.
-    await rerender({ props: { paneId: "paneVis", cwd: "/repo", visible: true } });
+    await rerender({ paneId: "paneVis", cwd: "/repo", visible: true });
     flushRaf(); // The outer rAF then schedules the inner one.
     flushRaf(); // The inner rAF then calls refit().
     expect(fitSpy).toHaveBeenCalled();

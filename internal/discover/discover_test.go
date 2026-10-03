@@ -1,6 +1,8 @@
 package discover
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -222,5 +224,82 @@ func TestRootNotExist(t *testing.T) {
 	_, err := Scan("/nonexistent/path/that/will/not/exist/perch_test", Options{MaxDepth: 2})
 	if err == nil {
 		t.Fatal("expected error for nonexistent root, got nil")
+	}
+}
+
+// TestSymlinkedRoot verifies that a root that is itself a symlink is scanned.
+func TestSymlinkedRoot(t *testing.T) {
+	base := t.TempDir()
+	real := makeDir(t, base, "real")
+	proj := makeDir(t, real, "proj")
+	makeGitDir(t, proj)
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	for _, root := range []string{link, link + string(filepath.Separator)} {
+		got, err := Scan(root, Options{})
+		if err != nil {
+			t.Fatalf("Scan(%q): %v", root, err)
+		}
+		want, _ := filepath.EvalSymlinks(proj)
+		if len(got) != 1 || got[0] != want {
+			t.Fatalf("Scan(%q) = %v, want [%s]", root, got, want)
+		}
+	}
+}
+
+// TestPruneBuildArtifacts verifies that common build-output directories are skipped.
+func TestPruneBuildArtifacts(t *testing.T) {
+	root := t.TempDir()
+	for _, d := range []string{"target", "build", "dist", "venv", "__pycache__", "site-packages"} {
+		makeGitDir(t, makeDir(t, root, d, "inner"))
+	}
+	got, err := Scan(root, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("want no repos under pruned dirs, got %v", got)
+	}
+}
+
+// TestPrunedNameDirThatIsARepoIsFound verifies that a repo whose own directory
+// is named like a prune entry (build, dist, target...) is still discovered,
+// while a pruned-name directory without .git is skipped.
+func TestPrunedNameDirThatIsARepoIsFound(t *testing.T) {
+	root := t.TempDir()
+	want := []string{}
+	for _, d := range []string{"build", "dist", "target", "venv"} {
+		dir := makeDir(t, root, d)
+		makeGitDir(t, dir)
+		want = append(want, dir)
+	}
+	// Plain pruned dir without .git, and a nested pruned dir inside a repo.
+	makeGitDir(t, makeDir(t, root, "out", "dist", "inner"))
+	makeGitDir(t, makeDir(t, root, "build", "dist", "inner"))
+	got, err := sortedScan(t, root, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(want)
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	}
+}
+
+// TestScanContextCancelled verifies that a cancelled context aborts the walk.
+func TestScanContextCancelled(t *testing.T) {
+	root := t.TempDir()
+	makeGitDir(t, makeDir(t, root, "a"))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := ScanContext(ctx, root, Options{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("want context.Canceled, got %v", err)
 	}
 }

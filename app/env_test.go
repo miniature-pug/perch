@@ -217,7 +217,15 @@ func openShellCapturesEnv(t *testing.T, paneID, cwd string, ls *envsync.Listener
 	t.Helper()
 	var mu sync.Mutex
 	var captured []string
+	store, err := registry.Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id := workspaceIDForShellPane(paneID); id != "" && paneID != homeShellPaneID {
+		_ = store.Upsert(registry.Workspace{ID: id, WorktreePath: cwd, Agent: "claude"})
+	}
 	a := &App{
+		store:      store,
 		roots:      []string{cwd},
 		emit:       func(string, ...any) {},
 		bridges:    map[string]*internalpty.Bridge{},
@@ -460,7 +468,14 @@ func TestOnEnvSync_StoresOverlayAndRelaunchesAsync(t *testing.T) {
 		newAdapter: fakeAdapterSeam(&fakeAdapter{name: "claude", detect: true}),
 	}
 
-	a.onEnvSync("ws-sync", []string{"API_TOKEN=fresh"})
+	// A relaunch only happens for an open session (APP-14), so open it first
+	// and drain that spawn.
+	if err := a.OpenWorkspace("ws-sync"); err != nil {
+		t.Fatalf("OpenWorkspace: %v", err)
+	}
+	<-spawned
+
+	a.onEnvSync("ws-sync", envsync.Delta{Set: []string{"API_TOKEN=fresh"}})
 
 	// onEnvSync must store the overlay synchronously. The async relaunch reads
 	// the overlay later.
@@ -534,7 +549,12 @@ func TestOnEnvSync_EmitsWorkspaceRelaunchSynchronously(t *testing.T) {
 		newAdapter: fakeAdapterSeam(&fakeAdapter{name: "claude", detect: true}),
 	}
 
-	a.onEnvSync("ws-relaunch", []string{"API_TOKEN=fresh"})
+	if err := a.OpenWorkspace("ws-relaunch"); err != nil {
+		t.Fatalf("OpenWorkspace: %v", err)
+	}
+	<-spawned
+
+	a.onEnvSync("ws-relaunch", envsync.Delta{Set: []string{"API_TOKEN=fresh"}})
 
 	// onEnvSync emits the remount signal synchronously, so the signal is already
 	// recorded when onEnvSync returns. onEnvSync emits the signal before the

@@ -7,7 +7,7 @@
  * Take a screenshot of the panel.
  *
  * IPC method under test: SaveSettings (from wails.ts, app().SaveSettings(s: AppSettings))
- * Settings store calls: setTheme, setDensity, setFont, setDnd, and setAlwaysRules.
+ * Settings store calls: setTheme, setDensity, setFont, and setDnd.
  * Each of these calls saveSettings, which calls app().SaveSettings(snap).
  */
 
@@ -179,7 +179,7 @@ test("toggling DND calls SaveSettings with dnd=true", async ({ page }) => {
   await page.screenshot({ path: path.join(SCREENSHOT_DIR, "settings-dnd-on.png"), fullPage: true });
 });
 
-test("revoking an always-rule calls SaveSettings with reduced list", async ({ page }) => {
+test("revoking an always-rule calls RemoveAlwaysRule for exactly that rule", async ({ page }) => {
   await openSettings(page);
 
   // Two rules should be listed
@@ -197,18 +197,15 @@ test("revoking an always-rule calls SaveSettings with reduced list", async ({ pa
   // Now only one rule should remain in the UI
   await expect(page.locator('button[aria-label="Revoke"]')).toHaveCount(1);
 
-  // SaveSettings should be called once
+  // The backend removes the one rule; the whole list is never written back.
   const callsAfter = await page.evaluate(() =>
     (window as any).__calls.filter((c: any) => c.method === "SaveSettings").length
   );
-  expect(callsAfter - callsBefore).toBe(1);
-
-  // The arg should have one rule remaining
-  const lastArg = await page.evaluate(() => {
-    const calls = (window as any).__calls.filter((c: any) => c.method === "SaveSettings");
-    return calls[calls.length - 1]?.args[0];
-  });
-  expect(lastArg?.alwaysRules?.length, "Should have 1 rule after revoking first").toBe(1);
+  expect(callsAfter - callsBefore).toBe(0);
+  const removed = await page.evaluate(() =>
+    (window as any).__calls.filter((c: any) => c.method === "RemoveAlwaysRule").map((c: any) => c.args[0])
+  );
+  expect(removed).toEqual([INITIAL_SETTINGS.alwaysRules[0]]);
 
   await page.screenshot({ path: path.join(SCREENSHOT_DIR, "settings-rule-revoked.png"), fullPage: true });
 });

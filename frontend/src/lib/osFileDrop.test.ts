@@ -3,6 +3,7 @@ import { vi } from "vitest";
 import {
   shellQuote,
   mentionBytes,
+  mentionText,
   paneIdAt,
   routeOsFileDrop,
   registerOsFileDrop,
@@ -11,7 +12,7 @@ import {
 
 vi.mock("./wails", () => ({ writeToPty: vi.fn(async () => {}) }));
 
-const decode = (bytes: number[]) => new TextDecoder().decode(new Uint8Array(bytes));
+const decode = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
 
 test("shellQuote wraps in single quotes and escapes embedded single quotes", () => {
   expect(shellQuote("/a/b.go")).toBe("'/a/b.go'");
@@ -20,9 +21,16 @@ test("shellQuote wraps in single quotes and escapes embedded single quotes", () 
   expect(shellQuote("it's")).toBe("'it'\\''s'");
 });
 
-test("mentionBytes encodes a shell-quoted @mention with a trailing space", () => {
-  expect(decode(mentionBytes("/wt/src/main.go"))).toBe("@'/wt/src/main.go' ");
+test("mentionBytes encodes an @mention with a trailing space, quoting only paths that need it (FEX-27)", () => {
+  expect(decode(mentionBytes("/wt/src/main.go"))).toBe("@/wt/src/main.go ");
   expect(decode(mentionBytes("/wt/a b/c.go"))).toBe("@'/wt/a b/c.go' ");
+  expect(decode(mentionBytes("/wt/it's.md"))).toBe("@'/wt/it'\\''s.md' ");
+});
+
+test("FEX-27/FEC-35: mentionText is the one format for every entry point", () => {
+  expect(mentionText("/wt/src/main.go")).toBe("@/wt/src/main.go ");
+  expect(mentionText("/wt/my docs/a.md")).toBe("@'/wt/my docs/a.md' ");
+  expect(mentionText("/wt/$(rm -rf).md")).toBe("@'/wt/$(rm -rf).md' ");
 });
 
 /** Build a detached drop-zone element carrying the routing attribute. */
@@ -64,8 +72,8 @@ test("routeOsFileDrop writes one @mention per path to the pane under the point",
   }
   expect(vi.mocked(writeToPty).mock.calls.length).toBe(2);
   expect(vi.mocked(writeToPty).mock.calls[0][0]).toBe("p9");
-  expect(decode(vi.mocked(writeToPty).mock.calls[0][1] as number[])).toBe("@'/x/a.go' ");
-  expect(decode(vi.mocked(writeToPty).mock.calls[1][1] as number[])).toBe("@'/x/b.go' ");
+  expect(decode(vi.mocked(writeToPty).mock.calls[0][1] as Uint8Array)).toBe("@/x/a.go ");
+  expect(decode(vi.mocked(writeToPty).mock.calls[1][1] as Uint8Array)).toBe("@/x/b.go ");
 });
 
 test("routeOsFileDrop is a no-op when the drop lands on no pane", async () => {
@@ -104,6 +112,27 @@ test("registerOsFileDrop wires OnFileDrop and its off-fn calls OnFileDropOff", (
     off();
     expect(onFileDropOff).toHaveBeenCalledTimes(1);
   } finally {
+    delete (globalThis as any).runtime;
+  }
+});
+
+test("FEC-26: a failed write for an OS file drop raises a notification instead of an unhandled rejection", async () => {
+  const w = await import("./wails");
+  const { getItems } = await import("./stores/notifications.svelte");
+  vi.mocked(w.writeToPty).mockRejectedValueOnce(new Error("unknown pane"));
+  let cb: ((x: number, y: number, paths: string[]) => void) | null = null;
+  (globalThis as any).runtime = { OnFileDrop: (c: typeof cb) => { cb = c; }, OnFileDropOff: () => {} };
+  const zone = paneZone("pane-err");
+  document.body.appendChild(zone);
+  const orig = document.elementFromPoint;
+  (document as any).elementFromPoint = () => zone;
+  try {
+    registerOsFileDrop();
+    cb!(1, 1, ["/wt/a.go"]);
+    await vi.waitFor(() => expect(getItems().some((n) => n.title === "Could not send the dropped file")).toBe(true));
+  } finally {
+    (document as any).elementFromPoint = orig;
+    zone.remove();
     delete (globalThis as any).runtime;
   }
 });

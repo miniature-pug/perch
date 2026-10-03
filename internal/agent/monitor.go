@@ -74,6 +74,14 @@ type Event struct {
 	// persists it, so perch can resume the session on the next
 	// OpenWorkspace call.
 	SessionID string `json:"sessionId,omitempty"`
+	// ResolvedReqID names an approval (the monitor's RAW reqID, as in
+	// ApprovalReq.ReqID before the app composes it) that is no longer
+	// pending: the user answered it in the agent's own TUI, the hook was
+	// cancelled, or perch's own verdict cleared it. Consumers drop the
+	// matching approval card. Kind "approval-resolved" carries it for a
+	// retraction perch did not cause; State is then set only when the
+	// awaiting-approval state clears.
+	ResolvedReqID string `json:"resolvedReqId,omitempty"`
 }
 
 type Monitor interface {
@@ -104,9 +112,11 @@ type Monitor interface {
 // from each emitted Event.State. CurrentState() returns it, and defaults to
 // StateIdle when unset. The field `lastTool string` is set from
 // Event.Approval.Tool on each approval event. LastApprovalTool() returns it.
-// app.ListWorkspaces reads CurrentState(). app.Approve reads
-// LastApprovalTool() to persist an AlwaysRule. These accessors are part of
-// the Monitor contract.
+// app.ListWorkspaces reads CurrentState(). No production code reads
+// LastApprovalTool(): app.Approve resolves the tool and input of an
+// always-rule from its own record of the approval it surfaced, never from
+// this racy "most recent" accessor. LastApprovalTool() stays in the contract
+// for tests and diagnostics.
 
 func NewMonitor(tool string, adapter Adapter) (Monitor, error) {
 	switch tool {

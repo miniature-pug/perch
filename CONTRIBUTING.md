@@ -7,7 +7,7 @@
 | Tool | Version |
 |------|---------|
 | Go language floor | `1.25.0` (the `go` directive in `go.mod`) |
-| Go toolchain | `go1.26.5` (the `toolchain` directive in `go.mod`, pinned in `.tool-versions`) |
+| Go toolchain | `go1.26.6` (the `toolchain` directive in `go.mod`, pinned in `.tool-versions`) |
 | Node.js | `22.22.3` (pinned in `.tool-versions`), with the bundled npm |
 | git | any recent version |
 

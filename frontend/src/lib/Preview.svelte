@@ -1,13 +1,61 @@
 <!-- frontend/src/lib/Preview.svelte -->
-<script lang="ts">
-  import { marked } from "marked";
+<script module lang="ts">
   import mermaid from "mermaid";
   import DOMPurify from "dompurify";
 
+  // Markdown task lists render as <input type="checkbox">. Every other input
+  // is removed, and a kept checkbox is always disabled, so the preview shows
+  // done/open items without offering a form control (review #6).
+  let purifyHooked = false;
+  function hookPurify() {
+    if (purifyHooked) return;
+    purifyHooked = true;
+    DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+      if (node.nodeName !== "INPUT") return;
+      const el = node as Element;
+      if ((el.getAttribute("type") ?? "").toLowerCase() !== "checkbox") { el.remove(); return; }
+      el.setAttribute("disabled", "");
+    });
+  }
+  hookPurify();
+
+  // Configure mermaid once per app, not on every render (FEX-25).
+  let mermaidReady = false;
+  function ensureMermaid() {
+    if (mermaidReady) return;
+    mermaid.initialize({ startOnLoad: false, securityLevel: "strict" });
+    mermaidReady = true;
+  }
+  // A unique render id per call, so overlapping renders never share mermaid's
+  // temporary DOM node (FEX-25).
+  let renderSeq = 0;
+
+  // Sanitizer settings for rendered markdown. The preview is rendered into the
+  // app's own document (not a sandboxed frame), so a README or an
+  // agent-written file must not be able to restyle the cockpit (a style element
+  // that relabels or hides the approval card), cover it with a fixed overlay
+  // (a style attribute), or post a form (FEX-10). Links are handled by
+  // onPreviewClick below, never by navigation.
+  export const MARKDOWN_PURIFY = {
+    USE_PROFILES: { html: true, svg: true, svgFilters: true },
+    FORBID_TAGS: ["style", "link", "meta", "base", "form", "button", "textarea",
+                  "select", "option", "iframe", "frame", "object", "embed", "dialog"],
+    FORBID_ATTR: ["id", "name", "style", "class", "action", "formaction", "target"],
+  };
+
+</script>
+
+<script lang="ts">
+  import { marked } from "marked";
+  import { isExternalUrl, resolveRelative } from "./preview";
+
   let {
-    path, kind, content, visible = true,
+    path, kind, content, visible = true, src = "", onOpenFile, onEditSource,
   }: {
     path: string;
+    // The URL an image preview loads (the backend's /wt-file/ handler,
+    // FEX-11). An absolute filesystem path never loads in the webview.
+    src?: string;
     kind: "markdown" | "mermaid" | "image";
     content: string;
     // False when the preview is mounted but off-screen, for example on the agent
@@ -15,6 +63,11 @@
     // mermaid never run while hidden. The effect re-runs and renders the
     // current content when the preview becomes visible again.
     visible?: boolean;
+    // Open a file a relative link points at. Without it, relative links do
+    // nothing.
+    onOpenFile?: (absPath: string) => void;
+    // Switch this file to the source editor (FEX-23).
+    onEditSource?: () => void;
   } = $props();
 
   let html = $state("");
@@ -27,13 +80,13 @@
     let cancelled = false;
     if (kind === "markdown" && content) {
       Promise.resolve(marked(content)).then((h) => {
-        if (!cancelled) html = DOMPurify.sanitize(h as string, { USE_PROFILES: { html: true, svg: true, svgFilters: true }, FORBID_ATTR: ['id', 'name'] });
+        if (!cancelled) html = DOMPurify.sanitize(h as string, MARKDOWN_PURIFY) as string;
       }).catch((e) => {
         if (!cancelled) html = errorBanner(e);
       });
     } else if (kind === "mermaid" && content) {
-      mermaid.initialize({ startOnLoad: false, securityLevel: "strict" });
-      mermaid.render("preview-mermaid", content).then(({ svg }) => {
+      ensureMermaid();
+      mermaid.render(`preview-mermaid-${++renderSeq}`, content).then(({ svg }) => {
         // Mermaid draws arrowheads as <marker> elements, referenced through
         // marker-end="url(#id)". Forbidding `id` here would strip the marker
         // ids, and the arrowheads would vanish. So this sanitize call does NOT
@@ -61,13 +114,39 @@
       { USE_PROFILES: { html: true } },
     );
   }
+
+  // A link in rendered content must never navigate the app's own webview
+  // away from the cockpit (FEX-10). Web links open in the system browser;
+  // a relative link opens the file it names; anything else does nothing.
+  function onPreviewClick(e: MouseEvent) {
+    const a = (e.target as Element | null)?.closest?.("a");
+    if (!a) return;
+    e.preventDefault();
+    const href = a.getAttribute("href") ?? a.getAttribute("xlink:href") ?? "";
+    if (isExternalUrl(href)) {
+      window.runtime?.BrowserOpenURL?.(href);
+      return;
+    }
+    const target = resolveRelative(path, href);
+    if (target) onOpenFile?.(target);
+  }
 </script>
 
 <section aria-label="preview" class="preview scrollable">
+  {#if onEditSource && kind !== "image"}
+    <div class="preview-toolbar">
+      <button class="btn btn-sm" onclick={onEditSource}>Edit source</button>
+    </div>
+  {/if}
   {#if kind === "image"}
-    <img src={path} alt={path} class="preview-img" />
+    {#if src}
+      <img {src} alt={path} class="preview-img" />
+    {:else}
+      <p class="preview-empty">This image is outside the session's worktree and cannot be previewed.</p>
+    {/if}
   {:else}
-    <div class="preview-body prose">{@html html}</div>
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+    <div class="preview-body prose" onclick={onPreviewClick}>{@html html}</div>
   {/if}
 </section>
 
@@ -85,6 +164,14 @@
   .preview::-webkit-scrollbar-track { background: transparent; }
   .preview::-webkit-scrollbar-thumb { background: var(--perch-border); border-radius: var(--perch-scrollbar-radius); }
   .preview::-webkit-scrollbar-thumb:hover { background: var(--perch-text-dim); }
+
+  .preview-empty { color: var(--perch-text-dim); margin: 0; }
+
+  .preview-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: var(--perch-sp-2);
+  }
 
   /* ---------- Prose area ---------- */
   .prose {

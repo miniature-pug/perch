@@ -17,6 +17,10 @@ import (
 //go:embed appicon.png
 var appIcon []byte
 
+// AppIcon returns the embedded 512x512 PNG app icon. `perch install-desktop`
+// writes it into the hicolor icon theme. Callers must not modify it.
+func AppIcon() []byte { return appIcon }
+
 // fileDropOptions configures the Wails native file drop. EnableFileDrop
 // registers the GTK drag-data-received and drag-drop handlers (see
 // vendor/.../linux/window.c onDragDataReceived). These handlers resolve each
@@ -92,11 +96,22 @@ func Run(assets embed.FS, roots []string) error {
 		BackgroundColour: &defaultWindowBg,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
+			// Serves /wt-file/<workspaceID>/<path> images for the Preview pane
+			// (FEX-11); see worktreeFileHandler for what it refuses.
+			Handler: app.worktreeFileHandler(),
 		},
-		// Linux.Icon sets the GTK window and taskbar icon. ProgramName sets
-		// the WM class through g_set_prgname. The installed perch.desktop
-		// file matches this WM class through StartupWMClass, so the
-		// app-switcher entry shows the same icon.
+		// Linux.Icon sets the GTK window icon. X11 window managers use it,
+		// but GNOME on Wayland ignores it: the dock and app switcher take
+		// the icon from the perch.desktop entry that matches the window
+		// (installed by `perch install-desktop`, see internal/desktop).
+		//
+		// ProgramName calls g_set_prgname("perch"). Wails calls it after
+		// gtk_init, so it sets the Wayland app_id ("perch", whatever the
+		// binary is named) but not the X11 WM_CLASS. GDK fixes WM_CLASS at
+		// gtk_init from argv[0], so it is "perch" only when the binary is
+		// named perch. The README installs the release binary as
+		// ~/.local/bin/perch for that reason. perch.desktop sets
+		// StartupWMClass=perch to match both.
 		Linux: &linux.Options{
 			Icon:        appIcon,
 			ProgramName: appTitle,

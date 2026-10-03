@@ -180,8 +180,19 @@ func TestOpencodeMonitorPrepare_Resume(t *testing.T) {
 	if !strings.HasSuffix(fresh, "\n") {
 		t.Errorf("launch command must end with a newline to submit to the shell: %q", fresh)
 	}
+	// AGT-11/12: the password travels as PERCH_OPENCODE_PASSWORD and is
+	// exported BY REFERENCE inside the subshell, after the login rc, together
+	// with the pinned username; the literal never appears in the line.
+	if strings.Contains(fresh, "=pw") {
+		t.Errorf("the typed line must not carry the password: %q", fresh)
+	}
+	if !strings.Contains(fresh, `export OPENCODE_SERVER_PASSWORD="$PERCH_OPENCODE_PASSWORD" OPENCODE_SERVER_USERNAME=opencode;`) {
+		t.Errorf("the subshell must export the credentials by reference: %q", fresh)
+	}
+	if !envSliceHas(om.PaneEnv(), "PERCH_OPENCODE_PASSWORD=pw") {
+		t.Errorf("PaneEnv must carry PERCH_OPENCODE_PASSWORD: %v", om.PaneEnv())
+	}
 	for _, want := range []string{
-		"export OPENCODE_SERVER_PASSWORD=pw",
 		"opencode serve --port 1234 --hostname 127.0.0.1",
 		"curl -s -o /dev/null http://localhost:1234", // readiness poll before attach
 		"opencode attach http://localhost:1234",
@@ -223,17 +234,19 @@ func TestOpencodeMonitorPrepare_SelfAssignsPortAndPassword(t *testing.T) {
 	if !strings.Contains(cmd, "http://127.0.0.1:") {
 		t.Errorf("expected a self-assigned loopback URL, got %q", cmd)
 	}
-	if strings.Contains(cmd, "OPENCODE_SERVER_PASSWORD=;") || strings.Contains(cmd, "OPENCODE_SERVER_PASSWORD= ") {
-		t.Errorf("password was not generated (empty): %q", cmd)
-	}
-	// A 16-byte hex password is 32 chars. Check that the export carries
-	// a non-empty token.
-	if i := strings.Index(cmd, "OPENCODE_SERVER_PASSWORD="); i >= 0 {
-		rest := cmd[i+len("OPENCODE_SERVER_PASSWORD="):]
-		token := rest[:strings.IndexByte(rest, ';')]
-		if len(token) < 16 {
-			t.Errorf("generated password too short: %q", token)
+	// The password is generated and travels through PaneEnv, never the
+	// typed line (AGT-12). A 16-byte hex password is 32 chars.
+	var token string
+	for _, e := range mon.PaneEnv() {
+		if v, ok := strings.CutPrefix(e, "PERCH_OPENCODE_PASSWORD="); ok {
+			token = v
 		}
+	}
+	if len(token) < 16 {
+		t.Errorf("generated password missing or too short in PaneEnv: %q", token)
+	}
+	if strings.Contains(cmd, token) {
+		t.Errorf("launch line leaks the password: %q", cmd)
 	}
 }
 
@@ -725,7 +738,7 @@ func TestOpencodeMonitorPrepare_ExitSentinelUsesEnvNotLiteralToken(t *testing.T)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	for _, want := range []string{"; ec=$?", "$PERCH_EXIT_TOKEN", "$PERCH_EXIT_URL", "AgentExit"} {
+	for _, want := range []string{"; ec=$?", "$PERCH_EXIT_TOKEN", "$PERCH_EXIT_URL", "agent_exit=$ec"} {
 		if !strings.Contains(cmd, want) {
 			t.Errorf("launch cmd missing %q; got %q", want, cmd)
 		}

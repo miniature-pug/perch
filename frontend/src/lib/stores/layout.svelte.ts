@@ -5,6 +5,7 @@ import {
 } from "../constants";
 
 export type View = "agent" | "code" | "diff";
+const VIEWS: readonly View[] = ["agent", "code", "diff"];
 
 // Clamp a live value into [min, max]. The function coerces a non-finite
 // value to min.
@@ -53,22 +54,37 @@ class LayoutStore {
         const s = JSON.parse(raw);
         this.sidebarW  = validRange(s.sidebarW, SIDEBAR_MIN_W, SIDEBAR_MAX_W, DEFAULT_SIDEBAR_W);
         this.shellH    = validRange(s.shellH,   SHELL_MIN_H,   SHELL_MAX_H,   DEFAULT_SHELL_H);
-        this.view      = s.view      ?? "agent";
-        this.split     = s.split     ?? false;
-        this.splitId   = s.splitId   ?? null;
+        // Accept only well-typed values. An unknown view (an older or
+        // hand-edited layout.json) would hide all three views (FEC-30).
+        this.view      = VIEWS.includes(s.view) ? s.view : "agent";
+        this.split     = typeof s.split === "boolean" ? s.split : false;
+        this.splitId   = typeof s.splitId === "string" && s.splitId ? s.splitId : null;
         this.collapsed = validCollapsed(s.collapsed);
-        this.order     = Array.isArray(s.order) ? s.order : [];
+        this.order     = Array.isArray(s.order) ? s.order.filter((x: unknown): x is string => typeof x === "string") : [];
       }
     } catch { /* Corrupt data. Keep the defaults. */ }
   }
 
-  private save(): void {
-    if (this.timer !== null) clearTimeout(this.timer);
-    this.timer = setTimeout(() => saveLayout(JSON.stringify({
+  private write(): Promise<void> {
+    return saveLayout(JSON.stringify({
       sidebarW: this.sidebarW, shellH: this.shellH,
       view: this.view, split: this.split, splitId: this.splitId,
       collapsed: this.collapsed, order: this.order,
-    })), LAYOUT_SAVE_DEBOUNCE_MS);
+    })).catch(() => { /* a failed layout save is not worth an interruption */ });
+  }
+
+  private save(): void {
+    if (this.timer !== null) clearTimeout(this.timer);
+    this.timer = setTimeout(() => { this.timer = null; void this.write(); }, LAYOUT_SAVE_DEBOUNCE_MS);
+  }
+
+  /** Write a pending debounced save now, for example on page unload, so the
+      last change is not lost (FEC-26). */
+  flush(): void {
+    if (this.timer === null) return;
+    clearTimeout(this.timer);
+    this.timer = null;
+    void this.write();
   }
 
   setSidebarW(v: number):  void { this.sidebarW = clamp(v, SIDEBAR_MIN_W, SIDEBAR_MAX_W); this.save(); }

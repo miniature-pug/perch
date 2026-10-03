@@ -1,13 +1,16 @@
 <!-- frontend/src/lib/FileTree.svelte -->
 <script lang="ts">
   import { listDir, revealInFiles, copyPath, type FsNode } from "./wails";
+  import { mentionText } from "./osFileDrop";
   import { MIME_TEXT } from "./constants";
   import { SvelteSet } from "svelte/reactivity";
   import { untrack } from "svelte";
 
   function handleDragStart(e: DragEvent, node: TreeNode) {
     if (!e.dataTransfer) return;
-    e.dataTransfer.setData(MIME_TEXT, `@${node.path} `);
+    // The same @mention format as an OS file drop and "Send to agent", so a
+    // path with spaces survives every entry point (FEX-27, FEC-35).
+    e.dataTransfer.setData(MIME_TEXT, mentionText(node.path));
     e.dataTransfer.effectAllowed = "copy";
   }
 
@@ -61,6 +64,11 @@
   // must not prune. A stale rebuild could remove an entry that the
   // winning rebuild still needs. Only the current rebuild can change
   // `expanded`.
+  //
+  // Sibling directories are listed in parallel, not one after another
+  // (FEX-19). A child directory that fails to list (deleted mid-rebuild,
+  // permissions) is shown collapsed instead of failing the whole rebuild
+  // (FEX-18).
   async function buildLevel(dir: string, token: number): Promise<TreeNode[]> {
     const listing = await listDir(dir);
     const present = new Set(listing.map((n) => n.path));
@@ -71,18 +79,35 @@
         if (isChildOf(dir, p) && !present.has(p)) expanded.delete(p);
       }
     }
-    const out: TreeNode[] = [];
-    for (const n of listing) {
+    return Promise.all(listing.map(async (n): Promise<TreeNode> => {
       const node: TreeNode = { ...n };
       if (n.isDir && expanded.has(n.path)) {
-        node.expanded = true;
-        node.children = await buildLevel(n.path, token);
+        try {
+          node.children = await buildLevel(n.path, token);
+          node.expanded = true;
+        } catch {
+          node.expanded = false;
+          if (token === rebuildToken) expanded.delete(n.path);
+        }
       } else if (n.isDir) {
         node.expanded = false;
       }
-      out.push(node);
+      return node;
+    }));
+  }
+
+  // The live node for `path` in the current tree. A rebuild replaces the node
+  // objects, so an action that awaited must re-find its node by path instead
+  // of mutating a detached one (FEX-18).
+  function findNode(list: TreeNode[], path: string): TreeNode | null {
+    for (const n of list) {
+      if (n.path === path) return n;
+      if (n.children && path.startsWith(n.path + "/")) {
+        const hit = findNode(n.children, path);
+        if (hit) return hit;
+      }
     }
-    return out;
+    return null;
   }
 
   // True when `p` is a direct child path of `dir` (one segment deeper).
@@ -99,8 +124,13 @@
   let rebuildToken = 0;
   async function rebuild() {
     const mine = ++rebuildToken;
-    const next = await buildLevel(root, mine);
-    if (mine === rebuildToken) nodes = next;
+    try {
+      const next = await buildLevel(root, mine);
+      if (mine === rebuildToken) nodes = next;
+    } catch {
+      // The root could not be listed (removed worktree, permissions). Keep
+      // what is shown; the next refresh retries (FEX-18).
+    }
   }
 
   // The root prop identifies the worktree that the tree shows. `expanded`
@@ -135,16 +165,29 @@
 
   async function toggle(node: TreeNode) {
     if (!node.isDir) return;
-    if (node.expanded) {
-      node.expanded = false;
-      node.children = undefined;
-      expanded.delete(node.path);
-    } else {
-      node.children = (await listDir(node.path)).map((c) => ({ ...c }));
-      node.expanded = true;
-      expanded.add(node.path);
+    const path = node.path;
+    if (expanded.has(path) || node.expanded) {
+      // Collapse the folder AND forget its expanded descendants, so they do
+      // not pop open by themselves on the next refresh (FEX-18).
+      for (const p of [...expanded]) if (p === path || p.startsWith(path + "/")) expanded.delete(p);
+      const cur = findNode(nodes, path);
+      if (cur) { cur.expanded = false; cur.children = undefined; }
+      nodes = [...nodes];
+      return;
     }
-    nodes = [...nodes];
+    let children: TreeNode[];
+    try {
+      children = await buildLevel(path, rebuildToken);
+    } catch {
+      return; // the folder vanished or cannot be read; nothing to expand
+    }
+    expanded.add(path);
+    const cur = findNode(nodes, path);
+    if (cur) {
+      cur.children = children;
+      cur.expanded = true;
+      nodes = [...nodes];
+    }
   }
 
   const MENU_APPROX_W = 180;
@@ -156,7 +199,15 @@
     menu = { node, x, y };
   }
   function closeMenu() { menu = null; }
-  function menuOpen()   { if (!menu) return; onOpen(menu.node.path); closeMenu(); }
+  // "Open" on a folder expands or collapses it; only a file goes to the
+  // editor, which cannot read a directory (FEX-3).
+  function menuOpen()   {
+    if (!menu) return;
+    const node = menu.node;
+    closeMenu();
+    if (node.isDir) void toggle(node);
+    else onOpen(node.path);
+  }
   function menuReveal() { if (!menu) return; revealInFiles(menu.node.path); closeMenu(); }
   function menuCopy()   {
     if (!menu) return;

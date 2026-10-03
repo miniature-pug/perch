@@ -215,3 +215,18 @@ test("F49a: last-active guards empty/invalid dates (renders empty, not 'NaN')", 
   const ageCell = document.querySelector(".cleanup-age")!;
   expect(ageCell.textContent).toBe("");
 });
+
+test("FEX-34: a safe row that arrives after mount is checked by default; a row the user unchecked stays unchecked", async () => {
+  const { default: CleanupPanel } = await import("./CleanupPanel.svelte");
+  const first = [makeSession({ id: "ws-a", safe: true })];
+  const r = render(CleanupPanel, { props: { sessions: first, onClose: () => {} } });
+  await fireEvent.click(screen.getByTestId("row-check-ws-a"));
+  expect((screen.getByTestId("row-check-ws-a") as HTMLInputElement).checked).toBe(false);
+  await r.rerender({
+    sessions: [...first, makeSession({ id: "ws-b", safe: true }), makeSession({ id: "ws-c", safe: false, merged: false })],
+    onClose: () => {},
+  });
+  await waitFor(() => expect((screen.getByTestId("row-check-ws-b") as HTMLInputElement).checked).toBe(true));
+  expect((screen.getByTestId("row-check-ws-a") as HTMLInputElement).checked).toBe(false);
+  expect((screen.getByTestId("row-check-ws-c") as HTMLInputElement).checked).toBe(false);
+});

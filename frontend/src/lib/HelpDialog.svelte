@@ -54,7 +54,9 @@
     ]},
     { heading: "Approvals", rows: [
       // ApprovalCard.svelte accelerators. They are active while the approval card has focus.
-      { combos: ["a"], action: "Allow the pending request" },
+      // In NORMAL mode, the first a only focuses the card (App.svelte); it never
+      // decides. Typing elsewhere never reaches the card.
+      { combos: ["a"], action: "Allow the pending request (in NORMAL mode, the first a focuses the card)" },
       { combos: ["d"], action: "Deny the pending request" },
       { combos: ["⇧A"], action: "Always allow this tool" },
     ]},

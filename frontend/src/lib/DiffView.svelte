@@ -1,6 +1,6 @@
 <!-- frontend/src/lib/DiffView.svelte -->
 <script lang="ts">
-  import { onDestroy } from "svelte";
+  import { onDestroy, untrack } from "svelte";
   import { diffStat, hunks as fetchHunks, stageHunk, discardHunk, unstageHunk, type FileDiff, type Hunk } from "./wails";
   import { MIME_TEXT, UNDO_REMOVE_DELAY_MS } from "./constants";
   import { addBlocking } from "./stores/notifications.svelte";
@@ -25,15 +25,24 @@
   let {
     worktree,
     refresh = 0,
+    visible = true,
+    workspaceId = "",
     onSendToAgent,
     onDiffChanged,
   }: {
     worktree: string;
     // A monotonic signal (the session's file-system version). The parent
     // bumps it when files change on disk. The signal re-fetches the file
-    // list in place. Expanded hunks and the scroll position survive. The
-    // parent does not remount the whole view (F4).
+    // list in place, and the hunks of every expanded file, so a hunk card
+    // never shows (or acts on) a stale index (F4, FEX-7). The parent does
+    // not remount the whole view.
     refresh?: number;
+    // False while the diff view is mounted but hidden (agent or code view).
+    // The view then runs no git work on fs changes; it catches up when it
+    // is shown again (FEX-20).
+    visible?: boolean;
+    // The owning session, so a failure notification links back to it.
+    workspaceId?: string;
     onSendToAgent?: (text: string) => void;
     onDiffChanged?: () => void;
   } = $props();
@@ -61,26 +70,77 @@
   // after that delay passes with no Undo. Undo cancels the discard
   // completely, so the code never loses the change. This matches the
   // session-remove undo pattern in App.svelte.
+  //
+  // A pending discard remembers the hunk's CONTENT, not just its index. An
+  // agent edit during the undo window can shift hunk indices, so the commit
+  // re-reads the hunks and discards the hunk with the same content, or
+  // nothing (FEX-7).
   type PendingDiscard = {
-    id: string; worktree: string; file: string; index: number;
+    id: string; worktree: string; file: string; hunk: Hunk;
     timer: ReturnType<typeof setTimeout>;
   };
   let pendingDiscards = $state<PendingDiscard[]>([]);
   let discardSeq = 0;
   // Files with a discard in flight. Their remaining hunk actions stay
-  // frozen. This stops a concurrent stage, unstage, or discard on the same
-  // file from shifting the pending hunk's index during the deferred revert.
+  // frozen, so the user's own stage or unstage cannot race the revert.
   const pendingDiscardFiles = $derived(new Set(pendingDiscards.map((p) => p.file)));
+
+  // Hunk identity by content: the changed lines and the staged flag. The
+  // header's line numbers are left out on purpose, because an edit above the
+  // hunk shifts them without changing the hunk itself.
+  function hunkKey(h: Hunk): string {
+    return (h.staged ? "S" : "U") + "\u0000" + h.lines.map((l) => l.kind + ":" + l.text).join("\u0000");
+  }
+
+  // Find the hunk in a fresh list that is the same change as `want`. An exact
+  // header match wins; otherwise the content must match exactly one hunk.
+  // Returns null when the change is gone or ambiguous.
+  function findSameHunk(list: Hunk[], want: Hunk): Hunk | null {
+    // The backend's content id, when present, is the authority.
+    if (want.id) {
+      const byId = list.filter((h) => h.id === want.id && !!h.staged === !!want.staged);
+      if (byId.length === 1) return byId[0];
+      if (byId.length > 1) return byId.find((h) => h.header === want.header) ?? null;
+      return null;
+    }
+    const key = hunkKey(want);
+    const same = list.filter((h) => hunkKey(h) === key);
+    if (same.length === 1) return same[0];
+    return same.find((h) => h.header === want.header) ?? null;
+  }
+
+  // Hunks to show for a file: everything except the ones hidden behind a
+  // pending discard.
+  function withoutPending(wt: string, file: string, list: Hunk[]): Hunk[] {
+    const hidden = pendingDiscards.filter((p) => p.worktree === wt && p.file === file);
+    if (hidden.length === 0) return list;
+    return list.filter((h) => !hidden.some((p) => hunkKey(p.hunk) === hunkKey(h)));
+  }
+
+  // A session switch hands this view another worktree. The previous
+  // worktree's expanded hunks must not render under (or act on) a same-named
+  // file in the new one (FEX-6).
+  let shownWorktree: string | undefined;
+  $effect(() => {
+    const wt = worktree;
+    if (shownWorktree !== undefined && shownWorktree !== wt) {
+      expanded = {};
+      flashFile = null;
+    }
+    shownWorktree = wt;
+  });
 
   // Cancellation guard. If `worktree` changes before an in-flight diffStat
   // call resolves, the stale result must not overwrite the newer worktree's
   // files or loading flag. The "Loading…" placeholder appears only after a
   // delay (F5). A fast resolve is the common case, and it never flashes the
   // placeholder. The previous file list stays visible until the new list
-  // arrives.
+  // arrives. While hidden, the view does no git work (FEX-20); showing it
+  // runs the fetch for the current state.
   $effect(() => {
     const wt = worktree;
     refresh; // track: an fs change re-fetches the file list in place (F4)
+    if (!visible) return;
     let cancelled = false;
     error = false;
     const loadingTimer = setTimeout(() => { if (!cancelled) loading = true; }, DIFF_LOADING_DELAY_MS);
@@ -88,13 +148,16 @@
     diffStat(wt)
       .then((r) => { if (!cancelled) { files = r; settle(); } })
       .catch(() => { if (!cancelled) { error = true; settle(); } });
+    // Expanded hunks go stale on the same change: re-fetch them too, so the
+    // Stage and Discard buttons act on current indices (FEX-7).
+    for (const file of untrack(() => Object.keys(expanded))) void refreshHunks(file, wt);
     return () => { cancelled = true; clearTimeout(loadingTimer); };
   });
 
   // Commit any pending discard when the user navigates away from a
   // worktree, or when the component is destroyed. The user asked to
-  // discard and did not press Undo, so the code honors that request. This
-  // code runs in the effect cleanup. The cleanup fires on both a worktree
+  // discard and did not press Undo, so the code honors that request, by
+  // content (see commitDiscard). The cleanup fires on both a worktree
   // change and a component destroy. The code clears timers so the commit
   // never runs twice.
   $effect(() => {
@@ -103,7 +166,7 @@
       for (const p of pendingDiscards) {
         if (p.worktree !== wt) continue;
         clearTimeout(p.timer);
-        discardHunk(p.worktree, p.file, p.index).catch(() => {});
+        void discardByContent(p);
       }
       if (mounted) pendingDiscards = pendingDiscards.filter((p) => p.worktree !== wt);
     };
@@ -113,57 +176,88 @@
     if (expanded[f.path]) {
       const next = { ...expanded }; delete next[f.path]; expanded = next;
     } else {
-      expanded = { ...expanded, [f.path]: await fetchHunks(worktree, f.path) };
+      const wt = worktree;
+      const hs = await fetchHunks(wt, f.path);
+      if (!mounted || wt !== worktree) return; // the session changed meanwhile (FEX-6)
+      expanded = { ...expanded, [f.path]: withoutPending(wt, f.path, hs) };
     }
   }
 
   async function refreshFiles() {
+    const wt = worktree;
     try {
-      const r = await diffStat(worktree);
-      if (mounted) files = r;
+      const r = await diffStat(wt);
+      if (mounted && wt === worktree) files = r;
     } catch {
       // A refresh failure must not break staging. The stale counts stay as they are.
     }
   }
 
   // Re-fetch the hunk list for a file. A `finally` block calls this function
-  // to keep the indices current.
-  async function refreshHunks(file: string) {
+  // to keep the indices current. A result for another worktree, or for a
+  // file the user collapsed meanwhile, is dropped.
+  //
+  // Refreshes for one file can overlap (an fs event and a stage's `finally`).
+  // Only the most recently STARTED request may write its result, so an older
+  // list that resolves last can never restore stale indices (review #9).
+  const hunkSeq = new Map<string, number>();
+  async function refreshHunks(file: string, wt: string = worktree) {
+    const key = wt + "\u0000" + file;
+    const seq = (hunkSeq.get(key) ?? 0) + 1;
+    hunkSeq.set(key, seq);
     try {
-      const hs = await fetchHunks(worktree, file);
-      if (mounted) expanded = { ...expanded, [file]: hs };
+      const hs = await fetchHunks(wt, file);
+      if (hunkSeq.get(key) !== seq) return;
+      if (mounted && wt === worktree && expanded[file]) {
+        expanded = { ...expanded, [file]: withoutPending(wt, file, hs) };
+      }
     } catch {
       // A hunk refresh failure is not fatal. The file list refresh still runs.
     }
   }
 
+  // The backend refuses a hunk action when the hunk at that index no longer
+  // has the content the user saw (the agent edited the file meanwhile).
+  function isHunkChanged(e: unknown): boolean {
+    return /hunk changed since it was displayed/i.test(e instanceof Error ? e.message : String(e));
+  }
+  function reportHunkError(action: string, file: string, e: unknown) {
+    if (isHunkChanged(e)) {
+      addBlocking(workspaceId, `${action} skipped`,
+        `The change in ${file} was modified since it was shown, so nothing was changed. The diff has been refreshed; review it and try again.`, "info");
+      return;
+    }
+    const msg = e instanceof Error ? e.message : String(e);
+    addBlocking(workspaceId, `${action} failed`, `Could not ${action.toLowerCase()} hunk in ${file}: ${msg}`);
+  }
+
   async function stage(h: Hunk) {
+    const wt = worktree;
     try {
-      await stageHunk(worktree, h.file, h.index);
-      if (mounted) flashFile = h.file;
+      await stageHunk(wt, h.file, h.index, h.id);
+      if (mounted && wt === worktree) flashFile = h.file;
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      addBlocking(worktree, "Stage failed", `Could not stage hunk in ${h.file}: ${msg}`);
+      reportHunkError("Stage", h.file, e);
     } finally {
       // Always re-fetch. This stops stale hunk indices from persisting
       // after a partial operation.
-      await refreshHunks(h.file);
+      await refreshHunks(h.file, wt);
       await refreshFiles();
-      if (mounted) onDiffChanged?.();
+      if (mounted && wt === worktree) onDiffChanged?.();
     }
   }
 
   async function unstage(h: Hunk) {
+    const wt = worktree;
     try {
-      await unstageHunk(worktree, h.file, h.index);
-      if (mounted) flashFile = h.file;
+      await unstageHunk(wt, h.file, h.index, h.id);
+      if (mounted && wt === worktree) flashFile = h.file;
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      addBlocking(worktree, "Unstage failed", `Could not unstage hunk in ${h.file}: ${msg}`);
+      reportHunkError("Unstage", h.file, e);
     } finally {
-      await refreshHunks(h.file);
+      await refreshHunks(h.file, wt);
       await refreshFiles();
-      if (mounted) onDiffChanged?.();
+      if (mounted && wt === worktree) onDiffChanged?.();
     }
   }
 
@@ -172,19 +266,13 @@
   // tree stays untouched until the timer fires.
   function requestDiscard(h: Hunk) {
     if (pendingDiscardFiles.has(h.file)) return; // one deferred discard per file
-    // Hide the hunk immediately, without waiting for the discard to
-    // finish. The code does not re-fetch, so every other hunk keeps the
-    // index the deferred revert uses.
     const current = expanded[h.file];
     if (current) {
       expanded = { ...expanded, [h.file]: current.filter((x) => x.index !== h.index) };
     }
     const id = `${h.file}#${h.index}#${discardSeq++}`;
-    const wt = worktree;
-    const file = h.file;
-    const index = h.index;
     const timer = setTimeout(() => { void commitDiscard(id); }, UNDO_REMOVE_DELAY_MS);
-    pendingDiscards = [...pendingDiscards, { id, worktree: wt, file, index, timer }];
+    pendingDiscards = [...pendingDiscards, { id, worktree, file: h.file, hunk: h, timer }];
   }
 
   function undoDiscard(id: string) {
@@ -196,26 +284,50 @@
     if (p.worktree === worktree) void refreshHunks(p.file);
   }
 
+  // Discard the hunk the user discarded: the content id captured at click
+  // time, at that hunk's CURRENT index (an agent edit above it can shift the
+  // index during the undo window). The backend refuses when the hunk at that
+  // index no longer has that id (ErrHunkChanged), so nothing else can be
+  // reverted. If the change is gone or ambiguous, nothing is discarded and
+  // the user is told (FEX-7).
+  async function discardByContent(p: PendingDiscard): Promise<void> {
+    const skipped = () => addBlocking(workspaceId, "Discard skipped",
+      `The change in ${p.file} was modified after you discarded it, so it was kept. Review it and discard again.`, "info");
+    try {
+      const fresh = await fetchHunks(p.worktree, p.file);
+      const target = findSameHunk(fresh, p.hunk);
+      if (!target) { skipped(); return; }
+      await discardHunk(p.worktree, p.file, target.index, p.hunk.id);
+    } catch (e) {
+      if (isHunkChanged(e)) { skipped(); return; }
+      const msg = e instanceof Error ? e.message : String(e);
+      addBlocking(workspaceId, "Discard failed", `Could not discard hunk in ${p.file}: ${msg}`);
+    }
+  }
+
   async function commitDiscard(id: string) {
     const p = pendingDiscards.find((x) => x.id === id);
     if (!p) return;
     pendingDiscards = pendingDiscards.filter((x) => x.id !== id);
-    try {
-      await discardHunk(p.worktree, p.file, p.index);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      addBlocking(p.worktree, "Discard failed", `Could not discard hunk in ${p.file}: ${msg}`);
-    } finally {
-      if (p.worktree === worktree) {
-        await refreshHunks(p.file);
-        await refreshFiles();
-        if (mounted) onDiffChanged?.();
-      }
+    await discardByContent(p);
+    if (mounted && p.worktree === worktree) {
+      await refreshHunks(p.file, p.worktree);
+      await refreshFiles();
+      if (mounted) onDiffChanged?.();
     }
   }
 
+  // The hunk as a unified diff: file headers, the hunk header, and every line
+  // with its +, - or space prefix, so the agent can tell what was removed
+  // from what was added (FEX-21).
   function hunkText(h: Hunk): string {
-    return h.lines.map((l) => l.text).join("\n");
+    const prefix = { add: "+", del: "-", ctx: " " } as const;
+    return [
+      `--- a/${h.file}`,
+      `+++ b/${h.file}`,
+      h.header,
+      ...h.lines.map((l) => (prefix[l.kind] ?? " ") + l.text),
+    ].join("\n") + "\n";
   }
 
   function sendHunk(h: Hunk) {
@@ -265,6 +377,9 @@
       <div class="hunk-panel scrollable">
         {#each files as f (f.path)}
           {#if expanded[f.path]}
+            <!-- One heading per expanded file, so the Stage and Discard
+                 buttons below it are never ambiguous (FEX-22). -->
+            <h3 class="hunk-file-heading" title={f.path}>{f.path}</h3>
             {#each expanded[f.path] as h (h.index)}
               <div class="hunk" role="group" aria-label={h.header} draggable="true" ondragstart={(e) => handleHunkDragStart(e, h)}>
                 <div class="hunk-header">
@@ -417,6 +532,20 @@
     min-width: 0;
     background: var(--perch-bg);
     padding: 0;
+  }
+
+  .hunk-file-heading {
+    margin: 0;
+    padding: 4px var(--perch-sp-2);
+    font-family: var(--perch-font-mono);
+    font-size: var(--perch-fs-code);
+    font-weight: 600;
+    color: var(--perch-text);
+    background: var(--perch-bg);
+    border-bottom: 1px solid var(--perch-border-strong);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .hunk {

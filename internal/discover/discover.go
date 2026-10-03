@@ -11,6 +11,7 @@
 package discover
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"os"
@@ -25,7 +26,10 @@ const DefaultMaxDepth = 8
 // DefaultPrune is the set of directory base names Scan skips.
 // Scan excludes heavy build-artifact and dependency directories by default
 // because they are never top-level git repos and can be huge.
-var DefaultPrune = []string{"node_modules", "vendor", ".git"}
+var DefaultPrune = []string{
+	"node_modules", "vendor", ".git",
+	"target", "build", "dist", "venv", "__pycache__", "site-packages",
+}
 
 // Options controls a Scan.
 type Options struct {
@@ -50,8 +54,10 @@ type Options struct {
 //
 // Behavior summary:
 //   - root must exist. If root does not exist, Scan returns an error.
-//   - Scan never follows symlinks (filepath.WalkDir does not follow
-//     directory symlinks, which also prevents infinite cycles).
+//   - Scan resolves a symlinked root once (so ~/code -> /mnt/data/code
+//     works), but never follows symlinks found below the root
+//     (filepath.WalkDir does not follow directory symlinks, which also
+//     prevents infinite cycles).
 //   - Finding a repo does NOT stop the descent. Scan still finds nested,
 //     independent repos.
 //   - A read error on one entry skips only that subtree. It does not abort
@@ -59,6 +65,12 @@ type Options struct {
 //   - Scan returns results in the lexical order that filepath.WalkDir
 //     produces. The caller must do any further sorting or deduplication.
 func Scan(root string, opts Options) ([]string, error) {
+	return ScanContext(context.Background(), root, opts)
+}
+
+// ScanContext works like Scan, but it stops the walk and returns ctx.Err()
+// when ctx is done.
+func ScanContext(ctx context.Context, root string, opts Options) ([]string, error) {
 	abs, err := filepath.Abs(root)
 	if err != nil {
 		return nil, fmt.Errorf("discover: resolve root %s: %w", root, err)
@@ -68,6 +80,12 @@ func Scan(root string, opts Options) ([]string, error) {
 	// instead of a silent empty result.
 	if _, err := os.Stat(abs); err != nil {
 		return nil, fmt.Errorf("discover: root %s: %w", abs, err)
+	}
+
+	// filepath.WalkDir Lstat's its root, so a root that is itself a symlink
+	// would be treated as a non-directory and never entered. Resolve it once.
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = resolved
 	}
 
 	maxDepth := opts.MaxDepth
@@ -87,6 +105,9 @@ func Scan(root string, opts Options) ([]string, error) {
 	var results []string
 
 	err = filepath.WalkDir(abs, func(path string, d fs.DirEntry, werr error) error {
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
+		}
 		// Per-entry error: skip this entry or subtree, but continue the walk.
 		if werr != nil {
 			if d != nil && d.IsDir() {
@@ -147,13 +168,22 @@ func Scan(root string, opts Options) ([]string, error) {
 		}
 
 		// Prune gate: never descend into directories on the prune list.
+		// A directory with a ".git" entry is a repo itself (for example
+		// ~/code/build), so keep walking: the walk then sees the ".git" entry
+		// and records the candidate. Its pruned-name children are still skipped.
 		if pruneSet[name] {
+			if _, statErr := os.Lstat(filepath.Join(path, ".git")); statErr == nil {
+				return nil
+			}
 			return fs.SkipDir
 		}
 
 		return nil
 	})
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, fmt.Errorf("discover: walk %s: %w", abs, err)
 	}
 

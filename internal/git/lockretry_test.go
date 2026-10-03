@@ -51,7 +51,7 @@ func TestStageHunk_RetriesOnIndexLockContention(t *testing.T) {
 	r := &lockContendingRunner{inner: proc.ExecRunner{}, failUntil: 3}
 	ctx := context.Background()
 
-	if err := git.StageHunk(ctx, r, repo, "target.txt", 0); err != nil {
+	if err := stageAt(ctx, r, repo, "target.txt", 0); err != nil {
 		t.Fatalf("StageHunk should have succeeded after lock cleared: %v", err)
 	}
 	if r.applies <= r.failUntil {
@@ -76,7 +76,7 @@ func TestDiscardHunk_RetriesOnIndexLockContention(t *testing.T) {
 	r := &lockContendingRunner{inner: proc.ExecRunner{}, failUntil: 2}
 	ctx := context.Background()
 
-	if err := git.DiscardHunk(ctx, r, repo, "target.txt", 0); err != nil {
+	if err := discardAt(ctx, r, repo, "target.txt", 0); err != nil {
 		t.Fatalf("DiscardHunk should have succeeded after lock cleared: %v", err)
 	}
 	if r.applies <= r.failUntil {
@@ -92,15 +92,32 @@ func TestStageHunk_ExhaustsRetriesThenFails(t *testing.T) {
 	// failUntil is larger than the retry budget, so every attempt fails.
 	r := &lockContendingRunner{inner: proc.ExecRunner{}, failUntil: 1000}
 	ctx := context.Background()
+	git.SetLockRetryBudgetForTest(t, time.Second)
 
 	start := time.Now()
-	err := git.StageHunk(ctx, r, repo, "target.txt", 0)
+	err := stageAt(ctx, r, repo, "target.txt", 0)
 	if err == nil {
 		t.Fatal("StageHunk should fail when the lock never clears")
 	}
-	// Total backoff is bounded well under a minute; assert we did not hang.
-	if elapsed := time.Since(start); elapsed > 30*time.Second {
+	// The budget is time-based; assert we stopped near it rather than hanging.
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("retry loop took too long: %v", elapsed)
+	}
+	if r.applies < 2 {
+		t.Fatalf("expected several apply attempts within the budget, got %d", r.applies)
+	}
+}
+
+// TestStageHunk_LockRetryOutlastsAttemptCount covers GFS-26: a lock held for
+// longer than the old fixed attempt budget (8 tries, about 3 s) by a
+// pre-commit hook must still be waited out, because the budget is time-based.
+func TestStageHunk_LockRetryOutlastsAttemptCount(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := twoHunkFile(t)
+	// 10 failed attempts take about 0.05+0.1+0.2+0.4+0.8*6 = 5.55 s.
+	r := &lockContendingRunner{inner: proc.ExecRunner{}, failUntil: 10}
+	if err := stageAt(context.Background(), r, repo, "target.txt", 0); err != nil {
+		t.Fatalf("StageHunk should outlast a lock held for ~5 s: %v", err)
 	}
 }
 
@@ -112,7 +129,7 @@ func TestStageHunk_NonLockErrorDoesNotRetry(t *testing.T) {
 	r := &nonLockFailRunner{inner: proc.ExecRunner{}}
 	ctx := context.Background()
 
-	if err := git.StageHunk(ctx, r, repo, "target.txt", 0); err == nil {
+	if err := stageAt(ctx, r, repo, "target.txt", 0); err == nil {
 		t.Fatal("StageHunk should surface the non-lock error")
 	}
 	if r.applies != 1 {
