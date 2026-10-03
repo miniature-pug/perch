@@ -8,6 +8,7 @@ import (
 	modelpkg "github.com/miniature-pug/perch/internal/model"
 )
 
+// State is the coarse agent state a monitor reports.
 type State string
 
 const (
@@ -32,13 +33,16 @@ const (
 	StateExited State = "exited"
 )
 
+// Caps tells the UI which features the agent supports.
 type Caps struct {
 	Approvals bool `json:"approvals"`
 	Attention bool `json:"attention"`
 }
 
+// Decision is the user's verdict on an approval request.
 type Decision struct{ Allow, Always bool }
 
+// ApprovalReq describes one pending tool-permission request.
 type ApprovalReq struct {
 	ReqID   string `json:"reqId"`
 	Tool    string `json:"tool"`
@@ -63,6 +67,7 @@ type ApprovalReq struct {
 // to the same length.
 const MaxApprovalInputLen = 4096
 
+// Event is one state, approval or question update from a monitor.
 type Event struct {
 	WorkspaceID string       `json:"workspaceId"`
 	Kind        string       `json:"kind"`
@@ -84,6 +89,7 @@ type Event struct {
 	ResolvedReqID string `json:"resolvedReqId,omitempty"`
 }
 
+// Monitor watches one workspace's agent and reports its state.
 type Monitor interface {
 	Prepare(ctx context.Context, workspaceID, cwd, resumeID string) (launchCmd string, err error)
 	// PaneEnv returns extra KEY=VALUE entries to inject into the pane

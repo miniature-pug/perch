@@ -59,7 +59,7 @@ const (
 
 	// The HTTP server timeouts bound how long one connection can occupy the
 	// listener, and this closes the slowloris risk of an unbounded server.
-	// The hook listener omits WriteTimeout because its PreToolUse handler
+	// The hook listener omits WriteTimeout because its PermissionRequest handler
 	// blocks on human decision time. The sync handler differs: it always
 	// responds immediately, so a finite WriteTimeout is both safe and
 	// appropriate here.

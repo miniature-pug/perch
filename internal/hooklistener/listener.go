@@ -41,7 +41,7 @@ const (
 	//
 	// WriteTimeout stays unset on purpose. Go arms the write deadline at the end
 	// of the request-header read, and the deadline then covers the whole
-	// ServeHTTP lifetime. A finite WriteTimeout would abort a PreToolUse
+	// ServeHTTP lifetime. A finite WriteTimeout would abort a PermissionRequest
 	// approval while it waits for the user's decision. This wait is a human
 	// "think time", and it can rightly exceed any fixed bound.
 	// ReadHeaderTimeout and ReadTimeout still close the slowloris risk from slow
@@ -95,6 +95,7 @@ type Decision struct {
 	Abstain bool `json:"abstain"`
 }
 
+// HookEvent is one decoded hook POST.
 type HookEvent struct {
 	Type           string          `json:"hook_event_name"`
 	SessionID      string          `json:"session_id"`
@@ -113,6 +114,7 @@ type HookEvent struct {
 
 type pending struct{ ch chan Decision }
 
+// Listener is the per-session loopback HTTP server that receives hook POSTs.
 type Listener struct {
 	srv    *http.Server
 	ln     net.Listener
@@ -127,6 +129,7 @@ type Listener struct {
 	closeOnce sync.Once
 }
 
+// New starts a Listener on an ephemeral loopback port.
 func New() (*Listener, error) {
 	ln, err := net.Listen("tcp", LoopbackHost+":0")
 	if err != nil {
