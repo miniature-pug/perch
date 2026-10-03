@@ -2108,7 +2108,7 @@ func TestApp_MaybeAutoApprove_ExactMatch(t *testing.T) {
 	// The authoritative match key is the sha256 hash of the full input, not the
 	// (truncated, display-only) Pattern. A rule must carry a Hash and the incoming
 	// request must carry the matching InputHash.
-	_ = a.SaveSettings(Settings{AlwaysRules: []AlwaysRule{{Agent: "claude", Tool: "Bash", Pattern: "ls -la", Hash: hashInput("ls -la")}}})
+	_ = a.saveSettingsLocked(Settings{AlwaysRules: []AlwaysRule{{Agent: "claude", Tool: "Bash", Pattern: "ls -la", Hash: hashInput("ls -la")}}})
 
 	req := agent.ApprovalReq{ReqID: "raw1", Tool: "Bash", Input: "ls -la", InputHash: hashInput("ls -la")}
 	if !a.maybeAutoApprove("ws", "raw1", req, fm) {
@@ -2140,7 +2140,7 @@ func TestApp_MaybeAutoApprove_NoMatch(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			a, fm := newAlwaysTestApp(t, "claude", nil)
-			_ = a.SaveSettings(Settings{AlwaysRules: []AlwaysRule{tc.rule}})
+			_ = a.saveSettingsLocked(Settings{AlwaysRules: []AlwaysRule{tc.rule}})
 			if a.maybeAutoApprove("ws", tc.req.ReqID, tc.req, fm) {
 				t.Errorf("%s: must NOT auto-approve", tc.name)
 			}

@@ -2316,20 +2316,20 @@ func (a *App) HomeShellCwd() string {
 // saveSettingsLocked directly. Calling this public method there would
 // self-deadlock, because sync.Mutex is not reentrant.
 //
-// Residual limit (inherent to whole-blob replacement, not a cut corner): the
-// lock cannot stop a stale whole-blob overwrite. A frontend SaveSettings call
-// carrying a snapshot read before an Approve(always) append will still
-// clobber the new rule. This is last-writer-wins on a full-document PUT, not
-// a data race. Closing this gap fully would need a version field and a
-// compare-and-set. A naive "re-read and preserve on-disk AlwaysRules" merge
-// is not a valid fix, because it would break the frontend's legitimate
-// rule-deletion path: setAlwaysRules deliberately sends a shorter list, and a
-// preserve-merge would treat the missing rules as rules to resurrect. The
-// lock is the correct fix for the in-scope torn-write and concurrent-append
-// races.
+// SaveSettings never writes AlwaysRules: it keeps the rules already on
+// disk and ignores the incoming list. Rules change only through
+// Approve("always"), ApproveAlways and RemoveAlwaysRule, each of which does
+// its own read-modify-write under settingsMu. A frontend preference save
+// (theme, density, DND...) carries a snapshot of the rules read earlier, so
+// writing that snapshot back would drop a rule granted in between.
 func (a *App) SaveSettings(s Settings) error {
 	a.settingsMu.Lock()
 	defer a.settingsMu.Unlock()
+	cur, err := a.GetSettings()
+	if err != nil {
+		return err
+	}
+	s.AlwaysRules = cur.AlwaysRules
 	return a.saveSettingsLocked(s)
 }
 

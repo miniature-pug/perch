@@ -401,7 +401,7 @@ func TestSecFix_M13_TruncationCollision_DistinctHashRejects(t *testing.T) {
 	}
 
 	// Persist a rule for input A (with hash of full A, pattern = truncated display).
-	_ = a.SaveSettings(Settings{AlwaysRules: []AlwaysRule{
+	_ = a.saveSettingsLocked(Settings{AlwaysRules: []AlwaysRule{
 		{Agent: "claude", Tool: "Bash", Pattern: truncA, Hash: hashA},
 	}})
 

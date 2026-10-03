@@ -94,21 +94,6 @@ describe("settings store", () => {
     expect(settings.alwaysRules).toEqual([rule]);
   });
 
-  // setAlwaysRules is the authoritative writer. It must NOT re-read (that would
-  // race its own write) and must persist exactly what the caller gave it.
-  it("setAlwaysRules writes the given rules without re-reading the backend", async () => {
-    const { settings } = await import("./settings.svelte");
-    const w = await import("../wails");
-    await settings.load();
-    vi.mocked(w.getSettings).mockClear();
-    const rules = [{ agent: "claude", tool: "Edit", pattern: "x", hash: "h" }];
-    await settings.setAlwaysRules(rules);
-    expect(vi.mocked(w.getSettings)).not.toHaveBeenCalled();
-    expect(vi.mocked(w.saveSettings)).toHaveBeenCalledWith(
-      expect.objectContaining({ alwaysRules: rules }),
-    );
-  });
-
   // Issue B: staleThresholdDays must round-trip through load, then setTheme, then saveSettings.
   it("staleThresholdDays is preserved in SaveSettings payload after unrelated UI change", async () => {
     const w = await import("../wails");

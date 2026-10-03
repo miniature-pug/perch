@@ -50,11 +50,6 @@ class SettingsStore {
   async setDnd(v: boolean): Promise<void>                               { this.dnd = v; applyDnd(v); await this.persistPref(); }
   async setGlass(v: boolean): Promise<void>                             { this.glass = v;       await this.persistPref(); }
   async setStaleThresholdDays(v: number | undefined): Promise<void>     { this.staleThresholdDays = v; await this.persistPref(); }
-  // setAlwaysRules is the authoritative writer of rules. It must not
-  // reload, because a reload would race its own write. The frontend never
-  // appends rules; it only overwrites them, through the settings UI. Its
-  // in-memory alwaysRules value is therefore authoritative here.
-  async setAlwaysRules(v: AppSettings["alwaysRules"]): Promise<void>    { this.alwaysRules = v; await saveSettings(this.snap()); }
 
   // Remove specific rules. The backend removes each one under its settings
   // lock (RemoveAlwaysRule), so a rule granted concurrently can never be lost

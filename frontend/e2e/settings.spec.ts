@@ -7,7 +7,7 @@
  * Take a screenshot of the panel.
  *
  * IPC method under test: SaveSettings (from wails.ts, app().SaveSettings(s: AppSettings))
- * Settings store calls: setTheme, setDensity, setFont, setDnd, and setAlwaysRules.
+ * Settings store calls: setTheme, setDensity, setFont, and setDnd.
  * Each of these calls saveSettings, which calls app().SaveSettings(snap).
  */
 

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/miniature-pug/perch/internal/agent"
@@ -49,7 +50,7 @@ func TestApproveAlways_ReturnsAddedRule_UndoRemovesOnlyIt(t *testing.T) {
 func TestApproveAlways_DuplicateRuleIsNotReportedAsAdded(t *testing.T) {
 	a, _ := newAlwaysTestApp(t, "claude", nil)
 	existing := AlwaysRule{Agent: "claude", Tool: "Bash", Pattern: "ls", Hash: hashInput("ls")}
-	if err := a.SaveSettings(Settings{AlwaysRules: []AlwaysRule{existing}}); err != nil {
+	if err := a.saveSettingsLocked(Settings{AlwaysRules: []AlwaysRule{existing}}); err != nil {
 		t.Fatal(err)
 	}
 	a.pending = map[string]agent.ApprovalReq{
@@ -76,5 +77,34 @@ func TestApprove_AlwaysStillPersistsRule(t *testing.T) {
 	s, _ := a.GetSettings()
 	if len(s.AlwaysRules) != 1 {
 		t.Fatalf("rules = %+v, want one", s.AlwaysRules)
+	}
+}
+
+// A preference save carries a snapshot of the rules read before a later
+// "always" grant. SaveSettings must keep the rule on disk, not the snapshot.
+func TestSaveSettings_KeepsRulesGrantedSinceSnapshot(t *testing.T) {
+	cfgDir := t.TempDir()
+	a := &App{settingsPath: filepath.Join(cfgDir, "settings.json")}
+	snapshot, err := a.GetSettings() // no rules yet
+	if err != nil {
+		t.Fatal(err)
+	}
+	granted := AlwaysRule{Agent: "claude", Tool: "Bash", Pattern: "ls", Hash: hashInput("ls")}
+	if err := a.saveSettingsLocked(Settings{AlwaysRules: []AlwaysRule{granted}}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot.Theme = "gruvbox"
+	if err := a.SaveSettings(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	got, err := a.GetSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Theme != "gruvbox" {
+		t.Errorf("theme not saved: %q", got.Theme)
+	}
+	if len(got.AlwaysRules) != 1 || got.AlwaysRules[0].Hash != granted.Hash {
+		t.Errorf("rule granted after the snapshot was lost: %+v", got.AlwaysRules)
 	}
 }
