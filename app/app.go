@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -148,6 +149,11 @@ type App struct {
 	// Approve consumes the entry to resolve the tool and input for an
 	// always-rule; it never trusts frontend-supplied values. mu guards this map.
 	pending map[string]agent.ApprovalReq
+	// pendingSeq records the order in which pending approvals arrived, so
+	// PendingApprovals returns them in a stable order (APP-22a). pendingNext
+	// is the last sequence number handed out. mu guards both.
+	pendingSeq  map[string]uint64
+	pendingNext uint64
 
 	cancels map[string]context.CancelFunc // workspaceID → pump/translation canceller
 
@@ -194,6 +200,12 @@ type App struct {
 	// in memory only; it is never persisted to disk, because the payload may
 	// hold secrets. mu guards this map.
 	envOverlay map[string][]string
+
+	// envUnset holds, per workspace id, the baseline variable names a
+	// `perch reload` found unset in the session terminal. They are dropped
+	// from os.Environ() at every agent-pane and drawer spawn, so `unset FOO`
+	// followed by a reload reaches the agent. mu guards this map.
+	envUnset map[string][]string
 
 	// envsync is the app-owned loopback endpoint that receives a session
 	// terminal's environment and drives the relaunch. startup stands it up. It
@@ -330,7 +342,7 @@ func (a *App) startup(ctx context.Context) {
 	// "not in a perch session" error. This failure must never crash startup.
 	// No secret is involved in a bind failure.
 	if a.envsync == nil {
-		if ls, err := envsync.New(a.baselineEnv, a.onEnvSync); err == nil {
+		if ls, err := envsync.NewWithDelta(a.baselineEnv, a.onEnvSync); err == nil {
 			a.envsync = ls
 		} else {
 			fmt.Fprintf(os.Stderr, "perch: env-sync endpoint unavailable; `perch reload` disabled: %v\n", err)
@@ -386,6 +398,7 @@ func (a *App) shutdown(_ context.Context) {
 	// Reset pending approvals on shutdown so stale entries cannot outlive
 	// their workspaces.
 	a.pending = map[string]agent.ApprovalReq{}
+	a.pendingSeq = nil
 	a.mu.Unlock()
 
 	for _, c := range cancels {
@@ -913,27 +926,26 @@ func (a *App) WorkspaceForBranch(repoPath, branch string) (id string, found bool
 	return "", false
 }
 
-// hookRewriter is implemented by monitors whose Prepare installs shared,
-// sentinel-keyed hooks in the worktree settings.json (ClaudeMonitor). On
-// Reopen, OpenWorkspace re-asserts the live monitor's hooks through this seam,
-// after the displaced monitor's Teardown strips every perch hook group (see
-// the call site for the reason). Monitors with per-instance side channels,
-// such as opencode's SSE server, which assigns itself a fresh port and
-// listener on every Prepare, do not implement hookRewriter. These monitors
-// have no shared settings.json state to lose, so they have nothing to
-// re-assert.
-type hookRewriter interface{ RewriteHooks() error }
+// ErrWorktreeMissing is returned by OpenWorkspace when the session's
+// directory (or, for a linked worktree, its .git file) no longer exists,
+// for example because it was deleted outside perch. Opening it anyway would
+// run the agent in an empty, non-git directory. Remove the session instead.
+var ErrWorktreeMissing = errors.New("session directory is missing; remove the session")
 
 // OpenWorkspace opens a workspace. It runs these steps:
-//  1. It spawns a login-shell pty for the workspace.
+//  1. It checks that the agent CLI is installed. If it is not, it opens a
+//     plain shell, surfaces a blocking "Agent not found" notice, and skips
+//     the monitor entirely (no Prepare, no Start, no launch line).
 //  2. It calls Monitor.Prepare to get the agent launch command and install
 //     the side-channel.
-//  3. It starts the monitor's event pump.
-//  4. It writes the launch command into the pty.
-//  5. It forwards monitor events to the frontend.
+//  3. It spawns a login-shell pty for the workspace.
+//  4. It starts the monitor's event pump.
+//  5. It writes the launch command into the pty.
+//  6. It forwards monitor events to the frontend.
 //
 // A per-workspace context binds all goroutines; CloseWorkspace or shutdown
-// cancels that context.
+// cancels that context. Opening an already open workspace replaces its
+// session (reopen); the conversation resumes through LastSessionID.
 //
 // mon.Start(wctx) is required. Without it, no events ever flow from a real
 // monitor.
@@ -945,6 +957,22 @@ func (a *App) OpenWorkspace(id string) error {
 	// Serialize with every other lifecycle operation on this workspace.
 	unlock := a.lockWorkspace(id)
 	defer unlock()
+	return a.openWorkspace(id)
+}
+
+// openWorkspace is OpenWorkspace's body. The caller holds id's lifecycle
+// lock.
+func (a *App) openWorkspace(id string) error {
+	w, ok := a.store.Get(id)
+	if !ok {
+		return fmt.Errorf("unknown workspace %q", id)
+	}
+	if worktreeGone(w) {
+		return fmt.Errorf("open %q: %w", w.WorktreePath, ErrWorktreeMissing)
+	}
+	if fi, err := os.Stat(w.WorktreePath); err == nil && !fi.IsDir() {
+		return fmt.Errorf("open %q: not a directory: %w", w.WorktreePath, ErrWorktreeMissing)
+	}
 
 	// OpenWorkspace bumps LastActive when it opens the workspace.
 	// ListStaleSessions and the sidebar order both key on LastActive, so an
@@ -953,21 +981,16 @@ func (a *App) OpenWorkspace(id string) error {
 	// change before it spawns the pty, so the refreshed order survives even if
 	// a later step fails. Update touches only LastActive and never recreates a
 	// record that a concurrent remove already dropped.
-	w, err := a.store.Update(id, func(w *registry.Workspace) error {
+	if nw, err := a.store.Update(id, func(w *registry.Workspace) error {
 		w.LastActive = time.Now()
 		return nil
-	})
-	if errors.Is(err, registry.ErrNotFound) {
+	}); err == nil {
+		w = nw
+	} else if errors.Is(err, registry.ErrNotFound) {
 		return fmt.Errorf("unknown workspace %q", id)
 	}
-	if err != nil {
-		// A failed flush keeps the in-memory record unchanged; opening the
-		// session is still possible.
-		var ok bool
-		if w, ok = a.store.Get(id); !ok {
-			return fmt.Errorf("unknown workspace %q", id)
-		}
-	}
+	// Any other Update error is a failed flush; the in-memory record is
+	// unchanged and opening the session is still possible.
 
 	paneID := paneIDFor(id)
 	event := ptyDataEventPrefix + paneID
@@ -975,97 +998,87 @@ func (a *App) OpenWorkspace(id string) error {
 
 	wctx, cancel := context.WithCancel(context.Background())
 
+	// AGT-22: when the agent CLI is missing from PATH, OpenWorkspace neither
+	// prepares nor starts a monitor. Prepare would stand up listeners and
+	// settings files for an agent that can never connect, and writing the
+	// launch line would only print a raw "command not found". The shell still
+	// opens, so the user can install the agent from it.
+	//
+	// adpt is non-nil for every reachable case: newMonitor returns an error
+	// for any tool other than claude or opencode, and agentAdapter returns a
+	// non-nil adapter for both. A nil adpt is possible only through a test
+	// seam; it counts as present.
+	adpt := a.newAdapter(w.Agent)
+	agentMissing := adpt != nil && !adpt.Detect()
+
 	// OpenWorkspace prepares the monitor before it spawns the pty. Prepare
-	// creates the exit listener, and for claude it also writes the hooks.
-	// PaneEnv then yields the exit sentinel's PERCH_EXIT_TOKEN and
-	// PERCH_EXIT_URL. These values must be present in the shell's process
+	// creates the exit listener, and for claude it also writes the hook
+	// settings file. PaneEnv then yields the exit sentinel's PERCH_EXIT_TOKEN
+	// and PERCH_EXIT_URL. These values must be present in the shell's process
 	// environment at spawn time, because env is inherited at exec and is never
 	// echoed, unlike the typed launch line. A monitor or prepare failure needs
 	// no bridge cleanup, because the pty is not spawned yet.
-	adpt := a.newAdapter(w.Agent)
-	mon, err := a.newMonitor(w.Agent, adpt)
-	if err != nil {
-		cancel()
-		return fmt.Errorf("new monitor: %w", err)
+	var mon agent.Monitor
+	var launchCmd string
+	var injected []string
+	if !agentMissing {
+		var err error
+		mon, err = a.newMonitor(w.Agent, adpt)
+		if err != nil {
+			cancel()
+			return fmt.Errorf("new monitor: %w", err)
+		}
+		launchCmd, err = mon.Prepare(wctx, id, w.WorktreePath, w.LastSessionID)
+		if err != nil {
+			cancel()
+			_ = mon.Teardown()
+			return fmt.Errorf("monitor prepare: %w", err)
+		}
+		injected = mon.PaneEnv()
 	}
 
-	launchCmd, err := mon.Prepare(wctx, id, w.WorktreePath, w.LastSessionID)
-	if err != nil {
-		cancel()
-		_ = mon.Teardown()
-		return fmt.Errorf("monitor prepare: %w", err)
-	}
-
-	// OpenWorkspace composes the pane env. os.Environ() sits under the
-	// monitor's pane env (the exit sentinel's PERCH_EXIT_* handles, referenced
-	// by name), which sits under any env-sync overlay captured for this
-	// workspace, so a `perch reload` reaches the relaunched agent. mergeEnv
-	// removes duplicates and protects the sentinel from the overlay.
-	paneEnv := mergeEnv(os.Environ(), mon.PaneEnv(), a.overlayFor(id))
+	// OpenWorkspace composes the pane env. os.Environ(), minus the variables
+	// a `perch reload` reported as unset, sits under the monitor's pane env
+	// (the exit sentinel's PERCH_EXIT_* handles, referenced by name), which
+	// sits under any env-sync overlay captured for this workspace, so a
+	// `perch reload` reaches the relaunched agent. mergeEnv removes duplicates
+	// and protects the sentinel from the overlay.
+	overlay, unset := a.envFor(id)
+	paneEnv := mergeEnv(withoutKeys(os.Environ(), unset), injected, overlay)
 
 	br, err := a.spawnPty(wctx, w.WorktreePath, internalpty.LoginShellArgv(), paneEnv, event, exitEvent, a.emit, defaultPtyCols, defaultPtyRows)
 	if err != nil {
 		cancel()
-		_ = mon.Teardown()
+		if mon != nil {
+			_ = mon.Teardown()
+		}
 		return fmt.Errorf("spawn pty: %w", err)
 	}
 
 	// REQUIRED: start the monitor's event pump (translation/SSE), bound to wctx.
-	mon.Start(wctx)
+	if mon != nil {
+		mon.Start(wctx)
+	}
 
 	// OpenWorkspace wires the fs watcher with a debounce goroutine bound to
 	// wctx. OpenWorkspace starts the watcher non-fatally: if the watcher fails,
 	// OpenWorkspace continues with no watcher, and the failure never fails
 	// OpenWorkspace itself.
-	var watcher *fspkg.Watcher
-	if a.newWatcher != nil {
-		changes := make(chan string, fsChangeChanBuf)
-
-		// This debounce goroutine coalesces raw onChange signals into a single
-		// fs:changed emit per debounce window. wctx bounds its lifetime.
-		go func() {
-			defer safe.Recover("fs-debounce")
-			var timer *time.Timer
-			var timerC <-chan time.Time
-			for {
-				select {
-				case <-wctx.Done():
-					if timer != nil {
-						timer.Stop()
-					}
-					return
-				case <-changes:
-					if timer == nil {
-						timer = time.NewTimer(a.debounce)
-						timerC = timer.C
-					}
-					// else: within the window, so coalesce (do nothing)
-				case <-timerC:
-					a.emit("fs:changed", map[string]any{"workspaceId": id, "path": w.WorktreePath})
-					timer = nil
-					timerC = nil
-				}
-			}
-		}()
-
-		onChange := func(_ string) {
-			select {
-			case changes <- "":
-			default:
-			}
-		}
-		// best-effort: a watcher failure must not fail OpenWorkspace
-		if wch, werr := a.newWatcher(w.WorktreePath, onChange); werr == nil {
-			watcher = wch
-		}
-	}
+	watcher := a.startWatcher(wctx, id, w.WorktreePath)
 
 	a.mu.Lock()
 	oldBr := a.bridges[paneID]
 	oldMon := a.monitors[id]
 	oldCancel := a.cancels[id]
 	a.bridges[paneID] = br
-	a.monitors[id] = mon
+	if mon != nil {
+		a.monitors[id] = mon
+	} else {
+		delete(a.monitors, id)
+	}
+	if a.cancels == nil {
+		a.cancels = map[string]context.CancelFunc{}
+	}
 	// This composite cancel function cancels wctx, stopping all goroutines, and
 	// closes the watcher. CloseWorkspace, reopen displacement, and shutdown all
 	// use it.
@@ -1075,6 +1088,12 @@ func (a *App) OpenWorkspace(id string) error {
 			_ = watcher.Close()
 		}
 	}
+	// APP-9: the displaced monitor's pending approvals die with it. Left in
+	// a.pending, a webview reload would resurrect their cards, and answering
+	// one would route to the NEW monitor (Approve routes by workspace id),
+	// clearing its state while its real approval stays blocked. They are
+	// denied on the old monitor below, before its Teardown.
+	stalePending := a.takePendingLocked(id)
 	a.mu.Unlock()
 
 	// Disarm the displaced shell's pty:exit emit before oldCancel() runs. On
@@ -1084,13 +1103,16 @@ func (a *App) OpenWorkspace(id string) error {
 	// and re-latch the "session has ended" overlay. The disarm must precede
 	// oldCancel(), because that cancellation reaps the shell (spawned through
 	// exec.CommandContext(wctx, ...)) and can wake its reaper during
-	// oldMon.Teardown()'s file I/O, before oldBr.Close() below runs. This
-	// mirrors, for the bridge, the old-monitor exit-sentinel suppression that
-	// the Teardown-before-kill order already provides. A genuine agent or
-	// shell exit still emits; CloseWorkspace uses the normal Close() with no
-	// suppression.
+	// oldMon.Teardown()'s file I/O, before oldBr.Close() below runs. A genuine
+	// agent or shell exit still emits; CloseWorkspace uses the normal Close()
+	// with no suppression.
 	if oldBr != nil {
 		oldBr.SuppressExit()
+	}
+	if oldMon != nil {
+		for _, raw := range stalePending {
+			_ = oldMon.Approve(raw, agent.Decision{Allow: false})
+		}
 	}
 	if oldCancel != nil {
 		oldCancel()
@@ -1098,133 +1120,206 @@ func (a *App) OpenWorkspace(id string) error {
 	// OpenWorkspace tears down the old monitor, closing its exit listener,
 	// before it SIGKILLs the old pane's process group. This order means a late
 	// exit sentinel from the displaced shell has nowhere to land, so it cannot
-	// surface a spurious "Agent exited" notification on reopen.
+	// surface a spurious "Agent exited" notification on reopen. Each monitor
+	// owns its own side channel (claude: a per-session --settings file), so
+	// the old monitor's Teardown cannot disturb the new one.
 	if oldMon != nil {
 		_ = oldMon.Teardown()
-		// oldMon.Teardown() just stripped every perch hook group from the
-		// worktree settings.json. All monitors share one sentinel, so
-		// removeMonitorHooks cannot tell the new monitor's group from the old
-		// one. The new monitor's Prepare (above) already tried to write its
-		// group, but its merge is idempotent by that same shared sentinel:
-		// while the old group was still present, Prepare added nothing. The
-		// file now carries the old, dead listener address and token, or none
-		// at all. This code re-asserts the new monitor's hooks now that
-		// settings.json is clean, so the reopened agent posts SessionStart to
-		// a listener that perch is actually watching. Without this step, the
-		// reopened session becomes a silent zombie: no SessionStart fires, so
-		// no live event ever heals the overlay, and perch observes no state.
-		// This runs here, after teardown, rather than by reordering teardown
-		// before Prepare, so a failed new-agent spawn above still rolls back
-		// to the old session. The env-sync `perch reload` relaunch (onEnvSync)
-		// calls OpenWorkspace on a live agent, so the displaced monitor is not
-		// always a dead one.
-		if hr, ok := mon.(hookRewriter); ok {
-			_ = hr.RewriteHooks()
-		}
 	}
 	if oldBr != nil {
 		_ = oldBr.Close()
 	}
+	// The attention count changes when a monitor is replaced or dropped.
+	a.scheduleTitleUpdate()
 
-	if launchCmd != "" {
-		// adpt is non-nil here for every reachable case: newMonitor above
-		// returns an error for any tool other than claude or opencode, bailing
-		// out before this point, and agentAdapter returns a non-nil adapter
-		// for both of those tools. A nil adpt is possible only through a test
-		// seam that decouples newAdapter from newMonitor; that case
-		// deliberately falls through to the write. Do not rewrite this check
-		// to `adpt == nil || !adpt.Detect()`, which would nil-panic on
-		// adpt.Name().
-		if adpt != nil && !adpt.Detect() {
-			// The agent CLI is missing from PATH. OpenWorkspace skips writing
-			// the launch command, which would otherwise surface as a raw shell
-			// "command not found" error, and instead surfaces a clear,
-			// blocking signal. The shell stays usable.
-			a.emit("notify", map[string]any{
-				"tier":        "blocking",
-				"title":       "Agent not found",
-				"body":        fmt.Sprintf("%q is not installed or not on PATH. Install it, then reopen this session.", adpt.Name()),
-				"workspaceId": id,
-			})
-		} else {
-			_, _ = br.Write([]byte(launchCmd))
-		}
+	if agentMissing {
+		a.emit("notify", map[string]any{
+			"tier":        "blocking",
+			"title":       "Agent not found",
+			"body":        fmt.Sprintf("%q is not installed or not on PATH. Install it, then reopen this session.", adpt.Name()),
+			"workspaceId": id,
+		})
+		return nil
 	}
 
-	// This goroutine forwards monitor events to the frontend. It follows a
-	// forward-and-continue pattern: it emits the event and moves on, never
-	// blocking on a user decision. It exits on wctx cancellation, since
-	// mon.Events() is never closed.
+	if launchCmd != "" {
+		_, _ = br.Write([]byte(launchCmd))
+	}
+
+	go a.pumpEvents(wctx, id, mon)
+	return nil
+}
+
+// takePendingLocked removes every pending approval of workspace id and
+// returns their raw reqIDs. Pending keys have the form "<raw>:<workspaceID>";
+// validateSessionID forbids ':' in ids, so the suffix match is unambiguous.
+// The caller holds a.mu.
+func (a *App) takePendingLocked(id string) []string {
+	suffix := ":" + id
+	var raws []string
+	for k := range a.pending {
+		if strings.HasSuffix(k, suffix) {
+			raws = append(raws, k[:len(k)-len(suffix)])
+			a.deletePendingLocked(k)
+		}
+	}
+	return raws
+}
+
+// deletePendingLocked drops one pending approval and its order record. The
+// caller holds a.mu.
+func (a *App) deletePendingLocked(key string) {
+	delete(a.pending, key)
+	delete(a.pendingSeq, key)
+}
+
+// pumpEvents forwards monitor events to the frontend until wctx is
+// cancelled. It follows a forward-and-continue pattern: it emits the event
+// and moves on, never blocking on a user decision. mon.Events() is never
+// closed, so cancellation is the only exit.
+func (a *App) pumpEvents(wctx context.Context, id string, mon agent.Monitor) {
+	defer safe.Recover("workspace-event-pump")
+	for {
+		select {
+		case <-wctx.Done():
+			return
+		case evt, ok := <-mon.Events():
+			if !ok {
+				return
+			}
+			a.forwardEvent(id, mon, evt)
+		}
+	}
+}
+
+// forwardEvent handles one monitor event for workspace id.
+func (a *App) forwardEvent(id string, mon agent.Monitor, evt agent.Event) {
+	// This stamps WorkspaceID, so the frontend can match events to the
+	// correct workspace.
+	evt.WorkspaceID = id
+	// An approval that is no longer pending (perch's own verdict, an
+	// auto-approval, a CloseWorkspace deny, or a hook the agent cancelled
+	// because the user answered in its own TUI or it timed out) arrives as
+	// exactly one event carrying the RAW reqID. Drop the pending entry, so a
+	// reload never resurrects the card, and compose the id the frontend keys
+	// its queue on.
+	if evt.ResolvedReqID != "" {
+		composed := evt.ResolvedReqID + ":" + id
+		a.mu.Lock()
+		a.deletePendingLocked(composed)
+		a.mu.Unlock()
+		evt.ResolvedReqID = composed
+	}
+	// This composes the approval ReqID as "<raw>:<workspaceID>", so Approve()
+	// can parse and route it with strings.LastIndex(":"). It copies the
+	// ApprovalReq to avoid mutating the monitor's own pointee.
+	if evt.Approval != nil {
+		rawReqID := evt.Approval.ReqID
+		a2 := *evt.Approval
+		a2.ReqID = rawReqID + ":" + id
+		evt.Approval = &a2
+		// Always-allow auto-approval: if this request exactly matches a
+		// persisted rule, the app allows it silently and suppresses the card
+		// and the blocking notification. A routine notify keeps it visible.
+		if a.maybeAutoApprove(id, rawReqID, a2, mon) {
+			return
+		}
+		// This registers the pending approval, so Approve() can resolve the
+		// tool and input authoritatively when the user clicks Always. Only
+		// the workspace's CURRENT monitor may register one: a displaced
+		// monitor's late approval would otherwise be answered by its
+		// successor (Approve routes by workspace id). Such an approval is
+		// denied on the monitor that raised it and never surfaced.
+		a.mu.Lock()
+		current := a.monitors[id] == mon
+		if current {
+			if a.pending == nil {
+				a.pending = map[string]agent.ApprovalReq{}
+			}
+			if a.pendingSeq == nil {
+				a.pendingSeq = map[string]uint64{}
+			}
+			a.pendingNext++
+			a.pending[a2.ReqID] = a2
+			a.pendingSeq[a2.ReqID] = a.pendingNext
+		}
+		a.mu.Unlock()
+		if !current {
+			_ = mon.Approve(rawReqID, agent.Decision{Allow: false})
+			return
+		}
+	}
+	// Session-resume: when the agent reports a new session id, the app
+	// persists it, so the next OpenWorkspace call can pass it as resumeID. It
+	// validates the session id before persisting; an invalid id, for example
+	// one containing shell metacharacters, is silently dropped, so it can
+	// never be concatenated into a shell launch command later. Update writes
+	// only LastSessionID, and returns ErrNotFound instead of resurrecting a
+	// record a concurrent remove dropped.
+	if evt.SessionID != "" && validateSessionID(evt.SessionID) == nil {
+		if cur, ok := a.store.Get(id); ok && cur.LastSessionID != evt.SessionID {
+			_, _ = a.store.Update(id, func(w *registry.Workspace) error {
+				w.LastSessionID = evt.SessionID
+				return nil
+			})
+		}
+	}
+	a.emit("agent:event", evt)
+	a.dispatchNotify(evt)
+	// WIN #6: this is the single point every monitor event flows through,
+	// right beside the notify dispatch, so every state transition is observed
+	// here. This code recomputes the "need you" count and debounces a native
+	// window-title refresh.
+	a.scheduleTitleUpdate()
+}
+
+// startWatcher starts the fs watcher for root, bound to wctx, and returns it,
+// or nil when there is no watcher seam or the watcher fails to start.
+func (a *App) startWatcher(wctx context.Context, id, root string) *fspkg.Watcher {
+	if a.newWatcher == nil {
+		return nil
+	}
+	changes := make(chan string, fsChangeChanBuf)
+
+	// This debounce goroutine coalesces raw onChange signals into a single
+	// fs:changed emit per debounce window. wctx bounds its lifetime.
 	go func() {
-		defer safe.Recover("workspace-event-pump")
+		defer safe.Recover("fs-debounce")
+		var timer *time.Timer
+		var timerC <-chan time.Time
 		for {
 			select {
 			case <-wctx.Done():
+				if timer != nil {
+					timer.Stop()
+				}
 				return
-			case evt, ok := <-mon.Events():
-				if !ok {
-					return
+			case <-changes:
+				if timer == nil {
+					timer = time.NewTimer(a.debounce)
+					timerC = timer.C
 				}
-				// This stamps WorkspaceID, so the frontend can match events to
-				// the correct workspace.
-				evt.WorkspaceID = id
-				// This composes the approval ReqID as "<raw>:<workspaceID>", so
-				// Approve() can parse and route it with strings.LastIndex(":").
-				// It copies the ApprovalReq to avoid mutating the monitor's own
-				// pointee.
-				if evt.Approval != nil {
-					rawReqID := evt.Approval.ReqID
-					a2 := *evt.Approval
-					a2.ReqID = rawReqID + ":" + id
-					evt.Approval = &a2
-					// Always-allow auto-approval: if this request exactly
-					// matches a persisted rule, OpenWorkspace allows it
-					// silently and suppresses the card and the blocking
-					// notification. A routine notify keeps it visible.
-					if a.maybeAutoApprove(id, rawReqID, a2, mon) {
-						continue
-					}
-					// This registers the pending approval, so Approve() can
-					// resolve the tool and input authoritatively when the user
-					// clicks Always.
-					a.mu.Lock()
-					if a.pending == nil {
-						a.pending = map[string]agent.ApprovalReq{}
-					}
-					a.pending[a2.ReqID] = a2
-					a.mu.Unlock()
-				}
-				// Session-resume: when the agent reports a new session id,
-				// OpenWorkspace persists it, so the next OpenWorkspace call
-				// can pass it as resumeID. OpenWorkspace validates the session
-				// id before persisting; an invalid id, for example one
-				// containing shell metacharacters, is silently dropped, so it
-				// can never be concatenated into a shell launch command later.
-				// Update writes only LastSessionID, and returns ErrNotFound
-				// instead of resurrecting a record a concurrent remove dropped.
-				if evt.SessionID != "" && validateSessionID(evt.SessionID) == nil {
-					if cur, ok := a.store.Get(id); ok && cur.LastSessionID != evt.SessionID {
-						_, _ = a.store.Update(id, func(w *registry.Workspace) error {
-							w.LastSessionID = evt.SessionID
-							return nil
-						})
-					}
-				}
-				a.emit("agent:event", evt)
-				a.dispatchNotify(evt)
-				// WIN #6: this is the single point every monitor event flows
-				// through, right beside the notify dispatch, so every state
-				// transition is observed here. This code recomputes the "need
-				// you" count and debounces a native window-title refresh.
-				// Recomputing from live monitors keeps the count correct
-				// regardless of which event fired; the debounce coalesces
-				// bursts.
-				a.scheduleTitleUpdate()
+				// else: within the window, so coalesce (do nothing)
+			case <-timerC:
+				a.emit("fs:changed", map[string]any{"workspaceId": id, "path": root})
+				timer = nil
+				timerC = nil
 			}
 		}
 	}()
 
-	return nil
+	onChange := func(_ string) {
+		select {
+		case changes <- "":
+		default:
+		}
+	}
+	// best-effort: a watcher failure must not fail OpenWorkspace
+	wch, werr := a.newWatcher(root, onChange)
+	if werr != nil {
+		return nil
+	}
+	return wch
 }
 
 // maybeAutoApprove auto-allows an incoming approval request when the request
@@ -1324,12 +1419,7 @@ func (a *App) dispatchNotify(evt agent.Event) {
 		// card). Keys have the form "<raw>:<workspaceID>".
 		a.mu.Lock()
 		_, live := a.monitors[evt.WorkspaceID]
-		suffix := ":" + evt.WorkspaceID
-		for k := range a.pending {
-			if strings.HasSuffix(k, suffix) {
-				delete(a.pending, k)
-			}
-		}
+		a.takePendingLocked(evt.WorkspaceID)
 		a.mu.Unlock()
 		// This suppresses a spurious "Agent exited" notification on
 		// intentional teardown. CloseWorkspace, displacement, and shutdown
@@ -1481,15 +1571,11 @@ func (a *App) closeWorkspace(id string) {
 	// releases a.mu. A blocked claude hook POST or opencode permission call
 	// would otherwise hang until its own timeout, once the workspace closes
 	// out from under it.
-	suffix := ":" + id
-	var pendingRaw []string
-	for k := range a.pending {
-		if strings.HasSuffix(k, suffix) {
-			pendingRaw = append(pendingRaw, k[:len(k)-len(suffix)])
-			delete(a.pending, k)
-		}
-	}
+	pendingRaw := a.takePendingLocked(id)
 	a.mu.Unlock()
+	// A closed session's drawers are gone, so their env-sync token must stop
+	// working; the overlay itself is kept for the next open.
+	a.forgetEnv(id, false)
 
 	// CloseWorkspace denies each in-flight approval through the monitor before
 	// teardown, so the agent's blocked hook returns promptly instead of
@@ -1584,6 +1670,7 @@ func (a *App) RemoveWorkspace(id string) error {
 
 // forgetWorkspace drops id's registry record.
 func (a *App) forgetWorkspace(id string) error {
+	a.forgetEnv(id, true)
 	return a.store.Remove(id)
 }
 
@@ -1852,7 +1939,8 @@ func (a *App) OpenShell(paneID, cwd string) error {
 				"PERCH_BIN="+a.perchBin,
 			)
 		}
-		env = mergeEnv(os.Environ(), injected, a.overlayFor(workspaceID))
+		overlay, unset := a.envFor(workspaceID)
+		env = mergeEnv(withoutKeys(os.Environ(), unset), injected, overlay)
 	}
 	br, err := a.spawnPty(ctx, cwd, internalpty.LoginShellArgv(), env, event, exitEvent, a.emit, defaultPtyCols, defaultPtyRows)
 	if err != nil {
@@ -2187,14 +2275,27 @@ func (a *App) PendingApprovals() []PendingApprovalVM {
 	// This returns an empty, never nil, slice, so it marshals to [] rather
 	// than null.
 	out := make([]PendingApprovalVM, 0, len(a.pending))
-	for key, req := range a.pending {
-		sep := strings.LastIndex(key, ":")
-		if sep < 0 {
-			continue // malformed key: skip rather than mis-route
+	keys := make([]string, 0, len(a.pending))
+	for key := range a.pending {
+		if strings.LastIndex(key, ":") >= 0 { // skip a malformed key rather than mis-route
+			keys = append(keys, key)
 		}
+	}
+	// Arrival order, so a reload rebuilds each workspace's queue in the same
+	// order every time (map iteration is random). Entries without a recorded
+	// sequence sort first, by key.
+	sort.Slice(keys, func(i, j int) bool {
+		si, sj := a.pendingSeq[keys[i]], a.pendingSeq[keys[j]]
+		if si != sj {
+			return si < sj
+		}
+		return keys[i] < keys[j]
+	})
+	for _, key := range keys {
+		sep := strings.LastIndex(key, ":")
 		out = append(out, PendingApprovalVM{
 			WorkspaceID: key[sep+1:],
-			Req:         req,
+			Req:         a.pending[key],
 		})
 	}
 	return out
@@ -2243,7 +2344,7 @@ func (a *App) Approve(reqID, decision string) error {
 	// across workspaces.
 	a.mu.Lock()
 	req, hadPending := a.pending[reqID]
-	delete(a.pending, reqID)
+	a.deletePendingLocked(reqID)
 	a.mu.Unlock()
 
 	if d.Always && hadPending && req.Tool != "" && req.Input != "" {
@@ -2278,8 +2379,13 @@ func (a *App) Approve(reqID, decision string) error {
 			})
 			// settingsMu is already held here, so this calls the unlocked
 			// inner helper to avoid a re-entrant deadlock; SaveSettings would
-			// otherwise re-take settingsMu.
-			_ = a.saveSettingsLocked(s)
+			// otherwise re-take settingsMu. The request itself is already
+			// allowed, so a failed write is reported as such: the user must
+			// learn that the rule was not saved and will prompt again.
+			if err := a.saveSettingsLocked(s); err != nil {
+				a.settingsMu.Unlock()
+				return fmt.Errorf("allowed, but could not save the always-allow rule: %w", err)
+			}
 		}
 		a.settingsMu.Unlock()
 	}

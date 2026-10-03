@@ -654,13 +654,6 @@ func (m *ClaudeMonitor) PaneEnv() []string {
 	return exitPaneEnv(m.listener)
 }
 
-// RewriteHooks is kept for app.OpenWorkspace's hookRewriter seam and is now
-// a no-op. Hooks used to live in the shared worktree settings.json, where a
-// displaced monitor's Teardown stripped the new monitor's group; each
-// monitor now owns its own settings file, so a reopen has nothing to
-// re-assert. The caller may drop the RewriteHooks call.
-func (m *ClaudeMonitor) RewriteHooks() error { return nil }
-
 // cleanupLegacyWorktreeHooks removes a `.claude/settings.json` that an
 // older perch version left in the worktree, but ONLY when the file holds
 // nothing except perch's own hook groups or nothing at all (`{}`, or

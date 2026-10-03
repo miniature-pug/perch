@@ -158,6 +158,9 @@ func TestE2E_HeadlessFullLoop(t *testing.T) {
 	}
 
 	// ── keep a.newMonitor at its default (real ClaudeMonitor) ────────────────
+	// The adapter is real but always reports claude as installed, so the test
+	// does not depend on the host PATH.
+	a.newAdapter = realAdapterPresent
 
 	// ── CreateWorkspace ───────────────────────────────────────────────────────
 	// Use "feat/e2e" to avoid collision with the repo's default "main" branch.
@@ -200,15 +203,16 @@ func TestE2E_HeadlessFullLoop(t *testing.T) {
 	}
 	t.Logf("bug-1: dataEvent=%q exitEvent=%q paneID=%q — all locked", capturedDataEvent, capturedExitEvent, vm.PaneID)
 
-	// ── extract addr + token from the written settings.json ──────────────────
-	// writeHooks runs synchronously inside Prepare (called by OpenWorkspace), so
-	// the file exists immediately after OpenWorkspace returns.
-	settingsJSON := filepath.Join(worktreePath, ".claude", "settings.json")
+	// ── extract addr + token from the monitor's hook settings file ───────────
+	// Prepare (called by OpenWorkspace) writes the per-session settings file
+	// that claude loads with --settings, so it exists once OpenWorkspace
+	// returns.
+	settingsJSON := hookSettingsPath(t, a, wsID)
 	raw, err := os.ReadFile(settingsJSON)
 	if err != nil {
-		t.Fatalf("read worktree settings.json: %v", err)
+		t.Fatalf("read hook settings file: %v", err)
 	}
-	t.Logf("worktree settings.json:\n%s", raw)
+	t.Logf("hook settings file:\n%s", raw)
 
 	// Extract token via "Bearer <token>".
 	tokenRe := regexp.MustCompile(`Bearer (\S+)`)
@@ -243,7 +247,7 @@ func TestE2E_HeadlessFullLoop(t *testing.T) {
 		"PERCH_HOOK_URL="+hookURL,
 		"PERCH_HOOK_TOKEN="+token,
 		"PERCH_SESSION_ID=ses_e2e-test",
-		"PERCH_SCRIPT=SessionStart;PreToolUse,tool=Write,input={};Stop",
+		"PERCH_SCRIPT=SessionStart;PermissionRequest,tool=Write,input={};Stop",
 	)
 	agentCmd := exec.CommandContext(ctx, fakeAgentBin)
 	agentCmd.Env = agentEnv

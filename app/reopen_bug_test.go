@@ -5,12 +5,12 @@
 // bridges. It reproduces two combining backend defects behind the stuck "session
 // has ended" overlay and silent-zombie reopen. It locks in both fixes:
 //
-//	D1 (hooks lost on reopen): after Reopen, <worktree>/.claude/settings.json must
-//	   carry the NEW monitor's LIVE listener addr and token. It must not carry the
-//	   old, dead one, and it must not be an empty file. This way, the reopened
-//	   agent's hooks POST SessionStart to a listener that perch actually watches.
-//	   The test proves the listener is LIVE: it POSTs a SessionStart to the addr
-//	   and token read back from the file, and it observes StateRunning flow through.
+//	D1 (hooks lost on reopen): after Reopen, the new monitor's own hook settings
+//	   file (claude --settings <file>) must carry its LIVE listener addr and
+//	   token, not the old, dead one. This way, the reopened agent's hooks POST
+//	   to a listener that perch actually watches. The test proves the listener
+//	   is LIVE: it POSTs hooks to the addr and token read back from the file,
+//	   and it observes StateRunning flow through.
 //	D2 (stale pty:exit re-latches the overlay): closing the DISPLACED login-shell
 //	   bridge must NOT emit on the shared "pty:exit:pane-<id>" name, or the
 //	   remounted Terminal would catch the stale exit and re-latch the overlay.
@@ -36,8 +36,38 @@ import (
 	"github.com/miniature-pug/perch/internal/registry"
 )
 
+// presentAdapter wraps a real adapter but always reports the agent CLI as
+// installed, so these tests exercise the real monitor on hosts without the
+// claude binary (OpenWorkspace skips the monitor when Detect is false).
+type presentAdapter struct{ agent.Adapter }
+
+func (presentAdapter) Detect() bool { return true }
+
+// realAdapterPresent is a newAdapter seam that returns the real adapter for
+// tool, wrapped in presentAdapter.
+func realAdapterPresent(tool string) agent.Adapter {
+	if ad := agentAdapter(tool); ad != nil {
+		return presentAdapter{ad}
+	}
+	return nil
+}
+
+// hookSettingsPath returns the per-session hook settings file of the live
+// claude monitor of workspace id (claude --settings <file>).
+func hookSettingsPath(t *testing.T, a *App, id string) string {
+	t.Helper()
+	a.mu.Lock()
+	m := a.monitors[id]
+	a.mu.Unlock()
+	cm, ok := m.(*agent.ClaudeMonitor)
+	if !ok {
+		t.Fatalf("workspace %s has no live ClaudeMonitor (got %T)", id, m)
+	}
+	return cm.HookSettingsPath()
+}
+
 // hookAddrToken extracts the loopback addr (host:port) and the hex Bearer token
-// from a worktree settings.json file. The claude monitor's hooks write this file.
+// from a claude monitor's per-session hook settings file.
 // hookAddrToken fails the test if either value is absent. An absent token is
 // itself the D1 symptom: Teardown stripped every perch group, and nothing
 // re-asserted the new one.
@@ -136,8 +166,9 @@ func TestOpenWorkspace_ReopenAfterExit_RewritesHooksAndSilencesStaleExit(t *test
 		emit internalpty.EmitFunc, cols, rows uint16) (*internalpty.Bridge, error) {
 		return internalpty.Spawn(sctx, cwd, []string{"sleep", "3600"}, env, dataEvent, exitEvent, emit, cols, rows)
 	}
-	// newMonitor and newAdapter stay at their real defaults (real ClaudeMonitor and
-	// real hook listener).
+	// newMonitor stays at its real default (real ClaudeMonitor and real hook
+	// listener); the adapter is real but always reports claude as installed.
+	a.newAdapter = realAdapterPresent
 
 	// ── create + open (monitor-1) ─────────────────────────────────────────────
 	vm, err := a.CreateWorkspace("claude", repo, "main", "feat/reopen", "", true)
@@ -145,8 +176,6 @@ func TestOpenWorkspace_ReopenAfterExit_RewritesHooksAndSilencesStaleExit(t *test
 		t.Fatalf("CreateWorkspace: %v", err)
 	}
 	wsID := vm.ID
-	worktreePath := vm.WorktreePath
-	settingsPath := filepath.Join(worktreePath, ".claude", "settings.json")
 	paneExitEvent := "pty:exit:" + paneIDFor(wsID)
 
 	if err := a.OpenWorkspace(wsID); err != nil {
@@ -154,7 +183,8 @@ func TestOpenWorkspace_ReopenAfterExit_RewritesHooksAndSilencesStaleExit(t *test
 	}
 	t.Cleanup(func() { _ = a.CloseWorkspace(wsID) })
 
-	addr1, token1 := hookAddrToken(t, settingsPath)
+	settings1 := hookSettingsPath(t, a, wsID)
+	addr1, token1 := hookAddrToken(t, settings1)
 	t.Logf("monitor-1 hook addr=%s token=%s…", addr1, token1[:8])
 
 	// ── simulate a graceful agent /exit (shell survives): the exit sentinel POSTs
@@ -178,23 +208,29 @@ func TestOpenWorkspace_ReopenAfterExit_RewritesHooksAndSilencesStaleExit(t *test
 		t.Fatalf("OpenWorkspace (reopen): %v", err)
 	}
 
-	// ── D1 assertion: settings.json now carries monitor-2's NEW, LIVE creds ─────
-	addr2, token2 := hookAddrToken(t, settingsPath)
+	// ── D1 assertion: monitor-2's own settings file carries NEW, LIVE creds ─────
+	settings2 := hookSettingsPath(t, a, wsID)
+	addr2, token2 := hookAddrToken(t, settings2)
 	t.Logf("monitor-2 hook addr=%s token=%s…", addr2, token2[:8])
 	if token2 == token1 {
-		t.Fatalf("D1: settings.json still carries the OLD listener token after reopen — "+
+		t.Fatalf("D1: the reopened session still carries the OLD listener token — "+
 			"the reopened agent would POST to a dead listener (token1=%s)", token1)
 	}
-	// Prove the credentials are LIVE. POST a SessionStart to the addr and token read
-	// back from the file. The SessionStart must flow through monitor-2 as
-	// StateRunning. This shows that the reopened agent CAN heal the overlay, and
-	// perch CAN observe the session.
+	if settings2 == settings1 {
+		t.Fatalf("D1: reopen reused monitor-1's settings file %s", settings1)
+	}
+	// Prove the credentials are LIVE. POST a SessionStart (idle) and then a
+	// UserPromptSubmit (running) to the addr and token read back from the file.
+	// The prompt must flow through monitor-2 as StateRunning. This shows that
+	// the reopened agent CAN heal the overlay, and perch CAN observe the
+	// session.
 	postHook(t, addr2, token2, `{"hook_event_name":"SessionStart","session_id":"ses_reopen"}`)
+	postHook(t, addr2, token2, `{"hook_event_name":"UserPromptSubmit","session_id":"ses_reopen"}`)
 	if _, ok := pollEvent(t, time.Now().Add(10*time.Second), &emitMu, &emitted, func(e capturedEmit) bool {
 		ev, ok := e.data.(agent.Event)
 		return e.event == "agent:event" && ok && ev.State == agent.StateRunning && ev.WorkspaceID == wsID
 	}); !ok {
-		t.Fatalf("D1: reopened agent's SessionStart to %s produced no StateRunning — hooks are not live", addr2)
+		t.Fatalf("D1: reopened agent's hooks to %s produced no StateRunning — hooks are not live", addr2)
 	}
 
 	// ── D2 assertion: closing the displaced shell must NOT emit pty:exit on the
