@@ -22,13 +22,13 @@ describe("ThemeProvider", () => {
   it("updates data-theme on prop change", async () => {
     const { default: ThemeProvider } = await import("./ThemeProvider.svelte");
     const { rerender } = render(ThemeProvider, { props: { theme: "nord" } });
-    await rerender({ props: { theme: "dracula" } });
+    await rerender({ theme: "dracula" });
     expect(document.documentElement.getAttribute("data-theme")).toBe("dracula");
   });
   it("updates data-density on prop change", async () => {
     const { default: ThemeProvider } = await import("./ThemeProvider.svelte");
     const { rerender } = render(ThemeProvider, { props: { theme: "gruvbox", density: "comfortable" } });
-    await rerender({ props: { theme: "gruvbox", density: "ultra" } });
+    await rerender({ theme: "gruvbox", density: "ultra" });
     expect(document.documentElement.getAttribute("data-density")).toBe("ultra");
   });
   it("defaults data-glass to 'on'", async () => {
@@ -44,7 +44,7 @@ describe("ThemeProvider", () => {
   it("updates data-glass on prop change", async () => {
     const { default: ThemeProvider } = await import("./ThemeProvider.svelte");
     const { rerender } = render(ThemeProvider, { props: { theme: "gruvbox", glass: true } });
-    await rerender({ props: { theme: "gruvbox", glass: false } });
+    await rerender({ theme: "gruvbox", glass: false });
     expect(document.documentElement.getAttribute("data-glass")).toBe("off");
   });
 });

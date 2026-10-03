@@ -270,7 +270,7 @@ describe("Terminal.svelte", () => {
     vi.mocked(w.resizePty).mockClear();
 
     // Flip the state from hidden to visible: the effect schedules a double rAF, then a debounced resize.
-    await rerender({ props: { paneId: "paneVis", cwd: "/repo", visible: true } });
+    await rerender({ paneId: "paneVis", cwd: "/repo", visible: true });
     flushRaf(); // The outer rAF then schedules the inner one.
     flushRaf(); // The inner rAF then calls refit().
     expect(fitSpy).toHaveBeenCalled();

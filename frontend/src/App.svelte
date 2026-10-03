@@ -349,6 +349,10 @@
   // split terminal keeps its live xterm buffer across split on and off toggles.
   const splitZoneEl = $derived(layout.splitId ? termZoneEls[layout.splitId] : undefined);
 
+  // Visible sessions. This excludes any session pending an optimistic removal.
+  const pendingRemovalIds = $derived(new Set(pendingRemovals.map(p => p.ws.id)));
+  const visibleWorkspaces = $derived(workspaces.filter(w => !pendingRemovalIds.has(w.id)));
+
   // Apply the user-defined order. Ids in layout.order come first, in that order.
   // The remaining sessions, not yet in the order, follow in backend order.
   const orderedWorkspaces = $derived((() => {
@@ -396,10 +400,6 @@
   const repoInfoByPath = $derived<Record<string, RepoInfo>>(
     Object.fromEntries(discoveredRepos.map(r => [r.path, r]))
   );
-
-  // Visible sessions. This excludes any session pending an optimistic removal.
-  const pendingRemovalIds = $derived(new Set(pendingRemovals.map(p => p.ws.id)));
-  const visibleWorkspaces = $derived(workspaces.filter(w => !pendingRemovalIds.has(w.id)));
 
   // Off-functions captured from wails event subscriptions. onMount subscribes to
   // these synchronously.
@@ -1137,7 +1137,7 @@
     { id: "view:diff",  group: "View", label: "Diff view",   keybinding: "3",  run: () => layout.setView("diff")  },
     { id: "view:split", group: "View", label: "Split",       keybinding: "\\", run: () => layout.toggleSplit()   },
     { id: "view:theme", group: "View", label: "Cycle theme",                   run: () => {
-        const idx = THEMES.indexOf(settings.theme);
+        const idx = (THEMES as readonly string[]).indexOf(settings.theme);
         settings.setTheme(THEMES[(idx + 1) % THEMES.length]);
       },
     },
@@ -1421,7 +1421,7 @@
 
 <svelte:window onkeydown={onKeyDown} />
 
-<ThemeProvider theme={settings.theme} density={settings.density} font={settings.font} glass={!(settings.glassDisabled ?? false)}>
+<ThemeProvider theme={settings.theme} density={settings.density} font={settings.font} glass={settings.glass}>
   <div class="app-root" onpointerdowncapture={onAppPointerDown}>
     <MenuBar onCommand={(id) => runCommand(id)} {unreadCount} />
 

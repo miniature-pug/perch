@@ -5284,3 +5284,22 @@ describe("App.svelte Batch-1 interaction findings", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Audit regressions (FEC / FEX). Each test pins one defect found in the
+// frontend audit.
+// ---------------------------------------------------------------------------
+describe("audit regressions: App wiring", () => {
+  it("FEC-8: the persisted Glass setting reaches ThemeProvider (data-glass)", async () => {
+    const { settings } = await import("./lib/stores/settings.svelte");
+    (settings as any).glass = false;
+    try {
+      const { default: App } = await import("./App.svelte");
+      render(App);
+      await tick();
+      expect(document.documentElement.getAttribute("data-glass")).toBe("off");
+    } finally {
+      delete (settings as any).glass;
+    }
+  });
+});

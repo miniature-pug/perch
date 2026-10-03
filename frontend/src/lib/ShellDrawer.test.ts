@@ -75,13 +75,13 @@ test("collapsed=true prop hides the shell region; collapsed=false shows it", asy
   expect(screen.getByRole("region", { name: /shell/i })).toBeInTheDocument();
 
   // Switch to collapsed via prop
-  await rerender({ props: { paneId: "shell-1", cwd: "/wt", collapsed: true } });
+  await rerender({ paneId: "shell-1", cwd: "/wt", collapsed: true });
   await tick();
   expect(screen.queryByRole("region", { name: /shell/i })).toBeNull();
   expect(screen.getByRole("button", { name: /expand/i })).toBeInTheDocument();
 
   // Switch back to expanded
-  await rerender({ props: { paneId: "shell-1", cwd: "/wt", collapsed: false } });
+  await rerender({ paneId: "shell-1", cwd: "/wt", collapsed: false });
   await tick();
   await waitFor(() => expect(screen.getByRole("region", { name: /shell/i })).toBeInTheDocument());
 });
