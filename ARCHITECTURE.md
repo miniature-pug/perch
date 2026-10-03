@@ -142,6 +142,18 @@ backgrounded `opencode serve` itself when `attach` exits. The launch lines are
 POSIX `sh`; when the login shell is fish, nushell, elvish, csh/tcsh or
 PowerShell, the line is typed as `sh -c '…'` instead.
 
+A line typed before the shell's line editor starts sits in the tty input
+queue, already echoed, where an rc file that drains or flushes stdin (`read
+-t`, `tcflush`, an OSC 11 colour query, a passphrase prompt) can swallow it.
+`Bridge.WaitShellReady(ctx, maxWait)` waits for the editor instead. The output
+pump watches for the bracketed-paste enable `ESC[?2004h` (bash 5.1+, zsh,
+fish, nushell), split across chunks or not, without altering the stream.
+The wait then returns true once that marker is current, the shell is the
+tty's foreground process group (`TIOCGPGRP` on the master), and the tty is
+non-canonical. A line editor without the marker counts as ready after 750ms
+of foreground non-canonical mode. A shell left in canonical mode at its
+prompt (dash) runs to `maxWait`, and the caller then types anyway.
+
 ### The agent Monitor seam
 
 Each agent implements `agent.Monitor` (`internal/agent/monitor.go`):

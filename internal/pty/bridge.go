@@ -38,6 +38,9 @@ type Bridge struct {
 	reaped bool
 	// pid is the shell's pid (0 for a test bridge without a process).
 	pid int
+	// gate tracks shell readiness for WaitShellReady (nil for a test bridge
+	// without a process). It is set before the pump starts and never changes.
+	gate *readyGate
 }
 
 // Write sends p to the pty. Write does not hold mu while it writes: a
@@ -83,6 +86,9 @@ func (b *Bridge) Close() error {
 	c := b.closer
 	b.closer = nil
 	b.ptyFile = nil
+	if b.gate != nil {
+		b.gate.markClosed()
+	}
 	return c()
 }
 
@@ -159,6 +165,10 @@ func LoginShellArgv() []string {
 // append(os.Environ(), extra...), to preserve the inherited environment. A
 // nil env leaves cmd.Env unset, so Go inherits the current process
 // environment unchanged (the plain-shell case).
+//
+// A caller that types a line into the shell right after spawning it (the
+// agent launch line) should first call WaitShellReady, or an rc file that
+// drains or flushes stdin can swallow the line after the tty has echoed it.
 func Spawn(ctx context.Context, cwd string, argv []string, env []string, dataEvent, exitEvent string, emit EmitFunc, cols, rows uint16) (*Bridge, error) {
 	return spawn(ctx, cwd, argv, env, dataEvent, exitEvent, emit, cols, rows, intsPayload)
 }
@@ -198,9 +208,30 @@ func spawn(ctx context.Context, cwd string, argv []string, env []string, dataEve
 	if err != nil {
 		return nil, fmt.Errorf("pty Spawn: start %q: %w", argv[0], err)
 	}
+	// The readiness probe reads the tty state through RawControl, which
+	// (unlike f.Fd) leaves the fd non-blocking and fails cleanly once f is
+	// closed.
+	rawConn, err := f.SyscallConn()
+	if err != nil {
+		b.mu.Lock()
+		b.killSessionLocked(cmd)
+		b.mu.Unlock()
+		_ = f.Close()
+		_ = cmd.Wait()
+		return nil, fmt.Errorf("pty Spawn: %w", err)
+	}
+	gate := newReadyGate(cmd.Process.Pid, func() (pgrp int, canonical bool, err error) {
+		if cerr := rawConn.Control(func(fd uintptr) {
+			pgrp, canonical, err = ttyState(fd)
+		}); cerr != nil {
+			return 0, false, cerr
+		}
+		return pgrp, canonical, err
+	})
 	b.mu.Lock()
 	b.ptyFile = f
 	b.pid = cmd.Process.Pid
+	b.gate = gate
 	b.setsize = func(c, r uint16) error {
 		return creackpty.Setsize(f, &creackpty.Winsize{Cols: c, Rows: r})
 	}
@@ -227,8 +258,9 @@ func spawn(ctx context.Context, cwd string, argv []string, env []string, dataEve
 		// reaped below. A panicking reader must never leak the process.
 		func() {
 			defer safe.Recover("pty-pump")
-			pump(f, dataEvent, emit, maxChunk, encode)
+			pump(f, dataEvent, emit, maxChunk, encode, gate.observe)
 		}()
+		gate.markClosed()
 		// Pump returned ⇒ pty EOF ⇒ the process is ending. Wait for it to
 		// exit WITHOUT reaping it, then mark it reaped under b.mu, and only
 		// then reap it. A concurrent Close therefore either finishes its
@@ -289,16 +321,20 @@ func base64Payload(chunk []byte) any {
 }
 
 func pumpReader(r io.Reader, event string, emit EmitFunc, maxChunk int) {
-	pump(r, event, emit, maxChunk, intsPayload)
+	pump(r, event, emit, maxChunk, intsPayload, nil)
 }
 
 // pump reads r until an error, and emits each chunk read (at most maxChunk
-// bytes) on event, encoded by encode.
-func pump(r io.Reader, event string, emit EmitFunc, maxChunk int, encode func([]byte) any) {
+// bytes) on event, encoded by encode. A non-nil observe sees each chunk
+// first; it must not modify or retain it.
+func pump(r io.Reader, event string, emit EmitFunc, maxChunk int, encode func([]byte) any, observe func([]byte)) {
 	buf := make([]byte, maxChunk)
 	for {
 		n, err := r.Read(buf)
 		if n > 0 {
+			if observe != nil {
+				observe(buf[:n])
+			}
 			emit(event, encode(buf[:n]))
 		}
 		if err != nil {

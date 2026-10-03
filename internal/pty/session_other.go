@@ -9,3 +9,7 @@ func killSession(int) {}
 // waitExited returns at once where waitid(WNOWAIT) is unavailable. The
 // reaper then marks the shell reaped just before cmd.Wait reaps it.
 func waitExited(int) {}
+
+// ttyState is unsupported here: WaitShellReady then relies on the
+// bracketed-paste marker alone.
+func ttyState(uintptr) (int, bool, error) { return 0, false, errTTYUnsupported }

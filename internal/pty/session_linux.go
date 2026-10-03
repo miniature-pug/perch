@@ -78,3 +78,20 @@ func waitExited(pid int) {
 		}
 	}
 }
+
+// ttyState reads, through the pty master fd, the terminal's foreground
+// process group (TIOCGPGRP) and whether its line discipline is in canonical
+// mode (ICANON in the termios TCGETS returns, which on Linux is the slave's).
+func ttyState(fd uintptr) (pgrp int, canonical bool, err error) {
+	var pg int32
+	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, syscall.TIOCGPGRP,
+		uintptr(unsafe.Pointer(&pg))); errno != 0 {
+		return 0, false, errno
+	}
+	var t syscall.Termios
+	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, syscall.TCGETS,
+		uintptr(unsafe.Pointer(&t))); errno != 0 {
+		return 0, false, errno
+	}
+	return int(pg), t.Lflag&syscall.ICANON != 0, nil
+}
