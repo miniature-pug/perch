@@ -112,9 +112,11 @@ type Monitor interface {
 // from each emitted Event.State. CurrentState() returns it, and defaults to
 // StateIdle when unset. The field `lastTool string` is set from
 // Event.Approval.Tool on each approval event. LastApprovalTool() returns it.
-// app.ListWorkspaces reads CurrentState(). app.Approve reads
-// LastApprovalTool() to persist an AlwaysRule. These accessors are part of
-// the Monitor contract.
+// app.ListWorkspaces reads CurrentState(). No production code reads
+// LastApprovalTool(): app.Approve resolves the tool and input of an
+// always-rule from its own record of the approval it surfaced, never from
+// this racy "most recent" accessor. LastApprovalTool() stays in the contract
+// for tests and diagnostics.
 
 func NewMonitor(tool string, adapter Adapter) (Monitor, error) {
 	switch tool {

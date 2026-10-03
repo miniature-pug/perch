@@ -88,12 +88,11 @@ const (
 	// defaultStaleThresholdDays is the number of days of inactivity after which a
 	// worktree session is considered stale and shown in the cleanup panel banner.
 	defaultStaleThresholdDays = 30
-	// ptyMinDim / ptyMaxDim bound the pty dimensions the backend accepts. The
-	// frontend already clamps to the same range (PTY_MAX_DIM in constants.ts), but
-	// the backend must not trust that: a 0 dimension is invalid for a terminal and
-	// the cap matches the uint16 max the frontend enforces.
+	// ptyMinDim is the smallest pty dimension the backend accepts. The
+	// frontend already clamps (PTY_MAX_DIM in constants.ts), but the backend
+	// must not trust that: a 0 dimension is invalid for a terminal. The upper
+	// bound is the uint16 parameter type itself.
 	ptyMinDim = 1
-	ptyMaxDim = 65535
 )
 
 // spawnPtyFunc and newMonitorFunc are injectable seams. NewApp wires them to
@@ -135,10 +134,9 @@ type App struct {
 
 	// settingsMu guards the GetSettings→check-duplicate→append→SaveSettings
 	// read-modify-write sequence in Approve, and the GetSettings read in
-	// maybeAutoApprove. Code must never acquire settingsMu while a.mu is held.
-	// The lock order is a.mu first, then settingsMu; never nest a.mu inside
-	// settingsMu. This lock stops concurrent Approve(always) calls from losing
-	// rules.
+	// maybeAutoApprove. settingsMu and a.mu are never nested, in either
+	// order: no code holds one while acquiring the other. This lock stops
+	// concurrent Approve(always) calls from losing rules.
 	settingsMu sync.Mutex
 
 	// pending maps a composed approval reqID ("<raw>:<workspaceID>") to the
@@ -219,6 +217,9 @@ type App struct {
 	// timer.
 	titleMu    sync.Mutex
 	titleTimer *time.Timer
+	// titleClosed is set by shutdown; scheduleTitleUpdate then does nothing.
+	// titleMu guards it.
+	titleClosed bool
 
 	// opMu guards opLocks. opLocks holds one mutex per workspace id while any
 	// lifecycle operation on that id is running or waiting. OpenWorkspace,
@@ -271,7 +272,7 @@ func (a *App) lockWorkspace(id string) (unlock func()) {
 func NewApp(store *registry.Store, roots []string) *App {
 	return &App{
 		store:        store,
-		roots:        roots,
+		roots:        normalizeRoots(roots),
 		run:          proc.ExecRunner{},
 		emit:         func(string, ...any) {},
 		bridges:      map[string]*internalpty.Bridge{},
@@ -289,6 +290,29 @@ func NewApp(store *registry.Store, roots []string) *App {
 		baselineEnv:  os.Environ(),
 		envOverlay:   map[string][]string{},
 	}
+}
+
+// normalizeRoots makes every root absolute and clean, and drops empty and
+// duplicate entries. Every path check compares absolute paths against the
+// roots, so a relative root (perch ., a relative config entry) would
+// otherwise reject everything (APP-4).
+func normalizeRoots(roots []string) []string {
+	out := make([]string, 0, len(roots))
+	seen := map[string]bool{}
+	for _, r := range roots {
+		if strings.TrimSpace(r) == "" {
+			continue
+		}
+		abs, err := filepath.Abs(r)
+		if err != nil {
+			continue
+		}
+		if !seen[abs] {
+			seen[abs] = true
+			out = append(out, abs)
+		}
+	}
+	return out
 }
 
 // runner returns the configured process runner. When run is unset, runner
@@ -421,6 +445,7 @@ func (a *App) shutdown(_ context.Context) {
 	// does not fire a WindowSetTitle call into a window that shutdown is
 	// tearing down.
 	a.titleMu.Lock()
+	a.titleClosed = true
 	if a.titleTimer != nil {
 		a.titleTimer.Stop()
 	}
@@ -434,6 +459,10 @@ func (a *App) putBridge(paneID string, b *internalpty.Bridge) {
 	a.bridges[paneID] = b
 	a.mu.Unlock()
 	if old != nil {
+		// The new pane reuses the old pane's pty:exit event name, so the
+		// displaced shell must not announce its exit: the frontend would
+		// treat it as the NEW shell exiting and close it (APP-11).
+		old.SuppressExit()
 		_ = old.Close()
 	}
 }
@@ -667,6 +696,11 @@ func (a *App) attentionCount() int {
 func (a *App) scheduleTitleUpdate() {
 	a.titleMu.Lock()
 	defer a.titleMu.Unlock()
+	if a.titleClosed {
+		// shutdown ran: a pump still mid-event must not re-arm the timer and
+		// call WindowSetTitle on a torn-down window.
+		return
+	}
 	if a.titleTimer != nil {
 		a.titleTimer.Stop()
 	}
@@ -762,7 +796,7 @@ func (a *App) CreateWorkspace(agentName, repoPath, baseRef, branch, title string
 	if worktree {
 		// Collision check: CreateWorkspace rejects the request if another worktree
 		// session already owns this branch.
-		if _, found := a.WorkspaceForBranch(repoPath, branch); found {
+		if _, found := a.workspaceForBranch(repoPath, branch); found {
 			return WorkspaceVM{}, fmt.Errorf("create worktree: %w", gitpkg.ErrBranchInUse)
 		}
 
@@ -812,6 +846,13 @@ func (a *App) CreateWorkspace(agentName, repoPath, baseRef, branch, title string
 			return WorkspaceVM{}, fmt.Errorf("current branch: %w", err)
 		}
 		if branch != current {
+			// Switching the shared checkout moves every open session in it to
+			// the new branch, so refuse while another one is open.
+			for _, other := range a.store.List() {
+				if other.WorktreePath == repoPath && a.isOpen(other.ID) {
+					return WorkspaceVM{}, fmt.Errorf("checkout branch: %w", ErrCheckoutInUse)
+				}
+			}
 			dirty, err := gitpkg.WorktreeDirty(ctx, a.runner(), repoPath)
 			if err != nil {
 				return WorkspaceVM{}, fmt.Errorf("check worktree: %w", err)
@@ -920,11 +961,27 @@ func (a *App) SetWorkspaceTitle(id, title string) error {
 	return nil
 }
 
-// WorkspaceForBranch returns the ID of the worktree session that tracks branch
-// in repoPath, if any exists. WorkspaceForBranch considers only worktree
-// sessions (Worktree==true); non-worktree sessions may share a branch by
-// design.
-func (a *App) WorkspaceForBranch(repoPath, branch string) (id string, found bool) {
+// BranchOwner is WorkspaceForBranch's result: the id of the worktree session
+// that tracks the branch, and whether one exists.
+type BranchOwner struct {
+	ID    string `json:"id"`
+	Found bool   `json:"found"`
+}
+
+// WorkspaceForBranch reports which worktree session tracks branch in
+// repoPath, if any. It considers only worktree sessions (Worktree==true);
+// non-worktree sessions may share a branch by design.
+//
+// It returns one struct, not (id, found): Wails resolves a two-value method
+// to its first value unless the second is an error, so a bool second result
+// would never reach the frontend (APP-1).
+func (a *App) WorkspaceForBranch(repoPath, branch string) BranchOwner {
+	id, found := a.workspaceForBranch(repoPath, branch)
+	return BranchOwner{ID: id, Found: found}
+}
+
+// workspaceForBranch is WorkspaceForBranch for Go callers.
+func (a *App) workspaceForBranch(repoPath, branch string) (id string, found bool) {
 	for _, w := range a.store.List() {
 		if w.Worktree && w.RepoPath == repoPath && w.Branch == branch {
 			return w.ID, true
@@ -932,6 +989,12 @@ func (a *App) WorkspaceForBranch(repoPath, branch string) (id string, found bool
 	}
 	return "", false
 }
+
+// ErrCheckoutInUse is returned by CreateWorkspace when an in-repo session
+// would switch the branch of a repository checkout that another open session
+// is working in (APP-18). The other session's agent would silently start
+// editing the new branch while its record still names the old one.
+var ErrCheckoutInUse = errors.New("another open session is working in this checkout; close it or use a worktree session")
 
 // ErrWorktreeMissing is returned by OpenWorkspace when the session's
 // directory (or, for a linked worktree, its .git file) no longer exists,
@@ -1581,14 +1644,12 @@ func (a *App) ResizePty(paneID string, cols, rows uint16) error {
 	return br.Resize(clampPtyDim(cols), clampPtyDim(rows))
 }
 
-// clampPtyDim bounds a pty dimension to [ptyMinDim, ptyMaxDim]. A 0 dimension is
-// invalid for a terminal and becomes ptyMinDim; anything over ptyMaxDim is capped.
+// clampPtyDim raises a pty dimension to at least ptyMinDim. A 0 dimension is
+// invalid for a terminal. The uint16 parameter already caps the upper end at
+// 65535, the maximum the frontend enforces.
 func clampPtyDim(v uint16) uint16 {
 	if v < ptyMinDim {
 		return ptyMinDim
-	}
-	if v > ptyMaxDim {
-		return ptyMaxDim
 	}
 	return v
 }
@@ -1993,17 +2054,34 @@ func (a *App) cleanupSession(id string, force bool) error {
 // OpenShell spawns a $SHELL -l pty for the shell drawer pane (paneID) in cwd.
 // Output flows to the "pty:data:<paneID>" event. OpenShell is separate from
 // agent panes, so the shell drawer has its own independent pty.
+//
+// paneID must be the home shell ("shell-home") or a workspace drawer
+// ("shell-<id>" or "shell-<id>_<n>") of a workspace in the registry; any
+// other id, including an agent pane "pane-<id>", is rejected. The home shell
+// always starts in HomeShellCwd and ignores cwd. A workspace drawer's cwd
+// must lie inside that workspace's tree and under a configured root.
 func (a *App) OpenShell(paneID, cwd string) error {
 	if err := validateSessionID(paneID); err != nil {
 		return fmt.Errorf("invalid pane id: %w", err)
 	}
-	// The home shell pane ("shell-home") has an OS-derived cwd (HomeShellCwd).
-	// This cwd is not user IPC input, and it is almost never under a
-	// configured project root, so OpenShell bypasses the root-containment
-	// guard for this pane alone. All other panes still validate.
-	if paneID != homeShellPaneID {
+	if paneID == homeShellPaneID {
+		// The home shell has no workspace and is almost never under a
+		// configured root. Its cwd is derived here, not taken from IPC.
+		cwd = a.HomeShellCwd()
+	} else {
+		workspaceID := workspaceIDForShellPane(paneID)
+		if workspaceID == "" || validateSessionID(workspaceID) != nil {
+			return fmt.Errorf("invalid pane id %q: not a shell drawer pane", paneID)
+		}
+		w, ok := a.store.Get(workspaceID)
+		if !ok {
+			return fmt.Errorf("invalid pane id %q: unknown workspace %q", paneID, workspaceID)
+		}
 		if err := validateWorktreeUnderRoots(cwd, a.roots); err != nil {
 			return fmt.Errorf("invalid shell cwd: %w", err)
+		}
+		if err := validateWorktreeUnderRoots(cwd, []string{w.WorktreePath}); err != nil {
+			return fmt.Errorf("invalid shell cwd: not inside the workspace tree: %w", err)
 		}
 	}
 	event := ptyDataEventPrefix + paneID
@@ -2089,7 +2167,7 @@ func (a *App) GetSettings() (Settings, error) {
 		}
 		return defaultSettings(), nil
 	}
-	return s, nil
+	return normalizeSettings(s), nil
 }
 
 // defaultSettings is the source of truth for settings defaults; the frontend
@@ -2097,7 +2175,32 @@ func (a *App) GetSettings() (Settings, error) {
 // defaults on first run (no settings file) and when an existing settings
 // file is corrupt.
 func defaultSettings() Settings {
-	return Settings{Theme: defaultTheme, Density: defaultDensity, Font: defaultFont, StaleThresholdDays: defaultStaleThresholdDays}
+	return Settings{
+		Theme:              defaultTheme,
+		Density:            defaultDensity,
+		Font:               defaultFont,
+		StaleThresholdDays: defaultStaleThresholdDays,
+		AlwaysRules:        []AlwaysRule{},
+	}
+}
+
+// normalizeSettings fills what a stored settings file may lack: an absent or
+// null alwaysRules becomes [] (the settings panel reads .length on it), and a
+// blank theme, density or font falls back to its default.
+func normalizeSettings(s Settings) Settings {
+	if s.AlwaysRules == nil {
+		s.AlwaysRules = []AlwaysRule{}
+	}
+	if s.Theme == "" {
+		s.Theme = defaultTheme
+	}
+	if s.Density == "" {
+		s.Density = defaultDensity
+	}
+	if s.Font == "" {
+		s.Font = defaultFont
+	}
+	return s
 }
 
 // quarantineCorrupt renames path to a timestamped .corrupt-* backup and
@@ -2272,26 +2375,27 @@ func (a *App) WriteFile(absPath, content string) error {
 	// absPath does not exist; this is truly a new file. WriteFile validates
 	// it by checking:
 	//   1. The parent dir must exist and resolve inside roots.
-	//   2. The cleaned absPath must be lexically under the resolved parent,
-	//      which guards against ".." or other path escapes in the filename
-	//      component.
-	parentDir := filepath.Dir(absPath)
-	if err := validateWorktreeUnderRoots(parentDir, a.roots); err != nil {
-		return err
-	}
+	//   2. The final component must be a plain name, not "." or "..". The
+	//      file is then written as that name inside the RESOLVED parent, so
+	//      a symlinked root or ancestor (for example /home -> /var/home)
+	//      works, and the write lands exactly where the check looked (APP-12).
 	cleanAbs := filepath.Clean(absPath)
 	if !filepath.IsAbs(cleanAbs) {
 		return fmt.Errorf("WriteFile: path must be absolute")
+	}
+	parentDir := filepath.Dir(cleanAbs)
+	if err := validateWorktreeUnderRoots(parentDir, a.roots); err != nil {
+		return err
+	}
+	name := filepath.Base(cleanAbs)
+	if name == "." || name == ".." || name == string(filepath.Separator) {
+		return fmt.Errorf("WriteFile: path %q has no file name", absPath)
 	}
 	resolvedParent, err := filepath.EvalSymlinks(parentDir)
 	if err != nil {
 		return fmt.Errorf("WriteFile: resolve parent %q: %w", parentDir, err)
 	}
-	expectedPrefix := resolvedParent + string(filepath.Separator)
-	if cleanAbs != resolvedParent && !strings.HasPrefix(cleanAbs, expectedPrefix) {
-		return fmt.Errorf("WriteFile: path %q escapes its parent dir", absPath)
-	}
-	return fspkg.WriteFile(absPath, []byte(content))
+	return fspkg.WriteFile(filepath.Join(resolvedParent, name), []byte(content))
 }
 
 // RevealInFiles opens the containing directory of absPath in the system file manager.
@@ -2588,14 +2692,14 @@ type RepoInfo struct {
 }
 
 // DiscoverRepos discovers git repositories under all configured roots and
-// returns a deduplicated, frontend-ready slice. It orders the slice by
-// frecency, falling back to alphabetical order on a cold start. DiscoverRepos
-// is for the New Session dialog on a fresh install, when there are no
-// existing workspaces.
+// returns a deduplicated, frontend-ready slice sorted by name, then path.
+// DiscoverRepos is for the New Session dialog on a fresh install, when there
+// are no existing workspaces.
 //
-// DiscoverRepos runs best-effort: it silently skips per-root errors, and it
-// returns an error only when every root fails. It returns an empty, non-nil
-// slice when it finds no repositories.
+// DiscoverRepos runs best-effort. A root that fails or times out still
+// contributes the repositories found before it stopped. It returns an error
+// only when it found nothing and every root failed. It returns an empty,
+// non-nil slice when it finds no repositories.
 func (a *App) DiscoverRepos() ([]RepoInfo, error) {
 	// byPath deduplicates across many roots.
 	byPath := make(map[string]struct{})
@@ -2616,10 +2720,12 @@ func (a *App) DiscoverRepos() ([]RepoInfo, error) {
 		)
 		cancel()
 		if err != nil {
+			// discover.Projects returns the projects found so far with
+			// ctx.Err() on a timeout; keep them.
 			lastErr = err
-			continue
+		} else {
+			okCount++
 		}
-		okCount++
 
 		for _, pt := range pts {
 			if _, seen := byPath[pt.Project.Path]; seen {
@@ -2655,9 +2761,17 @@ func (a *App) DiscoverRepos() ([]RepoInfo, error) {
 		}
 	}
 
-	if okCount == 0 && lastErr != nil {
+	if okCount == 0 && len(out) == 0 && lastErr != nil {
 		return nil, lastErr
 	}
+	// Each root's list is sorted on its own; sort the merged list so several
+	// roots read as one alphabetical list.
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Name != out[j].Name {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].Path < out[j].Path
+	})
 	return out, nil
 }
 

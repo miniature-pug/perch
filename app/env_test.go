@@ -217,7 +217,15 @@ func openShellCapturesEnv(t *testing.T, paneID, cwd string, ls *envsync.Listener
 	t.Helper()
 	var mu sync.Mutex
 	var captured []string
+	store, err := registry.Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id := workspaceIDForShellPane(paneID); id != "" && paneID != homeShellPaneID {
+		_ = store.Upsert(registry.Workspace{ID: id, WorktreePath: cwd, Agent: "claude"})
+	}
 	a := &App{
+		store:      store,
 		roots:      []string{cwd},
 		emit:       func(string, ...any) {},
 		bridges:    map[string]*internalpty.Bridge{},

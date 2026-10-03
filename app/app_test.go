@@ -1074,7 +1074,8 @@ func TestApp_WorkspaceForBranch_Hit(t *testing.T) {
 	})
 	a := &App{store: store, roots: []string{"/home/me"}}
 
-	id, found := a.WorkspaceForBranch("/home/me/proj", "feat-x")
+	owner := a.WorkspaceForBranch("/home/me/proj", "feat-x")
+	id, found := owner.ID, owner.Found
 	if !found {
 		t.Fatal("want found=true")
 	}
@@ -1090,7 +1091,7 @@ func TestApp_WorkspaceForBranch_Miss(t *testing.T) {
 	store, _ := registry.Load(cfgDir)
 	a := &App{store: store}
 
-	_, found := a.WorkspaceForBranch("/home/me/proj", "feat-x")
+	found := a.WorkspaceForBranch("/home/me/proj", "feat-x").Found
 	if found {
 		t.Fatal("want found=false for empty registry")
 	}
@@ -1116,7 +1117,7 @@ func TestApp_WorkspaceForBranch_IgnoresNonWorktree(t *testing.T) {
 	})
 	a := &App{store: store}
 
-	_, found := a.WorkspaceForBranch("/home/me/proj", "main")
+	found := a.WorkspaceForBranch("/home/me/proj", "main").Found
 	if found {
 		t.Fatal("WorkspaceForBranch must not return non-worktree sessions")
 	}
@@ -1604,7 +1605,8 @@ func TestApp_OpenShell_HomeShellPaneID_NotRequiresRoot(t *testing.T) {
 	store, _ := registry.Load(cfgDir)
 	homeCwd := t.TempDir() // NOT under any configured root
 	spawned := false
-	a := &App{
+	var a *App
+	a = &App{
 		store:    store,
 		roots:    []string{"/some/project/root"},
 		emit:     func(string, ...any) {},
@@ -1613,8 +1615,10 @@ func TestApp_OpenShell_HomeShellPaneID_NotRequiresRoot(t *testing.T) {
 		spawnPty: func(_ context.Context, cwd string, argv []string, _ []string, dataEvent, exitEvent string,
 			emit internalpty.EmitFunc, cols, rows uint16) (*internalpty.Bridge, error) {
 			spawned = true
-			if cwd != homeCwd {
-				return nil, fmt.Errorf("unexpected cwd %q, want %q", cwd, homeCwd)
+			// APP-21: the home shell's cwd comes from HomeShellCwd, never
+			// from the IPC argument.
+			if want := a.HomeShellCwd(); cwd != want {
+				return nil, fmt.Errorf("unexpected cwd %q, want %q", cwd, want)
 			}
 			return internalpty.NewBridgeForTest(func() error { return nil }), nil
 		},
@@ -1661,7 +1665,10 @@ func TestApp_OpenShell_SpawnsAndEmits(t *testing.T) {
 
 	shellCwd := t.TempDir()
 	spawnCalled := false
+	store, _ := registry.Load(t.TempDir())
+	_ = store.Upsert(registry.Workspace{ID: "1", WorktreePath: shellCwd, Agent: "claude"})
 	a := &App{
+		store:    store,
 		emit:     emit,
 		roots:    []string{shellCwd},
 		bridges:  map[string]*internalpty.Bridge{},
