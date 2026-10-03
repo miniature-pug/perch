@@ -30,20 +30,20 @@ func (h hookRunner) Run(ctx context.Context, name string, args ...string) ([]byt
 // an emit capture. spawn, when set, replaces the default fake spawnPty.
 type lifecycleApp struct {
 	*App
-	mu   sync.Mutex
-	recs []emitRec
-	mons []*agent.FakeMonitor
+	recMu sync.Mutex // guards recs and mons; App.mu is l.mu
+	recs  []emitRec
+	mons  []*agent.FakeMonitor
 }
 
 func (l *lifecycleApp) snapshot() []emitRec {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.recMu.Lock()
+	defer l.recMu.Unlock()
 	return append([]emitRec(nil), l.recs...)
 }
 
 func (l *lifecycleApp) lastMonitor() *agent.FakeMonitor {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.recMu.Lock()
+	defer l.recMu.Unlock()
 	if len(l.mons) == 0 {
 		return nil
 	}
@@ -68,9 +68,9 @@ func newLifecycleApp(t *testing.T, roots []string) *lifecycleApp {
 		cancels:      map[string]context.CancelFunc{},
 		settingsPath: cfgDir + "/settings.json",
 		emit: func(event string, data ...any) {
-			l.mu.Lock()
+			l.recMu.Lock()
 			l.recs = append(l.recs, emitRec{event, data})
-			l.mu.Unlock()
+			l.recMu.Unlock()
 		},
 		spawnPty: func(_ context.Context, _ string, _ []string, _ []string, _, _ string,
 			_ internalpty.EmitFunc, _, _ uint16) (*internalpty.Bridge, error) {
@@ -78,9 +78,9 @@ func newLifecycleApp(t *testing.T, roots []string) *lifecycleApp {
 		},
 		newMonitor: func(_ string, _ agent.Adapter) (agent.Monitor, error) {
 			fm := agent.NewFakeMonitor(nil)
-			l.mu.Lock()
+			l.recMu.Lock()
 			l.mons = append(l.mons, fm)
-			l.mu.Unlock()
+			l.recMu.Unlock()
 			return fm, nil
 		},
 		newAdapter: fakeAdapterSeam(&fakeAdapter{name: "claude", detect: true}),
@@ -235,5 +235,41 @@ func TestApp_RemoveWorkspace_StopsSessionBeforeDeletingTree(t *testing.T) {
 		if fm := l.lastMonitor(); !fm.TornDown() {
 			t.Errorf("force=%v: monitor not torn down", force)
 		}
+	}
+}
+
+// TestApp_OpenShellDuringRemove_DoesNotLeak is the review #5 regression
+// guard: a drawer the frontend respawns while RemoveWorkspace runs (after
+// the shells were closed, before git deleted the tree) must wait for the
+// removal and then fail, not leave a shell behind.
+func TestApp_OpenShellDuringRemove_DoesNotLeak(t *testing.T) {
+	repo := t.TempDir()
+	tree := linkedWorktreeDir(t)
+	l := newLifecycleApp(t, []string{repo, tree})
+	_ = l.store.Upsert(registry.Workspace{ID: "ws-rm", RepoPath: repo, WorktreePath: tree, Worktree: true, Agent: "claude", Branch: "feat"})
+	fr := proc.NewFakeRunner()
+	fr.Respond(proc.FakeResult{}, "git", "-C", tree, "status", "--porcelain")
+	fr.Respond(proc.FakeResult{}, "git", "-C", repo, "worktree", "remove", tree)
+	shellErr := make(chan error, 1)
+	l.run = hookRunner{Runner: fr, before: func(args []string) {
+		if len(args) >= 4 && args[2] == "worktree" && args[3] == "remove" {
+			go func() { shellErr <- l.OpenShell("shell-ws-rm_1", tree) }()
+			time.Sleep(20 * time.Millisecond) // let it reach the lock
+		}
+	}}
+	if err := l.OpenWorkspace("ws-rm"); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.RemoveWorkspace("ws-rm"); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-shellErr; err == nil {
+		t.Error("OpenShell racing RemoveWorkspace succeeded")
+	}
+	l.mu.Lock()
+	_, leaked := l.bridges["shell-ws-rm_1"]
+	l.mu.Unlock()
+	if leaked {
+		t.Error("a drawer shell outlived RemoveWorkspace")
 	}
 }

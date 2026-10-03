@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -264,8 +265,8 @@ func TestApp_Remove_RevokesEnvsyncAndDropsOverlay(t *testing.T) {
 	tok1, _ := ls.TokenFor("ws-v")
 	l.onEnvSync("ws-v", envsync.Delta{Set: []string{"A=1"}, Unset: []string{"B"}})
 	waitFor(t, "relaunch", func() bool {
-		l.mu.Lock()
-		defer l.mu.Unlock()
+		l.recMu.Lock()
+		defer l.recMu.Unlock()
 		return len(l.mons) >= 2
 	})
 
@@ -310,5 +311,117 @@ func TestApp_ApproveAlways_SaveErrorReturned(t *testing.T) {
 	}
 	if c := l.lastMonitor().ApproveCalls(); len(c) != 1 || !c[0].D.Allow {
 		t.Errorf("the request itself must still be allowed; calls = %+v", c)
+	}
+}
+
+// resolvingMonitor mimics ClaudeMonitor: Approve immediately enqueues the
+// approval's resolution event, which the event pump forwards.
+// afterSend, when set, runs after the event is queued and before Approve
+// returns; the test uses it to let the pump win the race deterministically.
+type resolvingMonitor struct {
+	*agent.FakeMonitor
+	ch        chan agent.Event
+	afterSend func(reqID string)
+}
+
+func (m *resolvingMonitor) Events() <-chan agent.Event { return m.ch }
+func (m *resolvingMonitor) Approve(reqID string, d agent.Decision) error {
+	_ = m.FakeMonitor.Approve(reqID, d)
+	m.ch <- agent.Event{Kind: "state", State: agent.StateRunning, ResolvedReqID: reqID}
+	if m.afterSend != nil {
+		m.afterSend(reqID)
+	}
+	return nil
+}
+
+// TestApp_ApproveAlways_RuleSurvivesPumpResolution is the review #2
+// regression guard: the pump deleting the pending entry on the resolution
+// event must not make Approve(always) skip saving the rule.
+func TestApp_ApproveAlways_RuleSurvivesPumpResolution(t *testing.T) {
+	l := newLifecycleApp(t, nil)
+	_ = l.store.Upsert(registry.Workspace{ID: "ws", WorktreePath: t.TempDir(), Agent: "claude"})
+	mon := &resolvingMonitor{FakeMonitor: agent.NewFakeMonitor(nil), ch: make(chan agent.Event, 16)}
+	// Return from Approve only once the pump has consumed the resolution
+	// and dropped the pending entry: the interleaving that lost rules.
+	mon.afterSend = func(raw string) {
+		waitFor(t, "pump resolution", func() bool {
+			l.mu.Lock()
+			defer l.mu.Unlock()
+			_, ok := l.pending[raw+":ws"]
+			return !ok
+		})
+	}
+	l.monitors["ws"] = mon
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go l.pumpEvents(ctx, "ws", mon)
+	const n = 20
+	for i := 0; i < n; i++ {
+		raw := fmt.Sprintf("r%d", i)
+		l.mu.Lock()
+		l.pending[raw+":ws"] = agent.ApprovalReq{ReqID: raw + ":ws", Tool: "Bash", Input: raw, InputHash: "h" + raw}
+		l.mu.Unlock()
+		if err := l.Approve(raw+":ws", "always"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s, err := l.GetSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.AlwaysRules) != n {
+		t.Errorf("saved %d always-rules, want %d (the pump's delete raced Approve)", len(s.AlwaysRules), n)
+	}
+}
+
+// resolvedIDs returns the resolvedReqId of every forwarded agent:event.
+func resolvedIDs(recs []emitRec) []string {
+	var out []string
+	for _, r := range recs {
+		if ev, ok := r.data[0].(agent.Event); ok && r.event == "agent:event" && ev.ResolvedReqID != "" {
+			out = append(out, ev.ResolvedReqID)
+		}
+	}
+	return out
+}
+
+// TestApp_CloseAndReopen_EmitResolvedForTakenApprovals is the review #6(a)
+// regression guard: approvals perch takes away on reopen and on close are
+// retracted toward the frontend directly, since the old monitor's own
+// resolution event dies with its pump.
+func TestApp_CloseAndReopen_EmitResolvedForTakenApprovals(t *testing.T) {
+	l := newLifecycleApp(t, nil)
+	openLifecycle(t, l, "ws-e")
+	l.lastMonitor().Replay(agent.Event{Kind: "approval", State: agent.StateAwaitingApproval, Approval: &agent.ApprovalReq{ReqID: "a1", Tool: "Bash", Input: "x"}})
+	waitFor(t, "pending a1", func() bool { return len(l.PendingApprovals()) == 1 })
+	if err := l.OpenWorkspace("ws-e"); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolvedIDs(l.snapshot()); len(got) != 1 || got[0] != "a1:ws-e" {
+		t.Fatalf("after reopen, resolved ids = %v, want [a1:ws-e]", got)
+	}
+	l.lastMonitor().Replay(agent.Event{Kind: "approval", State: agent.StateAwaitingApproval, Approval: &agent.ApprovalReq{ReqID: "a2", Tool: "Bash", Input: "y"}})
+	waitFor(t, "pending a2", func() bool { return len(l.PendingApprovals()) == 1 })
+	if err := l.CloseWorkspace("ws-e"); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolvedIDs(l.snapshot()); len(got) != 2 || got[1] != "a2:ws-e" {
+		t.Errorf("after close, resolved ids = %v, want [a1:ws-e a2:ws-e]", got)
+	}
+}
+
+// TestApp_StaleMonitorEventsDropped is the review #6(b) regression guard: a
+// replaced monitor's late events never reach the frontend.
+func TestApp_StaleMonitorEventsDropped(t *testing.T) {
+	l := newLifecycleApp(t, nil)
+	openLifecycle(t, l, "ws-st")
+	before := len(l.snapshot())
+	stale := agent.NewFakeMonitor(nil)
+	l.forwardEvent("ws-st", stale, agent.Event{Kind: "state", State: agent.StateRunning})
+	l.forwardEvent("ws-st", stale, agent.Event{Kind: "state", State: agent.StateRunning, ResolvedReqID: "zz"})
+	for _, r := range l.snapshot()[before:] {
+		if r.event == "agent:event" {
+			t.Errorf("a stale monitor's event was forwarded: %+v", r.data)
+		}
 	}
 }

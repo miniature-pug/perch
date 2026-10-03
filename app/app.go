@@ -812,11 +812,13 @@ func (a *App) CreateWorkspace(agentName, repoPath, baseRef, branch, title string
 		if !containedUnderRoots(treePath, a.roots) {
 			return WorkspaceVM{}, fmt.Errorf("derived worktree path %q escapes all configured roots", treePath)
 		}
-		// A worktree deleted outside perch stays registered in git until it
-		// is pruned: its branch reads as "already used by worktree" and its
-		// path as "a missing but already registered worktree". Prune first,
-		// best-effort; prune never touches a worktree that still exists.
-		_ = gitpkg.PruneWorktrees(ctx, a.runner(), repoPath)
+		// A worktree deleted outside perch stays registered in git: its
+		// branch reads as "already used by worktree" and its path as "a
+		// missing but already registered worktree". Drop exactly the stale
+		// registration in the way (this path or this branch), best-effort.
+		// Never `git worktree prune`: it would also drop the registration of
+		// any unrelated worktree whose directory is only temporarily missing.
+		_ = gitpkg.ForgetStaleWorktrees(ctx, a.runner(), repoPath, treePath, branch)
 
 		if baseRef != "" {
 			// New-branch mode: git worktree add -b <branch> <tree> <baseRef>.
@@ -1184,6 +1186,7 @@ func (a *App) openWorkspace(id string) error {
 			_ = oldMon.Approve(raw, agent.Decision{Allow: false})
 		}
 	}
+	a.emitResolved(id, stalePending)
 	if oldCancel != nil {
 		oldCancel()
 	}
@@ -1236,6 +1239,18 @@ func (a *App) takePendingLocked(id string) []string {
 	return raws
 }
 
+// emitResolved tells the frontend that the approvals raws of workspace id
+// are no longer pending: one agent:event of kind "approval-resolved" per
+// approval, carrying the composed id. The caller already removed them from
+// a.pending. This covers approvals perch takes away itself (close, reopen,
+// relaunch, agent exit), whose own resolution event from the monitor would
+// be dropped together with the monitor's pump.
+func (a *App) emitResolved(id string, raws []string) {
+	for _, raw := range raws {
+		a.emit("agent:event", agent.Event{WorkspaceID: id, Kind: "approval-resolved", ResolvedReqID: raw + ":" + id})
+	}
+}
+
 // deletePendingLocked drops one pending approval and its order record. The
 // caller holds a.mu.
 func (a *App) deletePendingLocked(key string) {
@@ -1264,6 +1279,22 @@ func (a *App) pumpEvents(wctx context.Context, id string, mon agent.Monitor) {
 
 // forwardEvent handles one monitor event for workspace id.
 func (a *App) forwardEvent(id string, mon agent.Monitor, evt agent.Event) {
+	// Only the workspace's CURRENT monitor speaks for it. A monitor that a
+	// reopen, relaunch or close replaced can still deliver a few late events
+	// while its pump is being cancelled; forwarding them would, for example,
+	// push the old session's "running" onto the new one. Its pending
+	// approvals were already resolved toward the frontend when it was
+	// replaced. A late approval it raises is denied on it, so its agent does
+	// not wait forever.
+	a.mu.Lock()
+	current := a.monitors[id] == mon
+	a.mu.Unlock()
+	if !current {
+		if evt.Approval != nil {
+			_ = mon.Approve(evt.Approval.ReqID, agent.Decision{Allow: false})
+		}
+		return
+	}
 	// This stamps WorkspaceID, so the frontend can match events to the
 	// correct workspace.
 	evt.WorkspaceID = id
@@ -1558,8 +1589,9 @@ func (a *App) dispatchNotify(evt agent.Event) {
 		// card). Keys have the form "<raw>:<workspaceID>".
 		a.mu.Lock()
 		_, live := a.monitors[evt.WorkspaceID]
-		a.takePendingLocked(evt.WorkspaceID)
+		exitedPending := a.takePendingLocked(evt.WorkspaceID)
 		a.mu.Unlock()
+		a.emitResolved(evt.WorkspaceID, exitedPending)
 		// This suppresses a spurious "Agent exited" notification on
 		// intentional teardown. CloseWorkspace, displacement, and shutdown
 		// deregister the monitor (under a.mu) before the pane is torn down,
@@ -1722,6 +1754,7 @@ func (a *App) closeWorkspace(id string) {
 			_ = mon.Approve(raw, agent.Decision{Allow: false})
 		}
 	}
+	a.emitResolved(id, pendingRaw)
 
 	if cancel != nil {
 		cancel()
@@ -1780,13 +1813,13 @@ func (a *App) RemoveWorkspace(id string) error {
 	// If something deleted the worktree dir outside perch, WorktreeDirty
 	// (git -C <missing> status) would error, and the record could never
 	// drop, leaving a ghost session forever. This code detects the missing
-	// tree up front and treats the worktree as already gone. It prunes git's
-	// stale registration, so the branch and the path can host a new session,
-	// and drops the record. Only a present-but-dirty tree returns
+	// tree up front and treats the worktree as already gone. It drops git's
+	// stale registration of that tree, so the branch and the path can host a
+	// new session, and drops the record. Only a present-but-dirty tree returns
 	// ErrWorktreeDirty.
 	if worktreeGone(w) {
 		a.closeWorkspace(id)
-		_ = gitpkg.PruneWorktrees(ctx, a.runner(), w.RepoPath)
+		a.forgetGoneWorktree(ctx, w)
 		return a.forgetWorkspace(id)
 	}
 	dirty, err := gitpkg.WorktreeDirty(ctx, a.runner(), w.WorktreePath)
@@ -1822,6 +1855,19 @@ func worktreePathGone(path string) bool {
 		return errors.Is(err, os.ErrNotExist)
 	}
 	return false
+}
+
+// forgetGoneWorktree drops git's registration of w's tree, which
+// worktreeGone reported gone, best-effort. `git worktree remove --force`
+// clears it when the directory is missing. When the directory still exists
+// without its .git file, git refuses that, and ForgetStaleWorktrees drops
+// only that entry's admin dir. It never runs `git worktree prune`, which
+// would also drop unrelated worktrees whose directories are only
+// temporarily missing.
+func (a *App) forgetGoneWorktree(ctx context.Context, w registry.Workspace) {
+	if err := gitpkg.RemoveWorktree(ctx, a.runner(), w.RepoPath, w.WorktreePath, true); err != nil {
+		_ = gitpkg.ForgetStaleWorktrees(ctx, a.runner(), w.RepoPath, w.WorktreePath, "")
+	}
 }
 
 // worktreeGone reports whether w's tree no longer exists as a git worktree:
@@ -1861,7 +1907,7 @@ func (a *App) ForceRemoveWorkspace(id string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), uiGitTimeout)
 		defer cancel()
 		if worktreeGone(w) {
-			_ = gitpkg.PruneWorktrees(ctx, a.runner(), w.RepoPath)
+			a.forgetGoneWorktree(ctx, w)
 		} else if err := gitpkg.RemoveWorktree(ctx, a.runner(), w.RepoPath, w.WorktreePath, true); err != nil {
 			return fmt.Errorf("force-remove worktree: %w", err)
 		}
@@ -2029,9 +2075,9 @@ func (a *App) cleanupSession(id string, force bool) error {
 	}
 	a.closeWorkspace(id)
 	if gone {
-		// The tree was deleted outside perch: prune git's stale
-		// registration instead of a remove that git would refuse.
-		_ = gitpkg.PruneWorktrees(ctx, a.runner(), w.RepoPath)
+		// The tree was deleted outside perch: drop git's stale registration
+		// of it instead of a plain remove that git would refuse.
+		a.forgetGoneWorktree(ctx, w)
 	} else if err := gitpkg.RemoveWorktree(ctx, a.runner(), w.RepoPath, w.WorktreePath, force); err != nil {
 		// Worktree removal failed, for example a dirty tree with
 		// force=false. CleanupSessions keeps the record, so the session
@@ -2073,9 +2119,18 @@ func (a *App) OpenShell(paneID, cwd string) error {
 		if workspaceID == "" || validateSessionID(workspaceID) != nil {
 			return fmt.Errorf("invalid pane id %q: not a shell drawer pane", paneID)
 		}
+		// Serialize with the workspace's lifecycle: a drawer the frontend
+		// respawns while RemoveWorkspace runs (it closes the shells before
+		// git deletes the tree) waits here, then finds the record gone,
+		// instead of leaving a shell in a deleted directory.
+		unlock := a.lockWorkspace(workspaceID)
+		defer unlock()
 		w, ok := a.store.Get(workspaceID)
 		if !ok {
 			return fmt.Errorf("invalid pane id %q: unknown workspace %q", paneID, workspaceID)
+		}
+		if worktreeGone(w) {
+			return fmt.Errorf("open shell %q: %w", w.WorktreePath, ErrWorktreeMissing)
 		}
 		if err := validateWorktreeUnderRoots(cwd, a.roots); err != nil {
 			return fmt.Errorf("invalid shell cwd: %w", err)
@@ -2535,18 +2590,23 @@ func (a *App) Approve(reqID, decision string) error {
 		return fmt.Errorf("unknown decision %q", decision)
 	}
 
+	// This reads the pending approval for this exact reqID BEFORE the
+	// verdict goes out: mon.Approve makes the monitor emit the approval's
+	// resolution, and the event pump then deletes the entry, possibly before
+	// this goroutine runs again. tool and input come from the backend's
+	// record of what was actually surfaced, never from the frontend, so an
+	// always-rule cannot be forged to grant something the user did not see.
+	// Resolving by reqID, not a racy "last approval" accessor, stays correct
+	// even when many approvals are pending across workspaces.
+	a.mu.Lock()
+	req, hadPending := a.pending[reqID]
+	a.mu.Unlock()
+
 	if err := mon.Approve(rawReqID, d); err != nil {
 		return err
 	}
 
-	// This consumes the pending approval for this exact reqID. tool and input
-	// come from the backend's record of what was actually surfaced, never
-	// from the frontend, so an always-rule cannot be forged to grant
-	// something the user did not see. Resolving by reqID, not a racy "last
-	// approval" accessor, stays correct even when many approvals are pending
-	// across workspaces.
 	a.mu.Lock()
-	req, hadPending := a.pending[reqID]
 	a.deletePendingLocked(reqID)
 	a.mu.Unlock()
 

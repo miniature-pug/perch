@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/miniature-pug/perch/internal/proc"
@@ -83,22 +85,105 @@ func RemoveWorktree(ctx context.Context, r proc.Runner, repoRoot, treePath strin
 	return nil
 }
 
-// PruneWorktrees runs `git -C <repoRoot> worktree prune`, which drops git's
-// administrative records for linked worktrees whose directories no longer
-// exist. Until they are pruned, git still treats the branch of a deleted
-// worktree as checked out ("is already used by worktree at ..."), and
-// refuses to add a new worktree at the old path ("is a missing but already
-// registered worktree"). Locked worktrees are never pruned.
-func PruneWorktrees(ctx context.Context, r proc.Runner, repoRoot string) error {
-	_, stderr, err := r.Run(ctx, "git", "-C", repoRoot, "worktree", "prune")
+// ForgetStaleWorktrees drops git's registration of the linked worktrees of
+// repoRoot that are stale (git lists them as "prunable": the directory, or
+// its .git file, is gone) AND are the one in the caller's way: the entry at
+// path, or the entry that has branch checked out. An empty path or branch
+// matches nothing. Locked entries are never touched.
+//
+// Until such a registration is dropped, git still treats its branch as
+// checked out ("is already used by worktree at ...") and refuses to add a
+// new worktree at its path ("is a missing but already registered
+// worktree"). Unlike `git worktree prune`, this never drops the
+// registration of an unrelated worktree whose directory is only
+// temporarily missing (an unmounted disk, a moved tree that `git worktree
+// repair` would fix).
+//
+// Each match is removed with `git worktree remove --force <path>`, which
+// git accepts for a missing directory. When the directory exists but lacks
+// its .git file, git refuses that ("validation failed"), and only that
+// entry's administrative directory under $GIT_COMMON_DIR/worktrees is
+// deleted; the directory and its files are left alone.
+func ForgetStaleWorktrees(ctx context.Context, r proc.Runner, repoRoot, path, branch string) error {
+	wts, err := ListWorktrees(ctx, r, repoRoot)
 	if err != nil {
-		msg := string(bytes.TrimSpace(stderr))
-		if msg != "" {
-			return fmt.Errorf("git: worktree prune %s: %w (stderr: %s)", repoRoot, err, msg)
-		}
-		return fmt.Errorf("git: worktree prune %s: %w", repoRoot, err)
+		return err
 	}
-	return nil
+	var errs []error
+	for _, wt := range wts {
+		if !wt.Prunable || wt.Locked {
+			continue
+		}
+		byPath := path != "" && samePath(wt.Path, path)
+		byBranch := branch != "" && wt.Branch == branch
+		if !byPath && !byBranch {
+			continue
+		}
+		if rmErr := RemoveWorktree(ctx, r, repoRoot, wt.Path, true); rmErr == nil {
+			continue
+		} else if admErr := removeWorktreeAdminDir(ctx, r, repoRoot, wt.Path); admErr != nil {
+			errs = append(errs, fmt.Errorf("%w; %w", rmErr, admErr))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// removeWorktreeAdminDir deletes the $GIT_COMMON_DIR/worktrees/<name>
+// directory whose gitdir file points at <treePath>/.git, and nothing else.
+func removeWorktreeAdminDir(ctx context.Context, r proc.Runner, repoRoot, treePath string) error {
+	out, stderr, err := r.Run(ctx, "git", "-C", repoRoot, "rev-parse", "--git-common-dir")
+	if err != nil {
+		return fmt.Errorf("git: rev-parse --git-common-dir %s: %w (stderr: %s)", repoRoot, err, bytes.TrimSpace(stderr))
+	}
+	common := strings.TrimSpace(string(out))
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(repoRoot, common)
+	}
+	admin := filepath.Join(common, "worktrees")
+	entries, err := os.ReadDir(admin)
+	if err != nil {
+		return fmt.Errorf("git: read %s: %w", admin, err)
+	}
+	want := filepath.Join(treePath, ".git")
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		gitdir, rerr := os.ReadFile(filepath.Join(admin, e.Name(), "gitdir"))
+		if rerr != nil || !samePath(strings.TrimSpace(string(gitdir)), want) {
+			continue
+		}
+		return os.RemoveAll(filepath.Join(admin, e.Name()))
+	}
+	return fmt.Errorf("git: no worktree registration for %s", treePath)
+}
+
+// samePath reports whether a and b name the same location, resolving
+// symlinks in the longest existing prefix of each (the paths themselves are
+// usually gone).
+func samePath(a, b string) bool {
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return true
+	}
+	return resolveExisting(a) == resolveExisting(b)
+}
+
+// resolveExisting resolves symlinks in the deepest existing ancestor of p
+// and re-appends the missing tail.
+func resolveExisting(p string) string {
+	p = filepath.Clean(p)
+	var tail []string
+	for cur := p; ; {
+		if r, err := filepath.EvalSymlinks(cur); err == nil {
+			return filepath.Join(append([]string{r}, tail...)...)
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return p
+		}
+		tail = append([]string{filepath.Base(cur)}, tail...)
+		cur = parent
+	}
 }
 
 // WorktreeDirty reports whether the working tree at treePath has any uncommitted

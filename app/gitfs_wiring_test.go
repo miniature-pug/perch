@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -127,17 +128,35 @@ func TestApp_DiscardHunk_StaleIDRefused(t *testing.T) {
 	}
 }
 
-// TestApp_CreateWorkspace_PrunesDeletedWorktree covers wiring item 7 (GFS-27,
+// TestApp_CreateWorkspace_ForgetsDeletedWorktreeOnly covers wiring item 7 (GFS-27,
 // APP-7): a worktree directory deleted outside perch must not block a new
 // session on the same path (new-branch mode) or the same branch
 // (existing-branch mode).
-func TestApp_CreateWorkspace_PrunesDeletedWorktree(t *testing.T) {
+func TestApp_CreateWorkspace_ForgetsDeletedWorktreeOnly(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	root := t.TempDir()
 	repo := makeTestRepo(t, root)
 	wtRoot := filepath.Join(root, "proj__worktrees")
 	l := newLifecycleApp(t, []string{root})
+
+	// An unrelated worktree of the user's on a disk that is unmounted right
+	// now. Nothing perch does may drop its registration (review #1).
+	usb := filepath.Join(t.TempDir(), "usb-wt")
+	runGit(t, repo, "worktree", "add", "-q", "-b", "usb", usb, "main")
+	if err := os.Rename(usb, usb+".away"); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := os.Rename(usb+".away", usb); err != nil {
+			t.Fatal(err)
+		}
+		// Remounted, the tree still works and still owns its branch.
+		runGit(t, usb, "status", "--porcelain")
+		if out, err := exec.Command("git", "-C", repo, "worktree", "add", filepath.Join(t.TempDir(), "x"), "usb").CombinedOutput(); err == nil {
+			t.Errorf("branch usb was freed: its worktree registration was dropped\n%s", out)
+		}
+	}()
 
 	// Existing-branch mode: branch "feat" was checked out in a worktree that
 	// was then rm -rf'ed.
@@ -162,6 +181,18 @@ func TestApp_CreateWorkspace_PrunesDeletedWorktree(t *testing.T) {
 	}
 	if vm.WorktreePath != filepath.Join(wtRoot, "newb") {
 		t.Errorf("WorktreePath = %q, want the freed slug path", vm.WorktreePath)
+	}
+
+	// Removing a session whose tree was deleted outside perch drops only
+	// that tree's registration.
+	if err := os.RemoveAll(vm.WorktreePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.RemoveWorkspace(vm.ID); err != nil {
+		t.Fatalf("RemoveWorkspace of a deleted tree: %v", err)
+	}
+	if out, err := exec.Command("git", "-C", repo, "worktree", "list", "--porcelain").CombinedOutput(); err != nil || strings.Contains(string(out), vm.WorktreePath+"\n") {
+		t.Errorf("registration of the removed session's tree survived: %v\n%s", err, out)
 	}
 }
 

@@ -3607,13 +3607,26 @@ func TestApp_RemoveWorkspace_MissingWorktreePath_DropsRecord(t *testing.T) {
 	if _, ok := store.Get("ws-gone"); ok {
 		t.Error("ghost record survived RemoveWorkspace for a deleted worktree path")
 	}
-	// The code must not call git worktree remove or status on the missing
-	// path. A best-effort `worktree prune` in the repo is expected (APP-7).
+	// The code must not run git status, a non-force remove, or a
+	// repository-wide `worktree prune` for the missing path. Dropping the
+	// stale registration of exactly this tree (`worktree remove --force
+	// <missing>`) is expected (APP-7).
+	sawTargeted := false
 	for _, c := range r.Calls {
-		isPrune := len(c.Args) == 4 && c.Args[2] == "worktree" && c.Args[3] == "prune"
-		if c.Name == "git" && !isPrune {
+		if c.Name != "git" {
+			continue
+		}
+		args := strings.Join(c.Args, " ")
+		switch {
+		case strings.Contains(args, "worktree remove --force "+missing):
+			sawTargeted = true
+		case strings.Contains(args, "worktree list --porcelain"), strings.Contains(args, "rev-parse --git-common-dir"):
+		default:
 			t.Errorf("unexpected git call for missing worktree path: %v", c.Args)
 		}
+	}
+	if !sawTargeted {
+		t.Error("no targeted `git worktree remove --force` for the missing tree")
 	}
 }
 

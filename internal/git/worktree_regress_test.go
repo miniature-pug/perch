@@ -212,8 +212,10 @@ func TestCheckoutBranch_RejectsFileAndTag(t *testing.T) {
 }
 
 // GFS-27: after a worktree directory is deleted outside perch, its branch
-// stays "in use" until PruneWorktrees runs.
-func TestPruneWorktrees_FreesBranchOfDeletedWorktree(t *testing.T) {
+// stays "in use" until its registration is dropped. ForgetStaleWorktrees
+// drops exactly that registration, and leaves an unrelated worktree whose
+// directory is only temporarily missing (an unmounted disk) registered.
+func TestForgetStaleWorktrees_FreesOnlyTheMatchingEntry(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	ctx := context.Background()
 	r := proc.ExecRunner{}
@@ -223,17 +225,61 @@ func TestPruneWorktrees_FreesBranchOfDeletedWorktree(t *testing.T) {
 	if err := os.RemoveAll(p); err != nil {
 		t.Fatal(err)
 	}
+	// An unrelated worktree on a "disk" that is unmounted right now.
+	usb := filepath.Join(t.TempDir(), "usb-wt")
+	runGit(t, repo, "worktree", "add", "-q", "-b", "usb", usb, "main")
+	away := usb + ".away"
+	if err := os.Rename(usb, away); err != nil {
+		t.Fatal(err)
+	}
+
 	p2 := filepath.Join(t.TempDir(), "wt2")
 	if err := git.AddWorktreeExisting(ctx, r, repo, "feat", p2); err == nil {
 		t.Fatal("test premise: git should still consider feat checked out")
 	}
-	if err := git.PruneWorktrees(ctx, r, repo); err != nil {
-		t.Fatalf("PruneWorktrees: %v", err)
+	if err := git.ForgetStaleWorktrees(ctx, r, repo, "", "feat"); err != nil {
+		t.Fatalf("ForgetStaleWorktrees(branch): %v", err)
 	}
 	if err := git.AddWorktreeExisting(ctx, r, repo, "feat", p2); err != nil {
-		t.Fatalf("AddWorktreeExisting after prune: %v", err)
+		t.Fatalf("AddWorktreeExisting after forgetting the stale entry: %v", err)
 	}
-	if out := gitOut(t, repo, "worktree", "list"); !strings.Contains(out, p2) {
-		t.Errorf("worktree list lacks %s:\n%s", p2, out)
+
+	// The unrelated tree comes back and still works.
+	if err := os.Rename(away, usb); err != nil {
+		t.Fatal(err)
+	}
+	if out := gitOut(t, usb, "-C", usb, "status", "--porcelain"); out != "" {
+		t.Errorf("status in the remounted tree = %q, want clean", out)
+	}
+	if err := git.AddWorktreeExisting(ctx, r, repo, "usb", filepath.Join(t.TempDir(), "x")); err == nil {
+		t.Error("the unrelated tree's branch was freed: its registration was dropped")
+	}
+}
+
+// ForgetStaleWorktrees by path, when the directory exists but its .git file
+// is gone: git refuses `worktree remove`, so only the admin dir is dropped
+// and the directory's files stay.
+func TestForgetStaleWorktrees_DirWithoutGitFile(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ctx := context.Background()
+	r := proc.ExecRunner{}
+	repo := initRepo(t)
+	p := filepath.Join(t.TempDir(), "wt")
+	runGit(t, repo, "worktree", "add", "-q", "-b", "feat", p, "main")
+	if err := os.Remove(filepath.Join(p, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	keep := filepath.Join(p, "keep.txt")
+	if err := os.WriteFile(keep, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := git.ForgetStaleWorktrees(ctx, r, repo, p, ""); err != nil {
+		t.Fatalf("ForgetStaleWorktrees(path): %v", err)
+	}
+	if out := gitOut(t, repo, "-C", repo, "worktree", "list", "--porcelain"); strings.Contains(out, p) {
+		t.Errorf("registration for %s survived:\n%s", p, out)
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Errorf("a file in the directory was deleted: %v", err)
 	}
 }

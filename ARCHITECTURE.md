@@ -94,7 +94,7 @@ callable over the bridge. The load-bearing methods:
 | `WorkspaceForBranch(repoPath, branch string) BranchOwner` | `{id, found}`: the worktree session that already tracks a branch |
 | `OpenWorkspace(id string) error` | Spawn the pty, prepare and start the Monitor, begin streaming; refuses a session whose tree is gone (`ErrWorktreeMissing`); with the agent CLI missing, opens a plain shell and creates no Monitor |
 | `CloseWorkspace(id string) error` | Tear down the pty bridge, drawer shells and Monitor; keep the record |
-| `RemoveWorkspace(id string) error` | Close the session, then remove the record; for worktree sessions run `git worktree remove`, returning `ErrWorktreeDirty` (session left running) on uncommitted changes; a tree deleted outside perch is pruned from git; the branch is kept |
+| `RemoveWorkspace(id string) error` | Close the session, then remove the record; for worktree sessions run `git worktree remove`, returning `ErrWorktreeDirty` (session left running) on uncommitted changes; for a tree deleted outside perch, only that tree's stale git registration is dropped (never a repository-wide `git worktree prune`); the branch is kept |
 | `ForceRemoveWorkspace(id string) error` | Close the session, then force-remove the worktree tree, discarding changes; the branch is kept |
 | `ListStaleSessions() ([]StaleSessionVM, error)` | Closed worktree sessions unused past the stale threshold, with per-row clean, merged and uncommitted line counts (four rows at a time, one deadline) |
 | `CleanupSessions(ids []string, force bool) error` | Bulk-remove sessions: remove the tree and delete the branch |
@@ -116,8 +116,8 @@ There is no model or token parameter anywhere: perch chooses its agents per
 session and never meters usage.
 
 Lifecycle calls on one session (`OpenWorkspace`, `CloseWorkspace`,
-`RemoveWorkspace`, `ForceRemoveWorkspace`, and each id of `CleanupSessions`)
-hold a per-session lock, so a remove never races a half-done open or an
+`RemoveWorkspace`, `ForceRemoveWorkspace`, each id of `CleanupSessions`, and
+a drawer's `OpenShell`) hold a per-session lock, so a remove never races a half-done open or an
 env-sync relaunch. Registry writes after creation go through
 `registry.Store.Update`, which changes only the named fields and never
 recreates a removed record.
