@@ -232,7 +232,6 @@ func TestInstallIcon(t *testing.T) {
 	}
 }
 
-
 func TestInstallOverwritesAndIsIdempotent(t *testing.T) {
 	dh := t.TempDir()
 	p := PathsFor(dh)
