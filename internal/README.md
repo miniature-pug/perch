@@ -12,7 +12,7 @@ exposes them to the frontend. For how the packages interact, see
 | `registry` | The thread-safe, file-backed session registry under the XDG config directory, with atomic writes. | `Store` (`Load`, `List`, `Get`, `Upsert`, `Update`, `Remove`), `ErrNotFound`, `Workspace`, `DefaultConfigDir`, `ConfigDirMode` |
 | `git` | git operations behind a `proc.Runner`: ref validation, worktree management, and diff and hunk staging. | `ValidRef`, `AddWorktree`, `AddWorktreeExisting`, `RemoveWorktree`, `WorktreeDirty`, `BranchMerged`, `DiffStat`, `Hunks`, `StageHunk`, `DiscardHunk`, and the `Err*` sentinels |
 | `agent` | The Monitor and Adapter seams, with concrete monitors for the two agents. | `Monitor`, `Adapter`, `NewMonitor`, `NewClaude`, `NewOpencode`, `State`, `Caps`, `Event` |
-| `hooklistener` | The per-session loopback listener that receives Claude hook posts and blocks `PreToolUse` until a verdict. | `Listener`, `New`, `LoopbackHost`, `HookEvent`, `Decision` |
+| `hooklistener` | The per-session loopback listener that receives Claude hook posts and blocks `PermissionRequest` until a verdict. | `Listener`, `New`, `LoopbackHost`, `HookEvent`, `Decision` |
 | `envsync` | The one-per-app loopback listener behind `perch reload`: a per-workspace bearer token, an in-memory environment delta, never persisted. | `Listener`, `New`, `SyncFunc`, `SyncRequest`, `EnvURL`, `EnvToken`, `EnvWS` |
 | `notify` | Desktop notifications over D-Bus, with a `notify-send` fallback. | `Notifier`, `New`, `FakeNotifier` |
 | `fs` | gitignore-aware directory listing, a recursive change watcher, and atomic file writes. | `Node`, `ListDir`, `Watch`, `ReadFile`, `WriteFile`, `RevealInFiles` |
@@ -21,6 +21,7 @@ exposes them to the frontend. For how the packages interact, see
 | `config` | The single-layer global TOML config that exposes the project roots. | `Config`, `Load`, `DefaultGlobalPath` |
 | `model` | Shared domain vocabulary as pure data, no I/O. | `Tool`, `ToolClaude`, `ToolOpencode`, `Project`, `Tree` |
 | `desktop` | The per-user freedesktop.org integration: the hicolor icon and `perch.desktop`, written atomically, with best-effort cache refresh. | `Install`, `InstallIcon`, `Options`, `Status`, `IsInstalled`, `NeedsUpdate`, `IconMissing`, `DefaultPaths`, `ExecValue` |
+| `safe` | `Recover`, which keeps a panicking background goroutine from crashing the whole process. | `Recover` |
 | `proc` | The subprocess seam every shell-out goes through. | `Runner`, `ExecRunner`, `FakeRunner` |
 
 ## Conventions

@@ -111,9 +111,10 @@ perch frees their worktrees and deletes their branches.
 Approvals work one way for Claude and another for opencode, because the two
 agents hand perch different reins.
 
-For **Claude**, perch owns the decision. When Claude wants to run a tool, its
-hook blocks the call. perch shows an approval card, docked at the bottom of
-the active session. The card names the tool and shows its input. The input
+For **Claude**, perch owns the decision. When Claude would show a permission prompt, its
+`PermissionRequest` hook blocks the call, and calls Claude allows on its own
+never reach perch. perch shows an approval card, docked at the bottom of the
+active session. The card names the tool and shows its input. The input
 scrolls when it runs long, so a large or many-lined request stays legible
 instead of a blind summary. You have three choices:
 
@@ -123,9 +124,10 @@ instead of a blind summary. You have three choices:
   the agent, the tool, and a hash of the exact input. A later call auto-approves
   only when all three match. A different input to the same tool still asks.
 
-From the keyboard the card takes `a` to allow, `d` to deny, and `Shift+A` to
-always-allow. The Allow button holds focus the moment the card opens, so `Enter`
-allows.
+From the keyboard, once the card has focus, `a` allows, `d` denies, and
+`Shift+A` always-allows; `Enter` allows too. In NORMAL mode the first `a` only
+focuses the card, so a stray key never decides. perch never steals focus for a
+new card, and the card ignores keys for a moment after a new request appears.
 
 **Approve all** and **Deny all** act on every pending request for the active
 session. You manage and revoke stored rules in Settings.
@@ -265,6 +267,14 @@ Open Settings from the menu or the command palette.
 Theme and other appearance changes apply immediately and persist across
 restarts.
 
+## The agent launch
+
+A new session opens a login shell and types the agent's launch line into it once
+the shell looks ready, so a prompt in your shell startup files is not typed
+over. If the shell is still busy after a long wait, perch does not type; it
+raises a blocking "Agent didn't start" notification. Answer the prompt, then
+use its **Retype launch** action to type the launch line anyway.
+
 ## Notifications
 
 The notification hub collects events. You can filter it by approvals, errors,
@@ -296,6 +306,8 @@ accelerates the cockpit. The current mode shows in the status line.
 | `x` | Remove the selected session, through the confirm dialog |
 | `Enter` | Open the selected session |
 | `i` | Enter TERMINAL mode, focusing the agent terminal |
+| `a` | Focus the pending approval card. Press `a` again to allow |
+| `Ctrl-S` | Save the open file in the editor |
 | `:` or `Ctrl-K` / `Cmd-K` | Open the command palette |
 | `?` or `F1` | Open the shortcuts and help panel |
 

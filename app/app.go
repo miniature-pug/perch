@@ -132,9 +132,9 @@ type App struct {
 	bridges  map[string]*internalpty.Bridge // paneID → Bridge
 	monitors map[string]agent.Monitor       // workspaceID → Monitor
 
-	// settingsMu guards the GetSettings→check-duplicate→append→SaveSettings
-	// read-modify-write sequence in Approve, and the GetSettings read in
-	// maybeAutoApprove. settingsMu and a.mu are never nested, in either
+	// settingsMu guards every settings read-modify-write (Approve(always),
+	// ApproveAlways, RemoveAlwaysRule, SaveSettings) and the GetSettings read
+	// in maybeAutoApprove. settingsMu and a.mu are never nested, in either
 	// order: no code holds one while acquiring the other. This lock stops
 	// concurrent Approve(always) calls from losing rules.
 	settingsMu sync.Mutex
@@ -1604,7 +1604,7 @@ func (a *App) dispatchNotify(evt agent.Event) {
 		}
 	case evt.Kind == "state" && evt.State == agent.StateExited:
 		// This prunes any pending approval for the exited workspace. A
-		// PreToolUse-time crash leaves an unresolved a.pending entry whose
+		// PermissionRequest-time crash leaves an unresolved a.pending entry whose
 		// reqID's agent is gone. Without this pruning step, a webview reload
 		// would falsely show a live approval card (ListWorkspaces reports
 		// StateExited, but PendingApprovals would still surface the dead
@@ -2783,7 +2783,7 @@ func (a *App) validateHunkArgs(worktree, file, id string) error {
 }
 
 // StageHunk stages the working-tree hunk of file whose content id is id
-// (Hunk.id from Hunks) with `git apply --cached`. index is the Hunk.index the
+// (Hunk.ID from Hunks) with `git apply --cached`. index is the Hunk.Index the
 // user saw; it only breaks a tie between identical hunks. When that content
 // is no longer in the diff (the agent edited the file meanwhile), StageHunk
 // changes nothing and returns an error wrapping gitpkg.ErrHunkChanged; the

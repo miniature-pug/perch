@@ -5,9 +5,10 @@
  * - The ApprovalCard renders when caps.approvals=true and an approval is in state.
  * - Click Allow: this calls the Approve IPC method with (reqId, "allow").
  * - Click Deny: this calls the Approve IPC method with (reqId, "deny").
- * - Click Always: this calls the Approve IPC method with (reqId, "always").
+ * - Click Always: this calls ApproveAlways(reqId); the toast's Undo then
+ *   calls RemoveAlwaysRule with the rule the grant reported.
  *
- * IPC method: Approve(reqId, decision) from wails.ts
+ * IPC methods: Approve(reqId, decision), ApproveAlways(reqId) from wails.ts
  * Event channel: "agent:event" (onAgentEvent)
  * Payload: AgentEvent { workspaceId, kind: "approval", approval: ApprovalReq }
  */

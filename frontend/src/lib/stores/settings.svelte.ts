@@ -34,9 +34,9 @@ class SettingsStore {
   }
 
   // Persist a UI-pref change without overwriting backend-owned state.
-  // alwaysRules is backend-owned: Approve(...,"always") appends to the
-  // settings blob with no event. Pull the latest value before a UI-pref
-  // save, or the save would overwrite a rule added since load().
+  // alwaysRules is backend-owned: ApproveAlways appends to the settings
+  // blob with no event. Pull the latest value before a UI-pref save so
+  // `alwaysRules` in memory (and the payload) is not stale after a grant.
   private async persistPref(): Promise<void> {
     try { const fresh = await getSettings(); this.alwaysRules = fresh.alwaysRules ?? []; } catch { /* keep current on read failure */ }
     await saveSettings(this.snap());

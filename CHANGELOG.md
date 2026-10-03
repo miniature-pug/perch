@@ -3,8 +3,9 @@
 # Changelog
 
 This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
-and [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Perch has not
-tagged a release yet, so everything to date sits under Unreleased.
+and [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The only
+published release so far is v0.1.0 on GitHub, which predates most of the
+entries below; they sit under Unreleased until the next tag.
 
 ## [Unreleased]
 
@@ -84,6 +85,14 @@ tagged a release yet, so everything to date sits under Unreleased.
   crashes, distinct from a running or errored one.
 - First-run guidance on the empty screen: what a session needs, a plain-word
   note on worktrees, and a pointer to `perch doctor` and the usage guide.
+- Shell-readiness launch gate: a new session types the agent launch line only
+  once the login shell reaches its prompt, after Ctrl-U to drop stray keys. If an
+  rc-file prompt holds the shell, perch raises an "Agent didn't start"
+  notification with a Retype launch action instead of swallowing the launch.
+- Image preview in the Preview pane through a `/wt-file/<workspaceID>/<path>`
+  handler that serves only files inside the session's worktree.
+- NORMAL-mode `a` focuses the pending approval card, so a stray key never
+  decides.
 - `perch install-desktop` installs the perch icon and a `perch.desktop` entry
   for the running binary under `~/.local/share` (or `$XDG_DATA_HOME`), then
   refreshes the icon theme and desktop database. A release binary now gets the
@@ -104,6 +113,14 @@ tagged a release yet, so everything to date sits under Unreleased.
 
 ### Changed
 
+- Claude hooks load through a private per-session `--settings` file (a `0700`
+  directory under `$XDG_RUNTIME_DIR`, else the temp directory), not the
+  worktree's `.claude/settings.json`, so the worktree stays clean. Only
+  `PermissionRequest` gates, so perch asks only when Claude would itself prompt.
+- Terminal data crosses the Wails bridge as base64 in both directions, so
+  non-UTF-8 bytes survive.
+- Diff hunks are addressed by content, not index, so a stale view can never
+  stage or discard the wrong hunk.
 - Production GUI builds link WebKit2GTK 4.1 instead of 4.0, which is end of life.
 - Modal dialogs are opaque surfaces rather than glass, so background content no
   longer bleeds through, and each theme declares a `color-scheme` so native form

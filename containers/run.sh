@@ -34,7 +34,7 @@ image="$1"; shift
 # The repo root is the parent of containers/, found without git (a tarball has no .git).
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# An opt-in dist mask, set by test-e2e and gui-build in the Makefile.
+# An opt-in dist mask, set by test-e2e in the Makefile and by the release build.
 # Only the value 1 enables it, so PERCH_MASK_DIST=0 really means "no mask".
 mask_dist=""
 if [ "${PERCH_MASK_DIST:-0}" = "1" ]; then
