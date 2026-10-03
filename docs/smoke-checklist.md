@@ -20,7 +20,10 @@ checklist is what the gate cannot see.
 - [ ] `shellcheck -s sh install.sh` and `sh -n install.sh` both exit 0.
 - [ ] A fresh `./install.sh` (optionally `--skip-agents`) runs end to end with no
       error and installs the `perch` binary. There is no setup or status step.
-      The run must never invoke one.
+      The run must never invoke one. The script builds the frontend (`npm ci`
+      and `npm run build`) before `go build`, so Node.js and npm must be present.
+- [ ] The installed `perch` launches a window. It must not exit with "this binary
+      was built without the frontend". `perch version` alone does not catch that.
 
 ## Environment
 

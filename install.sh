@@ -17,6 +17,10 @@ SKIP_AGENTS=0
 SKIP_BUILD=0
 INSTALL_PREFIX=""
 
+# Remember where the user ran the script, so a relative --prefix resolves
+# against that directory and not against the repo root.
+START_DIR="$(pwd)"
+
 for arg in "$@"; do
   case "$arg" in
     --skip-agents) SKIP_AGENTS=1 ;;
@@ -29,19 +33,64 @@ for arg in "$@"; do
   esac
 done
 
+# --prefix is the directory that receives the perch binary (DIR/perch). Make
+# it absolute now: the script later cd's into the repo root.
+case "$INSTALL_PREFIX" in
+  "" | /*) ;;
+  *) INSTALL_PREFIX="${START_DIR}/${INSTALL_PREFIX}" ;;
+esac
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
+
+# version_ge A B: succeeds when dotted version A >= B (numeric, per component).
+version_ge() {
+  awk -v a="$1" -v b="$2" 'BEGIN {
+    na = split(a, x, "."); nb = split(b, y, ".");
+    n = (na > nb) ? na : nb;
+    for (i = 1; i <= n; i++) {
+      xi = x[i] + 0; yi = y[i] + 0;
+      if (xi > yi) exit 0;
+      if (xi < yi) exit 1;
+    }
+    exit 0
+  }'
+}
+
+# run_remote_installer NAME URL: download an installer script to a temp file,
+# check that the download succeeded and is non-empty, then run it. A plain
+# "curl | sh" would run an empty script (and report success) when the download
+# fails, because POSIX sh has no pipefail.
+run_remote_installer() {
+  _name="$1"
+  _url="$2"
+  _script="$(mktemp "${TMPDIR:-/tmp}/perch-install-${_name}.XXXXXX")" \
+    || die "Cannot create a temp file for the ${_name} installer"
+  if ! curl -fsSL -o "$_script" "$_url" || [ ! -s "$_script" ]; then
+    rm -f "$_script"
+    die "Failed to download the ${_name} installer from ${_url}"
+  fi
+  # These installers are bash scripts. Prefer bash over a minimal /bin/sh.
+  if command -v bash >/dev/null 2>&1; then
+    bash "$_script" || { rm -f "$_script"; die "The ${_name} installer failed"; }
+  else
+    sh "$_script" || { rm -f "$_script"; die "The ${_name} installer failed"; }
+  fi
+  rm -f "$_script"
+}
 
 # Read a pinned version from .tool-versions.
 tool_version() {
   grep "^$1 " "${REPO_ROOT}/.tool-versions" | awk '{print $2}'
 }
 
-# Return the version reported by a CLI tool (last whitespace-delimited field).
+# Return the first dotted version number a CLI tool reports. Tools format
+# --version differently ("2.1.288 (Claude Code)", "1.15.12"), so match the
+# number instead of taking a fixed field.
 installed_version() {
-  "$1" --version 2>/dev/null | awk '{print $NF}'
+  "$1" --version 2>/dev/null | grep -Eo '[0-9]+(\.[0-9]+)+' | head -n 1
 }
 
 # Determine whether to use sudo (never call sudo when already root).
@@ -112,33 +161,89 @@ if ! command -v curl >/dev/null 2>&1; then
 fi
 
 # ---------------------------------------------------------------------------
+# Preflight: fail on missing build prerequisites before any long download.
+# Needs the webkit2gtk-4.1 and gtk+-3.0 dev libraries (Linux GUI build), and
+# Node.js with npm to build the frontend that the production binary embeds.
+# ---------------------------------------------------------------------------
+if [ "$SKIP_BUILD" != "1" ]; then
+  if [ "$OS" = "Linux" ]; then
+    _webkit_ok=1
+    if ! command -v pkg-config >/dev/null 2>&1; then
+      _webkit_ok=0
+    elif ! pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
+      _webkit_ok=0
+    elif ! pkg-config --exists gtk+-3.0 2>/dev/null; then
+      _webkit_ok=0
+    fi
+    if [ "$_webkit_ok" = "0" ]; then
+      printf 'error: the perch GUI build requires webkit2gtk-4.1 and gtk+-3.0 dev libraries (and pkg-config).\n' >&2
+      printf 'Install the missing packages, then re-run this script.\n' >&2
+      case "$PKG_MGR" in
+        apt)    printf '  sudo apt-get install -y pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev\n' >&2 ;;
+        dnf)    printf '  sudo dnf install -y pkgconf-pkg-config gtk3-devel webkit2gtk4.1-devel\n' >&2 ;;
+        pacman) printf '  sudo pacman -S pkgconf gtk3 webkit2gtk-4.1\n' >&2 ;;
+        *)      printf '  Install pkg-config, gtk3 dev, and webkit2gtk-4.1 dev via your package manager.\n' >&2 ;;
+      esac
+      exit 1
+    fi
+    printf '[ok]    webkit2gtk-4.1 and gtk+-3.0 dev libraries present\n'
+  fi
+
+  NODE_PINNED="$(tool_version nodejs)"
+  if [ -z "$NODE_PINNED" ]; then
+    die "Could not resolve nodejs version from .tool-versions — ensure the file has a 'nodejs <version>' line"
+  fi
+  NODE_PINNED_MAJOR="${NODE_PINNED%%.*}"
+  _node_ok=0
+  if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+    _node_ver="$(node --version 2>/dev/null | sed 's/^v//')"
+    _node_major="${_node_ver%%.*}"
+    case "$_node_major" in
+      '' | *[!0-9]*) ;;
+      *) [ "$_node_major" -ge "$NODE_PINNED_MAJOR" ] && _node_ok=1 ;;
+    esac
+  fi
+  if [ "$_node_ok" = "0" ]; then
+    printf 'error: building the perch frontend requires Node.js >= %s (pinned: %s) and npm.\n' \
+      "$NODE_PINNED_MAJOR" "$NODE_PINNED" >&2
+    printf 'Install it from https://nodejs.org/ or a version manager (nvm, asdf), then re-run this script.\n' >&2
+    printf 'Use --skip-build to install only the agents.\n' >&2
+    exit 1
+  fi
+  printf '[ok]    node %s and npm present\n' "$_node_ver"
+fi
+
+# ---------------------------------------------------------------------------
 # Step 1: Go
 # ---------------------------------------------------------------------------
 GO_VERSION="$(tool_version golang)"
 if [ -z "$GO_VERSION" ]; then
   die "Could not resolve golang version from .tool-versions — ensure the file exists and has a 'golang <version>' line"
 fi
-GO_MIN_MAJOR=1
-GO_MIN_MINOR=24
 
-# Check the fixed path, not PATH, so re-running this script gives the same result.
-GO_BIN="/usr/local/go/bin/go"
-
+# go.mod carries a "toolchain go<GO_VERSION>" line. A local Go older than the
+# pin would have to download that toolchain at build time (and fails under
+# GOTOOLCHAIN=local or without network), so require at least the pinned version.
+# Prefer a Go already on PATH (distro, brew, asdf); otherwise check the fixed
+# install location used by this script.
 go_meets_minimum() {
-  # Returns 0 (true) if the given go binary meets the minimum version.
+  # Returns 0 (true) if the given go binary is at least GO_VERSION.
   _go_bin="$1"
   if ! "$_go_bin" version >/dev/null 2>&1; then
     return 1
   fi
-  _ver="$("$_go_bin" version | awk '{print $3}' | sed 's/go//')"
-  _major="$(printf '%s' "$_ver" | cut -d. -f1)"
-  # Strip trailing letters before numeric comparison.
-  _minor="$(printf '%s' "$_ver" | cut -d. -f2 | sed 's/[^0-9].*//')"
-  [ "$_major" -gt "$GO_MIN_MAJOR" ] || \
-    { [ "$_major" -eq "$GO_MIN_MAJOR" ] && [ "$_minor" -ge "$GO_MIN_MINOR" ]; }
+  _ver="$("$_go_bin" version | awk '{print $3}' | sed 's/^go//')"
+  version_ge "$_ver" "$GO_VERSION"
 }
 
-if [ -x "$GO_BIN" ] && go_meets_minimum "$GO_BIN"; then
+GO_BIN=""
+if command -v go >/dev/null 2>&1 && go_meets_minimum "$(command -v go)"; then
+  GO_BIN="$(command -v go)"
+elif [ -x /usr/local/go/bin/go ] && go_meets_minimum /usr/local/go/bin/go; then
+  GO_BIN="/usr/local/go/bin/go"
+fi
+
+if [ -n "$GO_BIN" ]; then
   printf '[skip] go %s already installed at %s\n' \
     "$("$GO_BIN" version | awk '{print $3}' | sed 's/^go//')" "$GO_BIN"
 else
@@ -161,7 +266,8 @@ else
     die "Could not fetch SHA256 for ${TARBALL} from go.dev"
   fi
 
-  TMPFILE="$(mktemp /tmp/go-install-XXXXXX.tar.gz)"
+  # The template ends in the X's: BSD mktemp only substitutes trailing X's.
+  TMPFILE="$(mktemp "${TMPDIR:-/tmp}/go-install.XXXXXX")"
   # Use a staging directory on the same filesystem as /usr/local, so the move is atomic.
   STAGE_DIR="/usr/local/.perch-go-$$"
   # Remove the temp file and staging directory on any exit, including on errors.
@@ -203,7 +309,12 @@ else
 fi
 
 # Ensure Go is on PATH for the remainder of this script.
-export PATH="/usr/local/go/bin:$PATH"
+if [ -n "$GO_BIN" ]; then
+  PATH="$(dirname "$GO_BIN"):$PATH"
+else
+  PATH="/usr/local/go/bin:$PATH"
+fi
+export PATH
 
 # ---------------------------------------------------------------------------
 # Step 2: git (required; the script exits with an error if git is absent or too old)
@@ -265,7 +376,7 @@ else
     fi
   else
     printf '[install] claude via https://cli.anthropic.com/install.sh\n'
-    curl -fsSL https://cli.anthropic.com/install.sh | sh
+    run_remote_installer claude https://cli.anthropic.com/install.sh
     INSTALLED_CLAUDE="$(installed_version claude || true)"
     if [ "$INSTALLED_CLAUDE" = "$CLAUDE_VERSION" ]; then
       printf '[ok]    claude %s installed\n' "$INSTALLED_CLAUDE"
@@ -298,7 +409,7 @@ else
     fi
   else
     printf '[install] opencode via https://opencode.ai/install\n'
-    curl -fsSL https://opencode.ai/install | sh
+    run_remote_installer opencode https://opencode.ai/install
     INSTALLED_OPENCODE="$(installed_version opencode || true)"
     if [ "$INSTALLED_OPENCODE" = "$OPENCODE_VERSION" ]; then
       printf '[ok]    opencode %s installed\n' "$INSTALLED_OPENCODE"
@@ -318,35 +429,9 @@ if [ -z "$INSTALL_PREFIX" ]; then
     INSTALL_PREFIX="/usr/local/bin"
   else
     INSTALL_PREFIX="${HOME}/.local/bin"
-    mkdir -p "$INSTALL_PREFIX"
   fi
 fi
-
-# ---------------------------------------------------------------------------
-# Step 5: webkit2gtk-4.1 + gtk+-3.0 dev libraries (Linux GUI build deps)
-# ---------------------------------------------------------------------------
-if [ "$OS" = "Linux" ] && [ "$SKIP_BUILD" != "1" ]; then
-  _webkit_ok=1
-  if ! command -v pkg-config >/dev/null 2>&1; then
-    _webkit_ok=0
-  elif ! pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
-    _webkit_ok=0
-  elif ! pkg-config --exists gtk+-3.0 2>/dev/null; then
-    _webkit_ok=0
-  fi
-  if [ "$_webkit_ok" = "0" ]; then
-    printf 'error: the perch GUI build requires webkit2gtk-4.1 and gtk+-3.0 dev libraries (and pkg-config).\n' >&2
-    printf 'Install the missing packages, then re-run this script.\n' >&2
-    case "$PKG_MGR" in
-      apt)    printf '  sudo apt-get install -y pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev\n' >&2 ;;
-      dnf)    printf '  sudo dnf install -y pkgconf-pkg-config gtk3-devel webkit2gtk4.1-devel\n' >&2 ;;
-      pacman) printf '  sudo pacman -S pkgconf gtk3 webkit2gtk-4.1\n' >&2 ;;
-      *)      printf '  Install pkg-config, gtk3 dev, and webkit2gtk-4.1 dev via your package manager.\n' >&2 ;;
-    esac
-    exit 1
-  fi
-  printf '[ok]    webkit2gtk-4.1 and gtk+-3.0 dev libraries present\n'
-fi
+mkdir -p "$INSTALL_PREFIX" || die "Cannot create ${INSTALL_PREFIX}"
 
 # ---------------------------------------------------------------------------
 # Step 6: build perch
@@ -356,9 +441,28 @@ if [ "$SKIP_BUILD" = "1" ]; then
 else
   printf '[install] building perch -> %s/perch\n' "$INSTALL_PREFIX"
   cd "$REPO_ROOT" || die "Cannot cd to repo root: ${REPO_ROOT}"
+  PERCH_VERSION="$(git describe --tags --always 2>/dev/null || printf 'dev')"
+
+  # The committed frontend/dist/index.html is only a go:embed stub, and app.Run
+  # refuses to start with it. Build the real frontend first, as `make
+  # gui-build` does.
+  printf '[install] building frontend (npm ci && npm run build)\n'
+  npm --prefix frontend ci || die "npm ci failed in frontend/"
+  npm --prefix frontend run build || die "npm run build failed in frontend/"
+  if [ ! -s frontend/dist/index.html ] || ! grep -q '<script' frontend/dist/index.html; then
+    die "frontend build did not produce a real frontend/dist/index.html"
+  fi
+
   go build -tags "production webkit2_41" -trimpath \
-    -ldflags "-s -w -X main.version=$(git describe --tags --always 2>/dev/null || printf 'dev')" \
+    -ldflags "-s -w -X main.version=${PERCH_VERSION}" \
     -o "${INSTALL_PREFIX}/perch" ./cmd/perch
+
+  # vite overwrote the tracked stub. The binary already embeds the real index,
+  # so restore the stub to leave the work tree clean.
+  git -C "$REPO_ROOT" checkout -- frontend/dist/index.html 2>/dev/null || true
+
+  "${INSTALL_PREFIX}/perch" version >/dev/null 2>&1 \
+    || die "the built binary at ${INSTALL_PREFIX}/perch does not run"
   printf '[ok]    perch built at %s/perch\n' "$INSTALL_PREFIX"
 fi
 
@@ -368,7 +472,12 @@ fi
 # options.Linux.Icon. This step adds the app-menu and app-switcher entry.
 # Its StartupWMClass matches ProgramName, so the switcher shows the same icon.
 # ---------------------------------------------------------------------------
-if [ "$GOOS" = "linux" ]; then
+if [ "$GOOS" = "linux" ] && [ ! -x "${INSTALL_PREFIX}/perch" ]; then
+  printf '[skip] desktop entry (no perch binary at %s/perch)\n' "$INSTALL_PREFIX"
+elif [ "$GOOS" = "linux" ]; then
+  # Quote the Exec path (it may contain spaces) and double any % as the
+  # Desktop Entry spec requires.
+  exec_path="$(printf '%s' "${INSTALL_PREFIX}/perch" | sed 's/%/%%/g')"
   icon_dir="${HOME}/.local/share/icons/hicolor/512x512/apps"
   apps_dir="${HOME}/.local/share/applications"
   mkdir -p "$icon_dir" "$apps_dir"
@@ -378,7 +487,7 @@ if [ "$GOOS" = "linux" ]; then
 Type=Application
 Name=perch
 Comment=Cockpit for AI coding agents
-Exec=${INSTALL_PREFIX}/perch
+Exec="${exec_path}"
 Icon=perch
 Terminal=false
 Categories=Development;
