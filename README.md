@@ -179,7 +179,7 @@ keyboard control, read the [usage guide](docs/usage.md).
 | `perch` | Open the cockpit. The project root is the current directory |
 | `perch <path>` | Open the cockpit. The project root is the given directory |
 | `perch attach <query>` | Focus the running window on the session matching the query, or launch the cockpit if none is running |
-| `perch doctor` | Check that dependencies and configuration are in order |
+| `perch doctor` | Check that `git`, `go` (build-only), and at least one agent CLI (`claude` or `opencode`) are installed and not older than the versions in `.tool-versions`. It does not check WebKit2GTK or `config.toml` |
 | `perch version` | Print version and build information |
 | `perch reload` | Run inside a session terminal. Sends the environment to the agent and relaunches it, and the conversation continues |
 

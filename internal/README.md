@@ -16,7 +16,7 @@ exposes them to the frontend. For how the packages interact, see
 | `envsync` | The one-per-app loopback listener behind `perch reload`: a per-workspace bearer token, an in-memory environment delta, never persisted. | `Listener`, `New`, `SyncFunc`, `SyncRequest`, `EnvURL`, `EnvToken`, `EnvWS` |
 | `notify` | Desktop notifications over D-Bus, with a `notify-send` fallback. | `Notifier`, `New`, `FakeNotifier` |
 | `fs` | gitignore-aware directory listing, a recursive change watcher, and atomic file writes. | `Node`, `ListDir`, `Watch`, `ReadFile`, `WriteFile`, `RevealInFiles` |
-| `discover` | Finds git repositories under the roots, frecency-ordered, grouped with their worktrees. | `Scan`, `Projects`, `Options` |
+| `discover` | Finds git repositories under the roots, grouped with their worktrees. Ordered alphabetically today: the frecency ranking accepts stats, but no caller records them yet. | `Scan`, `ScanContext`, `Projects`, `Options` |
 | `doctor` | The `perch doctor` health check for `go`, `git`, and the agents, with OS calls injected for testing. | `Run`, `RealSystem`, `ParseToolVersions` |
 | `config` | The single-layer global TOML config that exposes the project roots. | `Config`, `Load`, `DefaultGlobalPath` |
 | `model` | Shared domain vocabulary as pure data, no I/O. | `Tool`, `ToolClaude`, `ToolOpencode`, `Project`, `Tree` |

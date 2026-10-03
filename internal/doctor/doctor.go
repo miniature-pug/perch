@@ -7,14 +7,16 @@
 package doctor
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	perch "github.com/miniature-pug/perch"
 	"github.com/miniature-pug/perch/internal/model"
@@ -28,9 +30,6 @@ import (
 type system interface {
 	lookPath(name string) (string, error)
 	output(name string, args ...string) ([]byte, error)
-	homeDir() (string, error)
-	stat(path string) error
-	readFile(path string) ([]byte, error)
 }
 
 // realSystem is the production implementation of system.
@@ -45,21 +44,33 @@ func (r *realSystem) lookPath(name string) (string, error) {
 	return exec.LookPath(name)
 }
 
+// versionTimeout bounds one `<tool> --version` call, so a hung agent CLI
+// cannot hang `perch doctor`.
+var versionTimeout = 5 * time.Second
+
+// output runs name with args and returns its version text. Most tools print
+// the version to stdout, but some print it to stderr, so output falls back to
+// stderr plus stdout when stdout holds no version token.
 func (r *realSystem) output(name string, args ...string) ([]byte, error) {
-	return exec.Command(name, args...).Output()
-}
-
-func (r *realSystem) homeDir() (string, error) {
-	return os.UserHomeDir()
-}
-
-func (r *realSystem) stat(path string) error {
-	_, err := os.Stat(path)
-	return err
-}
-
-func (r *realSystem) readFile(path string) ([]byte, error) {
-	return os.ReadFile(path)
+	ctx, cancel := context.WithTimeout(context.Background(), versionTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	// WaitDelay keeps Run from blocking on pipes held open by grandchildren
+	// after the timeout kills the tool itself.
+	cmd.WaitDelay = time.Second
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("timed out after %s", versionTimeout)
+		}
+		return nil, err
+	}
+	if extractVersionToken(stdout.String()) != "" {
+		return stdout.Bytes(), nil
+	}
+	return append(stderr.Bytes(), stdout.Bytes()...), nil
 }
 
 // ── Version utilities ─────────────────────────────────────────────────────────
@@ -234,7 +245,9 @@ func Run(version string, w io.Writer, sys system) int {
 	// results collects all tool-check rows for tabwriter rendering.
 	var results []checkResult
 	hardFail := false
+	hardFailures := 0
 	warnings := 0
+	missingAgentWarns := 0
 
 	// Track agent presence for the one-of-agents rule.
 	agentsPresent := 0
@@ -246,6 +259,7 @@ func Run(version string, w io.Writer, sys system) int {
 
 		if r.isHard && r.tag != "[ok]" {
 			hardFail = true
+			hardFailures++
 		} else if r.tag == "[warn]" {
 			warnings++
 		}
@@ -255,6 +269,12 @@ func Run(version string, w io.Writer, sys system) int {
 			agentToolCount++
 			if r.path != "" {
 				agentsPresent++
+			} else if r.tag == "[warn]" {
+				// A missing agent is only a warning while its sibling is
+				// present. If both are missing, the synthetic "agents" row
+				// below is the failure, so these rows must not also count
+				// as warnings.
+				missingAgentWarns++
 			}
 		}
 	}
@@ -265,6 +285,8 @@ func Run(version string, w io.Writer, sys system) int {
 	// does not count toward warnings. It is a hard fail, not a warning.
 	if agentToolCount > 0 && agentsPresent == 0 {
 		hardFail = true
+		hardFailures++
+		warnings -= missingAgentWarns
 		results = append(results, checkResult{
 			name:    "agents",
 			tag:     "[fail]",
@@ -288,9 +310,24 @@ func Run(version string, w io.Writer, sys system) int {
 
 	// ── Summary ───────────────────────────────────────────────────────────────
 	_, _ = fmt.Fprintln(w)
-	if warnings == 0 {
+	switch {
+	case hardFail:
+		noun := "checks"
+		if hardFailures == 1 {
+			noun = "check"
+		}
+		_, _ = fmt.Fprintf(w, "%d required %s failed.", hardFailures, noun)
+		if warnings > 0 {
+			wnoun := "warnings"
+			if warnings == 1 {
+				wnoun = "warning"
+			}
+			_, _ = fmt.Fprintf(w, " %d %s.", warnings, wnoun)
+		}
+		_, _ = fmt.Fprintln(w)
+	case warnings == 0:
 		_, _ = fmt.Fprintln(w, "All checks passed.")
-	} else {
+	default:
 		noun := "warnings"
 		if warnings == 1 {
 			noun = "warning"
@@ -357,7 +394,7 @@ func checkTool(td toolDescriptor, pinned map[string]string, sys system) checkRes
 	raw, err := sys.output(td.name, td.versionArgs...)
 	var installedVer string
 	if err != nil {
-		installedVer = "unknown (version check failed)"
+		installedVer = "unknown (version check failed: " + err.Error() + ")"
 	} else {
 		installedVer = extractVersionToken(string(raw))
 		if installedVer == "" {
@@ -369,6 +406,11 @@ func checkTool(td toolDescriptor, pinned map[string]string, sys system) checkRes
 	// could be parsed.
 	tag := "[ok]"
 	displayVer := installedVer
+	if strings.HasPrefix(installedVer, "unknown") {
+		// The binary exists but its version could not be read. That is not a
+		// clean bill of health.
+		tag = "[warn]"
+	}
 	if td.pinnedKey != "" {
 		if pinnedVer, ok := pinned[td.pinnedKey]; ok {
 			if installedVer != "" && !strings.HasPrefix(installedVer, "unknown") {
@@ -378,8 +420,8 @@ func checkTool(td toolDescriptor, pinned map[string]string, sys system) checkRes
 					displayVer = installedVer + " (below pin " + pinnedVer + ")"
 				}
 			}
-			// If installed == "unknown", checkTool cannot drift-check. It
-			// leaves the tag as [ok] (no crash).
+			// If installed == "unknown", checkTool cannot drift-check. The
+			// row is already tagged [warn] above.
 		}
 	}
 

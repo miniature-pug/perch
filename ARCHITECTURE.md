@@ -271,9 +271,9 @@ state only for sessions that are open. Settings, including the always-allow
 rules and the stale threshold (30 days by default), live in `settings.json`.
 
 Discovery starts from the roots, the launch directory by default. `discover.Scan`
-walks each root to a maximum depth of 8, pruning `node_modules`, `vendor`, and
-`.git`, and returns the directories that contain a `.git` entry, ordered by
-frecency. `DiscoverRepos` runs this across all roots, dedupes by repository, and
+walks each root (a symlinked root is resolved first) to a maximum depth of 8, pruning `node_modules`, `vendor`, build-output directories such as `target`, `build`, and `dist`, and
+`.git`, and returns the directories that contain a `.git` entry. `discover.Projects` orders them alphabetically; the
+frecency ranking exists but nothing records access stats yet. `DiscoverRepos` runs this across all roots, dedupes by repository, and
 reports an error only when every root fails.
 
 ## Status and approval pipeline
