@@ -3,6 +3,7 @@ import { vi } from "vitest";
 import {
   shellQuote,
   mentionBytes,
+  mentionText,
   paneIdAt,
   routeOsFileDrop,
   registerOsFileDrop,
@@ -20,9 +21,16 @@ test("shellQuote wraps in single quotes and escapes embedded single quotes", () 
   expect(shellQuote("it's")).toBe("'it'\\''s'");
 });
 
-test("mentionBytes encodes a shell-quoted @mention with a trailing space", () => {
-  expect(decode(mentionBytes("/wt/src/main.go"))).toBe("@'/wt/src/main.go' ");
+test("mentionBytes encodes an @mention with a trailing space, quoting only paths that need it (FEX-27)", () => {
+  expect(decode(mentionBytes("/wt/src/main.go"))).toBe("@/wt/src/main.go ");
   expect(decode(mentionBytes("/wt/a b/c.go"))).toBe("@'/wt/a b/c.go' ");
+  expect(decode(mentionBytes("/wt/it's.md"))).toBe("@'/wt/it'\\''s.md' ");
+});
+
+test("FEX-27/FEC-35: mentionText is the one format for every entry point", () => {
+  expect(mentionText("/wt/src/main.go")).toBe("@/wt/src/main.go ");
+  expect(mentionText("/wt/my docs/a.md")).toBe("@'/wt/my docs/a.md' ");
+  expect(mentionText("/wt/$(rm -rf).md")).toBe("@'/wt/$(rm -rf).md' ");
 });
 
 /** Build a detached drop-zone element carrying the routing attribute. */
@@ -64,8 +72,8 @@ test("routeOsFileDrop writes one @mention per path to the pane under the point",
   }
   expect(vi.mocked(writeToPty).mock.calls.length).toBe(2);
   expect(vi.mocked(writeToPty).mock.calls[0][0]).toBe("p9");
-  expect(decode(vi.mocked(writeToPty).mock.calls[0][1] as number[])).toBe("@'/x/a.go' ");
-  expect(decode(vi.mocked(writeToPty).mock.calls[1][1] as number[])).toBe("@'/x/b.go' ");
+  expect(decode(vi.mocked(writeToPty).mock.calls[0][1] as number[])).toBe("@/x/a.go ");
+  expect(decode(vi.mocked(writeToPty).mock.calls[1][1] as number[])).toBe("@/x/b.go ");
 });
 
 test("routeOsFileDrop is a no-op when the drop lands on no pane", async () => {

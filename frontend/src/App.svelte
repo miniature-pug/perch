@@ -23,7 +23,7 @@
   import HelpDialog         from "./lib/HelpDialog.svelte";
   import SettingsPanel      from "./lib/SettingsPanel.svelte";
   import DragDrop           from "./lib/DragDrop.svelte";
-  import { registerOsFileDrop } from "./lib/osFileDrop";
+  import { registerOsFileDrop, mentionText } from "./lib/osFileDrop";
   import { SvelteSet }      from "svelte/reactivity";
   import { layout }         from "./lib/stores/layout.svelte";
   import { mode }           from "./lib/stores/mode.svelte";
@@ -1806,8 +1806,9 @@
                       // a regular file open.
                       if (p.startsWith(MENTION_PREFIX)) {
                         const path = p.slice(MENTION_PREFIX.length);
-                        // This format matches DragDrop: '@'+path+' '
-                        sendToAgent("@" + path + " ");
+                        // The same @mention format as a tree drag and an OS
+                        // file drop (FEX-27, FEC-35).
+                        sendToAgent(mentionText(path));
                       } else {
                         codePaths[ws.id] = p;
                       }

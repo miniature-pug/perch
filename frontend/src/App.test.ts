@@ -2078,15 +2078,14 @@ describe("App.svelte DragDrop", () => {
       document.elementFromPoint = origEFP;
     }
 
-    // writeToPty is called with the paneId and bytes encoding the shell-quoted
-    // @mention "@'/tmp/alpha/foo.ts' " (single-quoted so a path with spaces
-    // survives as one token).
+    // writeToPty is called with the paneId and the @mention for the path. A
+    // plain path stays bare; one with spaces is single-quoted (FEX-27).
     await waitFor(() => {
       expect(writeToPty).toHaveBeenCalled();
       const [calledPaneId, calledBytes] = (writeToPty as ReturnType<typeof vi.fn>).mock.calls[0];
       expect(calledPaneId).toBe("p1");
       const decoded = new TextDecoder().decode(new Uint8Array(calledBytes));
-      expect(decoded).toBe("@'/tmp/alpha/foo.ts' ");
+      expect(decoded).toBe("@/tmp/alpha/foo.ts ");
     });
   });
 });

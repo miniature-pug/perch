@@ -68,7 +68,7 @@ test("OS file drop routes ABSOLUTE paths to the pty via the Wails OnFileDrop cal
     await waitFor(() => expect(w.writeToPty).toHaveBeenCalledWith("p1", expect.any(Array)));
     const [, bytes] = vi.mocked(w.writeToPty).mock.calls[0];
     const decoded = new TextDecoder().decode(new Uint8Array(bytes as number[]));
-    expect(decoded).toBe("@'/wt/src/main.go' ");
+    expect(decoded).toBe("@/wt/src/main.go "); // a plain path stays bare (FEX-27)
   } finally {
     document.elementFromPoint = origEFP;
     off();

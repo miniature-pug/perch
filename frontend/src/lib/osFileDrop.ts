@@ -30,11 +30,20 @@ export function shellQuote(p: string): string {
   return `'${p.replace(/'/g, "'\\''")}'`;
 }
 
-// Encode a single dropped path as a shell-quoted @mention with a trailing
-// space, as UTF-8 bytes ready for writeToPty. This matches the @'<path>'
-// convention the file tree and editor already use.
+// The one @mention format for every entry point: an OS file drop, a
+// file-tree drag, and "Send to agent" (FEX-27, FEC-35). A plain path stays
+// bare (@/repo/src/main.go), the form the agent CLIs resolve; a path with a
+// space or a shell metacharacter is single-quoted so it stays one token.
+// The trailing space ends the mention.
+const PLAIN_PATH = /^[A-Za-z0-9._\/@+=:,%~-]+$/;
+export function mentionText(path: string): string {
+  return `@${PLAIN_PATH.test(path) ? path : shellQuote(path)} `;
+}
+
+// Encode a single dropped path as an @mention (see mentionText), as UTF-8
+// bytes ready for writeToPty.
 export function mentionBytes(path: string): number[] {
-  return Array.from(new TextEncoder().encode(`@${shellQuote(path)} `));
+  return Array.from(new TextEncoder().encode(mentionText(path)));
 }
 
 // Resolve which pane sits under the drop point (x, y in viewport CSS
