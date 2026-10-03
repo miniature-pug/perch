@@ -1591,7 +1591,7 @@
                          editor reloads only when ITS file changes on disk, and only
                          when it has no unsaved edits, never on an unrelated write
                          or a view toggle. Visibility is handled by `visible`. -->
-                    <Editor path={codePath} worktree={ws.worktreePath}
+                    <Editor path={codePath} worktree={ws.worktreePath} workspaceId={ws.id}
                             reloadToken={fsPathVersion[codePath ?? ""] ?? 0}
                             visible={showing}
                             onSendToAgent={sendToAgent} />

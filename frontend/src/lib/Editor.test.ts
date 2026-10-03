@@ -460,3 +460,164 @@ test("B4: Ctrl-Shift-V pastes clipboardText() over the selection via a CM transa
   // The paste dispatch runs after the async clipboardText() resolves.
   await waitFor(() => expect(view.state.doc.toString()).toBe("APASTEDB\n"));
 });
+
+// --- Audit regressions: file switches, failed loads, and saves (FEX-1/2/3/12/16/17/29/30/31) ---
+
+describe("audit: Editor switch and save safety", () => {
+  async function setup(initial: string | null = "/wt/a.ts") {
+    const w = await import("./wails");
+    const { flushSync } = await import("svelte");
+    const { EditorView } = await import("@codemirror/view");
+    const { default: Host } = await import("./__stubs__/EditorHost.svelte");
+    vi.mocked(w.readFile).mockReset();
+    vi.mocked(w.readFile).mockImplementation(async (p: string) => "content of " + p);
+    vi.mocked(w.writeFile).mockReset();
+    vi.mocked(w.writeFile).mockImplementation(async () => {});
+    vi.mocked(w.hunks).mockReset();
+    vi.mocked(w.hunks).mockImplementation(async () => []);
+    const r = render(Host, { props: { path: initial } });
+    const cmView = () => {
+      const el = document.querySelector(".cm-editor") as HTMLElement | null;
+      return el ? EditorView.findFromDOM(el) : null;
+    };
+    const shown = () => cmView()?.state.doc.toString() ?? null;
+    const type = (text: string) => {
+      const v = cmView()!;
+      v.dispatch({ changes: { from: 0, insert: text } });
+    };
+    const setPath = (p: string | null) => { r.component.setPath(p); flushSync(); };
+    const bump = () => { r.component.bump(); flushSync(); };
+    if (initial) await waitFor(() => expect(shown()).toBe("content of " + initial));
+    return { w, r, shown, type, setPath, bump, cmView };
+  }
+
+  test("FEX-1: a dirty buffer is saved to its own file, never into the previewed file", async () => {
+    const { w, type, setPath } = await setup();
+    type("EDIT ");
+    setPath("/wt/readme.md");
+    await waitFor(() => expect(w.writeFile).toHaveBeenCalled());
+    expect(vi.mocked(w.writeFile).mock.calls).toEqual([["/wt/a.ts", "EDIT content of /wt/a.ts"]]);
+  });
+
+  test("FEX-2: switching away from a dirty file saves it before the next file loads", async () => {
+    const { w, type, setPath, shown } = await setup();
+    type("EDIT ");
+    setPath("/wt/b.ts");
+    await waitFor(() => expect(shown()).toBe("content of /wt/b.ts"));
+    expect(vi.mocked(w.writeFile).mock.calls).toEqual([["/wt/a.ts", "EDIT content of /wt/a.ts"]]);
+    expect(document.querySelector(".dirty-dot")).toBeNull();
+  });
+
+  test("FEX-2: a failed save on switch keeps the old file open and dirty, writes nothing else", async () => {
+    const { w, type, setPath, shown } = await setup();
+    vi.mocked(w.writeFile).mockRejectedValueOnce(new Error("disk full"));
+    type("EDIT ");
+    setPath("/wt/b.ts");
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toMatch(/a\.ts could not be saved/));
+    expect(shown()).toBe("EDIT content of /wt/a.ts");
+    expect(document.querySelector(".dirty-dot")).not.toBeNull();
+    // A retry with Ctrl-S writes a.ts to a.ts, then the switch to b.ts resumes.
+    await fireEvent.keyDown(document, { key: "s", ctrlKey: true });
+    await waitFor(() => expect(shown()).toBe("content of /wt/b.ts"));
+    const calls = vi.mocked(w.writeFile).mock.calls;
+    expect(calls.every(([p]) => p === "/wt/a.ts")).toBe(true);
+  });
+
+  test("FEX-3: a failed load shows an error and Ctrl-S cannot write the old text into the new file", async () => {
+    const { w, setPath, shown } = await setup();
+    vi.mocked(w.readFile).mockRejectedValueOnce(new Error("file too large"));
+    setPath("/wt/big.json");
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toMatch(/Could not open big\.json: file too large/));
+    expect(shown()).toBeNull();
+    await fireEvent.keyDown(document, { key: "s", ctrlKey: true });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(w.writeFile).not.toHaveBeenCalled();
+  });
+
+  test("FEX-17: a reload bump during a switch still loads the new file (old buffer never lands in it)", async () => {
+    const { w, type, setPath, bump, shown } = await setup();
+    type("EDIT ");
+    let releaseB: (s: string) => void = () => {};
+    vi.mocked(w.readFile).mockImplementation((p: string) =>
+      p === "/wt/b.ts" ? new Promise<string>((res) => { releaseB = res; }) : Promise.resolve("content of " + p));
+    setPath("/wt/b.ts");
+    await waitFor(() => expect(w.readFile).toHaveBeenCalledWith("/wt/b.ts"));
+    bump();
+    releaseB("content of /wt/b.ts");
+    await waitFor(() => expect(shown()).toBe("content of /wt/b.ts"));
+    await fireEvent.keyDown(document, { key: "s", ctrlKey: true });
+    await new Promise((r) => setTimeout(r, 20));
+    const calls = vi.mocked(w.writeFile).mock.calls;
+    expect(calls).toContainEqual(["/wt/a.ts", "EDIT content of /wt/a.ts"]);
+    expect(calls.filter(([p]) => p === "/wt/b.ts").every(([, c]) => c === "content of /wt/b.ts")).toBe(true);
+  });
+
+  test("FEX-16: keystrokes typed during an in-flight save survive the save and the reload it triggers", async () => {
+    const { w, type, bump, shown } = await setup();
+    type("ONE ");
+    let releaseWrite: () => void = () => {};
+    vi.mocked(w.writeFile).mockImplementationOnce(() => new Promise<void>((res) => { releaseWrite = res; }));
+    await fireEvent.keyDown(document, { key: "s", ctrlKey: true });
+    type("TWO ");
+    releaseWrite();
+    await new Promise((r) => setTimeout(r, 5));
+    // The watcher reports the save's own write.
+    vi.mocked(w.readFile).mockResolvedValueOnce("ONE content of /wt/a.ts");
+    bump();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(shown()).toBe("TWO ONE content of /wt/a.ts");
+    expect(document.querySelector(".dirty-dot")).not.toBeNull();
+  });
+
+  test("FEX-31: path a -> null -> b re-renders the editor (no detached view)", async () => {
+    const { setPath, shown } = await setup();
+    setPath(null);
+    await new Promise((r) => setTimeout(r, 10));
+    setPath("/wt/b.ts");
+    await waitFor(() => expect(shown()).toBe("content of /wt/b.ts"));
+    expect(document.querySelector(".cm-host .cm-editor")).not.toBeNull();
+  });
+
+  test("FEX-31: a dirty buffer is saved when the path goes null", async () => {
+    const { w, type, setPath } = await setup();
+    type("EDIT ");
+    setPath(null);
+    await waitFor(() => expect(w.writeFile).toHaveBeenCalledWith("/wt/a.ts", "EDIT content of /wt/a.ts"));
+  });
+
+  test("FEX-12: the git gutter asks for hunks with the worktree-relative path", async () => {
+    const { w } = await setup("/wt/src/main.go");
+    await waitFor(() => expect(w.hunks).toHaveBeenCalledWith("/wt", "src/main.go"));
+  });
+
+  test("FEX-29: Ctrl-S with Caps Lock (key 'S') still saves", async () => {
+    const { w, type } = await setup();
+    type("X");
+    await fireEvent.keyDown(document, { key: "S", ctrlKey: true });
+    await waitFor(() => expect(w.writeFile).toHaveBeenCalledWith("/wt/a.ts", "Xcontent of /wt/a.ts"));
+  });
+
+  test("FEC-24: a failed save notifies under the owning session, not the file path", async () => {
+    const { w, type } = await setup();
+    const { getItems } = await import("./stores/notifications.svelte");
+    vi.mocked(w.writeFile).mockRejectedValueOnce(new Error("EACCES"));
+    type("X");
+    await fireEvent.keyDown(document, { key: "s", ctrlKey: true });
+    await waitFor(() => expect(getItems().some((n) => n.title === "Save failed")).toBe(true));
+    const n = getItems().find((n) => n.title === "Save failed")!;
+    expect(n.workspaceId).toBe("ws-1");
+    expect(n.body).toContain("/wt/a.ts");
+  });
+});
+
+test("FEX-30: an unknown file type gets no JavaScript language support", async () => {
+  const { default: Editor } = await import("./Editor.svelte");
+  const { EditorView } = await import("@codemirror/view");
+  const { language } = await import("@codemirror/language");
+  const w = await import("./wails");
+  vi.mocked(w.readFile).mockResolvedValue("key: value\n");
+  render(Editor, { props: { path: "/wt/config.yaml", worktree: "/wt" } });
+  await waitFor(() => expect(document.querySelector(".cm-editor")).not.toBeNull());
+  const view = EditorView.findFromDOM(document.querySelector(".cm-editor") as HTMLElement)!;
+  expect(view.state.facet(language)).toBeNull();
+});
