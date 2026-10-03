@@ -1673,6 +1673,7 @@
                      scroll position survive the refresh. -->
                 <div class="diff-host" style:display={layout.view === "diff" ? "" : "none"}>
                   <DiffView worktree={active.worktreePath} refresh={fsVersion[active.id] ?? 0}
+                            visible={layout.view === "diff"} workspaceId={active.id}
                             onSendToAgent={sendToAgent}
                             onDiffChanged={() => { if (active) refreshDiffStat(active); }} />
                 </div>
