@@ -13,6 +13,7 @@
   import { isPreviewable, previewKind } from "./lib/preview";
   import { focusOnMount, countUp } from "./lib/actions";
   import { keepHome, adoptInto } from "./lib/portal";
+  import { isLeavePrefix, isLeaveFinal, isModifierKey } from "./lib/terminalKeys";
   import DiffView           from "./lib/DiffView.svelte";
   import { shouldFocusAwaitingInput, isViewingAgentPane } from "./lib/engagement";
   import MenuBar            from "./lib/MenuBar.svelte";
@@ -22,17 +23,17 @@
   import HelpDialog         from "./lib/HelpDialog.svelte";
   import SettingsPanel      from "./lib/SettingsPanel.svelte";
   import DragDrop           from "./lib/DragDrop.svelte";
-  import { registerOsFileDrop } from "./lib/osFileDrop";
+  import { registerOsFileDrop, mentionText } from "./lib/osFileDrop";
   import { SvelteSet }      from "svelte/reactivity";
   import { layout }         from "./lib/stores/layout.svelte";
   import { mode }           from "./lib/stores/mode.svelte";
-  import { settings }       from "./lib/stores/settings.svelte";
+  import { settings } from "./lib/stores/settings.svelte";
   import ApprovalCard       from "./lib/ApprovalCard.svelte";
   import NotificationHub    from "./lib/NotificationHub.svelte";
-  import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead, markAllRead, markReadForWorkspace, dropForWorkspace, dropAwaitingInputForWorkspace } from "./lib/stores/notifications.svelte";
+  import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead, markAllRead, markReadForWorkspace, dropForWorkspace, dropAwaitingInputForWorkspace, dropBlockingForWorkspace, clearActionForWorkspace } from "./lib/stores/notifications.svelte";
   import CleanupPanel from "./lib/CleanupPanel.svelte";
-  import { listWorkspaces, createWorkspace, setWorkspaceTitle, workspaceForBranch, removeWorkspace, openWorkspace, closeWorkspace, closeShell, revealInFiles, onAgentEvent, onNotify, onFsChanged, onWorkspaceAttach, onWorkspaceRelaunch, approve, pendingApprovals, branches, readFile, setWindowFocus, writeToPty, discoverRepos, diffStat, listStaleSessions, forceRemoveWorkspace, clipboardSetText, homeShellCwd as fetchHomeShellCwd } from "./lib/wails";
-  import type { WorkspaceVM, ApprovalReq, StaleSessionVM, AgentState, RepoInfo } from "./lib/wails";
+  import { listWorkspaces, createWorkspace, setWorkspaceTitle, workspaceForBranch, removeWorkspace, openWorkspace, closeWorkspace, closeShell, revealInFiles, onAgentEvent, onNotify, onFsChanged, onWorkspaceAttach, onWorkspaceRelaunch, approve, pendingApprovals, branches, readFile, setWindowFocus, writeToPty, discoverRepos, diffStat, listStaleSessions, forceRemoveWorkspace, clipboardSetText, approveAlways, removeAlwaysRule, retypeLaunch, homeShellCwd as fetchHomeShellCwd } from "./lib/wails";
+  import type { WorkspaceVM, ApprovalReq, StaleSessionVM, AgentState, RepoInfo, AlwaysRule, AlwaysGrant } from "./lib/wails";
   import { UNDO_REMOVE_DELAY_MS, GCHORD_TIMEOUT_MS, SIDEBAR_MIN_W, SIDEBAR_MAX_W, SHELL_MIN_H, SHELL_MAX_H, RESIZE_STEP_PX, THEMES, MIME_SESSION, MENTION_PREFIX, AGENT_CLAUDE, AGENT_OPENCODE } from "./lib/constants";
 
   let workspaces      = $state<WorkspaceVM[]>([]);
@@ -71,7 +72,10 @@
   // would reset on every switch. This map is keyed by session id, like termEpoch
   // and fsVersion.
   let codePaths       = $state<Record<string, string | null>>({});
-  let previewContent  = $state<string>("");
+  let previewContent  = $state<{ path: string | null; content: string }>({ path: null, content: "" });
+  // Previewable files the user switched to the source editor (FEX-23), by
+  // absolute path.
+  let sourceView      = new SvelteSet<string>();
   // Per-session approval QUEUE. A session's agent can have more than one tool call
   // waiting at once, because each is a distinct blocking hook. A single-valued map
   // would drop all but the last one and hang those hooks forever. The head of each
@@ -119,7 +123,7 @@
   // click. emphasizeInput is a transient flag that pulses when the ACTIVE agent
   // asks for input. termRefs is keyed by session id, because every open session
   // now keeps its own Terminal mounted.
-  let termRefs       = $state<Record<string, { focus: () => void }>>({});
+  let termRefs       = $state<Record<string, { focus: () => void; paste?: (text: string) => boolean; resync?: () => void }>>({});
   let emphasizeInput = $state(false);
   // Per-session ref to the agent terminal-zone DOM node. The split session's
   // Terminal mounts ONCE, in the primary keep-alive loop. When it becomes the
@@ -155,7 +159,6 @@
   // linger (F54). This timer is set when `g` is armed, and cleared when the
   // chord resolves.
   let pendingGTimer: ReturnType<typeof setTimeout> | undefined;
-  let pendingLeave = $state(false);
   let filtering    = $state(false);
   let filterQuery  = $state("");
 
@@ -168,11 +171,16 @@
   $effect(() => {
     const p = activeCodePath;
     if (p) fsPathVersion[p]; // track: re-read when THIS file changes on disk
-    if (!p || !isPreviewable(p) || previewKind(p) === "image") { previewContent = ""; return; }
+    if (p) sourceView.has(p); // track: re-read when returning from the source editor
+    if (!p || !isPreviewable(p) || previewKind(p) === "image") { previewContent = { path: null, content: "" }; return; }
     let cancelled = false;
+    // The content is tagged with its path, and a Preview only takes content
+    // for its own path. Another file's text never reaches a Preview, so a
+    // switch never flashes the previous file or feeds markdown to mermaid
+    // (FEC-25, FEX-24).
     readFile(p)
-      .then((c) => { if (!cancelled) previewContent = c; })
-      .catch(() => { if (!cancelled) previewContent = ""; });
+      .then((c) => { if (!cancelled) previewContent = { path: p, content: c }; })
+      .catch(() => { if (!cancelled) previewContent = { path: p, content: "" }; });
     return () => { cancelled = true; };
   });
 
@@ -236,11 +244,15 @@
   // tracks mountedWorkspaces and workspaces. The mutations run untracked, so writing
   // shellStatesFor never re-invalidates this effect. The effect converges once every
   // mounted session is seeded and no stale ids remain.
+  //
+  // Only a session opened this run gets shells. A split session restored from
+  // layout.json is mounted as a backstop but is still cold, and must not spawn
+  // a login shell just by being on screen (FEC-12).
   $effect(() => {
-    const mountedIds = mountedWorkspaces.map(w => w.id);
+    const mountedIds = mountedWorkspaces.map(w => w.id).filter(id => openIds.has(id) || everOpened.has(id));
     const liveIds = new Set(workspaces.map(w => w.id));
     untrack(() => {
-      for (const id of mountedIds) if (!shellStatesFor[id]) shellStatesFor[id] = initShellState(id);
+      for (const id of mountedIds) if (!shellStatesFor[id] && !shellsClosed.has(id)) shellStatesFor[id] = initShellState(id);
       for (const id of Object.keys(shellStatesFor)) if (!liveIds.has(id)) delete shellStatesFor[id];
     });
   });
@@ -263,7 +275,10 @@
     if (!st) return;
     closeShell(id).catch(() => {}); // reap the pty; idempotent even if it already exited
     let { state, empty } = removeShell(st, id);
-    if (empty) state = addShell(state, wsId).state; // replacement cell mounts, which calls openShell
+    // Replace the last shell, so the drawer is never left empty, unless the
+    // backend is closing this session's shells: a replacement would spawn a
+    // shell for a closed or removed session (FEC-14).
+    if (empty && !shellsClosed.has(wsId)) state = addShell(state, wsId).state; // replacement cell mounts, which calls openShell
     shellStatesFor[wsId] = state;
   }
   function shellToggleSplit(wsId: string) {
@@ -333,8 +348,12 @@
   // toggles the pane off and keeps the assignment. That is what lets a split
   // off-to-on toggle show the SAME live terminal again, instead of rebuilding a
   // blank one.
+  // A COLD active session (selected with j/k, or auto-selected after a
+  // removal, but never opened this run) is NOT mounted: mounting it would
+  // spawn login shells and subscribe a terminal to a pty that does not exist
+  // (FEC-12). The stage shows an "open it" placeholder for it instead.
   const mountedWorkspaces = $derived((() => {
-    let mounted = active && !openIds.has(active.id)
+    let mounted = active && !openIds.has(active.id) && everOpened.has(active.id)
       ? [...openWorkspaces, active]
       : openWorkspaces;
     if (layout.splitId) {
@@ -348,6 +367,47 @@
   // The secondary pane host adopts this exact node, with use:adoptInto, so the
   // split terminal keeps its live xterm buffer across split on and off toggles.
   const splitZoneEl = $derived(layout.splitId ? termZoneEls[layout.splitId] : undefined);
+
+  // The active session exists but was never opened this run, so no terminal
+  // or shell of it is mounted (FEC-12). Its Code view needs no pty, so it still
+  // gets one (review #8).
+  const activeCold = $derived(!!active && !openIds.has(active.id) && !everOpened.has(active.id));
+  const codeWorkspaces = $derived(activeCold && active ? [...mountedWorkspaces, active] : mountedWorkspaces);
+
+  // URL of a worktree image for the Preview, served by the backend's
+  // /wt-file/ asset handler (FEX-11). The version busts the webview cache
+  // when the file changes on disk.
+  function worktreeFileUrl(ws: WorkspaceVM, abs: string, version: number): string {
+    const prefix = ws.worktreePath.endsWith("/") ? ws.worktreePath : ws.worktreePath + "/";
+    if (!abs.startsWith(prefix)) return "";
+    const rel = abs.slice(prefix.length).split("/").map(encodeURIComponent).join("/");
+    return `/wt-file/${encodeURIComponent(ws.id)}/${rel}?v=${version}`;
+  }
+
+  // Sessions whose shell drawer stays mounted: every session with shell state.
+  // Shells outlive the agent and a session switch (F20a). Unmounting a panel
+  // and mounting it again later would re-run OpenShell for live shells and
+  // displace them, so a panel stays until its session is removed (FEC-13,
+  // frontend half).
+  const shellWorkspaces = $derived(workspaces.filter(w => shellStatesFor[w.id]));
+
+  // Sessions whose agent has sent at least one agent:event since the last
+  // launch. "Retype launch" is offered only before that (the backend refuses
+  // after it).
+  let agentReported = new SvelteSet<string>();
+
+  // Sessions whose shells are being closed by the backend (session close or
+  // removal). Their shells' exits must not respawn a replacement shell
+  // (FEC-14). openSession clears the flag.
+  let shellsClosed = new SvelteSet<string>();
+
+  // Visible sessions. This excludes any session pending an optimistic removal.
+  // Sessions whose real removeWorkspace call is in flight. They stay hidden
+  // until it settles, so the row does not reappear (clickable) for the length
+  // of `git worktree remove` (FEC-21).
+  let removingIds = new SvelteSet<string>();
+  const pendingRemovalIds = $derived(new Set([...pendingRemovals.map(p => p.ws.id), ...removingIds]));
+  const visibleWorkspaces = $derived(workspaces.filter(w => !pendingRemovalIds.has(w.id)));
 
   // Apply the user-defined order. Ids in layout.order come first, in that order.
   // The remaining sessions, not yet in the order, follow in backend order.
@@ -382,11 +442,12 @@
     layout.setOrder(next);
   }
 
-  // Derived repo list for NewSessionDialog. It is the union of session-derived
-  // paths and any paths discoverRepos() returns. discoverRepos() fills lazily,
-  // on dialog open.
+  // Derived repo list for NewSessionDialog. It is the union of the sessions'
+  // repo paths and any paths discoverRepos() returns. discoverRepos() fills
+  // lazily, on dialog open. A worktree session's worktreePath is another
+  // session's checkout, not a repo, so it must never be offered (FEC-9).
   const repos = $derived([...new Set([
-    ...workspaces.map(w => w.worktreePath),
+    ...workspaces.map(w => w.repoPath),
     ...discoveredRepos.map(r => r.path),
   ])]);
 
@@ -396,10 +457,6 @@
   const repoInfoByPath = $derived<Record<string, RepoInfo>>(
     Object.fromEntries(discoveredRepos.map(r => [r.path, r]))
   );
-
-  // Visible sessions. This excludes any session pending an optimistic removal.
-  const pendingRemovalIds = $derived(new Set(pendingRemovals.map(p => p.ws.id)));
-  const visibleWorkspaces = $derived(workspaces.filter(w => !pendingRemovalIds.has(w.id)));
 
   // Off-functions captured from wails event subscriptions. onMount subscribes to
   // these synchronously.
@@ -421,19 +478,47 @@
   // unfocused.
   function onWindowFocus() { windowFocused = true;  setWindowFocus(true).catch(() => {}); }
   function onWindowBlur()  { windowFocused = false; setWindowFocus(false).catch(() => {}); }
+  function flushLayout()   { layout.flush(); }
 
   // Aggregate the +N/-N diff stat for one session.
   // A missing or non-git worktree must not throw. The catch block suppresses
   // errors silently.
+  //
+  // At most one diffStat runs per session; a request that arrives while one is
+  // in flight sets a trailing rerun, so a burst of fs events costs two git runs,
+  // results can never land out of order, and a result for a session removed
+  // meanwhile is dropped (FEC-32).
+  const diffStatInFlight = new Set<string>();
+  const diffStatAgain = new Set<string>();
   async function refreshDiffStat(ws: WorkspaceVM) {
+    const id = ws.id;
+    if (diffStatInFlight.has(id)) { diffStatAgain.add(id); return; }
+    diffStatInFlight.add(id);
     try {
-      const files = await diffStat(ws.worktreePath);
-      let added = 0, removed = 0;
-      for (const f of files) { added += f.added; removed += f.removed; }
-      wsDiffStats = { ...wsDiffStats, [ws.id]: { added, removed, files: files.length } };
-    } catch {
-      // non-git or missing worktree: leave any existing entry untouched
+      do {
+        diffStatAgain.delete(id);
+        try {
+          const files = await diffStat(ws.worktreePath);
+          if (!workspaces.some(w => w.id === id)) return;
+          let added = 0, removed = 0;
+          for (const f of files) { added += f.added; removed += f.removed; }
+          wsDiffStats = { ...wsDiffStats, [id]: { added, removed, files: files.length } };
+        } catch {
+          // non-git or missing worktree: leave any existing entry untouched
+        }
+      } while (diffStatAgain.has(id));
+    } finally {
+      diffStatInFlight.delete(id);
     }
+  }
+
+  // Startup: refresh every session's diff stat, a few at a time, instead of
+  // one git process per session all at once (FEC-32).
+  const DIFFSTAT_STARTUP_CONCURRENCY = 4;
+  async function refreshAllDiffStats(list: WorkspaceVM[]) {
+    const queue = [...list];
+    const worker = async () => { for (let ws = queue.shift(); ws; ws = queue.shift()) await refreshDiffStat(ws); };
+    await Promise.all(Array.from({ length: Math.min(DIFFSTAT_STARTUP_CONCURRENCY, queue.length) }, worker));
   }
 
   // The active session just asked for input. This routes the user to its pane, so
@@ -487,6 +572,8 @@
     setWindowFocus(document.hasFocus()).catch(() => {});
     window.addEventListener("focus", onWindowFocus);
     window.addEventListener("blur",  onWindowBlur);
+    // Write a pending layout save before the page goes away (FEC-26).
+    window.addEventListener("beforeunload", flushLayout);
     // General Ctrl-Shift-C copy for non-terminal surfaces (B3).
     document.addEventListener("keydown", onCopyKeydown);
 
@@ -513,6 +600,17 @@
           approvals[ev.workspaceId] = [...q, ev.approval];
         }
       }
+      // A pending approval was answered (here, by an always-allow rule, or in
+      // the agent's own TUI) or taken away (close, reopen, reload, exit). Retract
+      // its card. The same id can arrive more than once; removal is idempotent.
+      if (ev.resolvedReqId) retractApproval(ev.workspaceId, ev.resolvedReqId);
+      // The agent is running: "Retype launch" no longer applies to this launch.
+      if (!agentReported.has(ev.workspaceId)) {
+        agentReported.add(ev.workspaceId);
+        clearActionForWorkspace(ev.workspaceId, "retype-launch");
+      }
+      // "approval-resolved" carries no state: nothing else to do.
+      if (ev.kind === "approval-resolved") return;
       const ws = workspaces.find(w => w.id === ev.workspaceId);
       if (!ws) return;
       const prev = ws.state;
@@ -550,7 +648,10 @@
         // event for a COLD session never marks it open or suppresses its resume
         // preview. The overlay stays gated on openIds.
         openIds.add(ev.workspaceId);
-        dropForWorkspace(ev.workspaceId);
+        // Drop only the notifications this edge resolves: an unread approval
+        // or question. Auto-approval audit entries, errors and the read history
+        // stay for the away catch-up (FEC-6).
+        dropBlockingForWorkspace(ev.workspaceId, ["awaiting-approval", "awaiting-input"]);
       }
       // Leaving awaiting-input for any OTHER state supersedes this session's
       // still-unread "Question" blocking notification. The question is moot once
@@ -608,7 +709,9 @@
     });
 
     offNotify = onNotify((n) => {
-      if      (n.tier === "blocking") addBlocking(n.workspaceId, n.title, n.body, undefined, n.state);
+      // An agent that already reported in makes "Retype launch" moot.
+      const action = n.action === "retype-launch" && agentReported.has(n.workspaceId) ? undefined : n.action;
+      if      (n.tier === "blocking") addBlocking(n.workspaceId, n.title, n.body, undefined, n.state, action);
       else if (n.tier === "ambient")  addAmbient (n.workspaceId, n.title, n.body, undefined, n.state);
       else                            addRoutine (n.workspaceId, n.title, n.body, undefined, n.state);
       // This deliberately does NOT auto-read on arrival, even for the session on
@@ -627,8 +730,16 @@
       fsVersion[p.workspaceId] = (fsVersion[p.workspaceId] ?? 0) + 1;
       // Per-path bump. Only the Editor or Preview showing THIS exact file reloads,
       // so an agent write to an unrelated file never disturbs the edited buffer
-      // (F15).
-      if (p.path) fsPathVersion[p.path] = (fsPathVersion[p.path] ?? 0) + 1;
+      // (F15). `paths` lists the changed files (FEC-1, FEX-4). Past the
+      // backend's cap it is empty and `truncated` is set, and an older backend
+      // sends no list at all: then anything may have changed, so the session's
+      // open file reloads (a clean buffer reloads; a dirty one checks on save).
+      if (p.truncated || !Array.isArray(p.paths)) {
+        const open = codePaths[p.workspaceId];
+        if (open) fsPathVersion[open] = (fsPathVersion[open] ?? 0) + 1;
+      } else {
+        for (const f of p.paths) fsPathVersion[f] = (fsPathVersion[f] ?? 0) + 1;
+      }
       const ws = workspaces.find(w => w.id === p.workspaceId);
       if (ws) refreshDiffStat(ws);
     });
@@ -666,8 +777,17 @@
       if (p.workspaceId) termEpoch[p.workspaceId] = (termEpoch[p.workspaceId] ?? 0) + 1;
     });
 
-    await Promise.all([settings.load(), layout.restore()]);
-    workspaces = await listWorkspaces();
+    // A settings read failure (unreadable settings.json) must not abort the
+    // rest of startup: keep the defaults and say so (FEC-22).
+    const [settingsResult] = await Promise.allSettled([settings.load(), layout.restore()]);
+    if (settingsResult.status === "rejected") {
+      addBlocking("", "Could not load settings", `${String(settingsResult.reason)}. Using the defaults.`, "error");
+    }
+    try {
+      workspaces = await listWorkspaces();
+    } catch (e) {
+      addBlocking("", "Could not list sessions", String(e), "error");
+    }
     // Seed the approval queue from the backend's authoritative pending set. An
     // approval frame delivered before this mount, or before a webview reload, is
     // otherwise a lost one-shot, which wedges the agent's blocked hook forever.
@@ -676,7 +796,7 @@
     seedPendingApprovals();
     // Refresh diff stats for all loaded sessions. This fires and forgets; event-
     // driven updates follow after startup.
-    for (const ws of workspaces) refreshDiffStat(ws);
+    void refreshAllDiffStats(workspaces);
     try {
       staleSessions = (await listStaleSessions()) ?? [];
     } catch {
@@ -698,10 +818,13 @@
     offOsFileDrop?.();
     window.removeEventListener("focus", onWindowFocus);
     window.removeEventListener("blur",  onWindowBlur);
+    window.removeEventListener("beforeunload", flushLayout);
+    layout.flush();
     document.removeEventListener("keydown", onCopyKeydown);
     // Cancel any pending deferred removals, to avoid use-after-unmount calls.
     for (const p of pendingRemovals) clearTimeout(p.timer);
     clearTimeout(pendingGTimer);
+    clearTimeout(alwaysToastTimer);
   });
 
   // Resume preview state: the session pending confirmation before opening.
@@ -740,11 +863,22 @@
   // live.
   async function openSession(id: string) {
     termEpoch[id] = (termEpoch[id] ?? 0) + 1;
+    agentReported.delete(id); // a new launch: no agent event yet
     activeId = id;
     openIds.add(id);
+    // A closed session's shells were closed with it. Reopening gives the
+    // drawer a fresh shell again (FEC-14).
+    if (shellsClosed.delete(id)) {
+      const st = shellStatesFor[id];
+      if (st && st.panes.length === 0) shellStatesFor[id] = addShell(st, id).state;
+    }
     everOpened.add(id); // opened this run, so a later click reopens directly (F22)
     try {
       await openWorkspace(id);
+      // The terminal's first resize can land before the backend registered the
+      // pty and be rejected. Send the size again now that the pty exists
+      // (FEX-15).
+      termRefs[id]?.resync?.();
       // Refresh caps and state now that the monitor is live. openWorkspace
       // registers the backend Monitor, so a fresh ListWorkspaces call returns real
       // Capabilities for approvals and attention. Without this refetch, the session
@@ -761,7 +895,18 @@
       // worktree that fails to spawn a pty, was once silently swallowed here,
       // leaving the row dimmed with no explanation. This surfaces the error, so
       // the user knows the reopen did not work (F35).
-      addBlocking(id, "Could not open session", String(e), "error");
+      const msg = String(e);
+      const ws = workspaces.find(w => w.id === id);
+      if (msg.includes("session directory is missing") && ws) {
+        // ErrWorktreeMissing: the worktree was deleted outside perch. Offer
+        // the one action that helps: removing the session (RemoveWorkspace
+        // drops it and prunes git).
+        addBlocking(id, "Session directory is missing",
+          `The worktree ${ws.worktreePath} no longer exists. Remove the session to clean it up.`, "error");
+        confirmRemove = ws;
+        return;
+      }
+      addBlocking(id, "Could not open session", msg, "error");
     }
   }
 
@@ -829,7 +974,9 @@
     if (!openIds.has(id)) {
       const prevActive = activeId;
       await openSession(id);
-      if (prevActive) activeId = prevActive;
+      // Restore only if the user did not pick another session meanwhile
+      // (FEC-29): activeId still holds the transient value openSession set.
+      if (prevActive && activeId === id) activeId = prevActive;
     }
     layout.setSplitId(id);
   }
@@ -890,44 +1037,98 @@
 
   async function handleCreate(agent: string, repo: string, baseRef: string, branch: string, title: string, worktree: boolean) {
     createError = null; // clear any prior inline error on a fresh attempt
-    // Guard: if the branch already belongs to a perch session, offer resume instead.
-    const existing = await workspaceForBranch(repo, branch);
-    if (existing.found) {
-      // The branch is already in use. Resume that session instead of creating a
-      // duplicate.
-      newSessionOpen = false;
-      newSessionInitialAgent = null;
-      await onSelect(existing.id);
-      return;
-    }
     try {
+      // Guard: if the branch already belongs to a perch session, offer resume
+      // instead. The backend only tracks branches for worktree sessions. The
+      // call sits inside the try, so a failure lands in the inline error
+      // instead of an unhandled rejection (FEC-26).
+      if (worktree) {
+        const existing = await workspaceForBranch(repo, branch);
+        if (existing.found) {
+          // The branch is already in use. Resume that session instead of
+          // creating a duplicate.
+          newSessionOpen = false;
+          newSessionInitialAgent = null;
+          await onSelect(existing.id);
+          return;
+        }
+      }
       const vm = await createWorkspace(agent, repo, baseRef, branch, title, worktree);
       workspaces = await listWorkspaces();
       newSessionOpen = false;
-      // Creating a session spawns its pty right away. onSelect sets activeId
-      // and opens the session in one step, so the new session comes up live,
-      // instead of sitting as a selected-but-dead row.
-      await onSelect(vm.id);
+      // Creating a session spawns its pty right away. A new session is cold
+      // (never opened this run), so onSelect would only show the resume
+      // preview; open it directly (FEC-18).
+      await openSession(vm.id);
     } catch (e) {
-      const msg = String(e);
       // Never show the raw error to the user, since it is git output noise, for
       // example "exit status 128: fatal: ...". Log it for diagnosis, and show a
-      // human-readable message instead.
+      // human-readable message inline, where the user can act on it (FEC-27).
       console.error("create session failed:", e);
-      if (msg.includes("uncommitted changes")) {
-        // ErrWorktreeDirty: a non-worktree session cannot switch to a different
-        // branch while the working tree has uncommitted changes.
-        addBlocking("", "Cannot switch branch",
-          "Your working tree has uncommitted changes. Commit or stash them before switching to a different branch.", "error");
-      } else if (/already exists/i.test(msg)) {
-        // ErrBranchExists at the git layer, from a new-branch-mode name collision.
-        // This is a genuine user error, so it MUST surface as actionable copy,
-        // inline in the dialog, not as raw git output (F26a).
-        createError = `A branch named "${branch}" already exists. Choose a different name, or turn on "Use existing branch" to resume it.`;
-      } else {
-        createError = "Could not create the session. Check the repo and branch, then try again.";
+      // ErrBranchInUse: another session already has this branch. Go to it.
+      if (worktree && String(e).includes("already checked out by a session")) {
+        try {
+          const owner = await workspaceForBranch(repo, branch);
+          if (owner.found) {
+            newSessionOpen = false;
+            newSessionInitialAgent = null;
+            onSelect(owner.id);
+            return;
+          }
+        } catch { /* fall through to the inline message */ }
       }
+      createError = createErrorMessage(String(e), branch);
       // Keep the dialog open, so the user can correct their choice.
+    }
+  }
+
+  // Map the backend's create sentinels to actionable copy (F26a, FEC-27).
+  function createErrorMessage(msg: string, branch: string): string {
+    if (msg.includes("worktree path already exists")) {
+      // ErrWorktreePathExists: the directory, not the branch, is taken. It must
+      // match before /already exists/ below, and must NOT suggest "Use
+      // existing branch".
+      return `A directory for the branch "${branch}" already exists. Remove or rename it, or choose a different branch name.`;
+    }
+    if (msg.includes("another open session is working in this checkout")) {
+      // ErrCheckoutInUse: an in-repo session would switch the branch under
+      // another open session.
+      return "Another open session is working in this checkout. Close it first, or turn on Worktree to work on a separate checkout.";
+    }
+    if (msg.includes("uncommitted changes")) {
+      // ErrWorktreeDirty: a non-worktree session cannot switch to a different
+      // branch while the working tree has uncommitted changes.
+      return "The repo has uncommitted changes. Commit or stash them before switching to a different branch, or turn on Worktree.";
+    }
+    if (msg.includes("already checked out by a session")) {
+      // ErrBranchInUse: another session already has this branch checked out.
+      return `The branch "${branch}" is already checked out by another session. Open that session, or choose a different branch.`;
+    }
+    if (msg.includes("has no commits yet")) {
+      // ErrNoCommits: a worktree needs a commit to branch from.
+      return "This repository has no commits yet. Make a first commit, then create the session.";
+    }
+    if (/already exists/i.test(msg)) {
+      // ErrBranchExists at the git layer, from a new-branch-mode name collision.
+      return `A branch named "${branch}" already exists. Choose a different name, or turn on "Use existing branch" to resume it.`;
+    }
+    return "Could not create the session. Check the repo and branch, then try again.";
+  }
+
+  // Rename optimistically, and roll back if the backend rejects the title
+  // (blank, invalid), so the sidebar never shows a name that was not saved
+  // (FEC-26).
+  async function renameSession(id: string, title: string) {
+    const ws = workspaces.find(w => w.id === id);
+    if (!ws) return;
+    const before = ws.title;
+    ws.title = title;
+    try {
+      await setWorkspaceTitle(id, title);
+    } catch (e) {
+      const cur = workspaces.find(w => w.id === id);
+      if (cur && cur.title === title) cur.title = before;
+      addBlocking(id, "Could not rename session", String(e), "error");
     }
   }
 
@@ -970,22 +1171,31 @@
     if (layout.splitId === wsToRemove.id) layout.setSplitId(null);
 
     const timer = setTimeout(async () => {
-      // Time is up. Commit the removal for real.
-      pendingRemovals = pendingRemovals.filter(p => p.ws.id !== wsToRemove.id);
+      // Time is up. Commit the removal for real. The toast goes away (Undo is
+      // no longer possible), but the row stays hidden until the call settles.
+      const id = wsToRemove.id;
+      pendingRemovals = pendingRemovals.filter(p => p.ws.id !== id);
+      removingIds.add(id);
+      shellsClosed.add(id); // the backend closes its shells (FEC-14)
       try {
-        await removeWorkspace(wsToRemove.id);
-        openIds.delete(wsToRemove.id);
-        everOpened.delete(wsToRemove.id);
-        dropForWorkspace(wsToRemove.id);
-        pruneWorkspaceState(wsToRemove.id);
-        workspaces = await listWorkspaces();
-        if (activeId === wsToRemove.id) activeId = workspaces[0]?.id ?? null;
+        await removeWorkspace(id);
+        openIds.delete(id);
+        everOpened.delete(id);
+        dropForWorkspace(id);
+        pruneWorkspaceState(id);
+        workspaces = await listWorkspaces().catch(() => workspaces.filter(w => w.id !== id));
+        if (activeId === id) activeId = workspaces[0]?.id ?? null;
       } catch (err) {
-        // If the backend call fails, put the session back.
-        workspaces = await listWorkspaces();
+        // If the backend call fails, put the session back and say why.
+        shellsClosed.delete(id);
+        try { workspaces = await listWorkspaces(); } catch { /* keep the current list */ }
         if (String(err).includes("uncommitted changes")) {
           confirmDirty = wsToRemove;
+        } else {
+          addBlocking(id, "Could not remove session", String(err), "error");
         }
+      } finally {
+        removingIds.delete(id);
       }
     }, UNDO_REMOVE_DELAY_MS);
 
@@ -1017,8 +1227,10 @@
     everOpened.delete(id);
     dropForWorkspace(id);
     pruneWorkspaceState(id);
+    shellsClosed.add(id);
     // This fires and forgets, and does not await, so it does not block the caller.
-    removeWorkspace(id).then(() => listWorkspaces()).then(ws => { workspaces = ws; }).catch(() => {});
+    removeWorkspace(id).then(() => listWorkspaces()).then(ws => { workspaces = ws; })
+      .catch((e) => addBlocking(id, "Could not remove session", String(e), "error"));
   }
 
   function handleCancelRemove() {
@@ -1029,6 +1241,7 @@
     if (!confirmDirty) return;
     const ws = confirmDirty;
     confirmDirty = null;
+    shellsClosed.add(ws.id);
     try {
       await forceRemoveWorkspace(ws.id);
       openIds.delete(ws.id);
@@ -1037,8 +1250,10 @@
       pruneWorkspaceState(ws.id);
       workspaces = await listWorkspaces();
       if (activeId === ws.id) activeId = workspaces[0]?.id ?? null;
-    } catch {
-      workspaces = await listWorkspaces();
+    } catch (e) {
+      shellsClosed.delete(ws.id);
+      addBlocking(ws.id, "Could not remove session", String(e), "error");
+      try { workspaces = await listWorkspaces(); } catch { /* keep the current list */ }
     }
   }
 
@@ -1058,33 +1273,52 @@
     if (ws && ws.state === "awaiting-approval") ws.state = "idle";
   }
 
+  // Drop one request from a session's approval queue, if it is still there.
+  // When the queue empties, its "Approval needed" notification is moot too.
+  function retractApproval(wsId: string, reqId: string) {
+    const q = approvals[wsId];
+    if (!q || !q.some(r => r.reqId === reqId)) return;
+    const rest = q.filter(r => r.reqId !== reqId);
+    if (rest.length) approvals[wsId] = rest;
+    else {
+      const { [wsId]: _drop, ...others } = approvals; approvals = others;
+      dropBlockingForWorkspace(wsId, ["awaiting-approval"]);
+    }
+  }
+
   // Resolve ONE queued request by reqId. This calls approve(), then pops the
   // request from its owning session's queue and runs the attention backstop. It
   // guards against a concurrent in-flight decide of the same reqId.
-  async function decideOne(reqId: string, decision: "allow" | "deny" | "always"): Promise<void> {
-    if (decidingReqs.has(reqId)) return;
+  async function decideOne(reqId: string, decision: "allow" | "deny" | "always"): Promise<{ ok: boolean; grant?: AlwaysGrant }> {
+    if (decidingReqs.has(reqId)) return { ok: false };
     // Locate the owning session, the queue that holds this reqId.
     const ownerEntry = Object.entries(approvals).find(([, q]) => q.some(r => r.reqId === reqId));
     const ownerWsId = ownerEntry?.[0] ?? activeId;
-    if (!ownerWsId) return;
+    if (!ownerWsId) return { ok: false };
     decidingReqs.add(reqId);
     try {
-      await approve(reqId, decision);
-      // Pop this reqId from the owner's queue, and leave any siblings so the next
-      // request surfaces.
-      const q = (approvals[ownerWsId] ?? []).filter(r => r.reqId !== reqId);
-      if (q.length) approvals[ownerWsId] = q;
-      else {
-        const { [ownerWsId]: _drop, ...rest } = approvals; approvals = rest;
-        // This session's last pending approval is resolved. This clears its
-        // blocking notification, so the stale "approve this" banner does not
-        // linger after the request it referred to is gone. It fires only when
-        // the queue is now empty.
-        dropForWorkspace(ownerWsId);
-      }
+      // "always" goes through ApproveAlways, which reports the exact rule it
+      // added, so the Undo toast can revoke that rule and nothing else.
+      let grant: AlwaysGrant | undefined;
+      if (decision === "always") grant = await approveAlways(reqId);
+      else await approve(reqId, decision);
+      // Pop this reqId from the owner's queue, and leave any siblings so the
+      // next request surfaces. The last one also clears its notification.
+      retractApproval(ownerWsId, reqId);
       clearAttentionBackstop(ownerWsId);
+      return { ok: true, grant };
     } catch (e) {
-      addBlocking(ownerWsId, "Approval failed", String(e), "error");
+      const msg = String(e);
+      // The request WAS allowed; only the standing rule failed to save.
+      if (decision === "always" && msg.includes("allowed, but could not save the always-allow rule")) {
+        retractApproval(ownerWsId, reqId);
+        clearAttentionBackstop(ownerWsId);
+        addBlocking(ownerWsId, "Always-allow rule not saved",
+          `The request was allowed, but the rule could not be saved, so the next identical request will ask again. ${msg}`, "error");
+        return { ok: true };
+      }
+      addBlocking(ownerWsId, "Approval failed", msg, "error");
+      return { ok: false };
     } finally {
       decidingReqs.delete(reqId);
     }
@@ -1113,10 +1347,13 @@
     { id: "session:close",  group: "Session", label: "Close session",      run: () => {
         if (!active) return;
         const id = active.id;
+        shellsClosed.add(id); // the backend closes the shells too (FEC-14)
         closeWorkspace(id).then(() => {
-          // Clean up per-session frontend state on close: the approvals queue,
-          // fsVersion, termEpoch, and diff stats.
-          pruneWorkspaceState(id);
+          // Drop the approvals queue: its agent is gone. Keep everything the
+          // still-mounted pane needs (termEpoch, codePaths, termRefs, diff
+          // stats). Pruning those remounted the terminal and blanked the
+          // editor of a session that is only closed, not removed (FEC-10).
+          if (approvals[id]) { const { [id]: _drop, ...rest } = approvals; approvals = rest; }
           // The pty is gone. This drops the id from the open set, so the row
           // dims and a later click routes through the resume-preview reopen path.
           openIds.delete(id);
@@ -1125,19 +1362,25 @@
           if (ws) ws.state = "idle";
           // Keep activeId, so the in-pane "This session has ended / Reopen"
           // overlay stays reachable, since the session left openIds above.
-        }).catch(() => {});
+        }).catch((e) => {
+          shellsClosed.delete(id);
+          addBlocking(id, "Could not close session", String(e), "error");
+        });
       } },
     { id: "session:remove", group: "Session", label: "Remove session",     run: () => { if (active) requestRemove(active); } },
+    { id: "session:retype-launch", group: "Session", label: "Retype launch", run: () => { if (active) doRetypeLaunch(active.id); } },
     // Worktree
     { id: "worktree:open",   group: "Worktree", label: "Open worktree",    keybinding: "Enter",       run: () => { if (active && !openIds.has(active.id)) openSession(active.id); } },
-    { id: "worktree:reveal", group: "Worktree", label: "Reveal in Files",  run: () => { if (active) revealInFiles(active.worktreePath); } },
+    { id: "worktree:reveal", group: "Worktree", label: "Reveal in Files",  run: () => {
+        if (active) revealInFiles(active.worktreePath).catch((e) => addBlocking(active?.id ?? "", "Could not reveal the worktree", String(e), "error"));
+      } },
     // View
     { id: "view:agent", group: "View", label: "Agent view",  keybinding: "1",  run: () => layout.setView("agent") },
     { id: "view:code",  group: "View", label: "Code view",   keybinding: "2",  run: () => layout.setView("code")  },
     { id: "view:diff",  group: "View", label: "Diff view",   keybinding: "3",  run: () => layout.setView("diff")  },
     { id: "view:split", group: "View", label: "Split",       keybinding: "\\", run: () => layout.toggleSplit()   },
     { id: "view:theme", group: "View", label: "Cycle theme",                   run: () => {
-        const idx = THEMES.indexOf(settings.theme);
+        const idx = (THEMES as readonly string[]).indexOf(settings.theme);
         settings.setTheme(THEMES[(idx + 1) % THEMES.length]);
       },
     },
@@ -1146,13 +1389,39 @@
     { id: "agent:deny-all",    group: "Agent", label: "Deny all pending",    run: () => decideAll("deny")  },
     // Notifications
     { id: "notifications:open", group: "Notifications", label: "Open notifications",    run: () => { openNotif(!notifOpen); } },
-    { id: "notifications:dnd",  group: "Notifications", label: "Toggle Do Not Disturb", run: () => setDnd(!getDnd()) },
+    { id: "notifications:dnd",  group: "Notifications", label: "Toggle Do Not Disturb", run: () => toggleDnd() },
     // Help: the two entries open genuinely distinct panels (F53).
     { id: "help:shortcuts", group: "Help", label: "Keyboard shortcuts", run: () => { helpSection = "shortcuts"; helpOpen = true; } },
     { id: "help:about",     group: "Help", label: "About perch",        run: () => { helpSection = "about";     helpOpen = true; } },
     // Settings
     { id: "settings:open", group: "Settings", label: "Settings…", run: () => { settingsOpen = true; } },
   ];
+
+  // Do Not Disturb lives in the persisted settings; the hub toggle and the
+  // command go through the settings store, which also applies it to the
+  // notification store (FEC-7).
+  function toggleDnd() {
+    const next = !getDnd();
+    setDnd(next); // apply now; the store call below persists it
+    settings.setDnd(next).catch((e) => addBlocking("", "Failed to save settings", String(e)));
+  }
+
+  // Retype the agent launch line for a session whose login shell was busy at
+  // launch (a startup-file prompt). The backend refusal is authoritative; it
+  // is shown as a notification.
+  async function doRetypeLaunch(wsId: string, notifId?: string) {
+    try {
+      await retypeLaunch(wsId);
+      if (notifId) markRead(notifId);
+      clearActionForWorkspace(wsId, "retype-launch");
+    } catch (e) {
+      addBlocking(wsId, "Could not retype the launch", String(e), "error");
+    }
+  }
+  // The palette offers "Retype launch" only for an open session whose agent
+  // has not reported in yet.
+  const canRetypeLaunch = $derived(!!active && openIds.has(active.id) && !agentReported.has(active.id));
+  const paletteCommands = $derived(commands.filter(c => c.id !== "session:retype-launch" || canRetypeLaunch));
 
   function runCommand(id: string) {
     const cmd = commands.find(c => c.id === id);
@@ -1216,21 +1485,28 @@
     // command palette is intentionally NOT reachable from TERMINAL mode. Leave
     // TERMINAL mode first, with Ctrl-\ Ctrl-n, to open the palette. This behavior
     // is documented here and unchanged (F55).
+    // The xterm hands these two keys back through its custom key handler
+    // (lib/terminalKeys.ts), so they reach this window listener even while a
+    // terminal holds focus (FEC-2).
     if (mode.current === "terminal") {
-      if (e.ctrlKey && e.key === "\\") {
-        pendingLeave = true;
+      if (isLeavePrefix(e)) {
+        mode.leavePending = true;
         e.preventDefault();
         return;
       }
-      if (pendingLeave && e.ctrlKey && e.key === "n") {
+      if (mode.leavePending && isLeaveFinal(e)) {
         mode.leaveTerminal();
-        pendingLeave = false;
         e.preventDefault();
+        // NORMAL mode is passive, but drop the caret out of the xterm too, so
+        // it no longer looks like it takes input.
+        const ae = document.activeElement as HTMLElement | null;
+        if (ae?.closest?.("[data-terminal-zone]")) ae.blur();
         return;
       }
-      // Any other key cancels the pending leave prefix. This does NOT call
-      // preventDefault, so the key still reaches the pty.
-      pendingLeave = false;
+      // Any other key cancels the pending leave prefix. A modifier pressed on
+      // its own (releasing and re-pressing Ctrl) does not (FEC-19). This does
+      // NOT call preventDefault, so the key still reaches the pty.
+      if (!isModifierKey(e)) mode.leavePending = false;
       return;
     }
 
@@ -1251,6 +1527,9 @@
 
     // g-prefix resolution must come first so gd/ge/gt/gT work correctly.
     if (pendingG) {
+      // A modifier press alone does not resolve the chord: browsers send a
+      // Shift keydown before the `T` of gT (FEC-19).
+      if (isModifierKey(e)) return;
       pendingG = false;
       clearTimeout(pendingGTimer); // chord resolved: stop the auto-clear (F54)
       if (e.key === "d") { e.preventDefault(); layout.setView("diff"); }
@@ -1272,6 +1551,29 @@
       // Any other key cancels the prefix silently, with no action.
       return;
     }
+
+    // Ctrl chords. These run before the plain-key guard below.
+    if (e.ctrlKey && !e.altKey && !e.metaKey) {
+      if (e.key === "`") {
+        e.preventDefault();
+        layout.setCollapsed("shell", !layout.collapsed["shell"]);
+        return;
+      }
+      if (e.key === "b") {
+        e.preventDefault();
+        layout.setCollapsed("sidebar", !layout.collapsed["sidebar"]);
+        return;
+      }
+    }
+
+    // The single-key shortcuts below fire only without Ctrl, Alt, or Meta, so
+    // Ctrl-X or Ctrl-1 never opens the Remove dialog or switches the view
+    // (FEC-20). Shift is allowed, because `?` and `T` need it.
+    if (e.ctrlKey || e.altKey || e.metaKey) return;
+    // Enter on a focused button, link, or menu item activates that control. It
+    // is not the "open session" shortcut, and calling preventDefault on it
+    // would cancel the control's own activation (FEC-20).
+    if (e.key === "Enter" && t?.closest?.("button, a[href], summary, [role='button'], [role='menuitem'], [role='option'], [role='tab'], [role='link']")) return;
 
     switch (e.key) {
       case "j": {
@@ -1311,20 +1613,6 @@
         return;
       }
       case "\\": e.preventDefault(); layout.toggleSplit(); break;
-      case "`": {
-        if (e.ctrlKey) {
-          e.preventDefault();
-          layout.setCollapsed("shell", !layout.collapsed["shell"]);
-        }
-        break;
-      }
-      case "b": {
-        if (e.ctrlKey) {
-          e.preventDefault();
-          layout.setCollapsed("sidebar", !layout.collapsed["sidebar"]);
-        }
-        break;
-      }
       case "/": {
         e.preventDefault();
         filtering    = true;
@@ -1351,6 +1639,17 @@
       }
       // New session: the one-key entry point matching the sidebar CTA and menu (F23).
       case "n": e.preventDefault(); openNewSession(); break;
+      // Focus the pending approval card. It never decides: the card is armed
+      // again, and a / d inside it decide (FEC-3). Keys typed into the card
+      // itself are its own.
+      case "a": {
+        if (t?.closest?.("[data-zone='approval-dock']")) break;
+        if (active && active.caps.approvals && approvals[active.id]?.[0]) {
+          e.preventDefault();
+          approvalCardRef?.focusCard();
+        }
+        break;
+      }
       // Remove the active session. This opens the CANCELABLE confirm dialog
       // instead of acting right away, so a stray keypress can never destroy a
       // worktree, since tmux-style `x` means kill or remove. The lone destructive
@@ -1402,8 +1701,14 @@
   // ---------------------------------------------------------------------------
   function sendToAgent(text: string) {
     if (!active?.paneId) return;
-    const bytes = Array.from(new TextEncoder().encode(text));
-    writeToPty(active.paneId, bytes);
+    // Route through the terminal as a paste, so a multi-line selection or hunk
+    // is bracketed and never submitted line by line (FEX-28). Fall back to a
+    // raw write when the pane has no mounted terminal.
+    if (termRefs[active.id]?.paste?.(text)) return;
+    const bytes = new TextEncoder().encode(text);
+    writeToPty(active.paneId, bytes).catch((e) => {
+      addBlocking(active?.id ?? "", "Could not send to the agent", String(e), "error");
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -1415,13 +1720,46 @@
   // wrong session.
   // ---------------------------------------------------------------------------
   async function onDecision(reqId: string, decision: "allow" | "deny" | "always") {
-    await decideOne(reqId, decision);
+    if (decision !== "always") { await decideOne(reqId, decision); return; }
+    // "Always allow" adds a standing rule in the backend. App hosts the Undo
+    // toast, because the card unmounts or moves to the next request as soon
+    // as the grant lands (FEC-15, FEX-9). ApproveAlways reports the rule the
+    // grant added, and Undo revokes exactly that rule in the backend
+    // (review #10); a duplicate grant added nothing, so it offers no Undo.
+    const tool = Object.values(approvals).flat().find(r => r.reqId === reqId)?.tool ?? "this tool";
+    const r = await decideOne(reqId, "always");
+    if (!r.ok) return; // the grant failed: no rule, nothing to undo
+    showAlwaysToast(tool, r.grant?.added ? r.grant.rule : null);
+  }
+
+  // The docked approval card, for the NORMAL-mode `a` focus shortcut.
+  let approvalCardRef = $state<{ focusCard: () => void } | undefined>();
+  // Post-grant "Always allow" toast. `rule` is null when the grant added no
+  // rule (an identical one existed, or saving it failed); the toast then
+  // offers no Undo.
+  let alwaysToast = $state<{ tool: string; rule: AlwaysRule | null } | null>(null);
+  let alwaysToastTimer: ReturnType<typeof setTimeout> | undefined;
+  function showAlwaysToast(tool: string, rule: AlwaysRule | null) {
+    clearTimeout(alwaysToastTimer);
+    alwaysToast = { tool, rule };
+    alwaysToastTimer = setTimeout(() => { alwaysToast = null; }, UNDO_REMOVE_DELAY_MS);
+  }
+  async function undoAlways() {
+    const t = alwaysToast;
+    clearTimeout(alwaysToastTimer);
+    alwaysToast = null;
+    if (!t || !t.rule) return;
+    try {
+      await removeAlwaysRule(t.rule);
+    } catch (e) {
+      addBlocking("", "Could not undo the always-allow rule", `${String(e)}. Remove it in Settings.`, "error");
+    }
   }
 </script>
 
 <svelte:window onkeydown={onKeyDown} />
 
-<ThemeProvider theme={settings.theme} density={settings.density} font={settings.font} glass={!(settings.glassDisabled ?? false)}>
+<ThemeProvider theme={settings.theme} density={settings.density} font={settings.font} glass={settings.glass}>
   <div class="app-root" onpointerdowncapture={onAppPointerDown}>
     <MenuBar onCommand={(id) => runCommand(id)} {unreadCount} />
 
@@ -1461,7 +1799,7 @@
           />
         {/if}
         <Sidebar workspaces={shownWorkspaces} {activeId} onSelect={onSelect} onNew={openNewSession} onReorder={handleReorder} diffStats={wsDiffStats} openIds={openIds} ackedInputIds={attnAck} ackedDoneIds={attnDoneAck}
-          onRename={(id, title) => { const ws = workspaces.find(w => w.id === id); if (ws) ws.title = title; setWorkspaceTitle(id, title); }}
+          onRename={renameSession}
           onEditStart={() => { previewWs = null; }}
           requestRemove={(id) => { const ws = workspaces.find(w => w.id === id); if (ws) requestRemove(ws); }} />
       </aside>
@@ -1524,6 +1862,14 @@
                 {@const ended = !openIds.has(ws.id)}
                 {@const isSplit = layout.split && layout.splitId === ws.id}
                 {@const vis = isSplit || (ws.id === activeId && layout.view === "agent")}
+                <!-- The slot is the node Svelte owns and moves when the list
+                     reorders. It never leaves the primary pane; only the zone
+                     inside it is relocated into the split host. So a reorder,
+                     or a block inserted next to the split session, can never
+                     pull the split terminal back out of the secondary pane
+                     (FEC-4). display:contents keeps the zone a flex child of
+                     the pane. -->
+                <div class="terminal-slot">
                 <div class="terminal-zone" class:input-emphasis={ws.id === activeId && emphasizeInput}
                      bind:this={termZoneEls[ws.id]}
                      use:keepHome
@@ -1537,11 +1883,23 @@
                       <button class="btn btn-primary" onclick={() => openSession(ws.id)}>Reopen</button>
                     </div>
                   {/if}
-                  <DragDrop paneId={ws.paneId} fileDrop={true}>
+                  <DragDrop paneId={ws.paneId} fileDrop={true} paste={(text) => termRefs[ws.id]?.paste?.(text) ?? false}>
                     <Terminal bind:this={termRefs[ws.id]} paneId={ws.paneId} cwd={ws.worktreePath} visible={vis} onExit={() => handleAgentExit(ws.id)} />
                   </DragDrop>
                 </div>
+                </div>
               {/each}
+              {#if activeCold && active && layout.view === "agent"}
+                <!-- A session selected with j/k (or after a removal) that was
+                     never opened this run: nothing is mounted for it, so no
+                     shell or pty is spawned just by moving the selection
+                     (FEC-12). -->
+                <div class="pane-cold" data-testid="pane-cold">
+                  <p>This session is not open.</p>
+                  <button class="btn btn-primary" onclick={() => { if (active) openSession(active.id); }}>Open</button>
+                  <p class="pane-cold-hint">Press <kbd>Enter</kbd> to open it.</p>
+                </div>
+              {/if}
               <!-- One code layout per MOUNTED session, kept mounted (hidden with
                    display) so switching sessions preserves each session's open
                    file, folder expansion, scroll position, and unsaved Editor
@@ -1552,9 +1910,10 @@
                    codePaths keep each file selection independent, and the
                    `visible` prop freezes a hidden pane, so it does no background
                    listing, reloading, or rendering. -->
-              {#each mountedWorkspaces as ws (ws.id)}
+              {#each codeWorkspaces as ws (ws.id)}
                 {@const codePath = codePaths[ws.id] ?? null}
                 {@const showing  = ws.id === activeId && layout.view === "code"}
+                {@const previewing = isPreviewable(codePath) && !(codePath && sourceView.has(codePath))}
                 <div class="code-layout" style:display={showing ? "" : "none"}>
                   <!-- FileTree re-lists IN PLACE on a file write, through the
                        monotonic refresh signal. It is never remounted, since that
@@ -1571,31 +1930,44 @@
                       // a regular file open.
                       if (p.startsWith(MENTION_PREFIX)) {
                         const path = p.slice(MENTION_PREFIX.length);
-                        // This format matches DragDrop: '@'+path+' '
-                        sendToAgent("@" + path + " ");
+                        // The same @mention format as a tree drag and an OS
+                        // file drop (FEX-27, FEC-35).
+                        sendToAgent(mentionText(path));
                       } else {
                         codePaths[ws.id] = p;
                       }
                     }} />
-                  {#if isPreviewable(codePath)}
+                  {#if previewing}
                     <!-- Keyed only by the file path, the same key on every view, so
                          a file switch gives a fresh render but an fs change does
                          not remount. The render side effect is frozen with
-                         `visible`. -->
+                         `visible`. Content is handed over only for this path
+                         (FEC-25). A relative link opens its file inside this
+                         worktree. Markdown and Mermaid files can switch to the
+                         source editor (FEX-23). -->
                     {#key codePath}
                       <Preview path={codePath ?? ""} kind={previewKind(codePath ?? "")}
-                               content={previewContent} visible={showing} />
+                               src={codePath ? worktreeFileUrl(ws, codePath, fsPathVersion[codePath] ?? 0) : ""}
+                               content={previewContent.path === codePath ? previewContent.content : ""}
+                               visible={showing}
+                               onOpenFile={(p: string) => { if (p.startsWith(ws.worktreePath + "/")) codePaths[ws.id] = p; }}
+                               onEditSource={() => { if (codePath) sourceView.add(codePath); }} />
                     {/key}
-                  {:else}
-                    <!-- reloadToken is the monotonic per-file fs version, so the
-                         editor reloads only when ITS file changes on disk, and only
-                         when it has no unsaved edits, never on an unrelated write
-                         or a view toggle. Visibility is handled by `visible`. -->
-                    <Editor path={codePath} worktree={ws.worktreePath}
-                            reloadToken={fsPathVersion[codePath ?? ""] ?? 0}
-                            visible={showing}
-                            onSendToAgent={sendToAgent} />
                   {/if}
+                  <!-- reloadToken is the monotonic per-file fs version, so the
+                       editor reloads only when ITS file changes on disk, and only
+                       when it has no unsaved edits, never on an unrelated write
+                       or a view toggle. Visibility is handled by `visible`.
+                       The Editor stays mounted, hidden, while a Preview is shown:
+                       destroying it would drop unsaved edits whose save failed
+                       (review #3). -->
+                  <div class="editor-slot" style:display={previewing ? "none" : "contents"}>
+                    <Editor path={codePath} worktree={ws.worktreePath} workspaceId={ws.id}
+                            reloadToken={fsPathVersion[codePath ?? ""] ?? 0}
+                            visible={showing && !previewing}
+                            onShowPreview={codePath && isPreviewable(codePath) ? () => { if (codePath) sourceView.delete(codePath); } : undefined}
+                            onSendToAgent={sendToAgent} />
+                  </div>
                 </div>
               {/each}
               {#if active}
@@ -1608,6 +1980,7 @@
                      scroll position survive the refresh. -->
                 <div class="diff-host" style:display={layout.view === "diff" ? "" : "none"}>
                   <DiffView worktree={active.worktreePath} refresh={fsVersion[active.id] ?? 0}
+                            visible={layout.view === "diff"} workspaceId={active.id}
                             onSendToAgent={sendToAgent}
                             onDiffChanged={() => { if (active) refreshDiffStat(active); }} />
                 </div>
@@ -1733,7 +2106,7 @@
                independent shell ptys: the shells are their own ptys and outlive
                the agent (F20a). The panel renders only once its shell state is
                seeded, in the effect above, so the {#if} guards that. -->
-          {#each mountedWorkspaces as ws (ws.id)}
+          {#each shellWorkspaces as ws (ws.id)}
             <div style:display={ws.id === activeId ? "contents" : "none"}>
               {#if shellStatesFor[ws.id]}
                 <ShellPanel
@@ -1783,7 +2156,7 @@
 
     <CommandPalette
       open={mode.current === "command"}
-      {commands}
+      commands={paletteCommands}
       onRun={(id) => { runCommand(id); mode.leaveCommand(); }}
       onClose={() => mode.leaveCommand()}
     />
@@ -1791,15 +2164,20 @@
     {#if active && approvals[active.id]?.[0]}
       {@const headReq = approvals[active.id][0]}
       <div data-zone="approval-dock" class="approval-dock">
-        <ApprovalCard
-          req={headReq}
-          sessionCount={approvals[active.id].length}
-          queue={approvals[active.id] ?? []}
-          caps={active.caps}
-          {onDecision}
-          onApproveAll={() => decideAll("allow")}
-          onDenyAll={() => decideAll("deny")}
-        />
+        <!-- Keyed by request, so each request gets a fresh card: a fresh
+             keyboard arming delay, and no focus or pending keypress carried
+             over from the request before it (FEC-16). -->
+        {#key headReq.reqId}
+          <ApprovalCard bind:this={approvalCardRef}
+            req={headReq}
+            sessionCount={approvals[active.id].length}
+            queue={approvals[active.id] ?? []}
+            caps={active.caps}
+            {onDecision}
+            onApproveAll={() => decideAll("allow")}
+            onDenyAll={() => decideAll("deny")}
+          />
+        {/key}
       </div>
     {/if}
 
@@ -1809,9 +2187,10 @@
           items={getItems()}
           dnd={getDnd()}
           onDismiss={(id) => markRead(id)}
-          onToggleDnd={() => setDnd(!getDnd())}
+          onToggleDnd={toggleDnd}
           onClearRead={clearRead}
           onSelect={onNotificationSelect}
+          onAction={(n) => { if (n.action === "retype-launch") doRetypeLaunch(n.workspaceId, n.id); }}
           onClose={() => openNotif(false)}
         />
       </div>
@@ -1909,8 +2288,18 @@
 
     <SettingsPanel open={settingsOpen} onClose={() => { settingsOpen = false; }} />
 
-    {#if pendingRemovals.length > 0}
+    {#if alwaysToast || pendingRemovals.length > 0}
       <div class="undo-toast-stack" aria-live="polite">
+        {#if alwaysToast}
+          <div class="undo-toast" role="status" data-testid="always-toast">
+            {#if alwaysToast.rule}
+              <span class="undo-toast-msg">Always-allow rule added for {alwaysToast.tool}</span>
+              <button class="undo-toast-btn" onclick={undoAlways}>Undo</button>
+            {:else}
+              <span class="undo-toast-msg">Always-allow rule added for {alwaysToast.tool}. Manage it in Settings.</span>
+            {/if}
+          </div>
+        {/if}
         {#each pendingRemovals as pending (pending.ws.id)}
           <div class="undo-toast" role="status" data-testid="undo-toast">
             <span class="undo-toast-msg">Session removed</span>
@@ -1941,6 +2330,7 @@
                       transition: outline-color var(--perch-dur) var(--perch-ease); }
   .code-layout      { display: flex; flex-direction: row; flex: 1; min-height: 0; min-width: 0; }
   .diff-host        { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+  .terminal-slot    { display: contents; }
   .terminal-zone    { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
   /* In-pane "session ended" overlay. It covers the dead xterm on the agent view
      only, since it lives inside the terminal-zone, which is hidden on the code
@@ -1957,6 +2347,16 @@
     text-align: center;
   }
   .pane-ended p { margin: 0; color: var(--perch-text-dim); }
+  .pane-cold {
+    flex: 1; min-height: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: var(--perch-sp-2);
+    color: var(--perch-text);
+    font-family: var(--perch-font-sans); font-size: var(--perch-fs-body);
+    text-align: center;
+  }
+  .pane-cold p { margin: 0; color: var(--perch-text-dim); }
+  .pane-cold-hint { font-size: var(--perch-fs-caption); }
   /* Transient ring pulse that draws the eye when the active agent wants input. */
   .terminal-zone.input-emphasis { animation: perch-emphasis var(--perch-dur-pop) var(--perch-ease); }
   @media (prefers-reduced-motion: reduce) {

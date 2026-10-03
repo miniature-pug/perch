@@ -3,7 +3,7 @@ import { gutterChangesFromHunks } from "./gutter";
 import type { Hunk } from "./wails";
 
 function hunk(p: Partial<Hunk>): Hunk {
-  return { file: "f", index: 0, header: "", oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: [], ...p };
+  return { file: "f", index: 0, id: "h0", header: "", oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: [], ...p };
 }
 
 describe("gutterChangesFromHunks", () => {
@@ -70,5 +70,14 @@ describe("gutterChangesFromHunks", () => {
     const { changed, deleted } = gutterChangesFromHunks([h]);
     expect([...changed].sort((a, b) => a - b)).toEqual([10, 11, 12]);
     expect(deleted.size).toBe(0);
+  });
+});
+
+describe("gutterChangesFromHunks: staged hunks (wiring-gitfs #4)", () => {
+  it("skips staged hunks, whose line numbers are relative to the index", () => {
+    const staged = hunk({ staged: true, newStart: 3, newLines: 1, lines: [{ kind: "add", text: "s" }] });
+    const unstaged = hunk({ newStart: 7, newLines: 1, lines: [{ kind: "add", text: "u" }] });
+    const { changed } = gutterChangesFromHunks([staged, unstaged]);
+    expect([...changed]).toEqual([7]);
   });
 });

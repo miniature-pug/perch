@@ -367,3 +367,106 @@ test("selectedPath marks the matching file row with is-selected + aria-current",
   expect(btn.classList.contains("is-selected")).toBe(true);
   expect(btn.getAttribute("aria-current")).toBe("true");
 });
+
+// --- Audit regressions (FEX-3, FEX-18, FEX-19, FEX-27) ---
+
+const deepTree = async (path: string): Promise<FsNode[]> => {
+  if (path === "/wt") return [
+    { name: "a", path: "/wt/a", isDir: true },
+    { name: "b", path: "/wt/b", isDir: true },
+  ];
+  if (path === "/wt/a") return [{ name: "inner", path: "/wt/a/inner", isDir: true }];
+  if (path === "/wt/a/inner") return [{ name: "deep.ts", path: "/wt/a/inner/deep.ts", isDir: false }];
+  if (path === "/wt/b") return [{ name: "b.ts", path: "/wt/b/b.ts", isDir: false }];
+  return [];
+};
+
+test("FEX-18: collapsing a folder forgets its expanded descendants", async () => {
+  mockListDir.mockImplementation(deepTree);
+  const { default: FileTree } = await import("./FileTree.svelte");
+  const r = render(FileTree, { props: { root: "/wt", onOpen: () => {}, refresh: 0 } });
+  await fireEvent.click(await screen.findByRole("button", { name: /^📁 a$|a$/ }));
+  await fireEvent.click(await screen.findByRole("button", { name: /inner/ }));
+  await screen.findByText("deep.ts");
+  await fireEvent.click(screen.getByRole("button", { name: /^.*\ba$/ }));       // collapse a
+  await fireEvent.click(await screen.findByRole("button", { name: /^.*\ba$/ })); // expand a again
+  await screen.findByText("inner");
+  expect(screen.queryByText("deep.ts")).toBeNull();
+  // A refresh does not pop the old descendant open either.
+  await r.rerender({ root: "/wt", onOpen: () => {}, refresh: 1 });
+  await new Promise((res) => setTimeout(res, 20));
+  expect(screen.queryByText("deep.ts")).toBeNull();
+});
+
+test("FEX-18: an expanded folder that fails to list does not break the rebuild", async () => {
+  mockListDir.mockImplementation(deepTree);
+  const { default: FileTree } = await import("./FileTree.svelte");
+  const r = render(FileTree, { props: { root: "/wt", onOpen: () => {}, refresh: 0 } });
+  await fireEvent.click(await screen.findByRole("button", { name: /^.*\ba$/ }));
+  await screen.findByText("inner");
+  mockListDir.mockImplementation(async (p: string) => {
+    if (p === "/wt/a") throw new Error("permission denied");
+    if (p === "/wt") return [...(await deepTree(p)), { name: "new.ts", path: "/wt/new.ts", isDir: false }];
+    return deepTree(p);
+  });
+  await r.rerender({ root: "/wt", onOpen: () => {}, refresh: 1 });
+  await screen.findByText("new.ts");
+  expect(screen.queryByText("inner")).toBeNull();
+});
+
+test("FEX-18: an expand that resolves after a rebuild still opens the folder", async () => {
+  mockListDir.mockImplementation(deepTree);
+  const { default: FileTree } = await import("./FileTree.svelte");
+  const r = render(FileTree, { props: { root: "/wt", onOpen: () => {}, refresh: 0 } });
+  await screen.findByText("b");
+  let release: (n: FsNode[]) => void = () => {};
+  mockListDir.mockImplementation((p: string) =>
+    p === "/wt/b" ? new Promise<FsNode[]>((res) => { release = res; }) : deepTree(p));
+  await fireEvent.click(screen.getByRole("button", { name: /^.*\bb$/ }));
+  await r.rerender({ root: "/wt", onOpen: () => {}, refresh: 1 }); // rebuild replaces node objects
+  await new Promise((res) => setTimeout(res, 10));
+  release([{ name: "b.ts", path: "/wt/b/b.ts", isDir: false }]);
+  await screen.findByText("b.ts");
+});
+
+test("FEX-19: sibling folders are listed in parallel", async () => {
+  const started: string[] = [];
+  const pending: Array<() => void> = [];
+  mockListDir.mockImplementation(deepTree);
+  const { default: FileTree } = await import("./FileTree.svelte");
+  const r = render(FileTree, { props: { root: "/wt", onOpen: () => {}, refresh: 0 } });
+  await fireEvent.click(await screen.findByRole("button", { name: /^.*\ba$/ }));
+  await screen.findByText("inner");
+  await fireEvent.click(screen.getByRole("button", { name: /^.*\bb$/ }));
+  await screen.findByText("b.ts");
+  mockListDir.mockImplementation((p: string) => {
+    started.push(p);
+    if (p === "/wt") return deepTree(p);
+    return new Promise<FsNode[]>((res) => { pending.push(() => res([])); });
+  });
+  await r.rerender({ root: "/wt", onOpen: () => {}, refresh: 1 });
+  await waitFor(() => expect(started).toEqual(expect.arrayContaining(["/wt/a", "/wt/b"])));
+  pending.forEach((f) => f());
+});
+
+test("FEX-3: context-menu Open on a folder expands it instead of opening it in the editor", async () => {
+  const { default: FileTree } = await import("./FileTree.svelte");
+  const onOpen = vi.fn();
+  render(FileTree, { props: { root: "/wt", onOpen } });
+  await fireEvent.contextMenu(await screen.findByText("src"));
+  await fireEvent.click(await screen.findByRole("menuitem", { name: /^open$/i }));
+  await screen.findByText("main.go");
+  expect(onOpen).not.toHaveBeenCalled();
+});
+
+test("FEX-27: dragging a path with a space sends a quoted @mention", async () => {
+  mockListDir.mockImplementation(async (p: string) =>
+    p === "/wt" ? [{ name: "my notes.md", path: "/wt/my notes.md", isDir: false }] : []);
+  const { default: FileTree } = await import("./FileTree.svelte");
+  render(FileTree, { props: { root: "/wt", onOpen: () => {} } });
+  const btn = (await screen.findByText("my notes.md")).closest("button")!;
+  const store = new Map<string, string>();
+  const dt = { setData: (t: string, v: string) => { store.set(t, v); }, effectAllowed: "" };
+  await fireEvent.dragStart(btn, { dataTransfer: dt });
+  expect(store.get("application/x-perch-text")).toBe("@'/wt/my notes.md' ");
+});

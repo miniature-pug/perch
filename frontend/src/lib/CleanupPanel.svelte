@@ -15,20 +15,24 @@
     onOpen?: (id: string) => void;
   } = $props();
 
-  // Initial selection: the safe rows. Only the initial `sessions` value sets
-  // this selection. The $effect below keeps the selection in sync as
-  // `sessions` changes.
+  // Initial selection: the safe rows. The $effect below keeps the selection
+  // in sync as `sessions` changes.
   // svelte-ignore state_referenced_locally
   let checked = $state<Set<string>>(new Set(sessions.filter(s => s.safe).map(s => s.id)));
+  // Every id the panel has shown. A row seen for the first time gets the
+  // default selection (checked when safe); a row the user already saw keeps
+  // whatever the user chose (FEX-34).
+  // svelte-ignore state_referenced_locally
+  const seen = new Set<string>(sessions.map(s => s.id));
   let confirmOpen = $state(false);
   let forceConfirmOpen = $state(false);
   let removing = $state(false);
   let error = $state<string | null>(null);
 
-  // This effect re-derives the checked set from the current `sessions` prop. It
-  // defaults to the safe rows. It drops any checked id that no longer appears
-  // in `sessions`, so a removed session never stays in the selection and is
-  // never sent again.
+  // This effect re-derives the checked set from the current `sessions` prop.
+  // It drops any checked id that no longer appears in `sessions`, so a removed
+  // session never stays in the selection and is never sent again, and it
+  // checks a newly arrived safe row by default, like the initial selection.
   $effect(() => {
     const ids = new Set(sessions.map(s => s.id));
     let mutated = false;
@@ -36,6 +40,11 @@
     for (const id of checked) {
       if (ids.has(id)) next.add(id);
       else mutated = true;
+    }
+    for (const s of sessions) {
+      if (seen.has(s.id)) continue;
+      seen.add(s.id);
+      if (s.safe) { next.add(s.id); mutated = true; }
     }
     if (mutated) checked = next;
   });

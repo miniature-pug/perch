@@ -96,6 +96,9 @@ func Run(assets embed.FS, roots []string) error {
 		BackgroundColour: &defaultWindowBg,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
+			// Serves /wt-file/<workspaceID>/<path> images for the Preview pane
+			// (FEX-11); see worktreeFileHandler for what it refuses.
+			Handler: app.worktreeFileHandler(),
 		},
 		// Linux.Icon sets the GTK window icon. X11 window managers use it,
 		// but GNOME on Wayland ignores it: the dock and app switcher take

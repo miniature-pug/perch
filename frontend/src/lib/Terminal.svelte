@@ -4,6 +4,7 @@
   import { FitAddon }  from "@xterm/addon-fit";
   import { onPtyData, onPtyExit, writeToPty, resizePty, clipboardSetText, clipboardText } from "./wails";
   import { TERMINAL_SCROLLBACK, PTY_MAX_DIM } from "./constants";
+  import { makeTerminalKeyHandler } from "./terminalKeys";
 
   // `visible` mirrors the pattern that Editor, FileTree, and Preview already
   // use: the pane stays mounted and is merely hidden by an ancestor
@@ -79,23 +80,25 @@
         const accent = cssVar("--perch-accent", "#d79921");
         return accent.startsWith("#") && accent.length === 7 ? accent + SELECTION_ALPHA_HEX : accent;
       })(),
-      // Standard 16-color ANSI, mapped to Gruvbox equivalents through tokens
-      // where possible
+      // Standard 16-color ANSI. Red, green, yellow and the greys come from the
+      // semantic tokens. Blue, magenta and cyan have their own per-theme
+      // --perch-ansi-* tokens, so blue and cyan are no longer the same color
+      // and magenta is no longer the (orange) accent (FEX-32).
       black:             cssVar("--perch-bg-elev",      "#1d2021"),
       red:               cssVar("--perch-err",          "#fb4934"),
       green:             cssVar("--perch-ok",           "#b8bb26"),
       yellow:            cssVar("--perch-warn",         "#fabd2f"),
-      blue:              cssVar("--perch-info",         "#83a598"),
-      magenta:           cssVar("--perch-accent",       "#d79921"),
-      cyan:              cssVar("--perch-info",         "#83a598"),
+      blue:              cssVar("--perch-ansi-blue",    "#83a598"),
+      magenta:           cssVar("--perch-ansi-magenta", "#d3869b"),
+      cyan:              cssVar("--perch-ansi-cyan",    "#8ec07c"),
       white:             cssVar("--perch-text",         "#ebdbb2"),
       brightBlack:       cssVar("--perch-text-dim",     "#a89984"),
       brightRed:         cssVar("--perch-err",          "#fb4934"),
       brightGreen:       cssVar("--perch-ok",           "#b8bb26"),
       brightYellow:      cssVar("--perch-warn",         "#fabd2f"),
-      brightBlue:        cssVar("--perch-info",         "#83a598"),
-      brightMagenta:     cssVar("--perch-accent",       "#d79921"),
-      brightCyan:        cssVar("--perch-info",         "#83a598"),
+      brightBlue:        cssVar("--perch-ansi-blue",    "#83a598"),
+      brightMagenta:     cssVar("--perch-ansi-magenta", "#d3869b"),
+      brightCyan:        cssVar("--perch-ansi-cyan",    "#8ec07c"),
       brightWhite:       cssVar("--perch-text",         "#ebdbb2"),
     };
   }
@@ -114,7 +117,13 @@
     const rows = Math.max(1, Math.min(PTY_MAX_DIM, term.rows | 0));
     if (!(Number.isFinite(cols) && Number.isFinite(rows) && cols > 0 && rows > 0)) return;
     // Nothing to tell the pty when the grid is unchanged from the last send.
-    if (cols === lastCols && rows === lastRows) return;
+    // A resize still pending for an intermediate size (A -> B -> A inside the
+    // debounce window) is cancelled, or it would land while xterm is back at
+    // A and leave the pty at B (FEX-14).
+    if (cols === lastCols && rows === lastRows) {
+      if (resizeTimer !== undefined) { clearTimeout(resizeTimer); resizeTimer = undefined; }
+      return;
+    }
     // Trailing edge: reset the timer on every changed frame, so a whole drag
     // collapses into one resizePty call when it settles.
     if (resizeTimer !== undefined) clearTimeout(resizeTimer);
@@ -123,8 +132,29 @@
       if (disposed) return;
       lastCols = cols;
       lastRows = rows;
-      resizePty(paneId, cols, rows);
+      // A rejected resize (for example "unknown pane", when the first fit
+      // lands before the backend registered the pty) is forgotten, so the
+      // next fit, or resync(), sends the size again (FEX-15).
+      resizePty(paneId, cols, rows).catch(() => {
+        if (lastCols === cols && lastRows === rows) { lastCols = -1; lastRows = -1; }
+      });
     }, PTY_RESIZE_DEBOUNCE_MS);
+  }
+
+  /** Re-send the current grid size to the pty. A parent calls this once the
+      backend has the pty (after OpenShell or OpenWorkspace resolves), so a
+      resize that raced the spawn is not lost (FEX-15). */
+  export function resync(): void {
+    lastCols = -1;
+    lastRows = -1;
+    refit();
+  }
+
+  /** Write a dim notice line into the terminal, for example a failed spawn
+      (FEX-33). */
+  export function notice(text: string): void {
+    if (disposed || !term) return;
+    term.write(`\r\n\x1b[2m${text}\x1b[0m\r\n`);
   }
 
   // Window-resize backstop. The host ResizeObserver fires only when the
@@ -173,29 +203,23 @@
       term.write(`\r\n\x1b[2m[process exited: ${code}]\x1b[0m\r\n`);
       onExit?.(code);
     });
-    term.onData((d) => writeToPty(paneId, Array.from(new TextEncoder().encode(d))));
+    term.onData((d) => { writeToPty(paneId, new TextEncoder().encode(d)).catch(() => {}); });
 
     // Copy/paste: return false only for the two exact chords, so xterm
     // suppresses its default handling. Return true for everything else, so
     // ordinary keys, and bare ctrl-c (SIGINT/cancel), still reach the pty
     // untouched. This routes through the host clipboard (WebKit2GTK) because
     // navigator.clipboard is unreliable there.
-    term.attachCustomKeyEventHandler((e) => {
-      if (e.type !== "keydown") return true;
-      const chord = e.ctrlKey && e.shiftKey;
-      if (chord && (e.key === "C" || e.key === "c") && term.hasSelection()) {
-        void clipboardSetText(term.getSelection());
-        return false;
-      }
-      if (chord && (e.key === "V" || e.key === "v")) {
-        // term.paste routes through onData -> writeToPty and honors bracketed
-        // paste mode, so shells and TUIs that opt in are protected. No manual
-        // encoding happens here.
-        void clipboardText().then((t) => { if (t && !disposed) term.paste(t); });
-        return false;
-      }
-      return true;
-    });
+    // The handler (lib/terminalKeys.ts) also hands app keys back to the
+    // window keymap: every key, and every keypress, outside TERMINAL mode, and
+    // the Ctrl-\ Ctrl-n leave sequence inside it (FEC-2).
+    term.attachCustomKeyEventHandler(makeTerminalKeyHandler({
+      hasSelection: () => term.hasSelection(),
+      copy: () => { void clipboardSetText(term.getSelection()); },
+      // term.paste routes through onData -> writeToPty and honors bracketed
+      // paste mode, so shells and TUIs that opt in are protected.
+      paste: () => { void clipboardText().then((t) => { if (t && !disposed) term.paste(t); }); },
+    }));
 
     obs = new ResizeObserver(() => {
       // Coalesce fit() to one layout pass per frame. Many ticks can land
@@ -229,6 +253,17 @@
       without requiring a click; the awaiting-input auto-focus uses this.
       Safe to call before mount. */
   export function focus(): void { term?.focus(); }
+
+  /** Send text to the pty as a paste. term.paste honours bracketed-paste
+      mode, so a multi-line editor selection or hunk reaches the agent TUI as
+      one paste instead of a series of Enter-terminated lines (FEX-28).
+      Returns false when the terminal is not mounted, so the caller can fall
+      back to a raw write. */
+  export function paste(text: string): boolean {
+    if (disposed || !term) return false;
+    term.paste(text);
+    return true;
+  }
 
   // Re-fit on the hidden-to-visible edge. Reading `visible` first tracks it
   // as the sole dependency (term, fit, and disposed are plain lets,

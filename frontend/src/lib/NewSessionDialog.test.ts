@@ -461,3 +461,45 @@ test("dialog heading uses sentence case", async () => {
   await waitFor(() => screen.getByRole("dialog", { name: /new session/i }));
   expect(screen.getByRole("heading", { name: "New session" })).toBeInTheDocument();
 });
+
+// ── Audit regressions (FEX-5, FEX-26) ────────────────────────────────────────
+
+test("FEX-5: reopening on the same repo reloads branches, re-seeds the base ref, and avoids the taken name", async () => {
+  const { default: D } = await import("./NewSessionDialog.svelte");
+  let list = ["main", "dev"];
+  const loadBranches = vi.fn(async () => list);
+  const onCreate = vi.fn();
+  const props = defaultProps({ repos: ["/r"], loadBranches, onCreate });
+  const r = render(D, { props });
+  await waitFor(() => expect((screen.getByLabelText("starting point") as HTMLSelectElement).value).toBe("main"));
+  // The first session took claude/work.
+  list = ["main", "dev", "claude/work"];
+  const loadsBefore = loadBranches.mock.calls.length;
+  await r.rerender({ ...props, open: false });
+  await r.rerender({ ...props, open: true });
+  await waitFor(() => expect(loadBranches.mock.calls.length).toBeGreaterThan(loadsBefore));
+  await waitFor(() => expect((screen.getByLabelText("starting point") as HTMLSelectElement).value).toBe("main"));
+  await waitFor(() => expect((screen.getByLabelText("branch name") as HTMLInputElement).value).toBe("claude/work-2"));
+  await fireEvent.click(screen.getByRole("button", { name: /create/i }));
+  await waitFor(() => expect(onCreate).toHaveBeenCalled());
+  expect(onCreate.mock.calls[0]).toEqual(["claude", "/r", "main", "claude/work-2", "", true]);
+});
+
+test("FEX-5: Create stays disabled in new-branch mode until a base ref is set", async () => {
+  const { default: D } = await import("./NewSessionDialog.svelte");
+  render(D, { props: defaultProps({ repos: ["/r"], loadBranches: vi.fn(async () => []) }) });
+  await waitFor(() => screen.getByRole("dialog", { name: /new session/i }));
+  await new Promise((res) => setTimeout(res, 10));
+  expect((screen.getByRole("button", { name: /create/i }) as HTMLButtonElement).disabled).toBe(true);
+});
+
+test("FEX-26: a repo list that arrives after the dialog opened becomes the default", async () => {
+  const { default: D } = await import("./NewSessionDialog.svelte");
+  const loadBranches = vi.fn(makeBranches);
+  const props = defaultProps({ repos: [], loadBranches });
+  const r = render(D, { props });
+  await waitFor(() => screen.getByRole("dialog", { name: /new session/i }));
+  await r.rerender({ ...props, repos: ["/home/user/proj"] });
+  await waitFor(() => expect((screen.getByLabelText("repo") as HTMLSelectElement).value).toBe("/home/user/proj"));
+  await waitFor(() => expect(loadBranches).toHaveBeenCalledWith("/home/user/proj"));
+});

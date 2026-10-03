@@ -4,7 +4,7 @@
   import { worktreeColor } from "./constants";
 
   let {
-    items, dnd, onDismiss, onToggleDnd, onClearRead, onSelect, onClose,
+    items, dnd, onDismiss, onToggleDnd, onClearRead, onSelect, onClose, onAction,
   }: {
     items: Notification[];
     dnd: boolean;
@@ -13,7 +13,12 @@
     onClearRead: () => void;
     onSelect?: (workspaceId: string) => void;
     onClose?: () => void;
+    // Runs a notification's offered action (see Notification.action).
+    onAction?: (n: Notification) => void;
   } = $props();
+
+  // The actions the hub knows how to offer. Anything else renders nothing.
+  const ACTION_LABELS: Record<string, string> = { "retype-launch": "Retype launch" };
 
   type Filter = "all" | "approvals" | "errors" | "done";
   let filter = $state<Filter>("all");
@@ -79,6 +84,9 @@
           <span class="notif-body" title={n.body}>{n.body}</span>
         {/if}
         <button class="dismiss-btn" onclick={(e) => { e.stopPropagation(); onDismiss(n.id); }} aria-label="dismiss notification">✕</button>
+        {#if onAction && n.action && ACTION_LABELS[n.action]}
+          <button class="action-btn btn btn-sm" onclick={(e) => { e.stopPropagation(); onAction(n); }}>{ACTION_LABELS[n.action]}</button>
+        {/if}
       </li>
     {/each}
     {#if visible.length === 0}<li class="notif-empty">{emptyText}</li>{/if}
@@ -293,6 +301,13 @@
   .notif-nav .notif-body  { grid-column: 1; grid-row: 2; }
 
   /* Dismiss icon button: column 3, spans both rows */
+  .action-btn {
+    grid-column: 2;
+    grid-row: 3;
+    justify-self: start;
+    margin-top: 2px;
+  }
+
   .dismiss-btn {
     grid-column: 3;
     grid-row: 1 / 3;

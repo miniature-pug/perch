@@ -44,7 +44,6 @@
   .stage-content.split { flex-direction: row; }
   .pane                { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
   .stage-content.split [data-pane="primary"]   { border-right: 1px solid var(--perch-border); }
-  .stage-content.split [data-pane="secondary"] { }
 
   /* Toolbar buttons: match the app-wide toolbar style */
   .stage-bar button {

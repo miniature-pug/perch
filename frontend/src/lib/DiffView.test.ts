@@ -1,7 +1,7 @@
 // frontend/src/lib/DiffView.test.ts
 import { render, screen, waitFor } from "@testing-library/svelte";
 import { fireEvent } from "@testing-library/svelte";
-import { vi } from "vitest";
+import { vi, afterEach, beforeEach } from "vitest";
 import type { FileDiff, Hunk } from "./wails";
 
 const fakeStat: FileDiff[] = [
@@ -9,10 +9,13 @@ const fakeStat: FileDiff[] = [
   { path: "README.md",   added: 10, removed: 0, status: "A" },
 ];
 const fakeHunks: Hunk[] = [{
-  file: "src/main.go", index: 0, header: "@@ -1,3 +1,4 @@",
+  file: "src/main.go", index: 0, id: "h-main-0", header: "@@ -1,3 +1,4 @@",
   oldStart: 1, oldLines: 3, newStart: 1, newLines: 4,
   lines: [{ kind: "ctx", text: "package main" }, { kind: "add", text: `import "fmt"` }],
 }];
+
+const UNIFIED_FAKE_HUNK =
+  "--- a/src/main.go\n+++ b/src/main.go\n@@ -1,3 +1,4 @@\n package main\n+import \"fmt\"\n";
 
 vi.mock("./wails", () => ({
   diffStat:    vi.fn(async () => fakeStat),
@@ -40,7 +43,7 @@ test("Stage button calls stageHunk", async () => {
   const w = await import("./wails");
   await waitFor(() => screen.getByRole("button", { name: /stage/i }));
   await fireEvent.click(screen.getByRole("button", { name: /stage/i }));
-  await waitFor(() => expect(w.stageHunk).toHaveBeenCalledWith("/wt", "src/main.go", 0));
+  await waitFor(() => expect(w.stageHunk).toHaveBeenCalledWith("/wt", "src/main.go", 0, "h-main-0"));
 });
 
 test("stage refreshes file list (diffStat re-called) and fires onDiffChanged", async () => {
@@ -134,7 +137,7 @@ test("an un-undone discard commits the real revert after the delay, then refresh
     await vi.advanceTimersByTimeAsync(6000);
 
     expect(w.discardHunk).toHaveBeenCalledTimes(1);
-    expect(w.discardHunk).toHaveBeenCalledWith("/wt", "src/main.go", 0);
+    expect(w.discardHunk).toHaveBeenCalledWith("/wt", "src/main.go", 0, "h-main-0");
     // A committed discard refreshes the file list and notifies the parent.
     expect(vi.mocked(w.diffStat).mock.calls.length).toBeGreaterThan(statBefore);
     expect(onDiffChanged).toHaveBeenCalledTimes(1);
@@ -182,8 +185,9 @@ test("send hunk to agent button calls onSendToAgent with hunk lines joined", asy
   // Click the send button
   await fireEvent.click(screen.getByRole("button", { name: /send hunk to agent/i }));
 
-  // The spy must receive the hunk's lines joined by "\n".
-  const expectedText = fakeHunks[0].lines.map((l) => l.text).join("\n");
+  // The spy must receive the hunk as a unified diff.
+  // FEX-21: a unified diff with file headers and +/-/space prefixes.
+  const expectedText = UNIFIED_FAKE_HUNK;
   expect(spy).toHaveBeenCalledWith(expectedText);
   expect(spy).toHaveBeenCalledTimes(1);
 });
@@ -214,7 +218,7 @@ test("dragstart on a hunk row sets application/x-perch-text to the hunk text", a
   };
   await fireEvent.dragStart(hunkEl, { dataTransfer: dt });
 
-  const expectedText = fakeHunks[0].lines.map((l) => l.text).join("\n");
+  const expectedText = UNIFIED_FAKE_HUNK;
   expect(dt.setData).toHaveBeenCalledWith("application/x-perch-text", expectedText);
   expect(dt.effectAllowed).toBe("copy");
 });
@@ -250,9 +254,189 @@ test("a staged hunk offers Unstage in place of Stage/Discard, and Unstage calls 
   expect(screen.queryByRole("button", { name: /discard/i })).toBeNull();
 
   await fireEvent.click(screen.getByRole("button", { name: /unstage/i }));
-  expect(w.unstageHunk).toHaveBeenCalledWith("/wt", "src/main.go", 0);
+  expect(w.unstageHunk).toHaveBeenCalledWith("/wt", "src/main.go", 0, "h-main-0");
 
   // The refetched (now unstaged) hunk toggles the action back to Stage and Discard.
   await waitFor(() => screen.getByRole("button", { name: /^stage$/i }));
   expect(screen.queryByRole("button", { name: /unstage/i })).toBeNull();
+});
+
+// --- Audit regressions: session switches and stale hunk indices (FEX-6, FEX-7, FEX-20, FEX-22) ---
+
+describe("audit: DiffView hunk identity", () => {
+  const hunkFor = (wt: string, index = 0, text = "x"): Hunk => ({
+    file: "src/a.ts", index, id: `id-${text}-${wt}`, header: `@@ -${index + 1},1 +${index + 1},1 @@`,
+    oldStart: 1, oldLines: 1, newStart: 1, newLines: 1,
+    lines: [{ kind: "add", text: `${text} from ${wt}` }],
+  });
+
+  async function setupDiff() {
+    const w = await import("./wails");
+    vi.mocked(w.diffStat).mockImplementation(async () => [{ path: "src/a.ts", added: 1, removed: 0, status: "M" }]);
+    vi.mocked(w.hunks).mockImplementation(async (wt: string) => [hunkFor(wt)]);
+    vi.mocked(w.stageHunk).mockClear();
+    vi.mocked(w.discardHunk).mockClear();
+    return w;
+  }
+  afterEach(async () => {
+    const w = await import("./wails");
+    vi.mocked(w.diffStat).mockImplementation(async () => fakeStat);
+    vi.mocked(w.hunks).mockImplementation(async () => fakeHunks);
+  });
+
+  test("FEX-6: a session switch drops the previous worktree's expanded hunks", async () => {
+    const w = await setupDiff();
+    const { default: DiffView } = await import("./DiffView.svelte");
+    const r = render(DiffView, { props: { worktree: "/wtA" } });
+    await fireEvent.click(await screen.findByRole("button", { name: "src/a.ts" }));
+    await screen.findByText(/x from \/wtA/);
+    await r.rerender({ worktree: "/wtB" });
+    await waitFor(() => expect(screen.queryByText(/x from \/wtA/)).toBeNull());
+    expect(screen.queryByRole("button", { name: /^stage$/i })).toBeNull();
+    expect(w.stageHunk).not.toHaveBeenCalled();
+  });
+
+  test("FEX-6: a hunk fetch that resolves after a session switch is dropped", async () => {
+    const w = await setupDiff();
+    let release: (h: Hunk[]) => void = () => {};
+    vi.mocked(w.hunks).mockImplementationOnce(() => new Promise<Hunk[]>((res) => { release = res; }));
+    const { default: DiffView } = await import("./DiffView.svelte");
+    const r = render(DiffView, { props: { worktree: "/wtA" } });
+    await fireEvent.click(await screen.findByRole("button", { name: "src/a.ts" }));
+    await r.rerender({ worktree: "/wtB" });
+    release([hunkFor("/wtA")]);
+    await new Promise((res) => setTimeout(res, 20));
+    expect(screen.queryByText(/x from \/wtA/)).toBeNull();
+  });
+
+  test("FEX-7: an fs refresh re-fetches the hunks of expanded files", async () => {
+    const w = await setupDiff();
+    const { default: DiffView } = await import("./DiffView.svelte");
+    const r = render(DiffView, { props: { worktree: "/wt", refresh: 0 } });
+    await fireEvent.click(await screen.findByRole("button", { name: "src/a.ts" }));
+    await screen.findByText(/x from \/wt/);
+    vi.mocked(w.hunks).mockImplementation(async (wt: string) => [hunkFor(wt, 0, "NEW"), hunkFor(wt, 1)]);
+    await r.rerender({ worktree: "/wt", refresh: 1 });
+    await screen.findByText(/NEW from \/wt/);
+  });
+
+  test("FEX-7: a deferred discard targets the same change at its new index", async () => {
+    vi.useFakeTimers();
+    try {
+      const w = await setupDiff();
+      const { default: DiffView } = await import("./DiffView.svelte");
+      render(DiffView, { props: { worktree: "/wt" } });
+      await vi.advanceTimersByTimeAsync(200);
+      await fireEvent.click(screen.getByRole("button", { name: "src/a.ts" }));
+      await vi.advanceTimersByTimeAsync(0);
+      await fireEvent.click(screen.getByRole("button", { name: /discard/i }));
+      // The agent inserts a new hunk above: the discarded change is now #1.
+      vi.mocked(w.hunks).mockImplementation(async (wt: string) => [hunkFor(wt, 0, "AGENT"), { ...hunkFor(wt), index: 1, header: "@@ -9,1 +9,1 @@" }]);
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(w.discardHunk).toHaveBeenCalledTimes(1);
+      expect(w.discardHunk).toHaveBeenCalledWith("/wt", "src/a.ts", 1, "id-x-/wt");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("FEX-7: a deferred discard whose change was modified discards nothing", async () => {
+    vi.useFakeTimers();
+    try {
+      const w = await setupDiff();
+      const { getItems } = await import("./stores/notifications.svelte");
+      const { default: DiffView } = await import("./DiffView.svelte");
+      render(DiffView, { props: { worktree: "/wt", workspaceId: "ws-9" } });
+      await vi.advanceTimersByTimeAsync(200);
+      await fireEvent.click(screen.getByRole("button", { name: "src/a.ts" }));
+      await vi.advanceTimersByTimeAsync(0);
+      await fireEvent.click(screen.getByRole("button", { name: /discard/i }));
+      vi.mocked(w.hunks).mockImplementation(async (wt: string) => [hunkFor(wt, 0, "EDITED")]);
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(w.discardHunk).not.toHaveBeenCalled();
+      const n = getItems().find((x) => x.title === "Discard skipped");
+      expect(n?.workspaceId).toBe("ws-9");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("FEX-20: a hidden diff view runs no diffStat on fs changes, and catches up when shown", async () => {
+    const w = await setupDiff();
+    vi.mocked(w.diffStat).mockClear();
+    const { default: DiffView } = await import("./DiffView.svelte");
+    const r = render(DiffView, { props: { worktree: "/wt", refresh: 0, visible: false } });
+    await r.rerender({ worktree: "/wt", refresh: 1, visible: false });
+    await new Promise((res) => setTimeout(res, 20));
+    expect(w.diffStat).not.toHaveBeenCalled();
+    await r.rerender({ worktree: "/wt", refresh: 1, visible: true });
+    await waitFor(() => expect(w.diffStat).toHaveBeenCalledTimes(1));
+  });
+
+  test("FEX-22: each expanded file gets a heading in the hunk panel", async () => {
+    await setupDiff();
+    const { default: DiffView } = await import("./DiffView.svelte");
+    render(DiffView, { props: { worktree: "/wt" } });
+    await fireEvent.click(await screen.findByRole("button", { name: "src/a.ts" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "src/a.ts" })).toBeInTheDocument());
+  });
+});
+
+describe("DiffView: hunk id contract and ordering", () => {
+  const H = (index: number, text: string): Hunk => ({
+    file: "src/a.ts", index, id: `id-${text}`, header: `@@ -${index + 1},1 +${index + 1},1 @@`,
+    oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: [{ kind: "add", text }],
+  });
+  beforeEach(async () => {
+    const w = await import("./wails");
+    vi.mocked(w.diffStat).mockImplementation(async () => [{ path: "src/a.ts", added: 1, removed: 0, status: "M" }]);
+    vi.mocked(w.stageHunk).mockReset();
+    vi.mocked(w.stageHunk).mockImplementation(async () => {});
+  });
+  afterEach(async () => {
+    const w = await import("./wails");
+    vi.mocked(w.diffStat).mockImplementation(async () => fakeStat);
+    vi.mocked(w.hunks).mockImplementation(async () => fakeHunks);
+  });
+
+  test("ErrHunkChanged on Stage re-fetches the hunks and tells the user, without a generic failure", async () => {
+    const w = await import("./wails");
+    const { getItems } = await import("./stores/notifications.svelte");
+    vi.mocked(w.hunks).mockImplementation(async () => [H(0, "old")]);
+    vi.mocked(w.stageHunk).mockRejectedValueOnce(new Error("git: hunk changed since it was displayed; refresh and retry"));
+    const { default: DiffView } = await import("./DiffView.svelte");
+    render(DiffView, { props: { worktree: "/wt", workspaceId: "ws-h" } });
+    await fireEvent.click(await screen.findByRole("button", { name: "src/a.ts" }));
+    await screen.findByText("old");
+    vi.mocked(w.hunks).mockImplementation(async () => [H(0, "new")]);
+    await fireEvent.click(screen.getByRole("button", { name: /^stage$/i }));
+    expect(w.stageHunk).toHaveBeenCalledWith("/wt", "src/a.ts", 0, "id-old");
+    await screen.findByText("new");
+    expect(getItems().some((n) => n.title === "Stage skipped" && n.workspaceId === "ws-h")).toBe(true);
+    expect(getItems().some((n) => n.title === "Stage failed")).toBe(false);
+  });
+
+  test("review #9: an older hunk list that resolves last never replaces a newer one", async () => {
+    const w = await import("./wails");
+    vi.mocked(w.hunks).mockImplementation(async () => [H(0, "v0")]);
+    const { default: DiffView } = await import("./DiffView.svelte");
+    const r = render(DiffView, { props: { worktree: "/wt", refresh: 0 } });
+    await fireEvent.click(await screen.findByRole("button", { name: "src/a.ts" }));
+    await screen.findByText("v0");
+    const releases: Array<() => void> = [];
+    let n = 0;
+    vi.mocked(w.hunks).mockImplementation(() => {
+      const mine = ++n;
+      return new Promise<Hunk[]>((res) => { releases[mine] = () => res([H(0, `v${mine}`)]); });
+    });
+    await r.rerender({ worktree: "/wt", refresh: 1 });   // request 1 (older)
+    await r.rerender({ worktree: "/wt", refresh: 2 });   // request 2 (newer)
+    await waitFor(() => expect(releases[2]).toBeDefined());
+    releases[2]();
+    await screen.findByText("v2");
+    releases[1]();
+    await new Promise((res) => setTimeout(res, 20));
+    expect(screen.queryByText("v1")).toBeNull();
+    expect(screen.getByText("v2")).toBeInTheDocument();
+  });
 });

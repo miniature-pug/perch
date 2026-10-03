@@ -24,7 +24,9 @@
     worktree,
     reloadToken = 0,
     visible = true,
+    workspaceId = "",
     onSendToAgent,
+    onShowPreview,
   }: {
     path: string | null;
     worktree: string;
@@ -36,7 +38,12 @@
     // on the agent pane or diff pane. It gates the Ctrl-S shortcut, so a
     // hidden editor never captures it.
     visible?: boolean;
+    // The owning session, so a "Save failed" notification links back to it.
+    workspaceId?: string;
     onSendToAgent?: (text: string) => void;
+    // Set for a previewable file (Markdown, Mermaid) opened as source: shows
+    // a button that switches back to the rendered preview (FEX-23).
+    onShowPreview?: () => void;
   } = $props();
 
   let container = $state<HTMLDivElement | null>(null);
@@ -48,6 +55,12 @@
   // Dirty (unsaved) state. True when the document has changed since the
   // last load or save.
   let dirty = $state<boolean>(false);
+  // A plain mirror of `dirty` for the logic. Svelte hands teardown code the
+  // value a $state had before the batch that destroyed the component, so an
+  // edit typed just before a switch would read as clean in onDestroy and be
+  // dropped. The script reads `isDirty`; the template reads `dirty`.
+  let isDirty = false;
+  function setDirty(v: boolean) { isDirty = v; dirty = v; }
 
   // ---------------------------------------------------------------------------
   // Language detection by filename extension
@@ -90,7 +103,9 @@
       case "go":
         return go();
       default:
-        return javascript(); // fallback
+        // Plain text. JavaScript highlighting and indentation are wrong for
+        // most other files (YAML, Rust, shell, Makefiles) (FEX-30).
+        return [];
     }
   }
 
@@ -148,7 +163,7 @@
     }
     // mark dirty on any user-driven document change
     if (update.docChanged) {
-      dirty = true;
+      setDirty(true);
     }
   });
 
@@ -158,14 +173,14 @@
     }
   }
 
-  // Generation counter. Each call to `load()` claims a generation number. A
+  // Generation counter. Each call to `sync()` claims a generation number. A
   // newer load can start before this call's async reads resolve, for
   // example on a file switch or a `reloadToken` bump. When that happens,
   // this call's generation number no longer matches, and the code drops
   // the stale result. So a slow `readFile(A)` call that resolves after
   // `readFile(B)` can never show file A's content over file B's.
   let loadGen = 0;
-  // The path whose content is now in the view. This lets `load()`
+  // The path whose content is now in the view. This lets `sync()`
   // tell a same-file reload apart from a real file switch. A same-file
   // reload keeps the caret position and scroll position. A real file
   // switch resets to a fresh state, with the caret at the top.
@@ -286,19 +301,149 @@
     });
   }
 
-  async function load(p: string, cancelled: () => boolean = () => false) {
-    const gen = ++loadGen;
-    const [content, hunkList] = await Promise.all([
-      readFile(p),
-      fetchHunks(worktree, p).catch(() => [] as Hunk[]),
-    ]);
-    // Drop a superseded result. A newer load may have claimed a later
-    // generation, or the component may be tearing down (cancelled). This
-    // guards against a stale file flashing in, and against dispatching
-    // into a view that the code is about to destroy.
-    if (cancelled() || gen !== loadGen) return;
-    const gutterState = gutterChangesFromHunks(hunkList);
+  // Path relative to the worktree, for the git hunk lookup. The backend's
+  // Hunks binding takes a worktree-relative path and rejects an absolute one,
+  // so passing the absolute path left the gutter permanently empty (FEX-12).
+  // A file outside the worktree has no git hunks to show.
+  function relToWorktree(p: string): string | null {
+    if (!worktree) return null;
+    const prefix = worktree.endsWith("/") ? worktree : worktree + "/";
+    return p.startsWith(prefix) ? p.slice(prefix.length) : null;
+  }
 
+  // An inline error shown in place of the document. `sync` sets it when a
+  // file cannot be read (too large, binary or non-UTF-8, not a regular file,
+  // deleted, outside the root). `switchBlocked` names a file whose unsaved
+  // edits could not be written when the user switched away from it, so it is
+  // still on screen; `blockedTarget` is the file the user asked for then.
+  let loadError = $state<{ path: string; message: string } | null>(null);
+  let switchBlocked = $state<string | null>(null);
+  let blockedTarget: string | null = null;
+  let destroyed = false;
+
+  // Save-conflict detection (FEX-4). `baseContent` is the text the buffer was
+  // loaded from (or last saved as). `diskMaybeChanged` is set when the
+  // backend reported a change to this file while the buffer had unsaved
+  // edits, so the reload was skipped. A save then re-reads the file first and,
+  // when the disk no longer holds `baseContent`, asks instead of overwriting.
+  let baseContent: string | null = null;
+  let diskMaybeChanged = false;
+  let conflict = $state<{ path: string } | null>(null);
+
+  function errMessage(e: unknown): string {
+    return e instanceof Error ? e.message : String(e);
+  }
+
+  // A friendly reason for a failed read.
+  function loadErrorText(e: unknown): string {
+    const msg = errMessage(e);
+    if (/binary or non-UTF-8/i.test(msg)) return "binary or non-UTF-8 file, not editable here";
+    return msg;
+  }
+
+  function baseName(p: string): string {
+    return p.split("/").pop() || p;
+  }
+
+  // Keep the CodeMirror view inside the current host element. `{#if path}`
+  // re-creates the host when the path goes null and back, which would leave a
+  // surviving view detached and the editor blank (FEX-31).
+  function attachView() {
+    if (view && container && view.dom.parentElement !== container) {
+      container.appendChild(view.dom);
+      view.requestMeasure();
+    }
+  }
+
+  // Bring the view in line with `p`. Every call claims a generation; a newer
+  // call supersedes an older one at each await, so a slow read can never show
+  // a stale file, and a reload bump during a switch cannot strand the old
+  // buffer under the new path (FEX-17). The rules:
+  //   - A dirty buffer for ANOTHER file is saved to ITS OWN path first, the
+  //     same autosave the component already does on teardown (FEX-1, FEX-2).
+  //     If that save fails, the switch stops and the old file stays on screen,
+  //     still dirty, so nothing is lost and nothing is written to the new file.
+  //   - A dirty buffer for THIS file is never replaced by a reload.
+  //   - A failed read shows an error and clears the view, so the old text can
+  //     never sit under the new path and be saved into it (FEX-3).
+  async function sync(p: string | null) {
+    const gen = ++loadGen;
+    const current = () => gen === loadGen && !destroyed;
+
+    if (!p) {
+      // The host is gone. Save a dirty buffer, then drop the view. If the save
+      // fails, keep the (detached) view and its edits: a later path re-attaches
+      // it, and teardown tries the save again.
+      if (view && isDirty && !(await save())) return;
+      if (!current()) return;
+      view?.destroy();
+      view = null;
+      renderedPath = null;
+      baseContent = null;
+      loadError = null;
+      switchBlocked = null;
+      return;
+    }
+
+    attachView();
+
+    if (view && isDirty && renderedPath && renderedPath !== p) {
+      // A switch that already failed to save is not retried on every fs
+      // event for the file the user asked for; only a different file, Ctrl-S
+      // or the banner's buttons retry (review #4).
+      if (switchBlocked === renderedPath && blockedTarget === p) return;
+      const leaving = renderedPath;
+      const ok = await save();
+      if (!current()) return;
+      if (!ok) { switchBlocked = leaving; blockedTarget = p; return; }
+    }
+    switchBlocked = null;
+    blockedTarget = null;
+
+    // Same file, unsaved edits: an external change must not discard them. It
+    // may have changed the file on disk, so the next save checks (FEX-4).
+    if (view && renderedPath === p && isDirty) { diskMaybeChanged = true; return; }
+
+    let content: string;
+    let hunkList: Hunk[];
+    try {
+      const rel = relToWorktree(p);
+      [content, hunkList] = await Promise.all([
+        readFile(p),
+        rel ? fetchHunks(worktree, rel).catch(() => [] as Hunk[]) : Promise.resolve([] as Hunk[]),
+      ]);
+    } catch (e) {
+      if (!current()) return;
+      // The user typed into the previous file while this read was in flight:
+      // run the switch again, which saves those edits first, instead of
+      // dropping them with the view (review #2).
+      if (view && isDirty && renderedPath && renderedPath !== p) { void sync(p); return; }
+      if (view && isDirty && renderedPath === p) { diskMaybeChanged = true; return; }
+      // Nothing of the previous file may stay under this path. The previous
+      // buffer is clean here, so dropping the view loses nothing.
+      view?.destroy();
+      view = null;
+      renderedPath = null;
+      baseContent = null;
+      setDirty(false);
+      loadError = { path: p, message: loadErrorText(e) };
+      return;
+    }
+    if (!current()) return;
+
+    // The user typed while the read was in flight.
+    if (isDirty && view) {
+      // Same file: keep the new edits, skip this reload.
+      if (renderedPath === p) { diskMaybeChanged = true; return; }
+      // Another file: run the switch again, which saves those edits first.
+      void sync(p);
+      return;
+    }
+
+    // The gutter marks what differs from the index: unstaged hunks only
+    // (gutterChangesFromHunks skips staged ones).
+    const gutterState = gutterChangesFromHunks(hunkList);
+    attachView();
     const sameFile = view !== null && renderedPath === p;
     if (!view) {
       if (!container) return;
@@ -314,8 +459,7 @@
       // clamp the old selection to the new length. A bare `setState` call
       // here would reset the cursor to 0 and jump the scroll to the top on
       // every reload.
-      const current = view.state.doc.toString();
-      if (current !== content) {
+      if (view.state.doc.toString() !== content) {
         const max = content.length;
         const sel = view.state.selection;
         const ranges = sel.ranges.map((r) =>
@@ -329,39 +473,130 @@
       }
     }
     renderedPath = p;
+    baseContent = content;
+    diskMaybeChanged = false;
+    conflict = null;
+    loadError = null;
     // Refresh the git gutter to match the newly loaded hunks. This also
     // clears stale markers on a same-file reload, when the changes were
     // just staged away.
     view.dispatch({ effects: setChangedLines.of(gutterState) });
-    // The `setState` call and the doc-replacing dispatch both fire
-    // `docChanged` through the update listener. Clear `dirty`, so the
-    // newly loaded buffer starts clean.
-    dirty = false;
+    // The doc-replacing dispatch fires `docChanged` through the update
+    // listener. Clear `dirty`, so the newly loaded buffer starts clean.
+    setDirty(false);
   }
 
-  async function save() {
-    if (!path || !view) return;
-    try {
-      await writeFile(path, view.state.doc.toString());
-      dirty = false;
-    } catch (e) {
-      // A failed write must not look successful. Keep the buffer dirty,
-      // and raise a blocking notification, so the code never silently
-      // loses the unsaved edit.
-      const msg = e instanceof Error ? e.message : String(e);
-      addBlocking(path, "Save failed", `Could not write ${path}: ${msg}`);
-    }
+  // The save in flight for the same document, so a second request for it
+  // (Ctrl-S during a switch, a reload racing a switch) shares one write.
+  let inflight: { path: string; doc: unknown; promise: Promise<boolean> } | null = null;
+  // Every write waits for the previous one, so two saves can never land out
+  // of order and leave the older text on disk (review #5).
+  let writeChain: Promise<unknown> = Promise.resolve();
+
+  // Save the buffer to the file it was loaded from (`renderedPath`), never to
+  // the live `path` prop: during a switch or teardown that prop already names
+  // the NEXT file (FEX-1). Resolves true when the write succeeded. With
+  // `force`, a detected on-disk change is overwritten (the user chose
+  // "Overwrite"); otherwise it stops the save and shows the conflict choice.
+  function save(force = false, teardown = false): Promise<boolean> {
+    if (!view || !renderedPath) return Promise.resolve(false);
+    const target = renderedPath;
+    const snap = view.state.doc;
+    if (!force && inflight && inflight.path === target && inflight.doc === snap) return inflight.promise;
+    const text = snap.toString();
+    const prev = writeChain;
+    let promise!: Promise<boolean>;
+    promise = (async () => {
+      await prev.catch(() => {});
+      try {
+        if (!force && diskMaybeChanged && baseContent !== null) {
+          const disk = await readFile(target).catch(() => null);
+          if (disk !== null && disk !== baseContent && disk !== text) {
+            if (teardown) {
+              // No one is left to ask: keep the file as the agent left it and
+              // put the edits on the clipboard rather than drop them.
+              void clipboardSetText(text).catch(() => {});
+              addBlocking(workspaceId, "Unsaved edits not written",
+                `${target} changed on disk while it had unsaved edits, so they were not written over it. They were copied to the clipboard.`);
+            } else {
+              conflict = { path: target };
+            }
+            return false;
+          }
+        }
+        await writeFile(target, text);
+        if (renderedPath === target) {
+          baseContent = text;
+          diskMaybeChanged = false;
+          if (conflict?.path === target) conflict = null;
+        }
+        // Keystrokes typed while the write was in flight are not on disk yet.
+        // CodeMirror's Text is immutable, so identity means "unchanged" (FEX-16).
+        if (view && renderedPath === target && view.state.doc === snap) setDirty(false);
+        if (switchBlocked === target) switchBlocked = null;
+        return true;
+      } catch (e) {
+        // A failed write must not look successful. Keep the buffer dirty,
+        // and raise a blocking notification, so the code never silently
+        // loses the unsaved edit.
+        addBlocking(workspaceId, "Save failed", `Could not write ${target}: ${errMessage(e)}`);
+        return false;
+      } finally {
+        if (inflight?.promise === promise) inflight = null;
+      }
+    })();
+    writeChain = promise;
+    inflight = { path: target, doc: snap, promise };
+    return promise;
+  }
+
+  // After a successful save, resume a switch that stopped on a failed one.
+  function resumeSwitch(ok: boolean) {
+    if (ok && path && renderedPath !== path) void sync(path);
   }
 
   function handleKeyDown(e: KeyboardEvent) {
-    if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+    // Match on the letter, case-insensitively, so Caps Lock does not turn
+    // the shortcut off (FEX-29).
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
       // The editor can stay mounted while hidden, for example on the agent
       // pane or diff pane. Ignore the shortcut then, so it does not
       // capture Ctrl-S from the terminal, or save an off-screen file.
       if (!visible) return;
       e.preventDefault();
-      save();
+      void save().then(resumeSwitch);
     }
+  }
+
+  // Banner actions for a switch that could not save (review #3).
+  function discardBlocked() {
+    switchBlocked = null;
+    blockedTarget = null;
+    conflict = null;
+    setDirty(false);
+    if (path) void sync(path);
+  }
+  function copyBuffer() {
+    if (view) void clipboardSetText(view.state.doc.toString()).catch(() => {});
+  }
+
+  // Conflict actions (FEX-4).
+  function conflictReload() {
+    conflict = null;
+    setDirty(false);
+    diskMaybeChanged = false;
+    // Re-read this file from disk (the view keeps its caret where it can).
+    if (renderedPath) {
+      const p = renderedPath;
+      void sync(p).then(() => resumeSwitch(true));
+    }
+  }
+  function conflictOverwrite() {
+    conflict = null;
+    void save(true).then(resumeSwitch);
+  }
+  function conflictKeep() {
+    conflict = null;
   }
 
   // Drag the selected text as application/x-perch-text. This matches the
@@ -373,45 +608,27 @@
     e.dataTransfer.setData("text/plain", selectionText);
   }
 
-  // Tracks the file the editor now holds. This lets the code tell a
-  // file switch apart from an in-place reload signal.
-  let loadedPath: string | null = null;
-
-  // Load on a file switch. On an external change to the same file, when
-  // `reloadToken` bumps, reload only when there are no unsaved edits. This
-  // stops a background change from discarding the user's draft. The code
-  // reads `dirty` and `loadedPath` untracked, so this effect depends only
-  // on `path` and `reloadToken`.
+  // Load on a file switch, and on an external change to the same file when
+  // `reloadToken` bumps. `sync` decides what to do and never replaces
+  // unsaved edits. The body runs untracked, so this effect depends only on
+  // `path` and `reloadToken`.
   $effect(() => {
     const p = path;
     reloadToken;
-    // Cancellation flag for this run. The cleanup function below flips
-    // this flag when the effect re-runs, for example when `path` or
-    // `reloadToken` changes, or when the component is destroyed. So an
-    // in-flight load that resolves afterward drops its stale result. See
-    // `load()`.
-    let cancelled = false;
-    untrack(() => {
-      if (!p) { loadedPath = null; return; }
-      if (p !== loadedPath || !dirty) {
-        loadedPath = p;
-        load(p, () => cancelled);
-      }
-    });
-    return () => { cancelled = true; };
+    untrack(() => { void sync(p); });
   });
 
   onMount(() => document.addEventListener("keydown", handleKeyDown));
   onDestroy(() => {
+    destroyed = true;
     document.removeEventListener("keydown", handleKeyDown);
     // A dirty buffer here means unsaved edits. Destroying the view
     // discards the document. So the code saves the document first, with
     // the same care as `save()`, instead of silently dropping the user's
-    // work on a session switch. `save()` captures the document
-    // synchronously before the write, and raises a blocking notification
-    // if the write fails. So a failed save always surfaces, and the code
-    // never hides it.
-    if (dirty) save();
+    // work on a session switch. `save()` captures the document and its own
+    // path synchronously before the write, and raises a blocking
+    // notification if the write fails.
+    if (isDirty) void save(false, true);
     view?.destroy();
     view = null;
   });
@@ -419,7 +636,32 @@
 
 {#if path}
   <section aria-label="editor" class="editor-wrap">
+    {#if conflict}
+      <div class="editor-banner" role="alert">
+        <span>{baseName(conflict.path)} changed on disk since you opened it, and you have unsaved edits.</span>
+        <span class="banner-actions">
+          <button class="btn btn-sm" onclick={conflictReload}>Reload from disk</button>
+          <button class="btn btn-sm" onclick={conflictOverwrite}>Overwrite</button>
+          <button class="btn btn-sm" onclick={conflictKeep}>Keep editing</button>
+        </span>
+      </div>
+    {:else if switchBlocked}
+      <div class="editor-banner" role="alert">
+        <span>Unsaved changes to {baseName(switchBlocked)} could not be saved, so it is still open. Press Ctrl-S to retry.</span>
+        <span class="banner-actions">
+          <button class="btn btn-sm" onclick={copyBuffer}>Copy text</button>
+          <button class="btn btn-sm" onclick={discardBlocked}>Discard changes</button>
+        </span>
+      </div>
+    {/if}
     <div bind:this={container} class="cm-host"></div>
+    {#if loadError && loadError.path === path}
+      <p class="editor-error" role="alert">Could not open {baseName(loadError.path)}: {loadError.message}</p>
+    {/if}
+
+    {#if onShowPreview}
+      <button class="show-preview-btn" onclick={onShowPreview}>Show preview</button>
+    {/if}
 
     {#if dirty}
       <span class="dirty-dot" aria-label="Unsaved changes" title="Unsaved changes">●</span>
@@ -469,6 +711,28 @@
     min-width: 6px;
   }
 
+  .editor-error,
+  .editor-banner {
+    margin: 0;
+    padding: var(--perch-sp-2) var(--perch-sp-3);
+    font-family: var(--perch-font-sans);
+    font-size: var(--perch-fs-body);
+  }
+  .editor-error { color: var(--perch-err); }
+  .editor-banner {
+    color: var(--perch-text);
+    background: color-mix(in srgb, var(--perch-warn) 15%, var(--perch-bg-elev));
+    border-bottom: 1px solid var(--perch-border);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--perch-sp-2);
+  }
+  .banner-actions {
+    display: inline-flex;
+    gap: var(--perch-sp-1);
+  }
+
   /* unsaved indicator */
   .dirty-dot {
     position: absolute;
@@ -480,6 +744,25 @@
     pointer-events: none;
     z-index: var(--perch-z-editor-dirty);
     user-select: none;
+  }
+
+  .show-preview-btn {
+    position: absolute;
+    top: var(--perch-sp-1);
+    right: calc(var(--perch-sp-2) + 16px);
+    padding: 2px 8px;
+    background: var(--perch-bg-elev);
+    color: var(--perch-text);
+    border: 1px solid var(--perch-border-strong);
+    border-radius: var(--perch-radius-sm);
+    font-family: var(--perch-font-sans);
+    font-size: var(--perch-fs-caption);
+    cursor: pointer;
+    z-index: var(--perch-z-editor-send);
+  }
+  .show-preview-btn:focus-visible {
+    outline: var(--perch-ring-w) solid var(--perch-accent);
+    outline-offset: 2px;
   }
 
   .send-to-agent-btn {

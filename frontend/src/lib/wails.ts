@@ -28,19 +28,37 @@ export interface WorkspaceVM {
 export type AgentState = "running"|"idle"|"awaiting-approval"|"awaiting-input"|"done"|"errored"|"exited";
 export interface AgentCaps { approvals: boolean; attention: boolean; }
 export interface AgentEvent {
-  sessionId?: string; workspaceId: string; kind: "state"|"approval"|"question";
+  sessionId?: string; workspaceId: string; kind: "state"|"approval"|"question"|"approval-resolved";
   state?: AgentState; approval?: ApprovalReq; err?: string;
+  // Set when a pending approval was resolved or withdrawn (answered in perch,
+  // auto-approved, answered in the agent's own TUI, or taken away on close,
+  // reopen, reload or exit). Composed like ApprovalReq.reqId
+  // ("<raw>:<workspaceId>"). May arrive more than once; removal is idempotent.
+  resolvedReqId?: string;
 }
 export interface ApprovalReq { reqId: string; tool: string; summary: string; input?: string; }
-export interface FileDiff { path: string; added: number; removed: number; status: "M"|"A"|"D"|"R"|"?"; }
+// A rename is one entry with status "R", the new path in `path` and the old
+// one in `oldPath`. An untracked directory is one entry ending in "/".
+export interface FileDiff { path: string; oldPath?: string; added: number; removed: number; status: "M"|"A"|"D"|"R"|"?"; }
 export interface HunkLine { kind: "ctx"|"add"|"del"; text: string; }
 export interface Hunk {
-  file: string; index: number; header: string;
+  // `id` is the content hash of the hunk. Stage/Discard/Unstage send it, and
+  // the backend refuses (ErrHunkChanged) when the hunk at `index` no longer
+  // has that content.
+  file: string; index: number; id: string; header: string;
   oldStart: number; oldLines: number; newStart: number; newLines: number; lines: HunkLine[];
   staged?: boolean;
 }
 export interface FsNode { name: string; path: string; isDir: boolean; modified?: boolean; untracked?: boolean; }
 export interface AlwaysRule { agent: string; tool: string; pattern: string; hash?: string; }
+// ApproveAlways result: the rule the grant appended. `added` is false when an
+// identical rule already existed, so an Undo must remove nothing.
+export interface AlwaysGrant { rule: AlwaysRule; added: boolean; }
+// fs:changed payload. `path` is the worktree root. `paths` are the absolute
+// files changed in the debounce window (deduplicated, never null); past the
+// backend's cap `paths` is [] and `truncated` is true, meaning "anything may
+// have changed".
+export interface FsChanged { workspaceId: string; path: string; paths?: string[]; truncated?: boolean; }
 export interface AppSettings {
   theme: string; density: string; font: string; dnd: boolean; glassDisabled?: boolean; alwaysRules: AlwaysRule[];
   staleThresholdDays?: number;
@@ -54,23 +72,29 @@ interface App {
   SetWorkspaceTitle(id: string, title: string): Promise<void>;
   WorkspaceForBranch(repoPath: string, branch: string): Promise<{ id: string; found: boolean }>;
   OpenWorkspace(id: string): Promise<void>;
+  // Types the agent launch line again into an open session whose login shell
+  // was still busy at launch. Rejects once the agent has reported in.
+  RetypeLaunch(id: string): Promise<void>;
   CloseWorkspace(id: string): Promise<void>;
   RemoveWorkspace(id: string): Promise<void>;
   ForceRemoveWorkspace(id: string): Promise<void>;
   ListStaleSessions(): Promise<StaleSessionVM[]>;
   CleanupSessions(ids: string[], force: boolean): Promise<void>;
-  WriteToPty(paneId: string, data: number[]): Promise<void>;
+  // data is padded standard base64 (Go decodes a []byte argument from that).
+  WriteToPty(paneId: string, data: string): Promise<void>;
   ResizePty(paneId: string, cols: number, rows: number): Promise<void>;
   OpenShell(paneId: string, cwd: string): Promise<void>;
   CloseShell(paneId: string): Promise<void>;
   ReloadAgentEnv(paneID: string): Promise<void>;
   Approve(reqId: string, decision: string): Promise<void>;
+  ApproveAlways(reqId: string): Promise<AlwaysGrant>;
+  RemoveAlwaysRule(rule: AlwaysRule): Promise<boolean>;
   PendingApprovals(): Promise<{ workspaceId: string; req: ApprovalReq }[]>;
   DiffStat(worktree: string): Promise<FileDiff[]>;
   Hunks(worktree: string, file: string): Promise<Hunk[]>;
-  StageHunk(worktree: string, file: string, index: number): Promise<void>;
-  DiscardHunk(worktree: string, file: string, index: number): Promise<void>;
-  UnstageHunk(worktree: string, file: string, index: number): Promise<void>;
+  StageHunk(worktree: string, file: string, index: number, id: string): Promise<void>;
+  DiscardHunk(worktree: string, file: string, index: number, id: string): Promise<void>;
+  UnstageHunk(worktree: string, file: string, index: number, id: string): Promise<void>;
   ListDir(absDir: string): Promise<FsNode[]>;
   ReadFile(absPath: string): Promise<string>;
   WriteFile(absPath: string, content: string): Promise<void>;
@@ -100,6 +124,8 @@ declare global {
       // process-wide, so App.svelte registers it once.
       OnFileDrop(cb: (x: number, y: number, paths: string[]) => void, useDropTarget: boolean): void;
       OnFileDropOff(): void;
+      // Opens a URL in the system browser. Wails validates the URL.
+      BrowserOpenURL?(url: string): void;
     };
     go: { app: { App: App } };
   }
@@ -113,13 +139,36 @@ export const createWorkspace      = (agent: string, repoPath: string, baseRef: s
 export const setWorkspaceTitle    = (id: string, title: string)                                                           => app().SetWorkspaceTitle(id, title);
 export const workspaceForBranch   = (repoPath: string, branch: string)                                                    => app().WorkspaceForBranch(repoPath, branch);
 export const openWorkspace   = (id: string)                                       => app().OpenWorkspace(id);
+export const retypeLaunch    = (workspaceId: string)                              => app().RetypeLaunch(workspaceId);
 export const closeWorkspace  = (id: string)                                       => app().CloseWorkspace(id);
 export const removeWorkspace      = (id: string)                                  => app().RemoveWorkspace(id);
 export const forceRemoveWorkspace = (id: string)                                  => app().ForceRemoveWorkspace(id);
 export const listStaleSessions    = ()                                            => app().ListStaleSessions();
 export const cleanupSessions      = (ids: string[], force: boolean)               => app().CleanupSessions(ids, force);
 // PTY
-export const writeToPty = (paneId: string, data: number[])                        => app().WriteToPty(paneId, data);
+// Bytes cross the bridge as ONE padded standard-base64 string (Go decodes a
+// []byte argument only from that form). The binary string is built in
+// chunks, to stay under String.fromCharCode's argument limit, and then
+// encoded with a single btoa: base64-encoding each chunk separately would put
+// padding in the middle and Go would reject the whole write (FEC-31).
+export function bytesToBase64(bytes: Uint8Array): string {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(bin);
+}
+// Decode one pty:data event. Each event is padded on its own, so it must be
+// decoded on its own, never concatenated with another first.
+export function base64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+export const writeToPty = (paneId: string, data: Uint8Array)                      => app().WriteToPty(paneId, bytesToBase64(data));
+// Text to the pty as UTF-8 (btoa alone throws on non-Latin-1 text).
+export const writeTextToPty = (paneId: string, text: string)                      => writeToPty(paneId, new TextEncoder().encode(text));
 export const resizePty  = (paneId: string, cols: number, rows: number)            => app().ResizePty(paneId, cols, rows);
 export const openShell  = (paneId: string, cwd: string)                           => app().OpenShell(paneId, cwd);
 export const closeShell = (paneId: string)                                        => app().CloseShell(paneId);
@@ -130,6 +179,9 @@ export const closeShell = (paneId: string)                                      
 export const reloadAgentEnv = (paneID: string)                                    => app().ReloadAgentEnv(paneID);
 // Approvals
 export const approve = (reqId: string, decision: "allow"|"deny"|"always")         => app().Approve(reqId, decision);
+// "Always allow" that reports the rule it added, and its exact undo.
+export const approveAlways    = (reqId: string)                                   => app().ApproveAlways(reqId);
+export const removeAlwaysRule = (rule: AlwaysRule)                                => app().RemoveAlwaysRule(rule);
 // Every approval still awaiting a decision. This list is seeded on mount
 // or open, to rebuild the queue after a reload or a late open, because the
 // agent:event that carries it fires only once.
@@ -137,9 +189,9 @@ export function pendingApprovals(): Promise<{ workspaceId: string; req: Approval
 // Git
 export const diffStat    = (worktree: string)                                     => app().DiffStat(worktree);
 export const hunks       = (worktree: string, file: string)                       => app().Hunks(worktree, file);
-export const stageHunk   = (worktree: string, file: string, index: number)       => app().StageHunk(worktree, file, index);
-export const discardHunk = (worktree: string, file: string, index: number)       => app().DiscardHunk(worktree, file, index);
-export const unstageHunk = (worktree: string, file: string, index: number)       => app().UnstageHunk(worktree, file, index);
+export const stageHunk   = (worktree: string, file: string, index: number, id: string) => app().StageHunk(worktree, file, index, id);
+export const discardHunk = (worktree: string, file: string, index: number, id: string) => app().DiscardHunk(worktree, file, index, id);
+export const unstageHunk = (worktree: string, file: string, index: number, id: string) => app().UnstageHunk(worktree, file, index, id);
 export const branches      = (repo: string)                                       => app().Branches(repo);
 export const discoverRepos = ()                                                   => app().DiscoverRepos();
 // FS
@@ -172,7 +224,9 @@ export const EVT_WORKSPACE_RELAUNCH = "workspace:relaunch";
 
 // Event helpers. The colon-separated names match the frozen Wails event table.
 export function onPtyData(paneId: string, cb: (bytes: Uint8Array) => void): () => void {
-  return window.runtime.EventsOn(EVT_PTY_DATA_PREFIX + paneId, (data: number[]) => cb(Uint8Array.from(data)));
+  // A base64 string per event; a number[] from an older backend still works.
+  return window.runtime.EventsOn(EVT_PTY_DATA_PREFIX + paneId, (data: string | number[]) =>
+    cb(typeof data === "string" ? base64ToBytes(data) : Uint8Array.from(data)));
 }
 export function onPtyExit(paneId: string, cb: (code: number) => void): () => void {
   return window.runtime.EventsOn(EVT_PTY_EXIT_PREFIX + paneId, (p: { code: number }) => cb(p.code));
@@ -180,11 +234,13 @@ export function onPtyExit(paneId: string, cb: (code: number) => void): () => voi
 export function onAgentEvent(cb: (ev: AgentEvent) => void): () => void {
   return window.runtime.EventsOn(EVT_AGENT, (ev: AgentEvent) => cb(ev));
 }
-export function onFsChanged(cb: (p: { workspaceId: string; path: string }) => void): () => void {
+export function onFsChanged(cb: (p: FsChanged) => void): () => void {
   return window.runtime.EventsOn(EVT_FS_CHANGED, cb);
 }
 export function onNotify(
-  cb: (p: { tier: "blocking"|"ambient"|"routine"; title: string; body: string; workspaceId: string; state?: string }) => void,
+  // `action` names an action the notification offers; "retype-launch" is the
+  // only one today. Unknown values are ignored.
+  cb: (p: { tier: "blocking"|"ambient"|"routine"; title: string; body: string; workspaceId: string; state?: string; action?: string }) => void,
 ): () => void {
   return window.runtime.EventsOn(EVT_NOTIFY, cb);
 }

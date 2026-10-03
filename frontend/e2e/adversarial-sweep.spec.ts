@@ -312,8 +312,9 @@ test("A4-view-roundtrip-and-shell-drawer", async ({ page }) => {
 
   await test.step("seed terminal output, then Agent→Code→Agent", async () => {
     await page.evaluate(() => {
-      const bytes = Array.from(new TextEncoder().encode("$ hello from pty\r\nline two\r\n"));
-      (window as any).__emit("pty:data:pane-ws-1", bytes);
+      // pty:data carries one padded base64 string per event.
+      const b64 = btoa(String.fromCharCode(...new TextEncoder().encode("$ hello from pty\r\nline two\r\n")));
+      (window as any).__emit("pty:data:pane-ws-1", b64);
     });
     await page.waitForTimeout(300);
     await page.locator('nav[aria-label="View"] button', { hasText: "Code" }).click().catch(() => {});

@@ -9,8 +9,10 @@
   --perch-glass-bg: rgba(40,40,40,0.82);
   --perch-glass-bg-solid: rgba(40,40,40,0.97);
   --perch-glass-border: rgba(235,219,178,0.12);
+  /* Terminal ANSI hues the semantic tokens do not cover, so blue, cyan and magenta stay distinct (FEX-32). */
+  --perch-ansi-blue: #83a598;   --perch-ansi-magenta: #d3869b;   --perch-ansi-cyan: #8ec07c;
 }
-/* tokyo-night: bg #1a1b26; text #c0caf5 ≈10.59:1; text-dim #7b83ac ≈4.63:1 PASS; border #414868 ≈1.91:1; border-strong #5d6896 ≈3.16:1 */
+/* tokyo-night: bg #1a1b26; text #c0caf5 ≈10.59:1; text-dim #878fb8 ≈5.41:1 PASS; border #414868 ≈1.91:1; border-strong #5d6896 ≈3.16:1 */
 [data-theme="tokyo-night"] {
   color-scheme: dark;
   --perch-bg: #1a1b26;       --perch-bg-elev: #13141f;   --perch-surface: #24283b;
@@ -21,8 +23,10 @@
   --perch-glass-bg: rgba(26,27,38,0.82);
   --perch-glass-bg-solid: rgba(26,27,38,0.97);
   --perch-glass-border: rgba(192,202,245,0.12);
+  /* Terminal ANSI hues the semantic tokens do not cover, so blue, cyan and magenta stay distinct (FEX-32). */
+  --perch-ansi-blue: #7aa2f7;   --perch-ansi-magenta: #bb9af7;   --perch-ansi-cyan: #7dcfff;
 }
-/* catppuccin mocha: bg #1e1e2e; text #cdd6f4 ≈11.34:1; text-dim #84889c ≈4.67:1 PASS; border #45475a ≈1.80:1; border-strong #676a87 ≈3.11:1 */
+/* catppuccin mocha: bg #1e1e2e; text #cdd6f4 ≈11.34:1; text-dim #979cb3 ≈6.03:1 PASS; border #45475a ≈1.80:1; border-strong #676a87 ≈3.11:1 */
 [data-theme="catppuccin"] {
   color-scheme: dark;
   --perch-bg: #1e1e2e;       --perch-bg-elev: #181825;   --perch-surface: #313244;
@@ -33,8 +37,10 @@
   --perch-glass-bg: rgba(30,30,46,0.82);
   --perch-glass-bg-solid: rgba(30,30,46,0.97);
   --perch-glass-border: rgba(205,214,244,0.12);
+  /* Terminal ANSI hues the semantic tokens do not cover, so blue, cyan and magenta stay distinct (FEX-32). */
+  --perch-ansi-blue: #89b4fa;   --perch-ansi-magenta: #f5c2e7;   --perch-ansi-cyan: #94e2d5;
 }
-/* dracula: bg #282a36; text #f8f8f2 ≈13.36:1; text-dim #8692b9 ≈4.63:1 PASS; border #44475a ≈1.56:1; border-strong #6f7492 ≈3.11:1 */
+/* dracula: bg #282a36; text #f8f8f2 ≈13.36:1; text-dim #97a1c2 ≈5.56:1 PASS; border #44475a ≈1.56:1; border-strong #6f7492 ≈3.11:1 */
 [data-theme="dracula"] {
   color-scheme: dark;
   --perch-bg: #282a36;       --perch-bg-elev: #1e1f29;   --perch-surface: #343746;
@@ -45,8 +51,10 @@
   --perch-glass-bg: rgba(40,42,54,0.82);
   --perch-glass-bg-solid: rgba(40,42,54,0.97);
   --perch-glass-border: rgba(248,248,242,0.12);
+  /* Terminal ANSI hues the semantic tokens do not cover, so blue, cyan and magenta stay distinct (FEX-32). */
+  --perch-ansi-blue: #bd93f9;   --perch-ansi-magenta: #ff79c6;   --perch-ansi-cyan: #8be9fd;
 }
-/* nord: bg #2e3440; text #d8dee9 ≈9.25:1; text-dim #949fb3 ≈4.68:1 PASS; border #434c5e ≈1.45:1; border-strong #727f9a ≈3.10:1 */
+/* nord: bg #2e3440; text #d8dee9 ≈9.25:1; text-dim #a6b0c2 ≈5.72:1 PASS; border #434c5e ≈1.45:1; border-strong #727f9a ≈3.10:1 */
 [data-theme="nord"] {
   color-scheme: dark;
   --perch-bg: #2e3440;       --perch-bg-elev: #242933;   --perch-surface: #3b4252;
@@ -57,8 +65,10 @@
   --perch-glass-bg: rgba(46,52,64,0.82);
   --perch-glass-bg-solid: rgba(46,52,64,0.97);
   --perch-glass-border: rgba(216,222,233,0.12);
+  /* Terminal ANSI hues the semantic tokens do not cover, so blue, cyan and magenta stay distinct (FEX-32). */
+  --perch-ansi-blue: #81a1c1;   --perch-ansi-magenta: #b48ead;   --perch-ansi-cyan: #88c0d0;
 }
-/* rose-pine: bg #191724; text #e0def4 ≈13.39:1; text-dim #84809b ≈4.66:1 PASS; border #403d52 ≈1.69:1; border-strong #686385 ≈3.12:1 */
+/* rose-pine: bg #191724; text #e0def4 ≈13.39:1; text-dim #8f8ba6 ≈5.39:1 PASS; border #403d52 ≈1.69:1; border-strong #686385 ≈3.12:1 */
 [data-theme="rose-pine"] {
   color-scheme: dark;
   --perch-bg: #191724;       --perch-bg-elev: #120f1d;   --perch-surface: #26233a;
@@ -69,8 +79,10 @@
   --perch-glass-bg: rgba(25,23,36,0.82);
   --perch-glass-bg-solid: rgba(25,23,36,0.97);
   --perch-glass-border: rgba(224,222,244,0.12);
+  /* Terminal ANSI hues the semantic tokens do not cover, so blue, cyan and magenta stay distinct (FEX-32). */
+  --perch-ansi-blue: #31748f;   --perch-ansi-magenta: #c4a7e7;   --perch-ansi-cyan: #9ccfd8;
 }
-/* one-dark: bg #282c34; text #abb2bf ≈6.57:1; text-dim #8e95a2 ≈4.65:1 PASS; border #3e4451 ≈1.43:1; border-strong #6c778e ≈3.11:1 */
+/* one-dark: bg #282c34; text #abb2bf ≈6.57:1; text-dim #939aa7 ≈4.95:1 PASS; border #3e4451 ≈1.43:1; border-strong #6c778e ≈3.11:1 */
 [data-theme="one-dark"] {
   color-scheme: dark;
   --perch-bg: #282c34;       --perch-bg-elev: #21252b;   --perch-surface: #2c313c;
@@ -81,8 +93,10 @@
   --perch-glass-bg: rgba(40,44,52,0.82);
   --perch-glass-bg-solid: rgba(40,44,52,0.97);
   --perch-glass-border: rgba(171,178,191,0.12);
+  /* Terminal ANSI hues the semantic tokens do not cover, so blue, cyan and magenta stay distinct (FEX-32). */
+  --perch-ansi-blue: #61afef;   --perch-ansi-magenta: #c678dd;   --perch-ansi-cyan: #56b6c2;
 }
-/* perch-cyan: bg #0d1117; text #e2e8f0 ≈15.35:1; text-dim #75808c ≈4.71:1 PASS; border #30363d ≈1.55:1; border-strong #5a6572 ≈3.19:1 */
+/* perch-cyan: bg #0d1117; text #e2e8f0 ≈15.35:1; text-dim #7a8591 ≈5.04:1 PASS; border #30363d ≈1.55:1; border-strong #5a6572 ≈3.19:1 */
 [data-theme="perch-cyan"] {
   color-scheme: dark;
   --perch-bg: #0d1117;       --perch-bg-elev: #090d12;   --perch-surface: #161b22;
@@ -93,6 +107,8 @@
   --perch-glass-bg: rgba(13,17,23,0.82);
   --perch-glass-bg-solid: rgba(13,17,23,0.97);
   --perch-glass-border: rgba(226,232,240,0.12);
+  /* Terminal ANSI hues the semantic tokens do not cover, so blue, cyan and magenta stay distinct (FEX-32). */
+  --perch-ansi-blue: #58a6ff;   --perch-ansi-magenta: #bc8cff;   --perch-ansi-cyan: #39c5cf;
 }
 /* light: bg #f5f0e8; text #1c1917 ≈15.42:1; text-dim #716b66 ≈4.63:1 PASS; border #c7bfb2 ≈1.61:1; border-strong #95856d ≈3.16:1 */
 [data-theme="light"] {
@@ -105,4 +121,6 @@
   --perch-glass-bg: rgba(245,240,232,0.88);
   --perch-glass-bg-solid: rgba(245,240,232,0.98);
   --perch-glass-border: rgba(28,25,23,0.12);
+  /* Terminal ANSI hues the semantic tokens do not cover, so blue, cyan and magenta stay distinct (FEX-32). */
+  --perch-ansi-blue: #1d4ed8;   --perch-ansi-magenta: #a21caf;   --perch-ansi-cyan: #0e7490;
 }

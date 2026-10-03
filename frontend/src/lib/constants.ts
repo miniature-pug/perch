@@ -19,6 +19,10 @@ export const UNDO_REMOVE_DELAY_MS = 6000;
 // swallowing the next unrelated keystroke, and stops the transient "g…"
 // indicator from lingering (F54).
 export const GCHORD_TIMEOUT_MS = 1500;
+// How long an approval card ignores keyboard decisions after it shows a new
+// request. A keystroke already in flight, a double-tap, or key repeat must
+// not decide a request the user has not read (FEC-3, FEC-16).
+export const APPROVAL_ARM_MS = 400;
 // Fallback for the count-up duration when the code cannot read the CSS
 // token --perch-dur-countup (jsdom, or no computed styles). This value
 // mirrors that token's value.

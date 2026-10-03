@@ -130,11 +130,11 @@ test("clicking Deny calls Approve with (reqId, 'deny')", async ({ page }) => {
   expect(lastCall.args[1]).toBe("deny");
 });
 
-test("clicking Always calls Approve with (reqId, 'always')", async ({ page }) => {
+test("clicking Always calls ApproveAlways(reqId), and Undo removes exactly that rule", async ({ page }) => {
   await triggerApproval(page);
 
   const callsBefore = await page.evaluate(() =>
-    (window as any).__calls.filter((c: any) => c.method === "Approve").length
+    (window as any).__calls.filter((c: any) => c.method === "ApproveAlways").length
   );
 
   const card = page.locator('section[aria-label="approval card"]');
@@ -142,11 +142,16 @@ test("clicking Always calls Approve with (reqId, 'always')", async ({ page }) =>
   await page.waitForTimeout(500);
 
   const approveCalls = await page.evaluate(() =>
-    (window as any).__calls.filter((c: any) => c.method === "Approve")
+    (window as any).__calls.filter((c: any) => c.method === "ApproveAlways")
   );
   expect(approveCalls.length - callsBefore).toBe(1);
+  expect(approveCalls[approveCalls.length - 1].args[0]).toBe(APPROVAL_REQ.reqId);
 
-  const lastCall = approveCalls[approveCalls.length - 1];
-  expect(lastCall.args[0]).toBe(APPROVAL_REQ.reqId);
-  expect(lastCall.args[1]).toBe("always");
+  await page.locator('[data-testid="always-toast"] button', { hasText: "Undo" }).click();
+  await page.waitForTimeout(300);
+  const removeCalls = await page.evaluate(() =>
+    (window as any).__calls.filter((c: any) => c.method === "RemoveAlwaysRule")
+  );
+  expect(removeCalls.length).toBe(1);
+  expect(removeCalls[0].args[0].pattern).toBe(APPROVAL_REQ.reqId);
 });

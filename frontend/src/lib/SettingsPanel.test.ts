@@ -22,6 +22,7 @@ const fixture: AppSettings = {
 vi.mock("./wails", () => ({
   getSettings:  vi.fn(async () => ({ ...fixture, alwaysRules: [...fixture.alwaysRules] })),
   saveSettings: vi.fn(async () => {}),
+  removeAlwaysRule: vi.fn(async () => true),
 }));
 
 // Mock the notifications store. The tests use it for the live DND toggle.
@@ -64,7 +65,7 @@ describe("SettingsPanel — open, always-rules", () => {
     );
   });
 
-  it("revoking first rule calls saveSettings exactly once with one fewer rule", async () => {
+  it("revoking the first rule removes exactly it through RemoveAlwaysRule (no whole-list save)", async () => {
     const w = await import("./wails");
     const { default: SettingsPanel } = await import("./SettingsPanel.svelte");
     render(SettingsPanel, { props: { open: true, onClose: vi.fn() } });
@@ -77,13 +78,10 @@ describe("SettingsPanel — open, always-rules", () => {
     await fireEvent.click(revokeBtns[0]);
 
     await waitFor(() =>
-      expect(vi.mocked(w.saveSettings)).toHaveBeenCalledWith(
-        expect.objectContaining({
-          alwaysRules: [{ agent: "claude", tool: "readFile", pattern: "/tmp/**" }],
-        })
-      )
+      expect(vi.mocked(w.removeAlwaysRule)).toHaveBeenCalledWith({ agent: "claude", tool: "bash", pattern: "npm test" })
     );
-    expect(vi.mocked(w.saveSettings)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(w.removeAlwaysRule)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(w.saveSettings)).not.toHaveBeenCalled();
   });
 });
 
@@ -241,19 +239,15 @@ describe("SettingsPanel — stale threshold persists", () => {
     expect(vi.mocked(w.saveSettings)).toHaveBeenCalledTimes(1);
   });
 
-  it("accepts 0 without raising an error", async () => {
+  it("ignores 0, which the backend would treat as the default anyway", async () => {
     const w = await import("./wails");
     const { default: SettingsPanel } = await import("./SettingsPanel.svelte");
     render(SettingsPanel, { props: { open: true, onClose: vi.fn() } });
 
     const input = (await screen.findByLabelText(/stale/i)) as HTMLInputElement;
     await fireEvent.input(input, { target: { value: "0" } });
-
-    await waitFor(() =>
-      expect(vi.mocked(w.saveSettings)).toHaveBeenCalledWith(
-        expect.objectContaining({ staleThresholdDays: 0 })
-      )
-    );
+    await new Promise((r) => setTimeout(r, 20));
+    expect(vi.mocked(w.saveSettings)).not.toHaveBeenCalled();
     expect(screen.queryByText(/failed to save settings/i)).not.toBeInTheDocument();
   });
 
@@ -304,5 +298,33 @@ describe("SettingsPanel — close behaviour", () => {
     const dialog = await screen.findByRole("dialog", { name: "Settings" });
     await fireEvent.keyDown(dialog, { key: "Escape" });
     expect(onClose).toHaveBeenCalledOnce();
+  });
+});
+
+describe("SettingsPanel — audit regressions (FEX-13)", () => {
+  it("re-reads settings on every open, so a rule granted since startup is listed", async () => {
+    const w = await import("./wails");
+    const { default: SettingsPanel } = await import("./SettingsPanel.svelte");
+    const r = render(SettingsPanel, { props: { open: true, onClose: vi.fn() } });
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "Revoke" })).toHaveLength(2));
+    await r.rerender({ open: false, onClose: vi.fn() });
+    vi.mocked(w.getSettings).mockResolvedValueOnce({
+      ...fixture, alwaysRules: [...fixture.alwaysRules, { agent: "claude", tool: "Edit", pattern: "*" }],
+    });
+    await r.rerender({ open: true, onClose: vi.fn() });
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "Revoke" })).toHaveLength(3));
+  });
+
+  it("revoke goes through the backend and then shows the stored list, including rules granted since", async () => {
+    const w = await import("./wails");
+    const { default: SettingsPanel } = await import("./SettingsPanel.svelte");
+    render(SettingsPanel, { props: { open: true, onClose: vi.fn() } });
+    const revokeBtns = await screen.findAllByRole("button", { name: "Revoke" });
+    const late = { agent: "claude", tool: "Edit", pattern: "*" };
+    vi.mocked(w.getSettings).mockResolvedValueOnce({ ...fixture, alwaysRules: [fixture.alwaysRules[1], late] });
+    await fireEvent.click(revokeBtns[0]);
+    await waitFor(() => expect(w.removeAlwaysRule).toHaveBeenCalledWith(fixture.alwaysRules[0]));
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "Revoke" })).toHaveLength(2));
+    expect(w.saveSettings).not.toHaveBeenCalled();
   });
 });

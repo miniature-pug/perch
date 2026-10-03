@@ -2589,9 +2589,67 @@ func (a *App) PendingApprovals() []PendingApprovalVM {
 // the form "<raw>:<workspaceID>". decision is "allow", "deny", or "always".
 // On "always", Approve persists an AlwaysRule to Settings.
 func (a *App) Approve(reqID, decision string) error {
+	_, err := a.approve(reqID, decision)
+	return err
+}
+
+// AlwaysGrant is the result of ApproveAlways. Added is true only when this
+// grant appended Rule to the settings; when an identical rule already existed
+// (or the request carried no input to key a rule on), Added is false and an
+// Undo must not remove anything.
+type AlwaysGrant struct {
+	Rule  AlwaysRule `json:"rule"`
+	Added bool       `json:"added"`
+}
+
+// ApproveAlways is Approve(reqID, "always") that also reports the rule the
+// grant added, so the frontend's Undo can revoke exactly that rule with
+// RemoveAlwaysRule instead of diffing two reads of the whole list (which can
+// pick up a rule another grant added in between).
+func (a *App) ApproveAlways(reqID string) (AlwaysGrant, error) {
+	added, err := a.approve(reqID, "always")
+	if added == nil {
+		return AlwaysGrant{}, err
+	}
+	return AlwaysGrant{Rule: *added, Added: true}, err
+}
+
+// RemoveAlwaysRule deletes the always-allow rule identical to rule (agent,
+// tool, pattern and hash) from the CURRENT settings, under settingsMu, so a
+// rule granted concurrently is never lost to a stale whole-list write. It
+// reports whether a rule was removed; an absent rule is not an error.
+func (a *App) RemoveAlwaysRule(rule AlwaysRule) (bool, error) {
+	a.settingsMu.Lock()
+	defer a.settingsMu.Unlock()
+	s, err := a.GetSettings()
+	if err != nil {
+		return false, err
+	}
+	kept := make([]AlwaysRule, 0, len(s.AlwaysRules))
+	removed := false
+	for _, r := range s.AlwaysRules {
+		if r == rule {
+			removed = true
+			continue
+		}
+		kept = append(kept, r)
+	}
+	if !removed {
+		return false, nil
+	}
+	s.AlwaysRules = kept
+	if err := a.saveSettingsLocked(s); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// approve implements Approve. It returns the always-allow rule it appended,
+// or nil when it appended none.
+func (a *App) approve(reqID, decision string) (*AlwaysRule, error) {
 	sep := strings.LastIndex(reqID, ":")
 	if sep < 0 {
-		return fmt.Errorf("invalid reqID format %q", reqID)
+		return nil, fmt.Errorf("invalid reqID format %q", reqID)
 	}
 	rawReqID := reqID[:sep]
 	workspaceID := reqID[sep+1:]
@@ -2600,7 +2658,7 @@ func (a *App) Approve(reqID, decision string) error {
 	mon, ok := a.monitors[workspaceID]
 	a.mu.Unlock()
 	if !ok {
-		return fmt.Errorf("no active monitor for workspace %q", workspaceID)
+		return nil, fmt.Errorf("no active monitor for workspace %q", workspaceID)
 	}
 
 	d := agent.Decision{}
@@ -2613,7 +2671,7 @@ func (a *App) Approve(reqID, decision string) error {
 	case "deny":
 		d.Allow = false
 	default:
-		return fmt.Errorf("unknown decision %q", decision)
+		return nil, fmt.Errorf("unknown decision %q", decision)
 	}
 
 	// This reads the pending approval for this exact reqID BEFORE the
@@ -2629,7 +2687,7 @@ func (a *App) Approve(reqID, decision string) error {
 	a.mu.Unlock()
 
 	if err := mon.Approve(rawReqID, d); err != nil {
-		return err
+		return nil, err
 	}
 
 	a.mu.Lock()
@@ -2649,7 +2707,7 @@ func (a *App) Approve(reqID, decision string) error {
 		s, err := a.GetSettings()
 		if err != nil {
 			a.settingsMu.Unlock()
-			return err
+			return nil, err
 		}
 		dup := false
 		for _, r := range s.AlwaysRules {
@@ -2660,12 +2718,13 @@ func (a *App) Approve(reqID, decision string) error {
 			}
 		}
 		if !dup {
-			s.AlwaysRules = append(s.AlwaysRules, AlwaysRule{
+			rule := AlwaysRule{
 				Agent:   agentName,
 				Tool:    req.Tool,
 				Pattern: req.Input,     // truncated display value
 				Hash:    req.InputHash, // hash of full input, authoritative match key
-			})
+			}
+			s.AlwaysRules = append(s.AlwaysRules, rule)
 			// settingsMu is already held here, so this calls the unlocked
 			// inner helper to avoid a re-entrant deadlock; SaveSettings would
 			// otherwise re-take settingsMu. The request itself is already
@@ -2673,12 +2732,14 @@ func (a *App) Approve(reqID, decision string) error {
 			// learn that the rule was not saved and will prompt again.
 			if err := a.saveSettingsLocked(s); err != nil {
 				a.settingsMu.Unlock()
-				return fmt.Errorf("allowed, but could not save the always-allow rule: %w", err)
+				return nil, fmt.Errorf("allowed, but could not save the always-allow rule: %w", err)
 			}
+			a.settingsMu.Unlock()
+			return &rule, nil
 		}
 		a.settingsMu.Unlock()
 	}
-	return nil
+	return nil, nil
 }
 
 // DiffStat returns the per-file summary of every uncommitted change in
