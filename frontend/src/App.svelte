@@ -1612,6 +1612,14 @@
                 {@const ended = !openIds.has(ws.id)}
                 {@const isSplit = layout.split && layout.splitId === ws.id}
                 {@const vis = isSplit || (ws.id === activeId && layout.view === "agent")}
+                <!-- The slot is the node Svelte owns and moves when the list
+                     reorders. It never leaves the primary pane; only the zone
+                     inside it is relocated into the split host. So a reorder,
+                     or a block inserted next to the split session, can never
+                     pull the split terminal back out of the secondary pane
+                     (FEC-4). display:contents keeps the zone a flex child of
+                     the pane. -->
+                <div class="terminal-slot">
                 <div class="terminal-zone" class:input-emphasis={ws.id === activeId && emphasizeInput}
                      bind:this={termZoneEls[ws.id]}
                      use:keepHome
@@ -1628,6 +1636,7 @@
                   <DragDrop paneId={ws.paneId} fileDrop={true} paste={(text) => termRefs[ws.id]?.paste?.(text) ?? false}>
                     <Terminal bind:this={termRefs[ws.id]} paneId={ws.paneId} cwd={ws.worktreePath} visible={vis} onExit={() => handleAgentExit(ws.id)} />
                   </DragDrop>
+                </div>
                 </div>
               {/each}
               <!-- One code layout per MOUNTED session, kept mounted (hidden with
@@ -2052,6 +2061,7 @@
                       transition: outline-color var(--perch-dur) var(--perch-ease); }
   .code-layout      { display: flex; flex-direction: row; flex: 1; min-height: 0; min-width: 0; }
   .diff-host        { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+  .terminal-slot    { display: contents; }
   .terminal-zone    { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
   /* In-pane "session ended" overlay. It covers the dead xterm on the agent view
      only, since it lives inside the terminal-zone, which is hidden on the code

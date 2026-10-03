@@ -55,10 +55,15 @@ export function keepHome(node: HTMLElement): { destroy(): void } {
   homes.set(node, { anchor });
   return {
     destroy(): void {
-      // Svelte is tearing down the owning {#each} item, and Svelte will
-      // remove `node`. Clean up only the anchor here. Re-inserting `node`
-      // would risk resurrecting a node Svelte has already detached.
-      homes.get(node)?.anchor.remove();
+      // Svelte is tearing down the owning {#each} item. Clean up the anchor.
+      // Never re-insert `node`: that would resurrect a node being disposed.
+      // When `node` sits inside a Svelte-owned wrapper (App wraps each
+      // terminal-zone in a slot that never moves, FEC-4), Svelte removes only
+      // the wrapper; a node relocated into the split host is no longer inside
+      // it, so remove the node here, or a dead terminal would linger there.
+      const home = homes.get(node);
+      if (home && node.parentNode && node.parentNode !== home.anchor.parentNode) node.remove();
+      home?.anchor.remove();
       homes.delete(node);
     },
   };

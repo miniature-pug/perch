@@ -5516,3 +5516,64 @@ describe("audit regressions: create session", () => {
     expect(createWorkspace).not.toHaveBeenCalled();
   });
 });
+
+describe("audit regressions: split terminal placement (FEC-4)", () => {
+  async function openBothAndSplitBeta(list = fakeWorkspaces) {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(list);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    for (const name of [/^Beta\b/, /^Alpha\b/]) {
+      await fireEvent.click(await screen.findByRole("button", { name }));
+      await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+      await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+      await tick();
+    }
+    layout.setView("agent");
+    layout.setSplit(true);
+    layout.setSplitId("ws-2");
+    await tick();
+    const secondary = () => document.querySelector("[data-pane='secondary']") as HTMLElement;
+    const primary = () => document.querySelector("[data-pane='primary']") as HTMLElement;
+    await waitFor(() => expect(within(secondary()).getByTestId("terminal").dataset.paneId).toBe("p2"));
+    return { secondary, primary };
+  }
+
+  it("a reorder of the session list leaves the split terminal in the secondary pane", async () => {
+    const { listWorkspaces } = await import("./lib/wails");
+    const { terminalExitHandlers } = await import("./lib/__stubs__/terminalExit");
+    // The split session (Beta) is listed first, so the reorder below has to move it.
+    const { secondary, primary } = await openBothAndSplitBeta([fakeWorkspaces[1], fakeWorkspaces[0]]);
+    // Alpha's agent exits; reopening it bumps its LastActive, so the backend
+    // now lists it first.
+    terminalExitHandlers["p1"]?.(0);
+    await tick();
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([fakeWorkspaces[0], fakeWorkspaces[1]]);
+    await fireEvent.keyDown(document.body, { key: "Enter" });
+    await new Promise((r) => setTimeout(r, 30));
+    await tick();
+    expect(within(secondary()).getByTestId("terminal").dataset.paneId).toBe("p2");
+    expect(within(secondary()).getAllByTestId("terminal")).toHaveLength(1);
+    expect(within(primary()).getAllByTestId("terminal").map((n) => n.dataset.paneId)).toEqual(["p1"]);
+  });
+
+  it("relaunching the split session leaves exactly one (fresh) terminal in the secondary pane", async () => {
+    const { secondary } = await openBothAndSplitBeta();
+    const before = within(secondary()).getByTestId("terminal");
+    captured.workspaceRelaunch.forEach((cb) => cb({ workspaceId: "ws-2" }));
+    await tick(); await tick();
+    const after = within(secondary()).getAllByTestId("terminal");
+    expect(after).toHaveLength(1);
+    expect(after[0]).not.toBe(before);
+    expect(after[0].dataset.paneId).toBe("p2");
+  });
+
+  it("a fresh terminal for the session listed before the split one mounts in the primary pane", async () => {
+    const { secondary, primary } = await openBothAndSplitBeta();
+    captured.workspaceRelaunch.forEach((cb) => cb({ workspaceId: "ws-1" }));
+    await tick(); await tick();
+    expect(within(secondary()).getAllByTestId("terminal").map((n) => n.dataset.paneId)).toEqual(["p2"]);
+    expect(within(primary()).getAllByTestId("terminal").map((n) => n.dataset.paneId)).toEqual(["p1"]);
+  });
+});
