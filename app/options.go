@@ -92,6 +92,9 @@ func Run(assets embed.FS, roots []string) error {
 		BackgroundColour: &defaultWindowBg,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
+			// Serves /wt-file/<workspaceID>/<path> images for the Preview pane
+			// (FEX-11); see worktreeFileHandler for what it refuses.
+			Handler: app.worktreeFileHandler(),
 		},
 		// Linux.Icon sets the GTK window and taskbar icon. ProgramName sets
 		// the WM class through g_set_prgname. The installed perch.desktop
