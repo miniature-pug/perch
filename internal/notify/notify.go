@@ -35,10 +35,12 @@ const (
 // queue is full and the notification was discarded.
 var ErrDropped = errors.New("notify: delivery queue full, notification dropped")
 
+// Notifier delivers a desktop notification.
 type Notifier interface {
 	Notify(title, body string) error
 }
 
+// FakeNotifier records Notify calls for tests.
 type FakeNotifier struct {
 	Calls []struct{ Title, Body string }
 }

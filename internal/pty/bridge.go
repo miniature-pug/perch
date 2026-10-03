@@ -16,8 +16,10 @@ import (
 	"github.com/miniature-pug/perch/internal/safe"
 )
 
+// EmitFunc publishes a frontend event.
 type EmitFunc func(event string, data ...any)
 
+// Bridge owns one pane's pty and shell process.
 type Bridge struct {
 	mu      sync.Mutex
 	ptyFile io.WriteCloser

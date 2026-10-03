@@ -12,6 +12,7 @@ type ApproveCall struct {
 	D     Decision
 }
 
+// FakeMonitor replays a scripted event sequence for tests.
 type FakeMonitor struct {
 	sequence     []Event
 	events       chan Event
