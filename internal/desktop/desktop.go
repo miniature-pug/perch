@@ -137,7 +137,26 @@ func Install(opts Options) error {
 	if err := writeFileAtomic(p.DesktopFile, []byte(entry)); err != nil {
 		return err
 	}
-	refreshCaches(opts, p)
+	refreshCaches(opts, p, true)
+	return nil
+}
+
+// InstallIcon writes only the icon (opts.BinPath is ignored) and refreshes
+// the icon theme. The GUI uses it when a perch.desktop it must not touch
+// (one that launches another working binary) exists but the perch icon does
+// not.
+func InstallIcon(opts Options) error {
+	if len(opts.Icon) == 0 {
+		return errors.New("desktop: no icon data")
+	}
+	p, err := resolvePaths(opts.DataHome)
+	if err != nil {
+		return err
+	}
+	if err := writeFileAtomic(p.IconFile, opts.Icon); err != nil {
+		return err
+	}
+	refreshCaches(opts, p, false)
 	return nil
 }
 
@@ -145,15 +164,16 @@ func Install(opts Options) error {
 type State int
 
 const (
-	// Missing: the desktop file or the icon does not exist.
+	// Missing: there is no perch.desktop.
 	Missing State = iota
-	// Current: both files exist and Exec launches the given binary.
+	// Current: perch.desktop's Exec launches the given binary.
 	Current
-	// Dangling: both files exist, but Exec names a file that no longer
-	// exists or is not executable (the binary moved or was deleted).
+	// Dangling: perch.desktop has no usable Exec, or its Exec names a file
+	// that no longer exists or is not executable (the binary moved or was
+	// deleted).
 	Dangling
-	// Other: both files exist and Exec launches a different, working
-	// binary (for example the installed perch, while a dev build runs).
+	// Other: perch.desktop's Exec launches a different, working binary (the
+	// installed perch while a dev build runs, or a hand-made entry).
 	Other
 )
 
@@ -173,7 +193,9 @@ func (s State) String() string {
 }
 
 // Status reports the state of the entry under dataHome (empty means
-// DataHome()) relative to binPath. Exec is compared after filepath.Clean.
+// DataHome()) relative to binPath, from perch.desktop's Exec alone. Exec is
+// compared after filepath.Clean. The icon does not count: a hand-made entry
+// may use an icon of its own (see IconMissing).
 func Status(dataHome, binPath string) (State, error) {
 	p, err := resolvePaths(dataHome)
 	if err != nil {
@@ -185,9 +207,6 @@ func Status(dataHome, binPath string) (State, error) {
 	}
 	if err != nil {
 		return Missing, fmt.Errorf("desktop: read %s: %w", p.DesktopFile, err)
-	}
-	if fi, err := os.Stat(p.IconFile); err != nil || fi.Size() == 0 {
-		return Missing, nil
 	}
 	exe, ok := ExecProgram(string(data))
 	if !ok {
@@ -220,17 +239,29 @@ func IsInstalled() bool {
 }
 
 // NeedsUpdate reports whether a GUI started from binPath should
-// (re)install the entry: when it is missing, or when its Exec target no
-// longer runs. An entry that launches another working perch binary is left
-// alone, so a dev build started from a checkout does not steal the entry
-// from the installed binary (and the two do not flip-flop). The explicit
-// `perch install-desktop` command always rewrites the entry.
+// (re)install the entry: when perch.desktop is missing, or when its Exec
+// target no longer runs. An entry that launches another working binary is
+// left alone, so a dev build started from a checkout does not steal the
+// entry from the installed binary (and the two do not flip-flop), and a
+// hand-made entry is never overwritten. The explicit `perch install-desktop`
+// command always rewrites the entry.
 func NeedsUpdate(binPath string) bool {
 	st, err := Status("", binPath)
 	if err != nil {
 		return false
 	}
 	return st == Missing || st == Dangling
+}
+
+// IconMissing reports whether the perch icon is absent from the hicolor
+// theme under the default data directory. When NeedsUpdate is false but
+// IconMissing is true, the GUI calls InstallIcon.
+func IconMissing() bool {
+	p, err := DefaultPaths()
+	if err != nil {
+		return false
+	}
+	return !regularFile(p.IconFile)
 }
 
 // Entry renders the perch.desktop contents for binPath. binPath must be an
@@ -255,10 +286,13 @@ func Entry(binPath string) (string, error) {
 
 // ExecValue encodes binPath as the value of an Exec= key, per the Desktop
 // Entry Specification: the path is one double-quoted argument with ", `, $
-// and \ backslash-escaped (the quoting rule), a literal % doubled to %% (the
-// field-code rule), and every backslash then doubled again (the string
-// escape rule, which applies before quoting). A literal backslash so ends up
-// as four backslashes.
+// and \ backslash-escaped (the quoting rule), and every backslash then
+// doubled again (the string escape rule, which applies before quoting). A
+// literal backslash so ends up as four backslashes.
+//
+// A path containing % is rejected. The spec's %% escape is correct, but
+// GLib's GDesktopAppInfo resolves the program before it expands %%, finds
+// no such file, and drops the whole entry, so GNOME would never show it.
 func ExecValue(binPath string) (string, error) {
 	if !filepath.IsAbs(binPath) {
 		return "", fmt.Errorf("desktop: binary path %q is not absolute", binPath)
@@ -271,6 +305,9 @@ func ExecValue(binPath string) (string, error) {
 			return "", fmt.Errorf("desktop: binary path %q contains a control character", binPath)
 		}
 	}
+	if strings.ContainsRune(binPath, '%') {
+		return "", fmt.Errorf("desktop: binary path %q contains %%, which GNOME cannot launch from a .desktop entry; move perch to a directory without %% in its path", binPath)
+	}
 	var q strings.Builder
 	q.WriteByte('"')
 	for _, r := range binPath {
@@ -278,8 +315,6 @@ func ExecValue(binPath string) (string, error) {
 		case '"', '`', '$', '\\':
 			q.WriteByte('\\')
 			q.WriteRune(r)
-		case '%':
-			q.WriteString("%%")
 		default:
 			q.WriteRune(r)
 		}
@@ -442,9 +477,26 @@ func writeFileAtomic(path string, data []byte) error {
 	return nil
 }
 
-// refreshCaches runs gtk-update-icon-cache and update-desktop-database when
-// they are on PATH. Errors and timeouts are ignored.
-func refreshCaches(opts Options, p Paths) {
+// IconCacheFile is the GTK icon cache inside a theme directory.
+const IconCacheFile = "icon-theme.cache"
+
+// refreshCaches tells the icon theme and the desktop database about new
+// files. Errors and timeouts are ignored.
+//
+// The icon theme is refreshed the way xdg-icon-resource does it: always bump
+// the mtime of the hicolor directory (GTK and GNOME rescan a theme whose
+// directory changed), and run gtk-update-icon-cache only when the user
+// already has a cache there. Creating a new cache would be harmful: GTK
+// checks a cache's freshness only against the theme directory's own mtime,
+// so an icon another app later drops into an existing size subdirectory
+// would stay invisible behind the stale cache.
+//
+// update-desktop-database runs only when apps is true (a .desktop file was
+// written).
+func refreshCaches(opts Options, p Paths, apps bool) {
+	now := time.Now()
+	_ = os.Chtimes(p.HicolorDir, now, now)
+
 	runner := opts.Runner
 	if runner == nil {
 		runner = proc.ExecRunner{}
@@ -457,9 +509,12 @@ func refreshCaches(opts Options, p Paths) {
 	if timeout <= 0 {
 		timeout = DefaultRefreshTimeout
 	}
-	cmds := [][]string{
-		{"gtk-update-icon-cache", "-f", "-t", p.HicolorDir},
-		{"update-desktop-database", p.ApplicationsDir},
+	var cmds [][]string
+	if regularFile(filepath.Join(p.HicolorDir, IconCacheFile)) {
+		cmds = append(cmds, []string{"gtk-update-icon-cache", "-f", "-t", p.HicolorDir})
+	}
+	if apps {
+		cmds = append(cmds, []string{"update-desktop-database", p.ApplicationsDir})
 	}
 	for _, c := range cmds {
 		bin, err := lookPath(c[0])

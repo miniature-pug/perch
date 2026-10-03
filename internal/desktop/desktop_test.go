@@ -80,8 +80,21 @@ func TestInstallWritesFiles(t *testing.T) {
 	}
 }
 
+// withIconCache creates an existing icon-theme.cache under dh's hicolor dir.
+func withIconCache(t *testing.T, dh string) {
+	t.Helper()
+	p := PathsFor(dh)
+	if err := os.MkdirAll(p.HicolorDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(p.HicolorDir, IconCacheFile), []byte("cache"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestInstallRefreshesCaches(t *testing.T) {
 	dh := t.TempDir()
+	withIconCache(t, dh)
 	r := newFake()
 	if err := Install(Options{BinPath: "/usr/bin/perch", Icon: testIcon, DataHome: dh, Runner: r, LookPath: lookAll}); err != nil {
 		t.Fatal(err)
@@ -99,9 +112,48 @@ func TestInstallRefreshesCaches(t *testing.T) {
 	}
 }
 
-func TestInstallSkipsMissingTools(t *testing.T) {
+// Regression: running gtk-update-icon-cache where no cache exists creates
+// one, and GTK then hides icons other apps add later. Install must only
+// touch the hicolor dir in that case.
+func TestInstallNeverCreatesIconCache(t *testing.T) {
+	dh := t.TempDir()
+	p := PathsFor(dh)
+	if err := os.MkdirAll(p.HicolorDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(p.HicolorDir, old, old); err != nil {
+		t.Fatal(err)
+	}
 	r := newFake()
-	if err := Install(Options{BinPath: "/usr/bin/perch", Icon: testIcon, DataHome: t.TempDir(), Runner: r, LookPath: lookNone}); err != nil {
+	if err := Install(Options{BinPath: "/usr/bin/perch", Icon: testIcon, DataHome: dh, Runner: r, LookPath: lookAll}); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range r.Calls {
+		if strings.HasSuffix(c.Name, "gtk-update-icon-cache") {
+			t.Fatalf("gtk-update-icon-cache ran with no existing cache: %v", c.Args)
+		}
+	}
+	if len(r.Calls) != 1 || !strings.HasSuffix(r.Calls[0].Name, "update-desktop-database") {
+		t.Fatalf("calls = %+v, want only update-desktop-database", r.Calls)
+	}
+	fi, err := os.Stat(p.HicolorDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(fi.ModTime()) > time.Hour {
+		t.Fatalf("hicolor mtime not bumped: %v", fi.ModTime())
+	}
+	if _, err := os.Stat(filepath.Join(p.HicolorDir, IconCacheFile)); !os.IsNotExist(err) {
+		t.Fatalf("icon cache exists: %v", err)
+	}
+}
+
+func TestInstallSkipsMissingTools(t *testing.T) {
+	dh := t.TempDir()
+	withIconCache(t, dh)
+	r := newFake()
+	if err := Install(Options{BinPath: "/usr/bin/perch", Icon: testIcon, DataHome: dh, Runner: r, LookPath: lookNone}); err != nil {
 		t.Fatal(err)
 	}
 	if len(r.Calls) != 0 {
@@ -110,9 +162,11 @@ func TestInstallSkipsMissingTools(t *testing.T) {
 }
 
 func TestInstallIgnoresRefreshErrors(t *testing.T) {
+	dh := t.TempDir()
+	withIconCache(t, dh)
 	r := proc.NewFakeRunner()
 	r.Default = &proc.FakeResult{Err: errors.New("boom")}
-	if err := Install(Options{BinPath: "/usr/bin/perch", Icon: testIcon, DataHome: t.TempDir(), Runner: r, LookPath: lookAll}); err != nil {
+	if err := Install(Options{BinPath: "/usr/bin/perch", Icon: testIcon, DataHome: dh, Runner: r, LookPath: lookAll}); err != nil {
 		t.Fatalf("refresh error must not fail Install: %v", err)
 	}
 	if len(r.Calls) != 2 {
@@ -137,8 +191,10 @@ func (d *deadlineRunner) Run(ctx context.Context, name string, args ...string) (
 }
 
 func TestInstallRefreshHasTimeout(t *testing.T) {
+	dh := t.TempDir()
+	withIconCache(t, dh)
 	r := &deadlineRunner{}
-	if err := Install(Options{BinPath: "/usr/bin/perch", Icon: testIcon, DataHome: t.TempDir(), Runner: r, LookPath: lookAll, RefreshTimeout: time.Second}); err != nil {
+	if err := Install(Options{BinPath: "/usr/bin/perch", Icon: testIcon, DataHome: dh, Runner: r, LookPath: lookAll, RefreshTimeout: time.Second}); err != nil {
 		t.Fatal(err)
 	}
 	if len(r.left) != 2 {
@@ -150,6 +206,32 @@ func TestInstallRefreshHasTimeout(t *testing.T) {
 		}
 	}
 }
+
+func TestInstallIcon(t *testing.T) {
+	dh := t.TempDir()
+	withIconCache(t, dh)
+	r := newFake()
+	if err := InstallIcon(Options{Icon: testIcon, DataHome: dh, Runner: r, LookPath: lookAll}); err != nil {
+		t.Fatal(err)
+	}
+	p := PathsFor(dh)
+	if got, err := os.ReadFile(p.IconFile); err != nil || string(got) != string(testIcon) {
+		t.Fatalf("icon = %q, %v", got, err)
+	}
+	if _, err := os.Stat(p.DesktopFile); !os.IsNotExist(err) {
+		t.Fatalf("InstallIcon wrote a desktop file: %v", err)
+	}
+	if len(r.Calls) != 1 || !strings.HasSuffix(r.Calls[0].Name, "gtk-update-icon-cache") {
+		t.Fatalf("calls = %+v, want only gtk-update-icon-cache", r.Calls)
+	}
+	if err := InstallIcon(Options{DataHome: dh}); err == nil {
+		t.Fatal("want error without icon data")
+	}
+	if err := InstallIcon(Options{Icon: testIcon, DataHome: "rel"}); err == nil {
+		t.Fatal("want error for a relative data home")
+	}
+}
+
 
 func TestInstallOverwritesAndIsIdempotent(t *testing.T) {
 	dh := t.TempDir()
@@ -241,7 +323,6 @@ func TestExecValueEscaping(t *testing.T) {
 		"/usr/bin/perch":      `"/usr/bin/perch"`,
 		"/home/a b/perch":     `"/home/a b/perch"`,
 		`/x/"q"/perch`:        `"/x/\\"q\\"/perch"`,
-		"/x/100%/perch":       `"/x/100%%/perch"`,
 		"/x/$HOME/perch":      `"/x/\\$HOME/perch"`,
 		"/x/`id`/perch":       "\"/x/\\\\`id\\\\`/perch\"",
 		`/x/back\slash/perch`: `"/x/back\\\\slash/perch"`,
@@ -265,6 +346,22 @@ func TestExecValueEscaping(t *testing.T) {
 		if _, err := ExecValue(bad); err == nil {
 			t.Errorf("ExecValue(%q): want error", bad)
 		}
+	}
+}
+
+// Regression: GLib resolves Exec's program before expanding %%, so an entry
+// for a path with % is silently dropped by GNOME. Reject it instead.
+func TestPercentInPathRejected(t *testing.T) {
+	_, err := ExecValue("/x/100%/perch")
+	if err == nil || !strings.Contains(err.Error(), "contains %") {
+		t.Fatalf("ExecValue: err = %v, want a %% error", err)
+	}
+	dh := t.TempDir()
+	if err := Install(Options{BinPath: "/x/100%/perch", Icon: testIcon, DataHome: dh, Runner: newFake(), LookPath: lookNone}); err == nil {
+		t.Fatal("Install: want error")
+	}
+	if ents, _ := os.ReadDir(dh); len(ents) != 0 {
+		t.Fatalf("rejected path wrote files: %v", ents)
 	}
 }
 
@@ -344,11 +441,11 @@ func TestStatus(t *testing.T) {
 		t.Fatalf("other binary running: %v", st)
 	}
 
-	// Icon removed: Missing.
+	// Icon removed: the entry decides alone (still Current).
 	if err := os.Remove(p.IconFile); err != nil {
 		t.Fatal(err)
 	}
-	if st, _ := Status(dh, cur); st != Missing {
+	if st, _ := Status(dh, cur); st != Current {
 		t.Fatalf("no icon: %v", st)
 	}
 	install(cur)
@@ -442,6 +539,48 @@ func TestIsInstalledAndNeedsUpdateUseXDGDataHome(t *testing.T) {
 	}
 }
 
+// Regression: a hand-made perch.desktop with its own icon (so no
+// hicolor/512x512/apps/perch.png) and an Exec at another working binary must
+// not count as missing, so the GUI never overwrites it. Only the icon may be
+// added.
+func TestHandMadeEntryIsNotOverwritten(t *testing.T) {
+	dh := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dh)
+	mine := filepath.Join(t.TempDir(), "perch-wrapper")
+	writeExe(t, mine)
+	running := filepath.Join(t.TempDir(), "perch")
+	writeExe(t, running)
+	p := PathsFor(dh)
+	if err := os.MkdirAll(p.ApplicationsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hand := "[Desktop Entry]\nType=Application\nName=perch\nExec=" + mine + " --flag\nIcon=/opt/icons/perch.svg\n"
+	if err := os.WriteFile(p.DesktopFile, []byte(hand), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := Status("", running); err != nil || st != Other {
+		t.Fatalf("Status = %v, %v; want other", st, err)
+	}
+	if NeedsUpdate(running) {
+		t.Fatal("NeedsUpdate true for a hand-made entry at a working binary")
+	}
+	if IsInstalled() {
+		t.Fatal("IsInstalled true without the perch icon")
+	}
+	if !IconMissing() {
+		t.Fatal("IconMissing false without the perch icon")
+	}
+	if err := InstallIcon(Options{Icon: testIcon, Runner: newFake(), LookPath: lookNone}); err != nil {
+		t.Fatal(err)
+	}
+	if IconMissing() {
+		t.Fatal("IconMissing true after InstallIcon")
+	}
+	if got, _ := os.ReadFile(p.DesktopFile); string(got) != hand {
+		t.Fatalf("hand-made entry changed:\n%s", got)
+	}
+}
+
 func TestDataHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -472,6 +611,9 @@ func TestDataHome(t *testing.T) {
 	}
 	if NeedsUpdate("/usr/bin/perch") {
 		t.Error("NeedsUpdate true with no data home")
+	}
+	if IconMissing() {
+		t.Error("IconMissing true with no data home")
 	}
 }
 
