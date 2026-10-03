@@ -13,6 +13,13 @@
   import ShellDrawer from "./ShellDrawer.svelte";
   import { shellTabTitle, reloadMenuItems, activeShellTitle, type ShellPane } from "./shellPanes";
   import { reloadAgentEnv } from "./wails";
+  import { addBlocking } from "./stores/notifications.svelte";
+
+  // A failed env reload (unknown pane, agent not running) must say so
+  // instead of failing silently (FEX-33).
+  function reportReloadError(e: unknown) {
+    addBlocking("", "Could not reload the agent", String(e), "error");
+  }
 
   const RELOAD_HINT =
     "File-based credentials (e.g. AWS SSO) refresh on the agent's next call with no reload. " +
@@ -56,7 +63,7 @@
   let caretEl = $state<HTMLButtonElement | undefined>();
 
   function reloadActive() {
-    if (activeId) reloadAgentEnv(activeId).catch(() => {});
+    if (activeId) reloadAgentEnv(activeId).catch(reportReloadError);
   }
 
   // reloadPane reloads one chosen shell, any pane id, since the backend
@@ -65,7 +72,7 @@
   // keyboard focus does not fall to <body> when the chosen menu item is
   // removed from the DOM.
   function reloadPane(id: string) {
-    reloadAgentEnv(id).catch(() => {});
+    reloadAgentEnv(id).catch(reportReloadError);
     menuOpen = false;
     caretEl?.focus();
   }

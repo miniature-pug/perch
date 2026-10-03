@@ -102,6 +102,18 @@ test("in-app text drop calls writeToPty with UTF-8 encoded bytes for paneId", as
   );
 });
 
+test("FEX-28: in-app text drop goes through the paste prop when given (no raw write)", async () => {
+  const { default: DragDrop } = await import("./DragDrop.svelte");
+  const w = await import("./wails");
+  vi.mocked(w.writeToPty).mockClear();
+  const paste = vi.fn(() => true);
+  render(DragDrop, { props: { paneId: "pane-43", fileDrop: true, paste } });
+  const zone = screen.getByRole("region", { name: /drop zone/i });
+  await fireEvent.drop(zone, { dataTransfer: fakeDataTransfer({ textData: "line1\nline2" }) });
+  await waitFor(() => expect(paste).toHaveBeenCalledWith("line1\nline2"));
+  expect(w.writeToPty).not.toHaveBeenCalled();
+});
+
 test("in-app text drop is ignored when fileDrop is false", async () => {
   const { default: DragDrop } = await import("./DragDrop.svelte");
   const w = await import("./wails");

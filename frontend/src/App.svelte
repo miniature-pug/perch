@@ -13,6 +13,7 @@
   import { isPreviewable, previewKind } from "./lib/preview";
   import { focusOnMount, countUp } from "./lib/actions";
   import { keepHome, adoptInto } from "./lib/portal";
+  import { isLeavePrefix, isLeaveFinal, isModifierKey } from "./lib/terminalKeys";
   import DiffView           from "./lib/DiffView.svelte";
   import { shouldFocusAwaitingInput, isViewingAgentPane } from "./lib/engagement";
   import MenuBar            from "./lib/MenuBar.svelte";
@@ -119,7 +120,7 @@
   // click. emphasizeInput is a transient flag that pulses when the ACTIVE agent
   // asks for input. termRefs is keyed by session id, because every open session
   // now keeps its own Terminal mounted.
-  let termRefs       = $state<Record<string, { focus: () => void }>>({});
+  let termRefs       = $state<Record<string, { focus: () => void; paste?: (text: string) => boolean; resync?: () => void }>>({});
   let emphasizeInput = $state(false);
   // Per-session ref to the agent terminal-zone DOM node. The split session's
   // Terminal mounts ONCE, in the primary keep-alive loop. When it becomes the
@@ -155,7 +156,6 @@
   // linger (F54). This timer is set when `g` is armed, and cleared when the
   // chord resolves.
   let pendingGTimer: ReturnType<typeof setTimeout> | undefined;
-  let pendingLeave = $state(false);
   let filtering    = $state(false);
   let filterQuery  = $state("");
 
@@ -746,6 +746,10 @@
     everOpened.add(id); // opened this run, so a later click reopens directly (F22)
     try {
       await openWorkspace(id);
+      // The terminal's first resize can land before the backend registered the
+      // pty and be rejected. Send the size again now that the pty exists
+      // (FEX-15).
+      termRefs[id]?.resync?.();
       // Refresh caps and state now that the monitor is live. openWorkspace
       // registers the backend Monitor, so a fresh ListWorkspaces call returns real
       // Capabilities for approvals and attention. Without this refetch, the session
@@ -1219,21 +1223,28 @@
     // command palette is intentionally NOT reachable from TERMINAL mode. Leave
     // TERMINAL mode first, with Ctrl-\ Ctrl-n, to open the palette. This behavior
     // is documented here and unchanged (F55).
+    // The xterm hands these two keys back through its custom key handler
+    // (lib/terminalKeys.ts), so they reach this window listener even while a
+    // terminal holds focus (FEC-2).
     if (mode.current === "terminal") {
-      if (e.ctrlKey && e.key === "\\") {
-        pendingLeave = true;
+      if (isLeavePrefix(e)) {
+        mode.leavePending = true;
         e.preventDefault();
         return;
       }
-      if (pendingLeave && e.ctrlKey && e.key === "n") {
+      if (mode.leavePending && isLeaveFinal(e)) {
         mode.leaveTerminal();
-        pendingLeave = false;
         e.preventDefault();
+        // NORMAL mode is passive, but drop the caret out of the xterm too, so
+        // it no longer looks like it takes input.
+        const ae = document.activeElement as HTMLElement | null;
+        if (ae?.closest?.("[data-terminal-zone]")) ae.blur();
         return;
       }
-      // Any other key cancels the pending leave prefix. This does NOT call
-      // preventDefault, so the key still reaches the pty.
-      pendingLeave = false;
+      // Any other key cancels the pending leave prefix. A modifier pressed on
+      // its own (releasing and re-pressing Ctrl) does not (FEC-19). This does
+      // NOT call preventDefault, so the key still reaches the pty.
+      if (!isModifierKey(e)) mode.leavePending = false;
       return;
     }
 
@@ -1254,6 +1265,9 @@
 
     // g-prefix resolution must come first so gd/ge/gt/gT work correctly.
     if (pendingG) {
+      // A modifier press alone does not resolve the chord: browsers send a
+      // Shift keydown before the `T` of gT (FEC-19).
+      if (isModifierKey(e)) return;
       pendingG = false;
       clearTimeout(pendingGTimer); // chord resolved: stop the auto-clear (F54)
       if (e.key === "d") { e.preventDefault(); layout.setView("diff"); }
@@ -1275,6 +1289,29 @@
       // Any other key cancels the prefix silently, with no action.
       return;
     }
+
+    // Ctrl chords. These run before the plain-key guard below.
+    if (e.ctrlKey && !e.altKey && !e.metaKey) {
+      if (e.key === "`") {
+        e.preventDefault();
+        layout.setCollapsed("shell", !layout.collapsed["shell"]);
+        return;
+      }
+      if (e.key === "b") {
+        e.preventDefault();
+        layout.setCollapsed("sidebar", !layout.collapsed["sidebar"]);
+        return;
+      }
+    }
+
+    // The single-key shortcuts below fire only without Ctrl, Alt, or Meta, so
+    // Ctrl-X or Ctrl-1 never opens the Remove dialog or switches the view
+    // (FEC-20). Shift is allowed, because `?` and `T` need it.
+    if (e.ctrlKey || e.altKey || e.metaKey) return;
+    // Enter on a focused button, link, or menu item activates that control. It
+    // is not the "open session" shortcut, and calling preventDefault on it
+    // would cancel the control's own activation (FEC-20).
+    if (e.key === "Enter" && t?.closest?.("button, a[href], summary, [role='button'], [role='menuitem'], [role='option'], [role='tab'], [role='link']")) return;
 
     switch (e.key) {
       case "j": {
@@ -1314,20 +1351,6 @@
         return;
       }
       case "\\": e.preventDefault(); layout.toggleSplit(); break;
-      case "`": {
-        if (e.ctrlKey) {
-          e.preventDefault();
-          layout.setCollapsed("shell", !layout.collapsed["shell"]);
-        }
-        break;
-      }
-      case "b": {
-        if (e.ctrlKey) {
-          e.preventDefault();
-          layout.setCollapsed("sidebar", !layout.collapsed["sidebar"]);
-        }
-        break;
-      }
       case "/": {
         e.preventDefault();
         filtering    = true;
@@ -1405,8 +1428,14 @@
   // ---------------------------------------------------------------------------
   function sendToAgent(text: string) {
     if (!active?.paneId) return;
+    // Route through the terminal as a paste, so a multi-line selection or hunk
+    // is bracketed and never submitted line by line (FEX-28). Fall back to a
+    // raw write when the pane has no mounted terminal.
+    if (termRefs[active.id]?.paste?.(text)) return;
     const bytes = Array.from(new TextEncoder().encode(text));
-    writeToPty(active.paneId, bytes);
+    writeToPty(active.paneId, bytes).catch((e) => {
+      addBlocking(active?.id ?? "", "Could not send to the agent", String(e), "error");
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -1573,7 +1602,7 @@
                       <button class="btn btn-primary" onclick={() => openSession(ws.id)}>Reopen</button>
                     </div>
                   {/if}
-                  <DragDrop paneId={ws.paneId} fileDrop={true}>
+                  <DragDrop paneId={ws.paneId} fileDrop={true} paste={(text) => termRefs[ws.id]?.paste?.(text) ?? false}>
                     <Terminal bind:this={termRefs[ws.id]} paneId={ws.paneId} cwd={ws.worktreePath} visible={vis} onExit={() => handleAgentExit(ws.id)} />
                   </DragDrop>
                 </div>

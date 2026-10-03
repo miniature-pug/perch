@@ -4,6 +4,7 @@
   import { FitAddon }  from "@xterm/addon-fit";
   import { onPtyData, onPtyExit, writeToPty, resizePty, clipboardSetText, clipboardText } from "./wails";
   import { TERMINAL_SCROLLBACK, PTY_MAX_DIM } from "./constants";
+  import { terminalKeyToPty } from "./terminalKeys";
 
   // `visible` mirrors the pattern that Editor, FileTree, and Preview already
   // use: the pane stays mounted and is merely hidden by an ancestor
@@ -114,7 +115,13 @@
     const rows = Math.max(1, Math.min(PTY_MAX_DIM, term.rows | 0));
     if (!(Number.isFinite(cols) && Number.isFinite(rows) && cols > 0 && rows > 0)) return;
     // Nothing to tell the pty when the grid is unchanged from the last send.
-    if (cols === lastCols && rows === lastRows) return;
+    // A resize still pending for an intermediate size (A -> B -> A inside the
+    // debounce window) is cancelled, or it would land while xterm is back at
+    // A and leave the pty at B (FEX-14).
+    if (cols === lastCols && rows === lastRows) {
+      if (resizeTimer !== undefined) { clearTimeout(resizeTimer); resizeTimer = undefined; }
+      return;
+    }
     // Trailing edge: reset the timer on every changed frame, so a whole drag
     // collapses into one resizePty call when it settles.
     if (resizeTimer !== undefined) clearTimeout(resizeTimer);
@@ -123,8 +130,29 @@
       if (disposed) return;
       lastCols = cols;
       lastRows = rows;
-      resizePty(paneId, cols, rows);
+      // A rejected resize (for example "unknown pane", when the first fit
+      // lands before the backend registered the pty) is forgotten, so the
+      // next fit, or resync(), sends the size again (FEX-15).
+      resizePty(paneId, cols, rows).catch(() => {
+        if (lastCols === cols && lastRows === rows) { lastCols = -1; lastRows = -1; }
+      });
     }, PTY_RESIZE_DEBOUNCE_MS);
+  }
+
+  /** Re-send the current grid size to the pty. A parent calls this once the
+      backend has the pty (after OpenShell or OpenWorkspace resolves), so a
+      resize that raced the spawn is not lost (FEX-15). */
+  export function resync(): void {
+    lastCols = -1;
+    lastRows = -1;
+    refit();
+  }
+
+  /** Write a dim notice line into the terminal, for example a failed spawn
+      (FEX-33). */
+  export function notice(text: string): void {
+    if (disposed || !term) return;
+    term.write(`\r\n\x1b[2m${text}\x1b[0m\r\n`);
   }
 
   // Window-resize backstop. The host ResizeObserver fires only when the
@@ -194,7 +222,9 @@
         void clipboardText().then((t) => { if (t && !disposed) term.paste(t); });
         return false;
       }
-      return true;
+      // Hand app keys back to the window keymap: everything outside TERMINAL
+      // mode, and the Ctrl-\ Ctrl-n leave sequence inside it (FEC-2).
+      return terminalKeyToPty(e);
     });
 
     obs = new ResizeObserver(() => {
@@ -229,6 +259,17 @@
       without requiring a click; the awaiting-input auto-focus uses this.
       Safe to call before mount. */
   export function focus(): void { term?.focus(); }
+
+  /** Send text to the pty as a paste. term.paste honours bracketed-paste
+      mode, so a multi-line editor selection or hunk reaches the agent TUI as
+      one paste instead of a series of Enter-terminated lines (FEX-28).
+      Returns false when the terminal is not mounted, so the caller can fall
+      back to a raw write. */
+  export function paste(text: string): boolean {
+    if (disposed || !term) return false;
+    term.paste(text);
+    return true;
+  }
 
   // Re-fit on the hidden-to-visible edge. Reading `visible` first tracks it
   // as the sole dependency (term, fit, and disposed are plain lets,

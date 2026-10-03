@@ -5379,3 +5379,60 @@ describe("audit regressions: approvals", () => {
     }
   });
 });
+
+describe("audit regressions: keymap", () => {
+  async function mountEmpty() {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await tick();
+  }
+
+  it("FEC-19: gT works although the browser sends a Shift keydown first", async () => {
+    const { layout } = await import("./lib/stores/layout.svelte");
+    await mountEmpty();
+    layout.setView("agent");
+    await fireEvent.keyDown(document.body, { key: "g" });
+    await fireEvent.keyDown(document.body, { key: "Shift", shiftKey: true });
+    await fireEvent.keyDown(document.body, { key: "T", shiftKey: true });
+    expect(layout.view).toBe("diff");
+  });
+
+  it("FEC-19: re-pressing Ctrl between Ctrl-backslash and Ctrl-n keeps the leave sequence armed", async () => {
+    const { mode } = await import("./lib/stores/mode.svelte");
+    await mountEmpty();
+    mode.enterTerminal();
+    await fireEvent.keyDown(document.body, { key: String.fromCharCode(92), ctrlKey: true });
+    await fireEvent.keyDown(document.body, { key: "Control", ctrlKey: true });
+    await fireEvent.keyDown(document.body, { key: "n", ctrlKey: true });
+    expect(mode.current).toBe("normal");
+  });
+
+  it("FEC-20: Ctrl-x and Ctrl-1 do not run the plain-key shortcuts", async () => {
+    const { layout } = await import("./lib/stores/layout.svelte");
+    await mountEmpty();
+    await fireEvent.click(await screen.findByRole("button", { name: /^Alpha\b/ }));
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    await tick();
+    // Sanity: plain x does open the confirm dialog for the active session.
+    await fireEvent.keyDown(document.body, { key: "x" });
+    await waitFor(() => expect(screen.getByText(/Remove workspace/)).toBeInTheDocument());
+    await fireEvent.keyDown(document.body, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByText(/Remove workspace/)).toBeNull());
+    layout.setView("code");
+    await fireEvent.keyDown(document.body, { key: "x", ctrlKey: true });
+    await fireEvent.keyDown(document.body, { key: "1", ctrlKey: true });
+    await tick();
+    expect(screen.queryByText(/Remove workspace/)).toBeNull();
+    expect(layout.view).toBe("code");
+  });
+
+  it("FEC-20: Enter on a focused button is left to the button", async () => {
+    await mountEmpty();
+    const btn = screen.getAllByRole("button")[0];
+    const ev = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    btn.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(false);
+  });
+});

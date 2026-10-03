@@ -3,6 +3,7 @@
   import { onMount } from "svelte";
   import Terminal from "./Terminal.svelte";
   import { openShell, reloadAgentEnv } from "./wails";
+  import { addBlocking } from "./stores/notifications.svelte";
 
   const HOME_SHELL_PANE_ID = "shell-home";
 
@@ -45,7 +46,23 @@
   // Otherwise, for the home shell, visibility follows the collapse state.
   const termVisible = $derived(visible ?? !collapsed);
 
-  onMount(() => { openShell(paneId, cwd); });
+  let term = $state<{ resync?: () => void; notice?: (text: string) => void } | undefined>();
+
+  // Spawn the shell, then re-send the terminal size: a resize sent before the
+  // backend registered the pty is rejected and would otherwise never be
+  // retried (FEX-15). A failed spawn writes a line into the terminal instead
+  // of leaving a silently blank pane (FEX-33).
+  onMount(() => {
+    openShell(paneId, cwd)
+      .then(() => term?.resync?.())
+      .catch((e) => term?.notice?.(`[could not start shell: ${e instanceof Error ? e.message : String(e)}]`));
+  });
+
+  function reloadEnv() {
+    reloadAgentEnv(paneId).catch((e) => {
+      addBlocking("", "Could not reload the agent", String(e), "error");
+    });
+  }
 </script>
 
 <div class="shell-drawer" class:collapsed class:no-chrome={!chrome}>
@@ -54,7 +71,7 @@
       <span class="shell-title">Shell — {cwd}</span>
       {#if paneId !== HOME_SHELL_PANE_ID}
         <button
-          onclick={() => { reloadAgentEnv(paneId).catch(() => {}); }}
+          onclick={reloadEnv}
           aria-label="Reload agent with this terminal's environment"
           title={RELOAD_HINT}
         >↻ env → agent</button>
@@ -75,7 +92,7 @@
     <!-- `visible` drives the Terminal's re-fit when it is shown again. The
          drawer or panel hides it through an ancestor display:none, which never
          fires xterm's ResizeObserver. -->
-    <Terminal {paneId} {cwd} visible={termVisible} {onExit} />
+    <Terminal bind:this={term} {paneId} {cwd} visible={termVisible} {onExit} />
   </section>
 </div>
 

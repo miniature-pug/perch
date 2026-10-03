@@ -7,8 +7,18 @@
   let {
     paneId,
     fileDrop,
+    paste,
     children,
-  }: { paneId: string; fileDrop: boolean; children?: import("svelte").Snippet } = $props();
+  }: {
+    paneId: string;
+    fileDrop: boolean;
+    // Optional. Sends dropped text through the pane's terminal as a paste
+    // (bracketed when the TUI asks for it), so a multi-line selection is not
+    // submitted line by line (FEX-28). Returns false when it could not paste;
+    // the drop then falls back to a raw pty write.
+    paste?: (text: string) => boolean;
+    children?: import("svelte").Snippet;
+  } = $props();
 
   let dragActive = $state(false);
 
@@ -50,6 +60,7 @@
     // file.
     const text = e.dataTransfer.getData(MIME_TEXT);
     if (text) {
+      if (paste?.(text)) return;
       const bytes = Array.from(new TextEncoder().encode(text));
       await writeToPty(paneId, bytes);
     }
