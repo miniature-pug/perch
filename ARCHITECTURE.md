@@ -151,6 +151,23 @@ backgrounded `opencode serve` itself when `attach` exits. The launch lines are
 POSIX `sh`; when the login shell is fish, nushell, elvish, csh/tcsh or
 PowerShell, the line is typed as `sh -c '…'` instead.
 
+A line typed before the shell's line editor starts sits in the tty input
+queue, already echoed, where an rc file that drains or flushes stdin (`read
+-t`, `tcflush`, an OSC 11 colour query, a passphrase prompt) can swallow it.
+`Bridge.WaitShellReady(ctx, maxWait)` waits for the editor instead. The output
+pump watches for the bracketed-paste enable `ESC[?2004h` (bash 5.1+, zsh,
+fish, nushell), split across chunks or not, without altering the stream.
+The wait returns `ShellReady` once that marker is current, the shell is the
+tty's foreground process group (`TIOCGPGRP` on the master) with no child in
+it, and the tty is non-canonical. zsh, fish, nushell and bash 5.1+ (probed
+once with `--version`, unless the inputrc turns bracketed paste off) count
+only the marker. Other shells also count 750ms of foreground non-canonical
+mode as ready, and a quiet second at a canonical prompt (dash, `bash
+--noediting`) as `ShellIdleCanonical`. On Linux, `/proc/<pid>/syscall`
+vetoes both while the shell is visibly in an rc builtin `read` (a timed wait,
+or a 1-byte canonical read). At `maxWait` the result is `ShellBusy`: a
+prompt may own the tty, so the caller must not type.
+
 ### The agent Monitor seam
 
 Each agent implements `agent.Monitor` (`internal/agent/monitor.go`):
