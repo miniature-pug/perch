@@ -100,6 +100,8 @@ declare global {
       // process-wide, so App.svelte registers it once.
       OnFileDrop(cb: (x: number, y: number, paths: string[]) => void, useDropTarget: boolean): void;
       OnFileDropOff(): void;
+      // Opens a URL in the system browser. Wails validates the URL.
+      BrowserOpenURL?(url: string): void;
     };
     go: { app: { App: App } };
   }

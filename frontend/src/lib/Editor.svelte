@@ -26,6 +26,7 @@
     visible = true,
     workspaceId = "",
     onSendToAgent,
+    onShowPreview,
   }: {
     path: string | null;
     worktree: string;
@@ -40,6 +41,9 @@
     // The owning session, so a "Save failed" notification links back to it.
     workspaceId?: string;
     onSendToAgent?: (text: string) => void;
+    // Set for a previewable file (Markdown, Mermaid) opened as source: shows
+    // a button that switches back to the rendered preview (FEX-23).
+    onShowPreview?: () => void;
   } = $props();
 
   let container = $state<HTMLDivElement | null>(null);
@@ -543,6 +547,10 @@
       <p class="editor-error" role="alert">Could not open {baseName(loadError.path)}: {loadError.message}</p>
     {/if}
 
+    {#if onShowPreview}
+      <button class="show-preview-btn" onclick={onShowPreview}>Show preview</button>
+    {/if}
+
     {#if dirty}
       <span class="dirty-dot" aria-label="Unsaved changes" title="Unsaved changes">●</span>
     {/if}
@@ -616,6 +624,25 @@
     pointer-events: none;
     z-index: var(--perch-z-editor-dirty);
     user-select: none;
+  }
+
+  .show-preview-btn {
+    position: absolute;
+    top: var(--perch-sp-1);
+    right: calc(var(--perch-sp-2) + 16px);
+    padding: 2px 8px;
+    background: var(--perch-bg-elev);
+    color: var(--perch-text);
+    border: 1px solid var(--perch-border-strong);
+    border-radius: var(--perch-radius-sm);
+    font-family: var(--perch-font-sans);
+    font-size: var(--perch-fs-caption);
+    cursor: pointer;
+    z-index: var(--perch-z-editor-send);
+  }
+  .show-preview-btn:focus-visible {
+    outline: var(--perch-ring-w) solid var(--perch-accent);
+    outline-offset: 2px;
   }
 
   .send-to-agent-btn {

@@ -72,7 +72,10 @@
   // would reset on every switch. This map is keyed by session id, like termEpoch
   // and fsVersion.
   let codePaths       = $state<Record<string, string | null>>({});
-  let previewContent  = $state<string>("");
+  let previewContent  = $state<{ path: string | null; content: string }>({ path: null, content: "" });
+  // Previewable files the user switched to the source editor (FEX-23), by
+  // absolute path.
+  let sourceView      = new SvelteSet<string>();
   // Per-session approval QUEUE. A session's agent can have more than one tool call
   // waiting at once, because each is a distinct blocking hook. A single-valued map
   // would drop all but the last one and hang those hooks forever. The head of each
@@ -168,11 +171,16 @@
   $effect(() => {
     const p = activeCodePath;
     if (p) fsPathVersion[p]; // track: re-read when THIS file changes on disk
-    if (!p || !isPreviewable(p) || previewKind(p) === "image") { previewContent = ""; return; }
+    if (p) sourceView.has(p); // track: re-read when returning from the source editor
+    if (!p || !isPreviewable(p) || previewKind(p) === "image") { previewContent = { path: null, content: "" }; return; }
     let cancelled = false;
+    // The content is tagged with its path, and a Preview only takes content
+    // for its own path. Another file's text never reaches a Preview, so a
+    // switch never flashes the previous file or feeds markdown to mermaid
+    // (FEC-25, FEX-24).
     readFile(p)
-      .then((c) => { if (!cancelled) previewContent = c; })
-      .catch(() => { if (!cancelled) previewContent = ""; });
+      .then((c) => { if (!cancelled) previewContent = { path: p, content: c }; })
+      .catch(() => { if (!cancelled) previewContent = { path: p, content: "" }; });
     return () => { cancelled = true; };
   });
 
@@ -1642,14 +1650,20 @@
                         codePaths[ws.id] = p;
                       }
                     }} />
-                  {#if isPreviewable(codePath)}
+                  {#if isPreviewable(codePath) && !(codePath && sourceView.has(codePath))}
                     <!-- Keyed only by the file path, the same key on every view, so
                          a file switch gives a fresh render but an fs change does
                          not remount. The render side effect is frozen with
-                         `visible`. -->
+                         `visible`. Content is handed over only for this path
+                         (FEC-25). A relative link opens its file inside this
+                         worktree. Markdown and Mermaid files can switch to the
+                         source editor (FEX-23). -->
                     {#key codePath}
                       <Preview path={codePath ?? ""} kind={previewKind(codePath ?? "")}
-                               content={previewContent} visible={showing} />
+                               content={previewContent.path === codePath ? previewContent.content : ""}
+                               visible={showing}
+                               onOpenFile={(p: string) => { if (p.startsWith(ws.worktreePath + "/")) codePaths[ws.id] = p; }}
+                               onEditSource={() => { if (codePath) sourceView.add(codePath); }} />
                     {/key}
                   {:else}
                     <!-- reloadToken is the monotonic per-file fs version, so the
@@ -1659,6 +1673,7 @@
                     <Editor path={codePath} worktree={ws.worktreePath} workspaceId={ws.id}
                             reloadToken={fsPathVersion[codePath ?? ""] ?? 0}
                             visible={showing}
+                            onShowPreview={codePath && isPreviewable(codePath) ? () => { if (codePath) sourceView.delete(codePath); } : undefined}
                             onSendToAgent={sendToAgent} />
                   {/if}
                 </div>

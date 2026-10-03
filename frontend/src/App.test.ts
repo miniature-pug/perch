@@ -5436,3 +5436,30 @@ describe("audit regressions: keymap", () => {
     expect(ev.defaultPrevented).toBe(false);
   });
 });
+
+describe("audit regressions: preview content", () => {
+  it("FEC-25/FEX-24: a Preview never receives another file's content while its own read is pending", async () => {
+    const { listWorkspaces, readFile } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await fireEvent.click(await screen.findByRole("button", { name: /^Alpha\b/ }));
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    layout.setView("code");
+    await tick();
+
+    vi.mocked(readFile).mockResolvedValueOnce("# markdown A");
+    await fireEvent.click(screen.getByRole("button", { name: "open markdown" }));
+    await waitFor(() => expect(screen.getByTestId("preview").dataset.content).toBe("# markdown A"));
+
+    let release: (s: string) => void = () => {};
+    vi.mocked(readFile).mockImplementationOnce(() => new Promise<string>((res) => { release = res; }));
+    await fireEvent.click(screen.getByRole("button", { name: "open mermaid" }));
+    await waitFor(() => expect(screen.getByTestId("preview").dataset.kind).toBe("mermaid"));
+    expect(screen.getByTestId("preview").dataset.content).toBe("");
+    release("graph TD; A-->B");
+    await waitFor(() => expect(screen.getByTestId("preview").dataset.content).toBe("graph TD; A-->B"));
+  });
+});

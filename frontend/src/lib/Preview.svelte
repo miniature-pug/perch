@@ -1,11 +1,60 @@
 <!-- frontend/src/lib/Preview.svelte -->
+<script module lang="ts">
+  import mermaid from "mermaid";
+
+  // Configure mermaid once per app, not on every render (FEX-25).
+  let mermaidReady = false;
+  function ensureMermaid() {
+    if (mermaidReady) return;
+    mermaid.initialize({ startOnLoad: false, securityLevel: "strict" });
+    mermaidReady = true;
+  }
+  // A unique render id per call, so overlapping renders never share mermaid's
+  // temporary DOM node (FEX-25).
+  let renderSeq = 0;
+
+  // Sanitizer settings for rendered markdown. The preview is rendered into the
+  // app's own document (not a sandboxed frame), so a README or an
+  // agent-written file must not be able to restyle the cockpit (a style element
+  // that relabels or hides the approval card), cover it with a fixed overlay
+  // (a style attribute), or post a form (FEX-10). Links are handled by
+  // onPreviewClick below, never by navigation.
+  export const MARKDOWN_PURIFY = {
+    USE_PROFILES: { html: true, svg: true, svgFilters: true },
+    FORBID_TAGS: ["style", "link", "meta", "base", "form", "input", "button", "textarea",
+                  "select", "option", "iframe", "frame", "object", "embed", "dialog"],
+    FORBID_ATTR: ["id", "name", "style", "class", "action", "formaction", "target"],
+  };
+
+  // External links open in the system browser. Only plain web and mail
+  // links qualify.
+  export function isExternalUrl(href: string): boolean {
+    return /^(https?:|mailto:)/i.test(href);
+  }
+
+  // Resolve a relative link against the previewed file's directory.
+  // Returns null for anchors, absolute URLs with a scheme, and empty links.
+  export function resolveRelative(fromFile: string, href: string): string | null {
+    const target = href.split("#")[0].split("?")[0];
+    if (!target || /^[a-z][a-z0-9+.-]*:/i.test(target)) return null;
+    const base = target.startsWith("/") ? [] : fromFile.split("/").slice(0, -1);
+    for (const part of target.split("/")) {
+      if (part === "" || part === ".") continue;
+      if (part === "..") base.pop();
+      else base.push(part);
+    }
+    let decoded = "/" + base.filter(Boolean).join("/");
+    try { decoded = decodeURIComponent(decoded); } catch { /* keep as is */ }
+    return decoded;
+  }
+</script>
+
 <script lang="ts">
   import { marked } from "marked";
-  import mermaid from "mermaid";
   import DOMPurify from "dompurify";
 
   let {
-    path, kind, content, visible = true,
+    path, kind, content, visible = true, onOpenFile, onEditSource,
   }: {
     path: string;
     kind: "markdown" | "mermaid" | "image";
@@ -15,6 +64,11 @@
     // mermaid never run while hidden. The effect re-runs and renders the
     // current content when the preview becomes visible again.
     visible?: boolean;
+    // Open a file a relative link points at. Without it, relative links do
+    // nothing.
+    onOpenFile?: (absPath: string) => void;
+    // Switch this file to the source editor (FEX-23).
+    onEditSource?: () => void;
   } = $props();
 
   let html = $state("");
@@ -27,13 +81,13 @@
     let cancelled = false;
     if (kind === "markdown" && content) {
       Promise.resolve(marked(content)).then((h) => {
-        if (!cancelled) html = DOMPurify.sanitize(h as string, { USE_PROFILES: { html: true, svg: true, svgFilters: true }, FORBID_ATTR: ['id', 'name'] });
+        if (!cancelled) html = DOMPurify.sanitize(h as string, MARKDOWN_PURIFY) as string;
       }).catch((e) => {
         if (!cancelled) html = errorBanner(e);
       });
     } else if (kind === "mermaid" && content) {
-      mermaid.initialize({ startOnLoad: false, securityLevel: "strict" });
-      mermaid.render("preview-mermaid", content).then(({ svg }) => {
+      ensureMermaid();
+      mermaid.render(`preview-mermaid-${++renderSeq}`, content).then(({ svg }) => {
         // Mermaid draws arrowheads as <marker> elements, referenced through
         // marker-end="url(#id)". Forbidding `id` here would strip the marker
         // ids, and the arrowheads would vanish. So this sanitize call does NOT
@@ -61,13 +115,35 @@
       { USE_PROFILES: { html: true } },
     );
   }
+
+  // A link in rendered content must never navigate the app's own webview
+  // away from the cockpit (FEX-10). Web links open in the system browser;
+  // a relative link opens the file it names; anything else does nothing.
+  function onPreviewClick(e: MouseEvent) {
+    const a = (e.target as Element | null)?.closest?.("a");
+    if (!a) return;
+    e.preventDefault();
+    const href = a.getAttribute("href") ?? a.getAttribute("xlink:href") ?? "";
+    if (isExternalUrl(href)) {
+      window.runtime?.BrowserOpenURL?.(href);
+      return;
+    }
+    const target = resolveRelative(path, href);
+    if (target) onOpenFile?.(target);
+  }
 </script>
 
 <section aria-label="preview" class="preview scrollable">
+  {#if onEditSource && kind !== "image"}
+    <div class="preview-toolbar">
+      <button class="btn btn-sm" onclick={onEditSource}>Edit source</button>
+    </div>
+  {/if}
   {#if kind === "image"}
     <img src={path} alt={path} class="preview-img" />
   {:else}
-    <div class="preview-body prose">{@html html}</div>
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+    <div class="preview-body prose" onclick={onPreviewClick}>{@html html}</div>
   {/if}
 </section>
 
@@ -85,6 +161,12 @@
   .preview::-webkit-scrollbar-track { background: transparent; }
   .preview::-webkit-scrollbar-thumb { background: var(--perch-border); border-radius: var(--perch-scrollbar-radius); }
   .preview::-webkit-scrollbar-thumb:hover { background: var(--perch-text-dim); }
+
+  .preview-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: var(--perch-sp-2);
+  }
 
   /* ---------- Prose area ---------- */
   .prose {
