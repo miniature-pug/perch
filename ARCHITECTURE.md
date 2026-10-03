@@ -103,6 +103,8 @@ callable over the bridge. The load-bearing methods:
 | `OpenShell(paneID, cwd string) error` | Spawn an auxiliary login-shell pty: `shell-home` (always in `HomeShellCwd`) or a drawer `shell-<id>[_<n>]` of a known session, with a cwd inside its tree |
 | `HomeShellCwd() string` | The working directory for the home shell |
 | `Approve(reqID, decision string) error` | Resolve a pending approval as allow, deny, or always |
+| `ApproveAlways(reqID string) (AlwaysGrant, error)` | Approve with a standing rule and report the rule it added (`added` is false for a duplicate) |
+| `RemoveAlwaysRule(rule AlwaysRule) (bool, error)` | Delete exactly that always-allow rule from the current settings, under the settings lock |
 | `DiffStat / Hunks` | The changed files (`git status` v2 plus net line counts, renames with `oldPath`) and the hunks of one file, each with a content `id` |
 | `StageHunk / DiscardHunk / UnstageHunk(worktree, file string, index int, id string) error` | Act on the hunk whose content `id` the user saw; a hunk that changed since is refused with "hunk changed since it was displayed" |
 | `Branches(repo string) ([]string, error)` | Local branch names |
@@ -112,6 +114,11 @@ callable over the bridge. The load-bearing methods:
 | `DiscoverRepos() ([]RepoInfo, error)` | Repositories under the configured roots, for the New Session dialog |
 
 The full set is in [internal/README.md](internal/README.md) and `app/app.go`.
+
+The asset server also serves `/wt-file/<workspaceID>/<path>` (`app/wtfile.go`)
+for the image preview: only png, jpg, gif, webp and svg files up to 20 MiB that
+resolve, after symlinks, inside that session's worktree and the configured
+roots. Everything else is 404.
 There is no model or token parameter anywhere: perch chooses its agents per
 session and never meters usage.
 
