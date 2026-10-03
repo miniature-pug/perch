@@ -139,7 +139,7 @@ jobs:
         run: rm -f /tmp/perch-dev-image.tar
 
       # The full contributor gate: test, test-integration, test-front, lint,
-      # vet, vulncheck, test-e2e. Each runs in its own perch-dev container
+      # vet, vulncheck, test-e2e, gui-check. Each runs in its own perch-dev container
       # with the right masks.
       - name: make test-all
         run: make test-all
