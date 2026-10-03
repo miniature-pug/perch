@@ -3,12 +3,14 @@ package agent
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strconv"
@@ -36,6 +38,7 @@ import (
 // as the WebKit smoke. Everything below is verified against source, not
 // a server.
 type OpencodeMonitor struct {
+	adapter    Adapter
 	serverURL  string
 	password   string
 	events     chan Event
@@ -59,13 +62,18 @@ type OpencodeMonitor struct {
 	// it on session.status busy and on question.replied. The terminating
 	// idle reports StateDone, the turn-done ✓ and the ambient "Turn
 	// complete" toast, only when turnRunning is set, INSTEAD of testing
-	// the prior m.state. A mid-turn permission.asked or question.asked
-	// overwrites m.state to an awaiting state, and opencode emits NO
-	// permission-resolved frame. So by the time the idle frame arrives,
-	// the prior state is no longer StateRunning. Tracking the turn
-	// separately is what lets a turn that used a tool, which is every
-	// real turn, still show done. Guarded by mu.
+	// the prior m.state, which a mid-turn permission.asked or
+	// question.asked overwrites. Guarded by mu.
 	turnRunning bool
+	// children holds the ids of subagent (task tool) sessions, learned from
+	// session.created/session.updated frames whose info.parentID is set.
+	// /event streams every session of the instance; a child's status, idle
+	// and error frames must not drive the workspace state or be persisted
+	// as the resumable session id (AGT-6). Guarded by mu.
+	children map[string]bool
+	// stopSSE cancels the SSE pump. handleExit calls it, so an exited
+	// session stops dialing a server that is gone (AGT-14). Guarded by mu.
+	stopSSE context.CancelFunc
 }
 
 const (
@@ -107,30 +115,57 @@ const (
 	// time.
 	firstConnectDeadline = 30 * time.Second
 
-	// sseRetryBackoff is the sleep between SSE reconnect attempts.
-	sseRetryBackoff = 500 * time.Millisecond
+	// sseRetryBackoffMin and sseRetryBackoffMax bound the sleep between SSE
+	// (re)connect attempts. Before the first connection the monitor polls at
+	// the minimum, so it notices the server coming up quickly; after a drop
+	// the delay doubles up to the maximum (AGT-14).
+	sseRetryBackoffMin = 500 * time.Millisecond
+	sseRetryBackoffMax = 5 * time.Second
 
-	// sseScannerInitBuf is the initial bufio.Scanner buffer capacity for
-	// the SSE reader.
-	sseScannerInitBuf = 64 * 1024
+	// sseReaderBuf is the SSE line reader's buffer size. Longer lines are
+	// accumulated up to sseMaxLineBytes.
+	sseReaderBuf = 64 * 1024
 
-	// sseScannerMaxBuf is the maximum token size the SSE scanner accepts.
-	sseScannerMaxBuf = 1024 * 1024
+	// sseMaxLineBytes caps one SSE line. A longer line (session.diff carries
+	// whole patches) is SKIPPED instead of aborting the stream, which would
+	// lose every frame published until the reconnect (AGT-13).
+	sseMaxLineBytes = 1024 * 1024
 
-	// serveAndAttachFmt is the shell incantation Prepare returns. It
-	// backgrounds `opencode serve`, polls until the port is listening,
-	// then exec's `opencode attach`. The arguments, in order, are:
-	// password, portStr, pollMaxIters, serverURL, pollIntervalSec,
-	// attach. The leading space keeps the password out of
-	// history-ignoring shells. The poll count and interval are passed in,
-	// not baked in, because they are DERIVED from firstConnectDeadline
-	// (see the var block below), so the poll budget and the monitor's
-	// connect deadline stay in lockstep. Do not hard-code them back into
-	// this string.
-	serveAndAttachFmt = " ( export OPENCODE_SERVER_PASSWORD=%s;" +
-		" opencode serve --port %s --hostname " + hooklistener.LoopbackHost + " >/dev/null 2>&1 &" +
+	// sseIdleTimeout drops and reconnects a stream that delivered nothing,
+	// not even opencode's 10-second server.heartbeat, for this long.
+	sseIdleTimeout = 30 * time.Second
+
+	// resyncTimeout bounds the GET /session/status resync after a reconnect.
+	resyncTimeout = 2 * time.Second
+
+	// serveAndAttachFmt is the shell incantation Prepare returns (before the
+	// login-shell wrapper). It backgrounds `opencode serve`, polls until the
+	// port is listening, runs `opencode attach`, and then kills the serve it
+	// started. The arguments, in order, are: bin, portStr, pollMaxIters,
+	// serverURL, pollIntervalSec, attach.
+	//
+	// attach is NOT exec'd: when it exits (/exit or a crash), the subshell
+	// kills the backgrounded serve and exits with attach's status, which the
+	// exit sentinel reports. The HUP/TERM trap covers the pane being closed
+	// while attach runs. Before, serve was orphaned to init and kept its
+	// port, memory and LSP children until logout (AGT-4).
+	//
+	// The Basic-auth password and username are NOT in the line: they travel
+	// through PaneEnv, so the shell neither echoes them nor writes them to
+	// history (AGT-11, AGT-12). The poll count and interval are DERIVED from
+	// firstConnectDeadline (see the var block below), so the poll budget and
+	// the monitor's connect deadline stay in lockstep. The line contains no
+	// single quote and no backslash, so wrapForLoginShell can run it under
+	// `sh -c` for non-POSIX login shells.
+	serveAndAttachFmt = "( %s serve --port %s --hostname " + hooklistener.LoopbackHost + " >/dev/null 2>&1 & sp=$!;" +
+		` trap "kill $sp 2>/dev/null" HUP TERM;` +
 		" i=0; while [ $i -lt %s ]; do curl -s -o /dev/null %s && break; i=$((i+1)); sleep %s; done;" +
-		" exec %s )" + exitSentinel + "\n"
+		" %s; ec=$?; kill $sp 2>/dev/null; exit $ec )" + exitSentinel
+
+	// Environment variables `opencode serve` and `opencode attach` read for
+	// the server's Basic auth (v1.15.12 server/auth.ts).
+	envOpencodePassword = "OPENCODE_SERVER_PASSWORD"
+	envOpencodeUsername = "OPENCODE_SERVER_USERNAME"
 )
 
 // opencodeServePollMaxIters and opencodeServePollIntervalSec are the
@@ -149,7 +184,8 @@ func newOpencodeMonitor(a Adapter) *OpencodeMonitor {
 	// serverURL and password stay empty here. Prepare self-assigns them,
 	// so the free port is grabbed as late as possible, keeping the
 	// bind-to-serve race window as small as possible.
-	return &OpencodeMonitor{events: make(chan Event, monitorEventChanBuf), httpClient: &http.Client{}}
+	return &OpencodeMonitor{adapter: a, events: make(chan Event, monitorEventChanBuf), httpClient: &http.Client{},
+		children: map[string]bool{}}
 }
 
 // NewOpencodeMonitorWithServer injects a server URL and password instead
@@ -157,8 +193,9 @@ func newOpencodeMonitor(a Adapter) *OpencodeMonitor {
 // an httptest server. Production code goes through newOpencodeMonitor,
 // then Prepare.
 func NewOpencodeMonitorWithServer(a Adapter, serverURL, pw string) *OpencodeMonitor {
-	return &OpencodeMonitor{serverURL: serverURL, password: pw,
-		events: make(chan Event, monitorEventChanBuf), httpClient: &http.Client{}}
+	return &OpencodeMonitor{adapter: a, serverURL: serverURL, password: pw,
+		events: make(chan Event, monitorEventChanBuf), httpClient: &http.Client{},
+		children: map[string]bool{}}
 }
 
 // NewOpencodeMonitorWithServerAndExitListener injects both the SSE server
@@ -180,13 +217,11 @@ func (m *OpencodeMonitor) Capabilities() Caps {
 	// cannot suppress it. So perch does NOT render its own ApprovalCard;
 	// the frontend gates the card on caps.approvals. perch surfaces
 	// permission.asked only as a PASSIVE attention signal
-	// (StateAwaitingApproval plus the blocking notification), mirroring
-	// how perch handles question.asked: the user answers in the TUI, and
-	// perch never replies. This avoids a double prompt and the
-	// stale-card bug, because opencode emits no permission-resolved SSE
-	// frame, so a perch-owned card would never clear. claude is
-	// DIFFERENT: its PreToolUse hook BLOCKS, and perch's reply suppresses
-	// claude's native prompt, so claude keeps Approvals: true.
+	// (StateAwaitingApproval plus the blocking notification), cleared by
+	// permission.replied, mirroring question.asked: the user answers in the
+	// TUI, and perch never replies, which avoids a double prompt. claude is
+	// DIFFERENT: its PermissionRequest hook BLOCKS, and perch's reply
+	// answers claude's prompt, so claude keeps Approvals: true.
 	return Caps{Approvals: false, Attention: true}
 }
 
@@ -203,11 +238,9 @@ func (m *OpencodeMonitor) Capabilities() Caps {
 // TUI. A server that never binds surfaces as StateErrored from the
 // monitor's bounded connect in Start, not from pane noise.
 //
-// The password travels through the environment, never argv, so it does
-// not appear in `ps`. The whole line leads with a space, so a
-// history-ignoring shell keeps the secret out of shell history. The
-// password is an ephemeral random secret that gates a loopback-only
-// server that dies with the pane, so on-screen exposure carries low risk.
+// The password travels through the pane's process environment (PaneEnv),
+// never argv and never the typed line, so it appears neither in `ps`, nor
+// on screen, nor in shell history.
 //
 // resumeID, when set, becomes `--session <id>` on attach, so opencode
 // resumes that session. perch does not pass a model flag. `opencode
@@ -245,51 +278,49 @@ func (m *OpencodeMonitor) Prepare(_ context.Context, _, _, resumeID string) (str
 		return "", fmt.Errorf("OpencodeMonitor.Prepare: parse server URL %q: %w", m.serverURL, err)
 	}
 
-	attach := "opencode attach " + m.serverURL
-	if resumeID != "" {
+	bin := launchBin(m.adapter, "opencode")
+	attach := bin + " attach " + m.serverURL
+	if resumeID != "" && m.adapter != nil {
 		// resumeID uses the charset [A-Za-z0-9_-]. app.validateSessionID
-		// validates it in the event pump, before perch persists any
-		// session id to the registry. So plain concatenation is safe as
-		// a single shell token.
-		attach += " --session " + resumeID
+		// validates it in the event pump, before perch persists any session
+		// id to the registry. So plain concatenation is safe as a single
+		// shell token. opencode also accepts --continue to resume the most
+		// recent session; perch does not wire it, because an empty resumeID
+		// means a fresh workspace, not "continue".
+		attach += " " + strings.Join(m.adapter.ResumeArgs(resumeID), " ")
 	}
-	// opencode also accepts --continue (or -c) to resume the most-recent
-	// session without knowing its ID. This code deliberately does NOT
-	// wire that flag, because the call path has no way for a caller to
-	// express "continue intent" as distinct from "I have no session id".
-	// app.OpenWorkspace always passes w.LastSessionID, a concrete ID or
-	// "". An empty resumeID means the workspace is fresh, not that perch
-	// should use --continue. Adding --continue support would need a new
-	// signal in the Monitor.Prepare signature, a shared interface that
-	// ClaudeMonitor and FakeMonitor also implement: a multi-file
-	// interface change. If a "resume most recent" UX is wanted later,
-	// extend app.OpenWorkspace and the registry to pass a
-	// "continueLatest bool" through to Prepare, then add the flag here.
 
-	// The leading space keeps the password out of history-ignoring
-	// shells. The poll budget (iterations times interval) derives from
-	// firstConnectDeadline, so it keeps probing until the same deadline
-	// the monitor's connect uses, before it falls through to attach. A
-	// serve that binds before the deadline is caught here, instead of
-	// abandoned early into a dead attach.
-	cmd := fmt.Sprintf(serveAndAttachFmt,
-		m.password, portStr, opencodeServePollMaxIters, m.serverURL, opencodeServePollIntervalSec, attach)
-	return cmd, nil
+	// The leading space keeps the line out of history-ignoring shells. The
+	// poll budget (iterations times interval) derives from
+	// firstConnectDeadline, so it keeps probing until the same deadline the
+	// monitor's connect uses, before it falls through to attach.
+	line := " " + fmt.Sprintf(serveAndAttachFmt,
+		bin, portStr, opencodeServePollMaxIters, m.serverURL, opencodeServePollIntervalSec, attach)
+	return wrapForLoginShell(line), nil
 }
 
-// PaneEnv supplies the exit sentinel's token and URL through the pane
-// shell's process environment. The sentinel appended to serveAndAttachFmt
-// references them by name, so the shell echoes no secret. Call PaneEnv
-// after Prepare, which creates m.exitListener.
+// PaneEnv supplies, through the pane shell's process environment, the exit
+// sentinel's token and URL and the opencode server's Basic-auth username
+// and password. The launch line references none of them, so the shell
+// echoes no secret. The username is pinned, because the server reads
+// OPENCODE_SERVER_USERNAME and a user-set value would make the monitor's
+// /event requests fail with 401 (AGT-11). Call PaneEnv after Prepare.
 func (m *OpencodeMonitor) PaneEnv() []string {
-	return exitPaneEnv(m.exitListener)
+	env := exitPaneEnv(m.exitListener)
+	if m.password != "" {
+		env = append(env,
+			envOpencodePassword+"="+m.password,
+			envOpencodeUsername+"="+opencodeBasicAuthUser)
+	}
+	return env
 }
 
-// Teardown closes the exit listener. ctx cancellation reaps the SSE
-// stream elsewhere, not here. OpenWorkspace, CloseWorkspace, and shutdown
-// enforce an order where the pane bridge is SIGKILLed before Teardown
-// closes the listener. Closing the listener first would leave a late
-// exit sentinel nowhere to land.
+// Teardown closes the exit listener. ctx cancellation reaps the SSE stream
+// elsewhere, not here. app.OpenWorkspace (on reopen), CloseWorkspace and
+// shutdown call Teardown BEFORE they close the pane bridge: closing the
+// exit listener first means a late exit sentinel from the dying shell has
+// nowhere to land, so it cannot raise a spurious "Agent exited" on a
+// reopen or close (AGT-20).
 func (m *OpencodeMonitor) Teardown() error {
 	if m.exitListener != nil {
 		return m.exitListener.Close()
@@ -337,17 +368,31 @@ func (m *OpencodeMonitor) authHeader() string {
 // and every HTTP request is ctx-scoped. So closing a workspace, which
 // cancels ctx, reaps the goroutine with no leak.
 func (m *OpencodeMonitor) Start(ctx context.Context) {
+	sseCtx, stop := context.WithCancel(ctx)
+	m.mu.Lock()
+	m.stopSSE = stop
+	exited := m.exited
+	m.mu.Unlock()
+	if exited {
+		stop()
+	}
 	go func() {
 		defer safe.Recover("opencode-monitor")
+		defer stop()
+		ctx := sseCtx
 		deadline := time.Now().Add(firstConnectDeadline)
 		connectedOnce := false
+		backoff := sseRetryBackoffMin
 
 		for {
 			if ctx.Err() != nil {
 				return
 			}
-			if m.streamOnce(ctx) {
+			if m.streamOnce(ctx, connectedOnce) {
 				connectedOnce = true
+				backoff = sseRetryBackoffMin
+			} else if connectedOnce {
+				backoff = min(backoff*2, sseRetryBackoffMax)
 			}
 			if ctx.Err() != nil {
 				return
@@ -360,7 +405,7 @@ func (m *OpencodeMonitor) Start(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(sseRetryBackoff):
+			case <-time.After(backoff):
 			}
 		}
 	}()
@@ -397,6 +442,14 @@ func (m *OpencodeMonitor) handleExit(ctx context.Context, ec string) {
 	if !m.markExited() {
 		return // duplicate AgentExit, already terminal
 	}
+	// Stop the SSE pump: the session is over, and the server is going away
+	// with attach (AGT-14).
+	m.mu.Lock()
+	stop := m.stopSSE
+	m.mu.Unlock()
+	if stop != nil {
+		stop()
+	}
 	// Send directly, not through emit, so this terminal frame bypasses
 	// the exited guard it just armed. markExited already set state to
 	// StateExited.
@@ -420,13 +473,19 @@ func (m *OpencodeMonitor) markExited() bool {
 	return true
 }
 
-// streamOnce opens GET /event and consumes frames until the stream ends
-// or errors. It returns true if it connected successfully (HTTP 200, and
-// it began reading), and false on a dial failure or a non-200 response.
-// This lets the caller tell "never connected", which eventually becomes
-// errored, from "stream dropped", which triggers a reconnect.
-func (m *OpencodeMonitor) streamOnce(ctx context.Context) (connected bool) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, m.serverURL+"/event", nil)
+// streamOnce opens GET /event and consumes frames until the stream ends,
+// errors, or stays silent for sseIdleTimeout. It returns true if it
+// connected successfully (HTTP 200), and false on a dial failure or a
+// non-200 response. This lets the caller tell "never connected", which
+// eventually becomes errored, from "stream dropped", which triggers a
+// reconnect. On a reconnect (resync), it first re-reads the session
+// statuses, because opencode replays nothing on connect, so a frame lost
+// in the gap (typically the final idle) would otherwise leave the state
+// stuck.
+func (m *OpencodeMonitor) streamOnce(ctx context.Context, resync bool) (connected bool) {
+	sctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	req, err := http.NewRequestWithContext(sctx, http.MethodGet, m.serverURL+"/event", nil)
 	if err != nil {
 		return false
 	}
@@ -440,23 +499,130 @@ func (m *OpencodeMonitor) streamOnce(ctx context.Context) (connected bool) {
 	if resp.StatusCode != http.StatusOK {
 		return false
 	}
-	sc := bufio.NewScanner(resp.Body)
-	sc.Buffer(make([]byte, 0, sseScannerInitBuf), sseScannerMaxBuf)
-	for sc.Scan() {
-		line := sc.Text()
-		// SSE data lines are `data:<json>`. The SSE spec allows one
-		// optional space after the colon, which this code strips. Other
-		// lines (event:, id:, the heartbeat comment) are ignored.
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		payload := strings.TrimSpace(line[len("data:"):])
-		if payload == "" {
-			continue
-		}
-		m.translateSSE(ctx, []byte(payload))
+	// Liveness: opencode sends server.heartbeat every 10 s. A stream that
+	// delivers nothing for sseIdleTimeout is dead; cancel it to reconnect.
+	idle := time.AfterFunc(sseIdleTimeout, cancel)
+	defer idle.Stop()
+	if resync {
+		m.resync(ctx)
 	}
-	return true
+	br := bufio.NewReaderSize(resp.Body, sseReaderBuf)
+	var long []byte
+	skipping := false
+	for {
+		chunk, err := br.ReadSlice('\n')
+		idle.Reset(sseIdleTimeout)
+		if err == bufio.ErrBufferFull {
+			// A line longer than the buffer: accumulate it, or skip it once
+			// it exceeds sseMaxLineBytes, instead of aborting the stream.
+			if !skipping {
+				if len(long)+len(chunk) > sseMaxLineBytes {
+					skipping, long = true, long[:0]
+				} else {
+					long = append(long, chunk...)
+				}
+			}
+			continue
+		}
+		if err != nil {
+			return true
+		}
+		if skipping {
+			skipping = false
+			continue
+		}
+		line := chunk
+		if len(long) > 0 {
+			long = append(long, chunk...)
+			line = long
+		}
+		m.handleSSELine(ctx, line)
+		long = long[:0]
+	}
+}
+
+// ssePrefilter lists byte patterns of the only frame types the monitor acts
+// on. Frames without any of them, chiefly the high-rate message.part.*
+// streaming deltas, are skipped without a JSON decode (AGT-13).
+var ssePrefilter = [][]byte{[]byte(`"session.`), []byte(`"question.`), []byte(`"permission.`)}
+
+// handleSSELine processes one raw SSE line. SSE data lines are
+// `data:<json>`; the spec allows one optional space after the colon. Other
+// lines (event:, id:, comments, blank separators) are ignored. line is only
+// valid during the call.
+func (m *OpencodeMonitor) handleSSELine(ctx context.Context, line []byte) {
+	line = bytes.TrimSpace(line)
+	payload, ok := bytes.CutPrefix(line, []byte("data:"))
+	if !ok {
+		return
+	}
+	payload = bytes.TrimSpace(payload)
+	if len(payload) == 0 {
+		return
+	}
+	for _, p := range ssePrefilter {
+		if bytes.Contains(payload, p) {
+			m.translateSSE(ctx, payload)
+			return
+		}
+	}
+}
+
+// resync reconciles the state with GET /session/status after a reconnect.
+// The endpoint lists only non-idle sessions ({id: {type: busy|retry}}).
+// If no root session is busy but perch still thinks a turn is running, the
+// final idle was lost: apply it. If a root session is busy while perch
+// reads idle or done, the busy was lost: apply that.
+func (m *OpencodeMonitor) resync(ctx context.Context) {
+	rctx, cancel := context.WithTimeout(ctx, resyncTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(rctx, http.MethodGet, m.serverURL+"/session/status", nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("Authorization", m.authHeader())
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return
+	}
+	var statuses map[string]struct {
+		Type string `json:"type"`
+	}
+	if json.NewDecoder(io.LimitReader(resp.Body, sseMaxLineBytes)).Decode(&statuses) != nil {
+		return
+	}
+	busy := false
+	for id, st := range statuses {
+		if (st.Type == "busy" || st.Type == "retry") && !m.isChild(id) {
+			busy = true
+		}
+	}
+	m.mu.Lock()
+	cur, running := m.state, m.turnRunning
+	m.mu.Unlock()
+	switch {
+	case !busy && (running || cur == StateRunning):
+		if st := m.idleState(); st != "" {
+			m.commitSSE(ctx, Event{Kind: "state", State: st})
+		}
+	case busy && (cur == StateIdle || cur == StateDone || cur == ""):
+		m.markTurnRunning()
+		m.commitSSE(ctx, Event{Kind: "state", State: StateRunning})
+	}
+}
+
+// isChild reports whether id is a known subagent session.
+func (m *OpencodeMonitor) isChild(id string) bool {
+	if id == "" {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.children[id]
 }
 
 // sseEnvelope is the opencode bus-event wire shape. Every SSE frame is
@@ -512,7 +678,11 @@ func (m *OpencodeMonitor) idleState() State {
 		m.turnRunning = false
 		return StateDone
 	}
-	if m.state == StateDone {
+	// done and errored are sticky until the next turn. opencode publishes
+	// session.error and IMMEDIATELY session.status{idle} (processor.ts
+	// halt()), so an idle after an error must not erase the red errored
+	// state within milliseconds (AGT-5).
+	if m.state == StateDone || m.state == StateErrored {
 		return ""
 	}
 	return StateIdle
@@ -544,6 +714,29 @@ func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
 
 	var ev Event
 	switch env.Type {
+	case "session.created", "session.updated":
+		// Learn subagent (task tool) sessions: their info carries parentID
+		// (opencode's own TUI tells them apart the same way).
+		var p struct {
+			SessionID string `json:"sessionID"`
+			Info      struct {
+				ID       string `json:"id"`
+				ParentID string `json:"parentID"`
+			} `json:"info"`
+		}
+		if json.Unmarshal(env.Properties, &p) != nil || p.Info.ParentID == "" {
+			return
+		}
+		id := p.Info.ID
+		if id == "" {
+			id = p.SessionID
+		}
+		if id != "" {
+			m.mu.Lock()
+			m.children[id] = true
+			m.mu.Unlock()
+		}
+		return
 	case "session.status":
 		// The session-level status is the authoritative idle/running
 		// signal. Crucially, it is also the only DEFAULT-emitted event
@@ -562,6 +755,11 @@ func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
 			} `json:"status"`
 		}
 		if json.Unmarshal(env.Properties, &p) != nil {
+			return
+		}
+		if m.isChild(p.SessionID) {
+			// A subagent's busy/idle must not complete the parent's turn,
+			// nor become the persisted resume id (AGT-6).
 			return
 		}
 		switch p.Status.Type {
@@ -604,6 +802,13 @@ func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
 		// clear and the state already StateDone, idleState returns "",
 		// and this code suppresses the alias so it cannot clobber the
 		// done marker.
+		var p struct {
+			SessionID string `json:"sessionID"`
+		}
+		_ = json.Unmarshal(env.Properties, &p)
+		if m.isChild(p.SessionID) {
+			return
+		}
 		st := m.idleState()
 		if st == "" {
 			return
@@ -622,8 +827,25 @@ func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
 			Error     json.RawMessage `json:"error"`
 		}
 		_ = json.Unmarshal(env.Properties, &p)
+		if m.isChild(p.SessionID) {
+			return
+		}
+		switch errName(p.Error) {
+		case "MessageAbortedError":
+			// The user interrupted (Esc). Not an error: drop the turn, so
+			// the idle that follows reads as a steady idle, with no "Turn
+			// complete" and no blocking "Agent error" (AGT-5).
+			_ = m.takeTurnRunning()
+			return
+		case "ContextOverflowError":
+			// opencode auto-compacts and continues the same turn
+			// (processor.ts); keep the turn running (AGT-5).
+			return
+		}
 		_ = m.takeTurnRunning() // an errored turn must not phantom-complete on a later idle
-		ev = Event{Kind: "state", State: StateErrored, Err: errMessage(p.Error), SessionID: p.SessionID}
+		// The session id is not reported here: an error frame must not
+		// redirect the persisted resume id.
+		ev = Event{Kind: "state", State: StateErrored, Err: errMessage(p.Error)}
 	case "question.asked":
 		// question.asked means the agent asks the USER a free-form
 		// choice. This is distinct from permission.asked, a tool-run
@@ -655,23 +877,12 @@ func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
 			ev = Event{Kind: "state", State: StateIdle}
 		}
 	case "permission.asked":
-		// permission.asked is a tool-run permission request. Unlike
-		// claude, whose PreToolUse hook BLOCKS so perch's reply is the
-		// sole answer that gates the ApprovalCard, opencode's `attach`
-		// TUI shows its OWN native permission prompt in the same pane,
-		// and perch cannot suppress it. So perch does NOT own this
-		// approval. It emits a PASSIVE attention signal only:
-		// StateAwaitingApproval with NO Approval payload. This mirrors
-		// question.asked: the user answers in the TUI, and perch never
-		// replies. Because Approval is nil, the app event pump
-		// registers no pending approval and never calls Approve().
-		// dispatchNotify still fires the blocking "Approval needed"
-		// notification, and the sidebar keeps its distinct amber
-		// awaiting-approval glance. The signal clears when the agent's
-		// next real state (running, idle, or done) arrives on the SSE
-		// stream. opencode emits no permission-resolved frame, which
-		// is exactly why a perch-owned card would go stale. That is
-		// why perch uses the passive signal instead.
+		// permission.asked is a tool-run permission request. opencode's
+		// `attach` TUI shows its OWN native permission prompt in the same
+		// pane, and perch cannot suppress it. So perch emits a PASSIVE
+		// attention signal only: StateAwaitingApproval with NO Approval
+		// payload, so the app registers no pending approval and never calls
+		// Approve(). permission.replied below clears it.
 		var p struct {
 			ID string `json:"id"`
 		}
@@ -679,6 +890,29 @@ func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
 			return
 		}
 		ev = Event{Kind: "approval", State: StateAwaitingApproval}
+	case "permission.replied":
+		// The user answered the permission in the TUI (v1.15.12
+		// permission/index.ts: {sessionID, requestID, reply}). Clear the
+		// amber signal now rather than at the next step's busy, which can be
+		// minutes away for a long tool run (AGT-10). The turn flag is kept,
+		// so the turn's final idle still reports done.
+		var p struct {
+			Reply string `json:"reply"`
+		}
+		if json.Unmarshal(env.Properties, &p) != nil {
+			return
+		}
+		m.mu.Lock()
+		awaiting := m.state == StateAwaitingApproval
+		m.mu.Unlock()
+		if !awaiting {
+			return
+		}
+		if p.Reply == "reject" {
+			ev = Event{Kind: "state", State: StateIdle}
+		} else {
+			ev = Event{Kind: "state", State: StateRunning}
+		}
 	default:
 		return
 	}
@@ -722,8 +956,10 @@ func (m *OpencodeMonitor) commitSSE(ctx context.Context, ev Event) {
 }
 
 // errMessage extracts a human-readable string from a session.error error
-// payload, which may be a bare string or an object with a message or name
-// field.
+// payload. opencode sends a NamedError toObject(), {name, data:{message}}
+// (core/util/error.ts), and older builds a bare string or {message,name}.
+// The message wins over the class name, so the user reads "rate limited"
+// rather than "APIError" (AGT-5).
 func errMessage(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
@@ -735,16 +971,29 @@ func errMessage(raw json.RawMessage) string {
 	var o struct {
 		Message string `json:"message"`
 		Name    string `json:"name"`
+		Data    struct {
+			Message string `json:"message"`
+		} `json:"data"`
 	}
 	if json.Unmarshal(raw, &o) == nil {
-		if o.Message != "" {
-			return o.Message
-		}
-		if o.Name != "" {
-			return o.Name
+		for _, v := range []string{o.Data.Message, o.Message, o.Name} {
+			if v != "" {
+				return v
+			}
 		}
 	}
 	return string(raw)
+}
+
+// errName returns a session.error payload's NamedError class name, or "".
+func errName(raw json.RawMessage) string {
+	var o struct {
+		Name string `json:"name"`
+	}
+	if json.Unmarshal(raw, &o) != nil {
+		return ""
+	}
+	return o.Name
 }
 
 // emit tracks state, then sends. perch uses it for monitor-originated
@@ -774,20 +1023,11 @@ func (m *OpencodeMonitor) send(ctx context.Context, ev Event) {
 }
 
 // Approve is a deliberate no-op for opencode. It exists only to satisfy
-// the Monitor interface. It is NEVER reached in production for opencode.
-//
-// opencode advertises Capabilities().Approvals = false, so perch renders
-// no ApprovalCard and registers no pending approval for a
-// permission.asked frame. The app's event pump only records a pending
-// approval, and only ever calls mon.Approve, when evt.Approval != nil,
-// which opencode never emits. The user answers the permission in
-// opencode's own `attach` TUI, which owns the reply. perch must not POST
-// /permission/:id/reply as well: that would race the TUI, and since
-// opencode emits no permission-resolved SSE frame, it could leave a
-// stale feel. With no pending approval registered, neither
-// maybeAutoApprove, nor decideOne, nor CloseWorkspace's deny-pending
-// loop can reach this method for an opencode workspace. Returning nil
-// keeps the interface honest without touching the wire.
+// the Monitor interface, and is never reached in production: opencode
+// advertises Capabilities().Approvals = false and never emits an Approval
+// payload, so the app registers no pending approval for it. The user
+// answers the permission in opencode's own `attach` TUI, which owns the
+// reply; a second reply from perch would race it.
 func (m *OpencodeMonitor) Approve(reqID string, d Decision) error {
 	_ = reqID
 	_ = d
