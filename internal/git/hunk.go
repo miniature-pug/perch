@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -40,10 +41,14 @@ func isIndexLockContention(stderr string) bool {
 		(strings.Contains(stderr, "Unable to create") || strings.Contains(stderr, "File exists"))
 }
 
-// FileDiff carries the per-file summary from DiffStat.
+// FileDiff carries the per-file summary from ChangedFiles (and DiffStat).
 // Status: "M" modified, "A" added, "D" deleted, "R" renamed, "?" untracked.
+// Path is the raw path relative to the worktree root, never quoted, and can
+// be passed straight back to Hunks. OldPath is set only by ChangedFiles, and
+// only for a rename: it is the path before the rename.
 type FileDiff struct {
 	Path    string `json:"path"`
+	OldPath string `json:"oldPath,omitempty"`
 	Added   int    `json:"added"`
 	Removed int    `json:"removed"`
 	Status  string `json:"status"`
@@ -74,7 +79,128 @@ type Hunk struct {
 	Staged   bool       `json:"staged"`
 }
 
+// ChangedFiles returns per-file summaries of all uncommitted changes in
+// worktree, sorted by path. It costs two git processes:
+//
+//   - `git status --porcelain=v2 -z --branch --renames` lists the changed
+//     paths. The -z form never quotes paths, so names with spaces, leading
+//     spaces or non-ASCII bytes come back verbatim, and a rename is one
+//     record with the new path plus OldPath.
+//   - `git diff HEAD --numstat -z -M` counts lines net against HEAD, so a
+//     line staged as X->Y and then edited to Z counts once, not twice. On an
+//     unborn HEAD there is nothing to diff against, so ChangedFiles counts
+//     the staged and unstaged diffs instead.
+//
+// Untracked files report 0/0, and an untracked directory is one entry
+// ending in "/", as in `git status`.
+func ChangedFiles(ctx context.Context, r proc.Runner, worktree string) ([]FileDiff, error) {
+	stOut, stErr, err := r.Run(ctx, "git", "-C", worktree, "status", "--porcelain=v2", "-z", "--branch", "--renames")
+	if err != nil {
+		return nil, fmt.Errorf("git status: %w: %s", err, strings.TrimSpace(string(stErr)))
+	}
+	files := make(map[string]*FileDiff)
+	unborn := false
+	recs := strings.Split(string(stOut), "\x00")
+	for i := 0; i < len(recs); i++ {
+		rec := recs[i]
+		if rec == "" {
+			continue
+		}
+		var path, oldPath, xy string
+		switch rec[0] {
+		case '#':
+			if rec == "# branch.oid (initial)" {
+				unborn = true
+			}
+			continue
+		case '1': // 1 XY sub mH mI mW hH hI path
+			f := strings.SplitN(rec, " ", 9)
+			if len(f) < 9 {
+				continue
+			}
+			xy, path = f[1], f[8]
+		case '2': // 2 XY sub mH mI mW hH hI Xscore path NUL origPath
+			f := strings.SplitN(rec, " ", 10)
+			if len(f) < 10 {
+				continue
+			}
+			xy, path = f[1], f[9]
+			if i+1 < len(recs) {
+				oldPath = recs[i+1]
+				i++
+			}
+		case 'u': // u XY sub m1 m2 m3 mW h1 h2 h3 path
+			f := strings.SplitN(rec, " ", 11)
+			if len(f) < 11 {
+				continue
+			}
+			xy, path = f[1], f[10]
+		case '?':
+			xy, path = "??", strings.TrimPrefix(rec, "? ")
+		default: // '!' ignored, or a record type this parser does not know.
+			continue
+		}
+		files[path] = &FileDiff{Path: path, OldPath: oldPath, Status: statusCode(strings.ReplaceAll(xy, ".", " "))}
+	}
+
+	numstats := [][]string{{"diff", "HEAD", "--numstat", "-z", "-M"}}
+	if unborn {
+		numstats = [][]string{{"diff", "--cached", "--numstat", "-z"}, {"diff", "--numstat", "-z"}}
+	}
+	for _, extra := range numstats {
+		out, errOut, runErr := r.Run(ctx, "git", append([]string{"-C", worktree}, extra...)...)
+		if runErr != nil {
+			return nil, fmt.Errorf("git %v: %w: %s", extra, runErr, strings.TrimSpace(string(errOut)))
+		}
+		addNumstatZ(files, string(out))
+	}
+
+	result := make([]FileDiff, 0, len(files))
+	for _, f := range files {
+		result = append(result, *f)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Path < result[j].Path })
+	return result, nil
+}
+
+// addNumstatZ adds the counts from `git diff --numstat -z` output to files.
+// Each record is "added<TAB>removed<TAB>path<NUL>", or, for a rename,
+// "added<TAB>removed<TAB><NUL>old<NUL>new<NUL>". A binary file reports "-"
+// counts, which add 0.
+func addNumstatZ(files map[string]*FileDiff, out string) {
+	toks := strings.Split(out, "\x00")
+	for i := 0; i < len(toks); i++ {
+		parts := strings.SplitN(toks[i], "\t", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		path, oldPath := parts[2], ""
+		if path == "" && i+2 < len(toks) {
+			oldPath, path = toks[i+1], toks[i+2]
+			i += 2
+		}
+		a, _ := strconv.Atoi(parts[0])
+		d, _ := strconv.Atoi(parts[1])
+		f, ok := files[path]
+		if !ok {
+			f = &FileDiff{Path: path, Status: "M"}
+			files[path] = f
+		}
+		if oldPath != "" && f.OldPath == "" {
+			f.OldPath = oldPath
+			f.Status = "R"
+		}
+		f.Added += a
+		f.Removed += d
+	}
+}
+
 // DiffStat returns per-file diff summaries for all uncommitted changes in worktree.
+//
+// Deprecated: DiffStat parses unquoted porcelain v1 output, so renames and
+// paths with spaces or non-ASCII bytes produce wrong or duplicate entries,
+// and it double-counts lines changed in both the index and the working
+// tree. Use ChangedFiles.
 func DiffStat(ctx context.Context, r proc.Runner, worktree string) ([]FileDiff, error) {
 	stOut, stErr, err := r.Run(ctx, "git", "-C", worktree, "status", "--porcelain")
 	if err != nil {
