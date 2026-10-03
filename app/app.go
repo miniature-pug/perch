@@ -151,6 +151,9 @@ type App struct {
 	pendingNext uint64
 
 	cancels map[string]context.CancelFunc // workspaceID → pump/translation canceller
+	// launches maps a workspace id to its current open's launch state (the
+	// line to type, whether the agent reported in). mu guards the map.
+	launches map[string]*launchState
 
 	spawnPty   spawnPtyFunc
 	newMonitor newMonitorFunc
@@ -413,6 +416,7 @@ func (a *App) shutdown(_ context.Context) {
 	bridges := a.bridges
 	monitors := a.monitors
 	cancels := a.cancels
+	a.launches = nil
 	a.bridges = map[string]*internalpty.Bridge{}
 	a.monitors = map[string]agent.Monitor{}
 	a.cancels = map[string]context.CancelFunc{}
@@ -1010,9 +1014,12 @@ var ErrWorktreeMissing = errors.New("session directory is missing; remove the se
 //     the monitor entirely (no Prepare, no Start, no launch line).
 //  2. It calls Monitor.Prepare to get the agent launch command and install
 //     the side-channel.
-//  3. It spawns a login-shell pty for the workspace.
+//  3. It spawns a login-shell pty for the workspace, with a usable TERM.
 //  4. It starts the monitor's event pump.
-//  5. It writes the launch command into the pty.
+//  5. It types the launch command, preceded by Ctrl-U, into the pty once
+//     Bridge.WaitShellReady reports the shell at its prompt (from a goroutine
+//     bound to the workspace context). If the shell stays busy for
+//     launchReadyMaxWait it notifies instead, and RetypeLaunch can type it.
 //  6. It forwards monitor events to the frontend.
 //
 // A per-workspace context binds all goroutines; CloseWorkspace or shutdown
@@ -1116,7 +1123,7 @@ func (a *App) openWorkspace(id string) error {
 	// `perch reload` reaches the relaunched agent. mergeEnv removes duplicates
 	// and protects the sentinel from the overlay.
 	overlay, unset := a.envFor(id)
-	paneEnv := mergeEnv(withoutKeys(os.Environ(), unset), injected, overlay)
+	paneEnv := withTerm(mergeEnv(withoutKeys(os.Environ(), unset), injected, overlay))
 
 	br, err := a.spawnPty(wctx, w.WorktreePath, internalpty.LoginShellArgv(), paneEnv, event, exitEvent, a.emit, defaultPtyCols, defaultPtyRows)
 	if err != nil {
@@ -1132,11 +1139,17 @@ func (a *App) openWorkspace(id string) error {
 		mon.Start(wctx)
 	}
 
-	// OpenWorkspace wires the fs watcher with a debounce goroutine bound to
-	// wctx. OpenWorkspace starts the watcher non-fatally: if the watcher fails,
-	// OpenWorkspace continues with no watcher, and the failure never fails
-	// OpenWorkspace itself.
-	watcher := a.startWatcher(wctx, id, w.WorktreePath)
+	// OpenWorkspace registers the bridge BEFORE the fs watcher starts: the
+	// watcher's initial walk can take seconds on a big worktree, and the
+	// Terminal calls ResizePty as soon as the pane mounts. Registered late,
+	// that call fails with "unknown pane" and the TUI starts at the default
+	// size. The composite cancel below reaches the watcher through slot,
+	// because the watcher does not exist yet.
+	var slot watcherSlot
+	var launch *launchState
+	if launchCmd != "" {
+		launch = newLaunchState(wctx, br, launchCmd)
+	}
 
 	a.mu.Lock()
 	oldBr := a.bridges[paneID]
@@ -1156,10 +1169,9 @@ func (a *App) openWorkspace(id string) error {
 	// use it.
 	a.cancels[id] = func() {
 		cancel()
-		if watcher != nil {
-			_ = watcher.Close()
-		}
+		slot.close()
 	}
+	a.setLaunchLocked(id, launch)
 	// APP-9: the displaced monitor's pending approvals die with it. Left in
 	// a.pending, a webview reload would resurrect their cards, and answering
 	// one would route to the NEW monitor (Approve routes by workspace id),
@@ -1205,6 +1217,19 @@ func (a *App) openWorkspace(id string) error {
 	// The attention count changes when a monitor is replaced or dropped.
 	a.scheduleTitleUpdate()
 
+	// OpenWorkspace types the launch line from a goroutine, so neither the
+	// watcher walk below nor a busy shell holds the caller up.
+	if launch != nil && !agentMissing {
+		go a.typeLaunchWhenReady(launch, id, launchReadyMaxWait)
+	}
+
+	// OpenWorkspace wires the fs watcher with a debounce goroutine bound to
+	// wctx. OpenWorkspace starts the watcher non-fatally: if the watcher fails,
+	// OpenWorkspace continues with no watcher, and the failure never fails
+	// OpenWorkspace itself. If the pane was closed or displaced during the
+	// walk, slot closes the watcher at once.
+	slot.set(a.startWatcher(wctx, id, w.WorktreePath))
+
 	if agentMissing {
 		a.emit("notify", map[string]any{
 			"tier":        "blocking",
@@ -1213,10 +1238,6 @@ func (a *App) openWorkspace(id string) error {
 			"workspaceId": id,
 		})
 		return nil
-	}
-
-	if launchCmd != "" {
-		_, _ = br.Write([]byte(launchCmd))
 	}
 
 	go a.pumpEvents(wctx, id, mon)
@@ -1272,6 +1293,7 @@ func (a *App) pumpEvents(wctx context.Context, id string, mon agent.Monitor) {
 			if !ok {
 				return
 			}
+			a.noteAgentEvent(wctx, id)
 			a.forwardEvent(id, mon, evt)
 		}
 	}
@@ -1729,6 +1751,7 @@ func (a *App) closeWorkspace(id string) {
 		cancel = a.cancels[id]
 		delete(a.cancels, id)
 	}
+	delete(a.launches, id)
 	// This purges pending approvals that belong to this workspace, so a closed
 	// workspace does not accumulate phantom entries in the pending map.
 	// Pending keys have the form "<raw>:<workspaceID>" (see Approve and the
@@ -2172,7 +2195,10 @@ func (a *App) OpenShell(paneID, cwd string) error {
 			)
 		}
 		overlay, unset := a.envFor(workspaceID)
-		env = mergeEnv(withoutKeys(os.Environ(), unset), injected, overlay)
+		env = withTerm(mergeEnv(withoutKeys(os.Environ(), unset), injected, overlay))
+	} else if t := os.Getenv("TERM"); t == "" || t == "dumb" {
+		// The home shell otherwise inherits the process environment as is.
+		env = withTerm(os.Environ())
 	}
 	br, err := a.spawnPty(ctx, cwd, internalpty.LoginShellArgv(), env, event, exitEvent, a.emit, defaultPtyCols, defaultPtyRows)
 	if err != nil {

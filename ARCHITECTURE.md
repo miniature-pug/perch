@@ -134,8 +134,12 @@ through a shell.
 in the worktree. The pty captures raw output and forwards it to the frontend as
 Wails events, where a Svelte component feeds the bytes to an xterm.js terminal.
 Keystrokes return through `WriteToPty` and resizes through `ResizePty`.
-`OpenWorkspace` writes the agent's launch command, produced by the Monitor's
-`Prepare`, into the shell, so the agent starts in the same pty. Because the
+`OpenWorkspace` types the agent's launch command, produced by the Monitor's
+`Prepare` and preceded by Ctrl-U, into the shell once `Bridge.WaitShellReady`
+reports the shell at its prompt (below), so the agent starts in the same pty.
+The pane is registered before the fs watcher's initial walk, so the Terminal's
+first resize finds it, and its environment gets `TERM=xterm-256color` when the
+process has none or `dumb`. Because the
 agent runs inside the shell rather than as the pane process, its exit returns
 control to the still-alive shell and fires no `pty:exit`. So the launch line
 carries an exit sentinel. After the agent command, the shell captures `$?` and
@@ -158,15 +162,22 @@ queue, already echoed, where an rc file that drains or flushes stdin (`read
 pump watches for the bracketed-paste enable `ESC[?2004h` (bash 5.1+, zsh,
 fish, nushell), split across chunks or not, without altering the stream.
 The wait returns `ShellReady` once that marker is current, the shell is the
-tty's foreground process group (`TIOCGPGRP` on the master) with no child in
-it, and the tty is non-canonical. zsh, fish, nushell and bash 5.1+ (probed
-once with `--version`, unless the inputrc turns bracketed paste off) count
-only the marker. Other shells also count 750ms of foreground non-canonical
+tty's foreground process group (`TIOCGPGRP` on the master), and the tty is
+non-canonical. A child in the shell's own group (an rc `cmd &`) vetoes this
+only while the shell is not itself blocked reading. zsh, fish, nushell and
+bash 5.1+ (probed with `--version`, unless the inputrc turns bracketed paste
+off or `TERM` is empty, `dumb` or has no terminfo entry) count only the
+marker; bash also counts a readline prompt wait (`pselect6` without a
+timeout) held for 750ms, which covers a `bind` in `.bashrc` that turned the
+marker off. Other shells also count 750ms of foreground non-canonical
 mode as ready, and a quiet second at a canonical prompt (dash, `bash
 --noediting`) as `ShellIdleCanonical`. On Linux, `/proc/<pid>/syscall`
 vetoes both while the shell is visibly in an rc builtin `read` (a timed wait,
 or a 1-byte canonical read). At `maxWait` the result is `ShellBusy`: a
-prompt may own the tty, so the caller must not type.
+prompt may own the tty, so the caller must not type. `OpenWorkspace` then
+emits a blocking "Agent didn't start" notification (`action: "retype-launch"`),
+and the bound method `RetypeLaunch(id)` types the line anyway, unless the
+agent has already reported in.
 
 ### The agent Monitor seam
 
@@ -207,7 +218,7 @@ The Go-to-frontend events:
 |-------|---------|---------|
 | `agent:event` | `agent.Event` | A Monitor produces a state, approval, or question event; `resolvedReqId` (`<raw>:<workspaceId>`) names an approval card to drop |
 | `fs:changed` | `{workspaceId, path, paths, truncated}` | The per-session watcher fires, debounced; `path` is the worktree root, `paths` the changed absolute paths |
-| `notify` | `{tier, title, body, workspaceId}` | A notification is dispatched |
+| `notify` | `{tier, title, body, workspaceId, action?}` | A notification is dispatched; `action: "retype-launch"` offers Retype launch |
 | `pty:data:<paneId>` | base64 string | The pty read loop has output |
 | `pty:exit:<paneId>` | exit code | A pty process exits |
 | `workspace:attach` | `{query}` | A second instance forwarded a query |
