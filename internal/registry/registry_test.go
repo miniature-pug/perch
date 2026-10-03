@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -403,5 +404,181 @@ func TestLoad_CorruptJSON_QuarantinesAndReturnsEmpty(t *testing.T) {
 	}
 	if !bytes.Equal(got, corruptData) {
 		t.Fatalf("backup data mismatch: got %q, want %q", got, corruptData)
+	}
+}
+
+func TestUpdate_MutatesAndPersists(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := registry.Load(dir)
+	_ = s.Upsert(registry.Workspace{ID: "a", Title: "t", LastSessionID: "s1"})
+
+	got, err := s.Update("a", func(w *registry.Workspace) error {
+		w.LastSessionID = "s2"
+		w.ID = "hijack" // must be ignored
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if got.ID != "a" || got.LastSessionID != "s2" || got.Title != "t" {
+		t.Fatalf("unexpected result: %+v", got)
+	}
+	s2, _ := registry.Load(dir)
+	w, ok := s2.Get("a")
+	if !ok || w.LastSessionID != "s2" || w.Title != "t" {
+		t.Fatalf("not persisted: %+v ok=%v", w, ok)
+	}
+	if _, ok := s2.Get("hijack"); ok {
+		t.Fatal("Update must not allow changing the ID")
+	}
+}
+
+func TestUpdate_DoesNotResurrectRemoved(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := registry.Load(dir)
+	_ = s.Upsert(registry.Workspace{ID: "a"})
+	_ = s.Remove("a")
+	called := false
+	_, err := s.Update("a", func(w *registry.Workspace) error { called = true; return nil })
+	if !errors.Is(err, registry.ErrNotFound) {
+		t.Fatalf("want ErrNotFound, got %v", err)
+	}
+	if called {
+		t.Fatal("fn must not run for a missing record")
+	}
+	if _, ok := s.Get("a"); ok {
+		t.Fatal("record was resurrected")
+	}
+}
+
+func TestUpdate_FnErrorLeavesRecordUnchanged(t *testing.T) {
+	s, _ := registry.Load(t.TempDir())
+	_ = s.Upsert(registry.Workspace{ID: "a", Title: "orig"})
+	boom := errors.New("boom")
+	_, err := s.Update("a", func(w *registry.Workspace) error { w.Title = "changed"; return boom })
+	if !errors.Is(err, boom) {
+		t.Fatalf("want boom, got %v", err)
+	}
+	if w, _ := s.Get("a"); w.Title != "orig" {
+		t.Fatalf("record changed despite error: %+v", w)
+	}
+}
+
+// Concurrent Updates of different fields must not lose each other's writes.
+func TestUpdate_ConcurrentFieldsNoLostUpdate(t *testing.T) {
+	s, _ := registry.Load(t.TempDir())
+	_ = s.Upsert(registry.Workspace{ID: "a"})
+	const n = 20
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_, _ = s.Update("a", func(w *registry.Workspace) error { w.LastSessionID = "sess"; return nil })
+		}()
+		go func() {
+			defer wg.Done()
+			_, _ = s.Update("a", func(w *registry.Workspace) error { w.Title = "title"; return nil })
+		}()
+	}
+	wg.Wait()
+	w, _ := s.Get("a")
+	if w.LastSessionID != "sess" || w.Title != "title" {
+		t.Fatalf("lost update: %+v", w)
+	}
+}
+
+func TestFlushFailureRollsBackMemory(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("directory permissions are not enforced for root")
+	}
+	dir := t.TempDir()
+	s, _ := registry.Load(dir)
+	_ = s.Upsert(registry.Workspace{ID: "a", Title: "orig"})
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(dir, 0o700)
+	if err := s.Upsert(registry.Workspace{ID: "b"}); err == nil {
+		t.Fatal("expected flush error")
+	}
+	if _, ok := s.Get("b"); ok {
+		t.Fatal("failed Upsert left record in memory")
+	}
+	if _, err := s.Update("a", func(w *registry.Workspace) error { w.Title = "x"; return nil }); err == nil {
+		t.Fatal("expected flush error")
+	}
+	if w, _ := s.Get("a"); w.Title != "orig" {
+		t.Fatalf("failed Update not rolled back: %+v", w)
+	}
+	if err := s.Remove("a"); err == nil {
+		t.Fatal("expected flush error")
+	}
+	if _, ok := s.Get("a"); !ok {
+		t.Fatal("failed Remove not rolled back")
+	}
+}
+
+func TestLoad_CorruptRecoversFromBackup(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := registry.Load(dir)
+	_ = s.Upsert(registry.Workspace{ID: "a"})
+	_ = s.Upsert(registry.Workspace{ID: "b"}) // first flush's file becomes .bak
+	// Simulate a crash that left a zero-length main file.
+	if err := os.WriteFile(filepath.Join(dir, "workspaces.json"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := registry.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s2.Get("a"); !ok {
+		t.Fatalf("expected record a recovered from .bak, got %+v", s2.List())
+	}
+}
+
+func TestFlushWritesSortedByID(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := registry.Load(dir)
+	for _, id := range []string{"c", "a", "b"} {
+		_ = s.Upsert(registry.Workspace{ID: id})
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, "workspaces.json"))
+	ia, ib, ic := bytes.Index(data, []byte(`"a"`)), bytes.Index(data, []byte(`"b"`)), bytes.Index(data, []byte(`"c"`))
+	if !(ia < ib && ib < ic) {
+		t.Fatalf("not sorted by ID: %s", data)
+	}
+}
+
+func TestLoad_RemovesStaleTempFiles(t *testing.T) {
+	dir := t.TempDir()
+	stale := filepath.Join(dir, ".workspaces-123.json.tmp")
+	fresh := filepath.Join(dir, ".workspaces-456.json.tmp")
+	_ = os.WriteFile(stale, []byte("x"), 0o600)
+	_ = os.WriteFile(fresh, []byte("x"), 0o600)
+	old := time.Now().Add(-time.Hour)
+	_ = os.Chtimes(stale, old, old)
+	if _, err := registry.Load(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stale); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("stale temp not removed")
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Fatal("fresh temp must be kept")
+	}
+}
+
+func TestLoad_TightensConfigDirMode(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Load(dir); err != nil {
+		t.Fatal(err)
+	}
+	fi, _ := os.Stat(dir)
+	if fi.Mode().Perm() != 0o700 {
+		t.Fatalf("mode = %v, want 0700", fi.Mode().Perm())
 	}
 }
