@@ -19,3 +19,9 @@ func childInGroup(int) bool { return false }
 
 // awaitsRcInput cannot tell here; it reports false.
 func awaitsRcInput(int, bool) bool { return false }
+
+// shellInInputWait cannot tell here; it reports false.
+func shellInInputWait(int) bool { return false }
+
+// awaitsPromptRead cannot tell here; it reports false.
+func awaitsPromptRead(int) bool { return false }

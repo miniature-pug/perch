@@ -124,39 +124,84 @@ func childInGroup(pid int) bool {
 	return false
 }
 
+// procSyscall reads /proc/<pid>/syscall: the number and six arguments of
+// the system call the (stopped-in-kernel) process pid is blocked in. ok is
+// false when the file is unreadable (no CONFIG_HAVE_ARCH_TRACEHOOK, ptrace
+// lockdown, the process is gone) or the process is running ("running", or
+// "-1 sp pc" when blocked outside a syscall).
+func procSyscall(pid int) (nr int, args [6]uint64, ok bool) {
+	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/syscall")
+	if err != nil {
+		return 0, args, false
+	}
+	f := strings.Fields(string(data))
+	if len(f) < 7 {
+		return 0, args, false
+	}
+	nr, err = strconv.Atoi(f[0])
+	if err != nil || nr < 0 {
+		return 0, args, false
+	}
+	for i := range args {
+		args[i], _ = strconv.ParseUint(strings.TrimPrefix(f[1+i], "0x"), 16, 64)
+	}
+	return nr, args, true
+}
+
 // awaitsRcInput reports whether the shell pid, blocked as /proc/<pid>/syscall
 // shows, is waiting for input in a way its prompt never does, so it must be
 // running a builtin read from an rc file:
-//   - pselect6 or ppoll with a timeout: `read -t N` in bash or zsh (a
-//     prompt waits without one, unless TMOUT is set);
+//   - pselect6 or ppoll with a timeout (also poll and select on amd64):
+//     `read -t N` in bash or zsh (a prompt waits without one);
 //   - in canonical mode, a 1-byte read: dash's `read` builtin (dash, and
 //     bash --noediting, read their prompt line in large blocks).
 //
 // It reports false when the file is unreadable or the shell is running.
 func awaitsRcInput(pid int, canonical bool) bool {
-	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/syscall")
-	if err != nil {
-		return false
-	}
-	f := strings.Fields(string(data))
-	if len(f) < 6 {
-		return false // "running", or a kernel without the arguments
-	}
-	nr, err := strconv.Atoi(f[0])
-	if err != nil {
-		return false
-	}
-	arg := func(i int) uint64 {
-		v, _ := strconv.ParseUint(strings.TrimPrefix(f[1+i], "0x"), 16, 64)
-		return v
-	}
+	nr, a, ok := procSyscall(pid)
+	return ok && rcInputSyscall(nr, a, canonical)
+}
+
+func rcInputSyscall(nr int, a [6]uint64, canonical bool) bool {
 	switch nr {
 	case syscall.SYS_PSELECT6:
-		return arg(4) != 0
+		return a[4] != 0
 	case syscall.SYS_PPOLL:
-		return arg(2) != 0
+		return a[2] != 0
 	case syscall.SYS_READ:
-		return canonical && arg(2) == 1
+		return canonical && a[2] == 1
 	}
-	return false
+	_, timed := legacyInputWait(nr, a)
+	return timed
+}
+
+// shellInInputWait reports whether the shell pid is blocked waiting for
+// input itself (read, pselect6, ppoll, plus poll and select on amd64), as
+// its line editor does at the prompt, rather than in wait4 for a foreground
+// child. It reports false when the state cannot be read.
+func shellInInputWait(pid int) bool {
+	nr, a, ok := procSyscall(pid)
+	return ok && inputWaitSyscall(nr, a)
+}
+
+func inputWaitSyscall(nr int, a [6]uint64) bool {
+	switch nr {
+	case syscall.SYS_READ, syscall.SYS_PSELECT6, syscall.SYS_PPOLL:
+		return true
+	}
+	wait, _ := legacyInputWait(nr, a)
+	return wait
+}
+
+// awaitsPromptRead reports whether the shell pid is blocked in pselect6 with
+// a NULL timeout: readline's rl_getc waiting for a key at the prompt. A
+// cbreak `read -n 1` in an rc file blocks in a plain read(2), and with -t in
+// pselect6 with a timeout, so neither matches.
+func awaitsPromptRead(pid int) bool {
+	nr, a, ok := procSyscall(pid)
+	return ok && promptReadSyscall(nr, a)
+}
+
+func promptReadSyscall(nr int, a [6]uint64) bool {
+	return nr == syscall.SYS_PSELECT6 && a[4] == 0
 }

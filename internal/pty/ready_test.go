@@ -131,7 +131,7 @@ const fakePID = -7
 func fakeBridge(pgrp int, canonical, markerOnly bool) (*Bridge, *readyGate) {
 	f := &fakeTTY{pgrp: pgrp, canonical: canonical}
 	g := newReadyGate(fakePID, f.probe)
-	g.traitsOnce.Do(func() { g.markerOnly = markerOnly })
+	g.traits, g.traitsKnown = shellTraits{markerOnly: markerOnly}, true
 	return &Bridge{gate: g}, g
 }
 
@@ -249,6 +249,12 @@ func writeScript(t *testing.T, path, body string) {
 	}
 }
 
+// withEnv returns env with the given KEY=value entries appended, so they
+// win (envValue takes the last).
+func withEnv(env []string, kv ...string) []string {
+	return append(append([]string(nil), env...), kv...)
+}
+
 func TestClassifyShell(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "rc-off"), "# x\nset enable-bracketed-paste Off\n")
@@ -262,7 +268,14 @@ func TestClassifyShell(t *testing.T) {
 	if err := os.Symlink("/usr/bin/zsh", link); err != nil {
 		t.Fatal(err)
 	}
-	env := func(rc string) []string { return []string{"INPUTRC=" + filepath.Join(dir, rc), "HOME=" + dir} }
+	writeFile(t, filepath.Join(dir, "ti", "x", "xterm-test"), "")
+	home := t.TempDir()
+	writeFile(t, filepath.Join(home, ".inputrc"), "set enable-bracketed-paste 0\n")
+	writeFile(t, filepath.Join(home, ".terminfo", "h", "home-term"), "")
+	env := func(rc string) []string {
+		return []string{"INPUTRC=" + filepath.Join(dir, rc), "HOME=" + dir,
+			"TERM=xterm-test", "TERMINFO=" + filepath.Join(dir, "ti")}
+	}
 	cases := []struct {
 		name string
 		spec shellSpec
@@ -281,14 +294,17 @@ func TestClassifyShell(t *testing.T) {
 		{"bash 5.1 inputrc off", shellSpec{path: newBash, env: env("rc-off")}, false},
 		{"bash 5.1 inputrc off then on", shellSpec{path: newBash, env: env("rc-on")}, true},
 		{"bash 5.1 --noediting", shellSpec{path: newBash, args: []string{"--noediting", "-i"}, env: env("rc-none")}, false},
+		{"bash 5.1 TERM unset", shellSpec{path: newBash, env: withEnv(env("rc-none"), "TERM=")}, false},
+		{"bash 5.1 TERM=dumb", shellSpec{path: newBash, env: withEnv(env("rc-none"), "TERM=dumb")}, false},
+		{"bash 5.1 TERM without terminfo", shellSpec{path: newBash, env: withEnv(env("rc-none"), "TERM=nosuchterm")}, false},
+		{"bash 5.1 TERM in ~/.terminfo", shellSpec{path: newBash, env: withEnv(env("rc-none"), "TERM=home-term", "TERMINFO=", "HOME="+home)}, true},
+		{"zsh TERM=dumb", shellSpec{path: "/usr/bin/zsh", env: []string{"TERM=dumb"}}, true},
 	}
 	for _, tc := range cases {
-		if got := classifyShell(tc.spec); got != tc.want {
-			t.Errorf("%s: markerOnly = %v, want %v", tc.name, got, tc.want)
+		if got, known := classifyShell(context.Background(), tc.spec); got.markerOnly != tc.want || !known {
+			t.Errorf("%s: markerOnly = %v known = %v, want %v", tc.name, got.markerOnly, known, tc.want)
 		}
 	}
-	home := t.TempDir()
-	writeFile(t, filepath.Join(home, ".inputrc"), "set enable-bracketed-paste 0\n")
 	if !inputrcDisablesBracketedPaste([]string{"HOME=" + home}) {
 		t.Error("~/.inputrc with enable-bracketed-paste 0 not detected")
 	}
@@ -481,6 +497,9 @@ var shellKinds = []shellKind{
 
 func writeFile(t *testing.T, path, body string) {
 	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
