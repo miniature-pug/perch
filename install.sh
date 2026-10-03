@@ -63,20 +63,32 @@ version_ge() {
 # check that the download succeeded and is non-empty, then run it. A plain
 # "curl | sh" would run an empty script (and report success) when the download
 # fails, because POSIX sh has no pipefail.
+# Returns non-zero (after printing a [warn]) on failure instead of aborting:
+# an agent CLI is optional for the perch build, and the installer URLs can
+# move, so a failure here must not stop the perch install.
 run_remote_installer() {
   _name="$1"
   _url="$2"
-  _script="$(mktemp "${TMPDIR:-/tmp}/perch-install-${_name}.XXXXXX")" \
-    || die "Cannot create a temp file for the ${_name} installer"
+  _script="$(mktemp "${TMPDIR:-/tmp}/perch-install-${_name}.XXXXXX")" || {
+    printf '[warn]  Cannot create a temp file for the %s installer; skipping it\n' "$_name"
+    return 1
+  }
   if ! curl -fsSL -o "$_script" "$_url" || [ ! -s "$_script" ]; then
     rm -f "$_script"
-    die "Failed to download the ${_name} installer from ${_url}"
+    printf '[warn]  Failed to download the %s installer from %s; skipping it\n' "$_name" "$_url"
+    printf '        Install %s manually, or re-run with --skip-agents.\n' "$_name"
+    return 1
   fi
   # These installers are bash scripts. Prefer bash over a minimal /bin/sh.
   if command -v bash >/dev/null 2>&1; then
-    bash "$_script" || { rm -f "$_script"; die "The ${_name} installer failed"; }
+    _runner=bash
   else
-    sh "$_script" || { rm -f "$_script"; die "The ${_name} installer failed"; }
+    _runner=sh
+  fi
+  if ! "$_runner" "$_script"; then
+    rm -f "$_script"
+    printf '[warn]  The %s installer failed; continuing without it\n' "$_name"
+    return 1
   fi
   rm -f "$_script"
 }
@@ -376,9 +388,11 @@ else
     fi
   else
     printf '[install] claude via https://cli.anthropic.com/install.sh\n'
-    run_remote_installer claude https://cli.anthropic.com/install.sh
+    run_remote_installer claude https://cli.anthropic.com/install.sh || true
     INSTALLED_CLAUDE="$(installed_version claude || true)"
-    if [ "$INSTALLED_CLAUDE" = "$CLAUDE_VERSION" ]; then
+    if [ -z "$INSTALLED_CLAUDE" ]; then
+      printf '[warn]  claude is not installed; continuing without it\n'
+    elif [ "$INSTALLED_CLAUDE" = "$CLAUDE_VERSION" ]; then
       printf '[ok]    claude %s installed\n' "$INSTALLED_CLAUDE"
     else
       printf '[warn]  claude %s installed; .tool-versions pins %s\n' \
@@ -409,9 +423,11 @@ else
     fi
   else
     printf '[install] opencode via https://opencode.ai/install\n'
-    run_remote_installer opencode https://opencode.ai/install
+    run_remote_installer opencode https://opencode.ai/install || true
     INSTALLED_OPENCODE="$(installed_version opencode || true)"
-    if [ "$INSTALLED_OPENCODE" = "$OPENCODE_VERSION" ]; then
+    if [ -z "$INSTALLED_OPENCODE" ]; then
+      printf '[warn]  opencode is not installed; continuing without it\n'
+    elif [ "$INSTALLED_OPENCODE" = "$OPENCODE_VERSION" ]; then
       printf '[ok]    opencode %s installed\n' "$INSTALLED_OPENCODE"
     else
       printf '[warn]  opencode %s installed; .tool-versions pins %s\n' \
