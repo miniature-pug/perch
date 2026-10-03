@@ -50,7 +50,7 @@ endif
 # build: only the backend binary. It embeds the committed
 # frontend/dist/index.html stub and does not rebuild the frontend. For a full
 # production artifact, run `make gui-build`.
-build:                ## Build the binary into ./bin. The build is vendored and reproducible. Add -tags '$(TAGS)' for the GUI build.
+build:                ## Build the binary into ./bin (vendored, reproducible, '$(TAGS)' tags). Embeds the stub frontend; use gui-build for a real UI.
 	@mkdir -p $(BIN_DIR)
 	@go build -tags '$(TAGS)' -trimpath -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/$(BIN) ./cmd/perch
 
