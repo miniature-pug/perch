@@ -148,11 +148,16 @@ queue, already echoed, where an rc file that drains or flushes stdin (`read
 `Bridge.WaitShellReady(ctx, maxWait)` waits for the editor instead. The output
 pump watches for the bracketed-paste enable `ESC[?2004h` (bash 5.1+, zsh,
 fish, nushell), split across chunks or not, without altering the stream.
-The wait then returns true once that marker is current, the shell is the
-tty's foreground process group (`TIOCGPGRP` on the master), and the tty is
-non-canonical. A line editor without the marker counts as ready after 750ms
-of foreground non-canonical mode. A shell left in canonical mode at its
-prompt (dash) runs to `maxWait`, and the caller then types anyway.
+The wait returns `ShellReady` once that marker is current, the shell is the
+tty's foreground process group (`TIOCGPGRP` on the master) with no child in
+it, and the tty is non-canonical. zsh, fish, nushell and bash 5.1+ (probed
+once with `--version`, unless the inputrc turns bracketed paste off) count
+only the marker. Other shells also count 750ms of foreground non-canonical
+mode as ready, and a quiet second at a canonical prompt (dash, `bash
+--noediting`) as `ShellIdleCanonical`. On Linux, `/proc/<pid>/syscall`
+vetoes both while the shell is visibly in an rc builtin `read` (a timed wait,
+or a 1-byte canonical read). At `maxWait` the result is `ShellBusy`: a
+prompt may own the tty, so the caller must not type.
 
 ### The agent Monitor seam
 

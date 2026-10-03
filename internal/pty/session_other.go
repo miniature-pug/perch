@@ -13,3 +13,9 @@ func waitExited(int) {}
 // ttyState is unsupported here: WaitShellReady then relies on the
 // bracketed-paste marker alone.
 func ttyState(uintptr) (int, bool, error) { return 0, false, errTTYUnsupported }
+
+// childInGroup cannot tell here; it reports false.
+func childInGroup(int) bool { return false }
+
+// awaitsRcInput cannot tell here; it reports false.
+func awaitsRcInput(int, bool) bool { return false }

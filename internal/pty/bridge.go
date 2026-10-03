@@ -167,8 +167,10 @@ func LoginShellArgv() []string {
 // environment unchanged (the plain-shell case).
 //
 // A caller that types a line into the shell right after spawning it (the
-// agent launch line) should first call WaitShellReady, or an rc file that
-// drains or flushes stdin can swallow the line after the tty has echoed it.
+// agent launch line) should first call WaitShellReady and type only when the
+// result CanType: an rc file that drains or flushes stdin can otherwise
+// swallow the line after the tty has echoed it, and a prompt the rc file
+// shows can receive it.
 func Spawn(ctx context.Context, cwd string, argv []string, env []string, dataEvent, exitEvent string, emit EmitFunc, cols, rows uint16) (*Bridge, error) {
 	return spawn(ctx, cwd, argv, env, dataEvent, exitEvent, emit, cols, rows, intsPayload)
 }
@@ -228,6 +230,7 @@ func spawn(ctx context.Context, cwd string, argv []string, env []string, dataEve
 		}
 		return pgrp, canonical, err
 	})
+	gate.spec = shellSpec{path: cmd.Path, args: argv[1:], env: cmd.Env}
 	b.mu.Lock()
 	b.ptyFile = f
 	b.pid = cmd.Process.Pid
