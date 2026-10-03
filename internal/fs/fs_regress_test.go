@@ -151,6 +151,143 @@ func TestWatcher_AnchoredGitignoreExcludesDir(t *testing.T) {
 	}
 }
 
+// watchRecorder starts a watcher on root and records every reported path.
+func watchRecorder(t *testing.T, root string) (seen func() []string) {
+	t.Helper()
+	var mu sync.Mutex
+	var paths []string
+	w, err := fs.Watch(root, func(p string) {
+		mu.Lock()
+		paths = append(paths, p)
+		mu.Unlock()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+	return func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), paths...)
+	}
+}
+
+func mustWrite(t *testing.T, p, s string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(s), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Review finding 5: git decides what the watcher skips, so a nested
+// .gitignore, .git/info/exclude, an ignore rule added after Watch, and a
+// nested repository's own .gitignore are all honoured.
+func TestWatcher_HonoursAllGitIgnoreSources(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	gitRun(t, root, "init", "-q")
+	mustWrite(t, filepath.Join(root, "packages", "web", ".gitignore"), "node_modules/\n")
+	mustWrite(t, filepath.Join(root, ".git", "info", "exclude"), "/excluded/\n")
+	if err := os.MkdirAll(filepath.Join(root, "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, filepath.Join(root, "nested"), "init", "-q")
+	mustWrite(t, filepath.Join(root, "nested", ".gitignore"), "dist/\n")
+	ignoredDirs := []string{
+		filepath.Join(root, "packages", "web", "node_modules", "dep"),
+		filepath.Join(root, "excluded", "sub"),
+		filepath.Join(root, "nested", "dist", "x"),
+	}
+	for _, d := range ignoredDirs {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	keep := filepath.Join(root, "packages", "web", "src")
+	if err := os.MkdirAll(keep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	seen := watchRecorder(t, root)
+
+	// A rule added after Watch applies to directories created later.
+	mustWrite(t, filepath.Join(root, ".gitignore"), "/later/\n")
+	time.Sleep(200 * time.Millisecond)
+	later := filepath.Join(root, "later", "deep")
+	if err := os.MkdirAll(later, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	for _, d := range append(ignoredDirs, later) {
+		mustWrite(t, filepath.Join(d, "f.txt"), "x")
+	}
+	keepFile := filepath.Join(keep, "f.txt")
+	mustWrite(t, keepFile, "x")
+	if !waitFor(t, 3*time.Second, func() bool {
+		for _, p := range seen() {
+			if p == keepFile {
+				return true
+			}
+		}
+		return false
+	}) {
+		t.Fatal("write in a non-ignored directory was not observed")
+	}
+	time.Sleep(200 * time.Millisecond)
+	for _, p := range seen() {
+		for _, d := range append(ignoredDirs, later) {
+			if strings.HasPrefix(p, d+string(filepath.Separator)) {
+				t.Errorf("watcher reported %s inside ignored %s", p, d)
+			}
+		}
+	}
+}
+
+// The background walk of a new tree stops at Close, and onChange is not
+// called after Close returns.
+func TestWatcher_CloseStopsBackgroundWalk(t *testing.T) {
+	root := t.TempDir()
+	var mu sync.Mutex
+	closed := false
+	late := 0
+	w, err := fs.Watch(root, func(string) {
+		mu.Lock()
+		if closed {
+			late++
+		}
+		mu.Unlock()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	staging := t.TempDir()
+	for i := 0; i < 50; i++ {
+		mustWrite(t, filepath.Join(staging, "tree", strings.Repeat("d", i%5+1), "f"+string(rune('a'+i%26))+".txt"), "x")
+	}
+	if err := os.Rename(filepath.Join(staging, "tree"), filepath.Join(root, "tree")); err != nil {
+		t.Skipf("rename: %v", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	start := time.Now()
+	_ = w.Close()
+	mu.Lock()
+	closed = true
+	mu.Unlock()
+	if d := time.Since(start); d > 3*time.Second {
+		t.Errorf("Close took %v", d)
+	}
+	time.Sleep(200 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if late != 0 {
+		t.Errorf("onChange called %d times after Close returned", late)
+	}
+}
+
 // GFS-12: WriteFile through a symlink updates the target and keeps the link.
 func TestWriteFile_ThroughSymlink(t *testing.T) {
 	d := t.TempDir()

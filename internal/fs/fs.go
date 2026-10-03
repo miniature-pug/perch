@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -296,20 +297,31 @@ type Watcher struct {
 	fw       *fsnotify.Watcher
 	onChange func(string)
 	root     string
-	rules    []ignoreRule
+	// rules are the root .gitignore patterns. They decide what to skip only
+	// when git cannot answer (the root is not a repository, or git fails).
+	rules []ignoreRule
 	// addFailed records that an inotify watch could not be added, so the
 	// failure is logged once instead of once per directory.
-	addFailed bool
-	once      sync.Once
-	done      chan struct{}
+	addFailed atomic.Bool
+	// ctx is cancelled by Close; it stops background walks and their git calls.
+	ctx      context.Context
+	cancel   context.CancelFunc
+	walks    sync.WaitGroup
+	loopDone chan struct{}
+	once     sync.Once
+	done     chan struct{}
 }
 
 // Watch creates a Watcher for absRoot. Watch calls onChange with the
 // absolute path of any changed file or directory. Watch returns an error if
 // fsnotify fails to start, or if Watch cannot add the root.
-// The watcher is recursive: it watches all subdirectories, except .git and
-// any directory that the patterns in absRoot/.gitignore ignore. When a new
-// directory appears, the watcher adds it and every directory below it, and
+//
+// The watcher is recursive: it watches all subdirectories except .git and
+// the directories git ignores. git decides (`git check-ignore`), so nested
+// .gitignore files, .git/info/exclude, core.excludesFile and later edits
+// to any of them all count. When git cannot answer, the patterns in
+// absRoot/.gitignore decide instead. When a new directory appears, the
+// watcher adds it and every directory below it in the background, and
 // reports the files already inside them, since those were created before
 // any watch could see them (mkdir -p, git checkout, tar x).
 func Watch(absRoot string, onChange func(absPath string)) (*Watcher, error) {
@@ -322,11 +334,15 @@ func Watch(absRoot string, onChange func(absPath string)) (*Watcher, error) {
 		_ = fw.Close()
 		return nil, err
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	w := &Watcher{
 		fw:       fw,
 		onChange: onChange,
 		root:     absRoot,
 		rules:    parseIgnoreRules(loadGitignorePatterns(filepath.Join(absRoot, ".gitignore"))),
+		ctx:      ctx,
+		cancel:   cancel,
+		loopDone: make(chan struct{}),
 		done:     make(chan struct{}),
 	}
 	w.addTree(absRoot, false)
@@ -334,45 +350,132 @@ func Watch(absRoot string, onChange func(absPath string)) (*Watcher, error) {
 	return w, nil
 }
 
-// excluded reports whether the directory at absPath must not be watched.
-func (w *Watcher) excluded(absPath string) bool {
-	if filepath.Base(absPath) == ".git" {
-		return true
+// addTree adds a watch for dir and every non-ignored directory below it,
+// one directory level at a time, so that a single git call per level (and
+// per repository) decides what to skip. When reportFiles is true, it also
+// calls onChange for every file it finds. Best-effort: an unreadable
+// directory is skipped, and the first failed watch is logged (inotify
+// watch limits are the usual cause). addTree stops early once the watcher
+// is closed.
+func (w *Watcher) addTree(dir string, reportFiles bool) {
+	level := []string{dir}
+	if dir != w.root {
+		level = w.notIgnored(level)
 	}
-	rel, err := filepath.Rel(w.root, absPath)
-	if err != nil || rel == "." {
-		return false
+	for len(level) > 0 {
+		var next []string
+		for _, d := range level {
+			if w.ctx.Err() != nil {
+				return
+			}
+			if addErr := w.fw.Add(d); addErr != nil && !w.addFailed.Swap(true) {
+				log.Printf("fs.Watcher: cannot watch %s (further failures not logged): %v", d, addErr)
+			}
+			entries, err := os.ReadDir(d)
+			if err != nil {
+				continue
+			}
+			for _, e := range entries {
+				p := filepath.Join(d, e.Name())
+				switch {
+				case e.IsDir(): // never follows a symlink
+					if e.Name() != ".git" {
+						next = append(next, p)
+					}
+				case reportFiles:
+					w.onChange(p)
+				}
+			}
+		}
+		level = w.notIgnored(next)
 	}
-	return ignored(filepath.ToSlash(rel), true, w.rules)
 }
 
-// addTree adds a watch for dir and every non-excluded directory below it.
-// When reportFiles is true, it also calls onChange for every file it finds.
-// Best-effort: an unreadable subdirectory is skipped, and the first failed
-// watch is logged (inotify watch limits are the usual cause).
-func (w *Watcher) addTree(dir string, reportFiles bool) {
-	_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if !d.IsDir() {
-			if reportFiles {
-				w.onChange(p)
-			}
-			return nil
-		}
-		if w.excluded(p) {
-			return filepath.SkipDir
-		}
-		if addErr := w.fw.Add(p); addErr != nil && !w.addFailed {
-			w.addFailed = true
-			log.Printf("fs.Watcher: cannot watch %s (further failures not logged): %v", p, addErr)
-		}
+// notIgnored returns the directories in dirs that git does not ignore.
+// Directories are grouped by the repository that contains them (a nested
+// repository answers for its own contents), and each group costs one
+// `git check-ignore --stdin -z`. If git cannot answer for a group, the
+// root .gitignore rules decide for it.
+func (w *Watcher) notIgnored(dirs []string) []string {
+	if len(dirs) == 0 {
 		return nil
-	})
+	}
+	groups := make(map[string][]string) // repo root -> dirs
+	repoOf := make(map[string]string)   // parent dir -> repo root (cache)
+	for _, d := range dirs {
+		parent := filepath.Dir(d)
+		repo, ok := repoOf[parent]
+		if !ok {
+			repo = w.repoRootOf(parent)
+			repoOf[parent] = repo
+		}
+		groups[repo] = append(groups[repo], d)
+	}
+	var keep []string
+	for repo, ds := range groups {
+		ignoredSet, ok := w.checkIgnore(repo, ds)
+		for _, d := range ds {
+			skip := false
+			if ok {
+				skip = ignoredSet[d]
+			} else if rel, err := filepath.Rel(w.root, d); err == nil {
+				skip = ignored(filepath.ToSlash(rel), true, w.rules)
+			}
+			if !skip {
+				keep = append(keep, d)
+			}
+		}
+	}
+	return keep
+}
+
+// repoRootOf returns the nearest directory at or above dir, but not above
+// the watch root, that contains a .git entry. It returns the watch root
+// when there is none.
+func (w *Watcher) repoRootOf(dir string) string {
+	for d := dir; d != w.root; {
+		if _, err := os.Lstat(filepath.Join(d, ".git")); err == nil {
+			return d
+		}
+		parent := filepath.Dir(d)
+		if parent == d || !strings.HasPrefix(parent, w.root) {
+			break
+		}
+		d = parent
+	}
+	return w.root
+}
+
+// checkIgnore asks git which of dirs (all inside repo) are ignored. ok is
+// false when git could not answer.
+func (w *Watcher) checkIgnore(repo string, dirs []string) (set map[string]bool, ok bool) {
+	var in bytes.Buffer
+	for _, d := range dirs {
+		rel, err := filepath.Rel(repo, d)
+		if err != nil {
+			return nil, false
+		}
+		in.WriteString(rel)
+		in.WriteByte(0)
+	}
+	ctx, cancel := context.WithTimeout(w.ctx, gitStatusTimeout)
+	defer cancel()
+	out, errOut, err := gitRunner.RunStdin(ctx, repo, in.Bytes(), "git", "check-ignore", "--stdin", "-z")
+	// Exit status 1 means "nothing is ignored"; anything else is a failure.
+	if err != nil && (proc.ExitCode(err) != 1 || len(bytes.TrimSpace(errOut)) > 0) {
+		return nil, false
+	}
+	set = make(map[string]bool)
+	for _, rel := range strings.Split(string(out), "\x00") {
+		if rel != "" {
+			set[filepath.Join(repo, rel)] = true
+		}
+	}
+	return set, true
 }
 
 func (w *Watcher) loop() {
+	defer close(w.loopDone)
 	defer safe.Recover("fs-watcher")
 	for {
 		select {
@@ -382,11 +485,18 @@ func (w *Watcher) loop() {
 			}
 			w.onChange(event.Name)
 			// On a create event, watch the new directory and everything
-			// already below it.
+			// already below it. The walk runs in the background, so a large
+			// tree (npm install, tar x) cannot stall event handling and let
+			// the kernel queue overflow.
 			if event.Op&fsnotify.Create != 0 {
 				info, statErr := os.Lstat(event.Name)
-				if statErr == nil && info.IsDir() && !w.excluded(event.Name) {
-					w.addTree(event.Name, true)
+				if statErr == nil && info.IsDir() && filepath.Base(event.Name) != ".git" {
+					w.walks.Add(1)
+					go func(dir string) {
+						defer w.walks.Done()
+						defer safe.Recover("fs-watcher-walk")
+						w.addTree(dir, true)
+					}(event.Name)
 				}
 			}
 		case werr, ok := <-w.fw.Errors:
@@ -400,12 +510,17 @@ func (w *Watcher) loop() {
 	}
 }
 
-// Close stops the watcher. Close is safe to call more than once.
+// Close stops the watcher and waits for any background walk to stop. Close
+// is safe to call more than once. After Close returns, onChange is not
+// called again.
 func (w *Watcher) Close() error {
 	var err error
 	w.once.Do(func() {
 		close(w.done)
+		w.cancel()
 		err = w.fw.Close()
+		<-w.loopDone
+		w.walks.Wait()
 	})
 	return err
 }
