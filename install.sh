@@ -1,7 +1,19 @@
 #!/bin/sh
-# install.sh: sets up perch and its runtime dependencies.
-# This script uses POSIX sh only, with no bash-specific syntax. It is
-# shellcheck-clean for the sh dialect.
+# install.sh: sets up perch and its runtime dependencies, or upgrades an
+# installed perch (--upgrade).
+#
+# Usage:
+#   ./install.sh [--skip-agents] [--skip-build] [--prefix=DIR]
+#   ./install.sh --upgrade[=release|source] [--prefix=DIR]
+#
+# --upgrade replaces the installed perch with the newest stable release.
+# Release mode (the default outside a git checkout) downloads the GitHub
+# release binary and verifies it against SHA256SUMS. Source mode (the default
+# inside a git checkout) checks out the newest v* tag and builds it. Both
+# keep the previous binary as perch.prev and refresh the desktop entry.
+#
+# This script uses POSIX sh only, with no bash-specific syntax. It passes
+# `shellcheck -s sh` with no findings.
 set -e
 
 # ---------------------------------------------------------------------------
@@ -16,6 +28,11 @@ REPO_ROOT="$SCRIPT_DIR"
 SKIP_AGENTS=0
 SKIP_BUILD=0
 INSTALL_PREFIX=""
+# UPGRADE is empty for a normal install, or one of auto, release, source.
+UPGRADE=""
+
+# The GitHub repository that publishes the release binaries.
+PERCH_REPO_URL="https://github.com/miniature-pug/perch"
 
 # Remember where the user ran the script, so a relative --prefix resolves
 # against that directory and not against the repo root.
@@ -26,6 +43,16 @@ for arg in "$@"; do
     --skip-agents) SKIP_AGENTS=1 ;;
     --skip-build)  SKIP_BUILD=1  ;;
     --prefix=*)    INSTALL_PREFIX="${arg#--prefix=}" ;;
+    --upgrade)     UPGRADE=auto ;;
+    --upgrade=release | --upgrade=source) UPGRADE="${arg#--upgrade=}" ;;
+    --upgrade=*)
+      printf 'error: --upgrade takes release or source, not %s\n' "${arg#--upgrade=}" >&2
+      exit 2
+      ;;
+    -h | --help)
+      sed -n '5,13p' "$0" | sed 's/^# \{0,1\}//'
+      exit 0
+      ;;
     *)
       printf 'error: unknown flag: %s\n' "$arg" >&2
       exit 2
@@ -39,6 +66,11 @@ case "$INSTALL_PREFIX" in
   "" | /*) ;;
   *) INSTALL_PREFIX="${START_DIR}/${INSTALL_PREFIX}" ;;
 esac
+
+if [ -n "$UPGRADE" ] && [ "$SKIP_BUILD" = "1" ]; then
+  printf 'error: --upgrade and --skip-build cannot be combined\n' >&2
+  exit 2
+fi
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -83,7 +115,7 @@ run_remote_installer() {
   if command -v bash >/dev/null 2>&1; then
     _runner=bash
   else
-    _runner=sh
+    _runner="sh"
   fi
   if ! "$_runner" "$_script"; then
     rm -f "$_script"
@@ -103,6 +135,332 @@ tool_version() {
 # number instead of taking a fixed field.
 installed_version() {
   "$1" --version 2>/dev/null | grep -Eo '[0-9]+(\.[0-9]+)+' | head -n 1
+}
+
+# run_bounded CMD...: run CMD with a 10s limit when timeout(1) exists.
+run_bounded() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 10 "$@"
+  else
+    "$@"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Desktop integration (Linux): the hicolor icon and the perch.desktop entry.
+# GNOME on Wayland ignores the window's own icon: the dock and the app
+# switcher show the icon of the .desktop entry that matches the window
+# (app_id and WM_CLASS "perch"), or a generic icon when there is none.
+# ---------------------------------------------------------------------------
+
+# supports_install_desktop BIN: succeeds when BIN has the install-desktop
+# subcommand. An unknown argument makes perch treat it as a project path;
+# a path that does not exist prints the usage and exits without opening a
+# window, so grep the usage. (The probe path must not contain the
+# subcommand name: perch echoes it back in its error.)
+supports_install_desktop() {
+  "$1" /nonexistent/.perch-usage-probe 2>&1 | grep -q 'perch install-desktop'
+}
+
+# write_desktop_entry_inline BIN: the fallback for a perch binary without
+# the install-desktop subcommand. It writes the same files the subcommand
+# writes, each through a temp file and a rename, then refreshes the caches.
+write_desktop_entry_inline() {
+  _icon_src="${REPO_ROOT}/app/appicon.png"
+  if [ ! -f "$_icon_src" ]; then
+    printf '[warn]  no app/appicon.png next to this script; skipping the desktop entry\n'
+    printf '        Run "perch install-desktop" with a perch that has the subcommand.\n'
+    return 0
+  fi
+  _data="${XDG_DATA_HOME:-}"
+  case "$_data" in
+    /*) ;;
+    *) _data="${HOME}/.local/share" ;;
+  esac
+  # Exec quoting per the Desktop Entry spec: inside double quotes escape \ " `
+  # and $ with a backslash, double every %, then double every backslash again
+  # for the string-value escape layer.
+  _exec="$(printf '%s' "$1" \
+    | sed -e 's/\\/\\\\/g' -e 's/["`$]/\\&/g' -e 's/%/%%/g' -e 's/\\/\\\\/g')"
+  _icon_dir="${_data}/icons/hicolor/512x512/apps"
+  _apps_dir="${_data}/applications"
+  mkdir -p "$_icon_dir" "$_apps_dir" || return 1
+  cp "$_icon_src" "${_icon_dir}/.perch.png.$$" \
+    && chmod 0644 "${_icon_dir}/.perch.png.$$" \
+    && mv -f "${_icon_dir}/.perch.png.$$" "${_icon_dir}/perch.png" || return 1
+  cat > "${_apps_dir}/.perch.desktop.$$" <<DESKTOP || return 1
+[Desktop Entry]
+Type=Application
+Name=perch
+Comment=Cockpit for AI coding agents
+Exec="${_exec}"
+Icon=perch
+Terminal=false
+Categories=Development;
+StartupWMClass=perch
+DESKTOP
+  chmod 0644 "${_apps_dir}/.perch.desktop.$$" \
+    && mv -f "${_apps_dir}/.perch.desktop.$$" "${_apps_dir}/perch.desktop" || return 1
+  # Best effort: GNOME also notices the files on its own, at the latest on
+  # the next login.
+  if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    run_bounded gtk-update-icon-cache -f -t "${_data}/icons/hicolor" >/dev/null 2>&1 || true
+  fi
+  if command -v update-desktop-database >/dev/null 2>&1; then
+    run_bounded update-desktop-database "$_apps_dir" >/dev/null 2>&1 || true
+  fi
+  printf '[ok]    desktop entry installed at %s/perch.desktop\n' "$_apps_dir"
+}
+
+# desktop_entry BIN: install the icon and perch.desktop (Exec=BIN) for the
+# user who ran the script. Never fails the script.
+desktop_entry() {
+  _bin="$1"
+  if [ "$GOOS" != "linux" ]; then
+    return 0
+  fi
+  if [ ! -x "$_bin" ]; then
+    printf '[skip] desktop entry (no perch binary at %s)\n' "$_bin"
+    return 0
+  fi
+  # Under sudo, HOME is root's home: an entry written there is invisible to
+  # the desktop user. Write it as the user who ran sudo instead.
+  _as_user=""
+  if [ "$(id -u)" = "0" ]; then
+    if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+      _as_user="$SUDO_USER"
+    else
+      printf '[warn]  running as root: the desktop entry goes under %s, so only root sees it\n' "$HOME"
+    fi
+  fi
+  if supports_install_desktop "$_bin"; then
+    if [ -n "$_as_user" ]; then
+      if sudo -u "$_as_user" -H "$_bin" install-desktop; then
+        printf '[ok]    desktop entry installed for %s\n' "$_as_user"
+      else
+        printf '[warn]  could not install the desktop entry for %s\n' "$_as_user"
+        printf '        Run "%s install-desktop" as %s, without sudo.\n' "$_bin" "$_as_user"
+      fi
+    elif ! "$_bin" install-desktop; then
+      printf '[warn]  "%s install-desktop" failed; the dock may show a generic icon\n' "$_bin"
+    fi
+    return 0
+  fi
+  if [ -n "$_as_user" ]; then
+    printf '[warn]  skipping the desktop entry: under sudo it would land in root'"'"'s home\n'
+    printf '        Re-run as %s without sudo: ./install.sh --skip-agents --skip-build --prefix=%s\n' \
+      "$_as_user" "$(dirname "$_bin")"
+    return 0
+  fi
+  write_desktop_entry_inline "$_bin" \
+    || printf '[warn]  could not write the desktop entry; the dock may show a generic icon\n'
+}
+
+# ---------------------------------------------------------------------------
+# Upgrade helpers (--upgrade)
+# ---------------------------------------------------------------------------
+
+# perch_version BIN: the version BIN reports ("v1.2.3"), or nothing.
+perch_version() {
+  if [ -x "$1" ]; then
+    "$1" version 2>/dev/null | awk 'NR == 1 && $1 == "perch" { print $2 }'
+  fi
+}
+
+# version_core V: the numeric core of a tag or describe string
+# ("v1.2.3-rc1" -> "1.2.3").
+version_core() {
+  printf '%s' "$1" | sed -e 's/^v//' -e 's/[^0-9.].*$//'
+}
+
+# version_newer A B: succeeds when A's numeric core is strictly newer than B's.
+version_newer() {
+  _va="$(version_core "$1")"
+  _vb="$(version_core "$2")"
+  [ -n "$_va" ] && [ -n "$_vb" ] && version_ge "$_va" "$_vb" && ! version_ge "$_vb" "$_va"
+}
+
+# in_checkout: succeeds when this script sits at the root of a perch git
+# checkout.
+in_checkout() {
+  [ -f "${REPO_ROOT}/cmd/perch/main.go" ] && [ -f "${REPO_ROOT}/go.mod" ] \
+    && command -v git >/dev/null 2>&1 \
+    && git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1
+}
+
+# physical_dir DIR: DIR with symlinks resolved, or DIR itself.
+physical_dir() {
+  (cd "$1" 2>/dev/null && pwd -P) || printf '%s' "$1"
+}
+
+# resolve_upgrade_target: pick the binary to replace. --prefix wins;
+# otherwise the perch first on PATH; otherwise the normal install default.
+resolve_upgrade_target() {
+  if [ -z "$INSTALL_PREFIX" ]; then
+    _cur="$(command -v perch 2>/dev/null || true)"
+    case "$_cur" in
+      /*) INSTALL_PREFIX="$(dirname "$_cur")" ;;
+      *)
+        if [ -w /usr/local/bin ]; then
+          INSTALL_PREFIX="/usr/local/bin"
+        else
+          INSTALL_PREFIX="${HOME}/.local/bin"
+        fi
+        ;;
+    esac
+  fi
+  mkdir -p "$INSTALL_PREFIX" || die "Cannot create ${INSTALL_PREFIX}"
+  if [ ! -w "$INSTALL_PREFIX" ]; then
+    die "cannot write to ${INSTALL_PREFIX}. Re-run with --prefix=DIR, or with sudo for a system-wide install."
+  fi
+  TARGET="${INSTALL_PREFIX}/perch"
+  OLD_VERSION="$(perch_version "$TARGET")"
+}
+
+# make_upgrade_tmp: a temp directory inside the install prefix, so the final
+# mv is a rename on one filesystem. Removed on exit.
+make_upgrade_tmp() {
+  UPGRADE_TMP="$(mktemp -d "${INSTALL_PREFIX}/.perch-upgrade.XXXXXX")" \
+    || die "cannot create a temp directory in ${INSTALL_PREFIX}"
+  trap 'rm -rf "$UPGRADE_TMP"' EXIT
+  trap 'exit 130' INT TERM
+}
+
+# exit_if_current TAG: stop when the installed perch is already TAG, or is a
+# newer build (a later tag, or a source build ahead of TAG).
+exit_if_current() {
+  if [ "$OLD_VERSION" = "$1" ]; then
+    printf '[ok]    perch %s at %s is the newest release; nothing to upgrade\n' "$1" "$TARGET"
+    desktop_entry "$TARGET"
+    exit 0
+  fi
+  case "$OLD_VERSION" in
+    "$1"-[0-9]*-g*)
+      printf '[ok]    perch %s at %s is ahead of the newest release %s; nothing to upgrade\n' \
+        "$OLD_VERSION" "$TARGET" "$1"
+      exit 0
+      ;;
+  esac
+  if [ -n "$OLD_VERSION" ] && version_newer "$OLD_VERSION" "$1"; then
+    printf '[ok]    perch %s at %s is newer than the newest release %s; nothing to upgrade\n' \
+      "$OLD_VERSION" "$TARGET" "$1"
+    exit 0
+  fi
+}
+
+# smoke_test BIN: BIN must run and report NEW_TAG. Sets NEW_VERSION.
+smoke_test() {
+  if ! _out="$("$1" version 2>&1)"; then
+    printf '%s\n' "$_out" >&2
+    die "the new perch binary does not run (are the WebKit2GTK 4.1 and GTK3 libraries installed?). ${TARGET} is unchanged."
+  fi
+  NEW_VERSION="$(printf '%s\n' "$_out" | awk 'NR == 1 && $1 == "perch" { print $2 }')"
+  if [ "$NEW_VERSION" != "$NEW_TAG" ]; then
+    die "the new perch binary reports version '${NEW_VERSION}', expected ${NEW_TAG}. ${TARGET} is unchanged."
+  fi
+}
+
+# swap_in NEW: keep the current binary as perch.prev, then rename NEW over
+# perch. A running perch keeps its old inode, so the swap is safe while it
+# runs.
+swap_in() {
+  if [ -e "$TARGET" ]; then
+    ln -f "$TARGET" "${TARGET}.prev" 2>/dev/null \
+      || cp -p "$TARGET" "${TARGET}.prev" \
+      || die "cannot keep the old binary as ${TARGET}.prev. ${TARGET} is unchanged."
+  fi
+  chmod 0755 "$1"
+  mv -f "$1" "$TARGET" || die "cannot move the new binary into ${TARGET}"
+}
+
+# finish_upgrade: report old -> new, and warn about anything that would keep
+# the user on the old binary.
+finish_upgrade() {
+  printf '[ok]    perch %s -> %s at %s\n' "${OLD_VERSION:-(none)}" "$NEW_VERSION" "$TARGET"
+  if [ -e "${TARGET}.prev" ]; then
+    printf '        The previous binary is kept at %s.prev. To roll back: mv -f %s.prev %s\n' \
+      "$TARGET" "$TARGET" "$TARGET"
+  fi
+  if command -v pgrep >/dev/null 2>&1 && pgrep -x perch >/dev/null 2>&1; then
+    printf '[warn]  perch is running. Quit it (close every perch window), then start it again.\n'
+    printf '        Starting perch while the old one runs only raises the old window.\n'
+  fi
+  _first="$(command -v perch 2>/dev/null || true)"
+  if [ -z "$_first" ]; then
+    printf '[warn]  %s is not on your PATH. Add it to run "perch" by name.\n' "$INSTALL_PREFIX"
+  elif [ "$(physical_dir "$(dirname "$_first")")" != "$(physical_dir "$INSTALL_PREFIX")" ]; then
+    printf '[warn]  another perch comes first on your PATH: %s (%s)\n' \
+      "$_first" "$(perch_version "$_first")"
+    printf '        "perch" runs that one, not %s. Remove it or reorder PATH.\n' "$TARGET"
+  fi
+}
+
+# upgrade_release: replace TARGET with the latest GitHub release binary.
+upgrade_release() {
+  if [ "$GOOS" != "linux" ]; then
+    die "release binaries exist only for linux. Use --upgrade=source from a checkout."
+  fi
+  command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required to verify the download"
+  # /releases/latest redirects to /releases/tag/<newest stable tag>.
+  _latest="$(curl -sSfLI -o /dev/null -w '%{url_effective}' "${PERCH_REPO_URL}/releases/latest")" \
+    || die "cannot reach ${PERCH_REPO_URL}/releases/latest"
+  NEW_TAG="${_latest##*/}"
+  case "$NEW_TAG" in
+    v[0-9]*) ;;
+    *) die "no published release found (${PERCH_REPO_URL}/releases/latest resolved to ${_latest})" ;;
+  esac
+  printf '[upgrade] newest release: %s; installed: %s\n' "$NEW_TAG" "${OLD_VERSION:-(none)}"
+  exit_if_current "$NEW_TAG"
+
+  _asset="perch-linux-${ARCH}"
+  _base="${PERCH_REPO_URL}/releases/download/${NEW_TAG}"
+  make_upgrade_tmp
+  printf '[download] %s/%s\n' "$_base" "$_asset"
+  if ! curl -fsSL -o "${UPGRADE_TMP}/${_asset}" "${_base}/${_asset}" \
+    || [ ! -s "${UPGRADE_TMP}/${_asset}" ]; then
+    die "failed to download ${_asset} for ${NEW_TAG}. ${TARGET} is unchanged."
+  fi
+  if ! curl -fsSL -o "${UPGRADE_TMP}/SHA256SUMS" "${_base}/SHA256SUMS" \
+    || [ ! -s "${UPGRADE_TMP}/SHA256SUMS" ]; then
+    die "failed to download SHA256SUMS for ${NEW_TAG}. ${TARGET} is unchanged."
+  fi
+  # Check only this asset's line: the file also lists the other architecture.
+  awk -v f="$_asset" '$2 == f || $2 == "*" f' "${UPGRADE_TMP}/SHA256SUMS" \
+    > "${UPGRADE_TMP}/SHA256SUMS.asset"
+  if [ ! -s "${UPGRADE_TMP}/SHA256SUMS.asset" ]; then
+    die "SHA256SUMS for ${NEW_TAG} has no entry for ${_asset}. ${TARGET} is unchanged."
+  fi
+  if ! (cd "$UPGRADE_TMP" && sha256sum -c SHA256SUMS.asset >/dev/null 2>&1); then
+    die "checksum mismatch for ${_asset} ${NEW_TAG}. ${TARGET} is unchanged."
+  fi
+  printf '[ok]    %s matches SHA256SUMS\n' "$_asset"
+  chmod 0755 "${UPGRADE_TMP}/${_asset}"
+  smoke_test "${UPGRADE_TMP}/${_asset}"
+  swap_in "${UPGRADE_TMP}/${_asset}"
+  desktop_entry "$TARGET"
+  finish_upgrade
+}
+
+# upgrade_source_checkout: in a clean checkout, fetch tags and check out the
+# newest stable v* tag. The normal build path then builds it.
+upgrade_source_checkout() {
+  in_checkout || die "--upgrade=source must run from a perch git checkout; ${REPO_ROOT} is not one"
+  if [ -n "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no)" ]; then
+    die "the checkout at ${REPO_ROOT} has uncommitted changes. Commit or stash them, then re-run."
+  fi
+  printf '[upgrade] fetching tags\n'
+  git -C "$REPO_ROOT" fetch --tags --quiet || die "git fetch --tags failed in ${REPO_ROOT}"
+  # Newest stable tag: skip pre-releases (a "-" suffix), newest by version.
+  NEW_TAG="$(git -C "$REPO_ROOT" tag -l 'v[0-9]*' | grep -v -- '-' | sort -V | tail -n 1)"
+  [ -n "$NEW_TAG" ] || die "no v* release tag found in ${REPO_ROOT}"
+  printf '[upgrade] newest release tag: %s; installed: %s\n' "$NEW_TAG" "${OLD_VERSION:-(none)}"
+  exit_if_current "$NEW_TAG"
+  if [ "$(git -C "$REPO_ROOT" rev-parse HEAD)" != "$(git -C "$REPO_ROOT" rev-parse "${NEW_TAG}^{commit}")" ]; then
+    _from="$(git -C "$REPO_ROOT" symbolic-ref --short -q HEAD || git -C "$REPO_ROOT" rev-parse --short HEAD)"
+    git -C "$REPO_ROOT" checkout --quiet "$NEW_TAG" || die "cannot check out ${NEW_TAG}"
+    printf '[upgrade] checked out %s (was %s). "git checkout %s" returns to it.\n' \
+      "$NEW_TAG" "$_from" "$_from"
+  fi
 }
 
 # Determine whether to use sudo (never call sudo when already root).
@@ -170,6 +528,29 @@ pkg_install() {
 if ! command -v curl >/dev/null 2>&1; then
   printf '[install] curl (required for downloads)\n'
   pkg_install curl
+fi
+
+# ---------------------------------------------------------------------------
+# --upgrade: release mode replaces the binary here and exits. Source mode
+# checks out the newest tag here, then continues through the normal build
+# (agents are left alone) into a temp file, and swaps it in at Step 6.
+# ---------------------------------------------------------------------------
+if [ "$UPGRADE" = "auto" ]; then
+  if in_checkout; then
+    UPGRADE="source"
+  else
+    UPGRADE="release"
+  fi
+fi
+if [ -n "$UPGRADE" ]; then
+  resolve_upgrade_target
+  printf '[upgrade] %s mode, target %s\n' "$UPGRADE" "$TARGET"
+  if [ "$UPGRADE" = "release" ]; then
+    upgrade_release
+    exit 0
+  fi
+  upgrade_source_checkout
+  SKIP_AGENTS=1
 fi
 
 # ---------------------------------------------------------------------------
@@ -451,10 +832,17 @@ mkdir -p "$INSTALL_PREFIX" || die "Cannot create ${INSTALL_PREFIX}"
 
 # ---------------------------------------------------------------------------
 # Step 6: build perch
+# A normal install builds straight into the prefix. --upgrade=source builds
+# into a temp file next to it, smoke-tests it, then swaps it in.
 # ---------------------------------------------------------------------------
 if [ "$SKIP_BUILD" = "1" ]; then
   printf '[skip] perch build (--skip-build)\n'
 else
+  BUILD_OUT="${INSTALL_PREFIX}/perch"
+  if [ "$UPGRADE" = "source" ]; then
+    make_upgrade_tmp
+    BUILD_OUT="${UPGRADE_TMP}/perch"
+  fi
   printf '[install] building perch -> %s/perch\n' "$INSTALL_PREFIX"
   cd "$REPO_ROOT" || die "Cannot cd to repo root: ${REPO_ROOT}"
   PERCH_VERSION="$(git describe --tags --always 2>/dev/null || printf 'dev')"
@@ -471,43 +859,32 @@ else
 
   go build -tags "production webkit2_41" -trimpath \
     -ldflags "-s -w -X main.version=${PERCH_VERSION}" \
-    -o "${INSTALL_PREFIX}/perch" ./cmd/perch
+    -o "$BUILD_OUT" ./cmd/perch
 
   # vite overwrote the tracked stub. The binary already embeds the real index,
   # so restore the stub to leave the work tree clean.
   git -C "$REPO_ROOT" checkout -- frontend/dist/index.html 2>/dev/null || true
 
-  "${INSTALL_PREFIX}/perch" version >/dev/null 2>&1 \
-    || die "the built binary at ${INSTALL_PREFIX}/perch does not run"
+  if [ "$UPGRADE" = "source" ]; then
+    smoke_test "$BUILD_OUT"
+    swap_in "$BUILD_OUT"
+  else
+    "$BUILD_OUT" version >/dev/null 2>&1 \
+      || die "the built binary at ${BUILD_OUT} does not run"
+  fi
   printf '[ok]    perch built at %s/perch\n' "$INSTALL_PREFIX"
 fi
 
 # ---------------------------------------------------------------------------
 # Step 7: desktop integration (Linux): icon and .desktop entry
 # The binary already carries the window icon, embedded through
-# options.Linux.Icon. This step adds the app-menu and app-switcher entry.
-# Its StartupWMClass matches ProgramName, so the switcher shows the same icon.
+# options.Linux.Icon, but GNOME on Wayland shows the dock and switcher icon
+# only through a perch.desktop whose StartupWMClass (perch) matches the
+# window. A perch with the install-desktop subcommand writes it; otherwise
+# the inline fallback in write_desktop_entry_inline does.
 # ---------------------------------------------------------------------------
-if [ "$GOOS" = "linux" ] && [ ! -x "${INSTALL_PREFIX}/perch" ]; then
-  printf '[skip] desktop entry (no perch binary at %s/perch)\n' "$INSTALL_PREFIX"
-elif [ "$GOOS" = "linux" ]; then
-  # Quote the Exec path (it may contain spaces) and double any % as the
-  # Desktop Entry spec requires.
-  exec_path="$(printf '%s' "${INSTALL_PREFIX}/perch" | sed 's/%/%%/g')"
-  icon_dir="${HOME}/.local/share/icons/hicolor/512x512/apps"
-  apps_dir="${HOME}/.local/share/applications"
-  mkdir -p "$icon_dir" "$apps_dir"
-  cp "${REPO_ROOT}/app/appicon.png" "${icon_dir}/perch.png"
-  cat > "${apps_dir}/perch.desktop" <<DESKTOP
-[Desktop Entry]
-Type=Application
-Name=perch
-Comment=Cockpit for AI coding agents
-Exec="${exec_path}"
-Icon=perch
-Terminal=false
-Categories=Development;
-StartupWMClass=perch
-DESKTOP
-  printf '[ok]    desktop entry installed at %s/perch.desktop\n' "$apps_dir"
+desktop_entry "${INSTALL_PREFIX}/perch"
+
+if [ "$UPGRADE" = "source" ]; then
+  finish_upgrade
 fi
