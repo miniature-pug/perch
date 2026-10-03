@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	perch "github.com/miniature-pug/perch"
 )
 
 // ── fakeSystem ────────────────────────────────────────────────────────────────
@@ -47,6 +49,12 @@ func (f *fakeSystem) output(name string, args ...string) ([]byte, error) {
 
 // fullSystem returns a fakeSystem where everything is present and healthy.
 // Tests override individual fields to simulate failures.
+// pinnedGoVersionOutput returns `go version` output for exactly the pinned
+// toolchain, so a healthy fake system stays healthy when the pin is bumped.
+func pinnedGoVersionOutput() string {
+	return "go version go" + ParseToolVersions(perch.ToolVersions)["golang"] + " linux/amd64"
+}
+
 func fullSystem(home string) *fakeSystem {
 	return &fakeSystem{
 		paths: map[string]string{
@@ -56,7 +64,7 @@ func fullSystem(home string) *fakeSystem {
 			"opencode": "/home/user/.local/bin/opencode",
 		},
 		outputs: map[string]fakeOutput{
-			"go version":         {out: []byte("go version go1.26.5 linux/amd64")},
+			"go version":         {out: []byte(pinnedGoVersionOutput())},
 			"git --version":      {out: []byte("git version 2.43.0")},
 			"claude --version":   {out: []byte("2.1.158")},
 			"opencode --version": {out: []byte("1.15.12")},
@@ -318,7 +326,7 @@ func TestRunSummary_DynamicWarnCount(t *testing.T) {
 			// opencode absent
 		},
 		outputs: map[string]fakeOutput{
-			"go version":       {out: []byte("go version go1.26.5 linux/amd64")},
+			"go version":       {out: []byte(pinnedGoVersionOutput())},
 			"git --version":    {out: []byte("git version 2.43.0")},
 			"claude --version": {out: []byte("2.1.158")},
 		},

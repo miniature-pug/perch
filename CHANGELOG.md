@@ -186,8 +186,9 @@ tagged a release yet, so everything to date sits under Unreleased.
 - Every IPC argument is validated: identifiers against a charset allowlist and
   worktree paths against the configured roots. All git work runs as argv, never
   through a shell.
-- Pinned the Go toolchain to `go1.26.5`, which carries the fix for the
-  `crypto/tls` advisory GO-2026-5856.
+- Pinned the Go toolchain to `go1.26.6`, which carries the fixes for the
+  `crypto/tls` advisory GO-2026-5856 and the standard-library advisories
+  GO-2026-5972, GO-2026-5026 and GO-2026-6089 (among others) fixed in go1.26.6.
 - Bumped dompurify (3.4.7 to 3.4.13), clearing an mXSS advisory in the sole
   sanitizer for untrusted repository markdown, and mermaid (11.15.0 to 11.16.1),
   clearing five advisories in the renderer that draws untrusted `.mmd`. Both stay

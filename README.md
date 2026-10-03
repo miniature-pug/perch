@@ -156,7 +156,7 @@ make install
 gui-build` first. Otherwise, `make install` embeds the placeholder, and the
 guard above stops the binary at launch.
 
-Building from source needs the Go toolchain (`go1.26.5`) and Node.js
+Building from source needs the Go toolchain (`go1.26.6`) and Node.js
 (`22.22.3`). The exact pins live in `.tool-versions`. Module path:
 `github.com/miniature-pug/perch`.
 
