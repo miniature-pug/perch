@@ -171,3 +171,39 @@ describe("settings store", () => {
     expect(settings.staleThresholdDays).toBe(21);
   });
 });
+
+describe("settings store: audit regressions", () => {
+  it("FEC-7: load() applies the persisted DND to the notification store", async () => {
+    const w = await import("../wails");
+    vi.mocked(w.getSettings).mockResolvedValueOnce({
+      theme: "gruvbox", density: "dense", font: "geist", dnd: true, glassDisabled: false, alwaysRules: [],
+    });
+    const { settings } = await import("./settings.svelte");
+    const { getDnd } = await import("./notifications.svelte");
+    await settings.load();
+    expect(getDnd()).toBe(true);
+  });
+
+  it("FEC-7: setDnd applies to the notification store and persists", async () => {
+    const w = await import("../wails");
+    const { settings } = await import("./settings.svelte");
+    const { getDnd } = await import("./notifications.svelte");
+    await settings.setDnd(true);
+    expect(getDnd()).toBe(true);
+    expect(vi.mocked(w.saveSettings)).toHaveBeenCalledWith(expect.objectContaining({ dnd: true }));
+  });
+
+  it("FEX-13/FEC-15: removeAlwaysRules filters a fresh read by identity, keeping rules added since", async () => {
+    const w = await import("../wails");
+    const keep1 = { agent: "claude", tool: "Read", pattern: "*" };
+    const gone = { agent: "claude", tool: "Bash", pattern: "npm test" };
+    const addedLater = { agent: "claude", tool: "Edit", pattern: "*" };
+    vi.mocked(w.getSettings).mockResolvedValueOnce({
+      theme: "gruvbox", density: "dense", font: "geist", dnd: false, glassDisabled: false,
+      alwaysRules: [keep1, gone, addedLater],
+    });
+    const { settings } = await import("./settings.svelte");
+    await settings.removeAlwaysRules([{ ...gone }]);
+    expect(vi.mocked(w.saveSettings)).toHaveBeenCalledWith(expect.objectContaining({ alwaysRules: [keep1, addedLater] }));
+  });
+});

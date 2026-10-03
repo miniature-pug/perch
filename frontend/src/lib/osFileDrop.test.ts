@@ -107,3 +107,24 @@ test("registerOsFileDrop wires OnFileDrop and its off-fn calls OnFileDropOff", (
     delete (globalThis as any).runtime;
   }
 });
+
+test("FEC-26: a failed write for an OS file drop raises a notification instead of an unhandled rejection", async () => {
+  const w = await import("./wails");
+  const { getItems } = await import("./stores/notifications.svelte");
+  vi.mocked(w.writeToPty).mockRejectedValueOnce(new Error("unknown pane"));
+  let cb: ((x: number, y: number, paths: string[]) => void) | null = null;
+  (globalThis as any).runtime = { OnFileDrop: (c: typeof cb) => { cb = c; }, OnFileDropOff: () => {} };
+  const zone = paneZone("pane-err");
+  document.body.appendChild(zone);
+  const orig = document.elementFromPoint;
+  (document as any).elementFromPoint = () => zone;
+  try {
+    registerOsFileDrop();
+    cb!(1, 1, ["/wt/a.go"]);
+    await vi.waitFor(() => expect(getItems().some((n) => n.title === "Could not send the dropped file")).toBe(true));
+  } finally {
+    (document as any).elementFromPoint = orig;
+    zone.remove();
+    delete (globalThis as any).runtime;
+  }
+});

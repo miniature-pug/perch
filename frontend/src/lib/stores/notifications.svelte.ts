@@ -45,7 +45,17 @@ export function setDnd(v: boolean)          { dnd = v; }
 // the Approvals filter. An untitled blocking notice is an approval, an
 // ambient notice is a completed turn, and a routine notice is background
 // info.
-function defaultKind(tier: Tier, title: string): Kind {
+function defaultKind(tier: Tier, title: string, state?: string): Kind {
+  // The source agent state, when known, says what the notification is about
+  // (FEC-23): only an awaiting-approval notice belongs under Approvals, so
+  // "Agent exited" or "Question" no longer land there.
+  switch (state) {
+    case "awaiting-approval": return "approval";
+    case "errored":
+    case "exited":            return "error";
+    case "done":              return "done";
+    case "awaiting-input":    return "info";
+  }
   if (/error|fail/i.test(title)) return "error";
   if (tier === "blocking") return "approval";
   if (tier === "ambient")  return "done";
@@ -61,7 +71,7 @@ function add(tier: Tier, workspaceId: string, title: string, body: string, kind?
   // blocking only. DND never silences blocking (tier 1) notifications.
   // Silencing means muting the interruption while keeping the record.
   const silenced = dnd && tier !== "blocking";
-  items = [{ id, workspaceId, tier, kind: kind ?? defaultKind(tier, title), title, body, read: silenced, ts: Date.now(), state }, ...items];
+  items = [{ id, workspaceId, tier, kind: kind ?? defaultKind(tier, title, state), title, body, read: silenced, ts: Date.now(), state }, ...items];
   trimToCap();
 
   // No auto-dismiss timer. The hub stays docked; it is not a temporary
@@ -99,6 +109,7 @@ export function addAmbient (w: string, t: string, b: string, kind?: Kind, state?
 export function addRoutine (w: string, t: string, b: string, kind?: Kind, state?: string) { add("routine",  w, t, b, kind, state); }
 
 export function markRead(id: string) {
+  if (!items.some((n) => n.id === id && !n.read)) return;
   items = items.map((n) => n.id === id ? { ...n, read: true } : n);
 }
 
@@ -106,6 +117,9 @@ export function markRead(id: string) {
 // seeing the hub is the catch-up, so the unread badge clears. Items stay
 // in the list, marked read; the code does not drop them.
 export function markAllRead() {
+  // No-op when nothing is unread, so the hub and the badge are not
+  // invalidated on every session switch or window focus (FEC-33).
+  if (!items.some((n) => !n.read)) return;
   items = items.map((n) => n.read ? n : { ...n, read: true });
 }
 
@@ -120,11 +134,14 @@ export function markAllRead() {
 // events that arrive while the user is away still accumulate, and still
 // trigger an OS toast, until the user returns.
 export function markReadForWorkspace(wsId: string) {
+  if (!items.some((n) => n.workspaceId === wsId && !n.read)) return; // FEC-33
   items = items.map((n) => n.workspaceId === wsId && !n.read ? { ...n, read: true } : n);
 }
 
-// Drop every notification that belongs to a removed session.
+// Drop every notification that belongs to a removed session. Only for a
+// genuine removal; a state change uses dropBlockingForWorkspace.
 export function dropForWorkspace(wsId: string) {
+  if (!items.some((n) => n.workspaceId === wsId)) return;
   items = items.filter((n) => n.workspaceId !== wsId);
 }
 
@@ -138,9 +155,19 @@ export function dropForWorkspace(wsId: string) {
 // awaiting-input-to-other-state edge that the resolved-state
 // dropForWorkspace clear does not cover.
 export function dropAwaitingInputForWorkspace(wsId: string) {
-  items = items.filter(
-    (n) => !(n.workspaceId === wsId && n.tier === "blocking" && n.state === "awaiting-input" && !n.read),
-  );
+  dropBlockingForWorkspace(wsId, ["awaiting-input"]);
+}
+
+// Drop a session's still-unread blocking notifications whose source state is
+// one of `states`, once the condition they asked about is resolved. Use this,
+// not dropForWorkspace, on a state edge: everything else (auto-approval
+// audit entries, errors, completed turns, the read history) stays in the hub
+// for the away catch-up (FEC-6).
+export function dropBlockingForWorkspace(wsId: string, states: string[]) {
+  const drop = (n: Notification) =>
+    n.workspaceId === wsId && n.tier === "blocking" && !n.read && n.state !== undefined && states.includes(n.state);
+  if (!items.some(drop)) return;
+  items = items.filter((n) => !drop(n));
 }
 
 export function clearRead() { items = items.filter((n) => !n.read); }

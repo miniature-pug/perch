@@ -264,8 +264,8 @@
       const fresh = await fetchHunks(p.worktree, p.file);
       const target = findSameHunk(fresh, p.hunk);
       if (!target) {
-        addBlocking(workspaceId, "Discard skipped",
-          `The change in ${p.file} was modified after you discarded it, so it was kept. Review it and discard again.`);
+        addBlocking(workspaceId, "Discard skipped", 
+          `The change in ${p.file} was modified after you discarded it, so it was kept. Review it and discard again.`, "info");
         return;
       }
       await discardHunk(p.worktree, p.file, target.index);

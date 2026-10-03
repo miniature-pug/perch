@@ -136,3 +136,44 @@ describe("notification store", () => {
     expect(getItems()[0].read).toBe(true);
   });
 });
+
+describe("notification store: audit regressions", () => {
+  beforeEach(() => { vi.resetModules(); });
+
+  it("FEC-6: dropBlockingForWorkspace drops only unread blocking items of the given states", async () => {
+    const { addBlocking, addRoutine, markRead, dropBlockingForWorkspace, getItems } = await import("./notifications.svelte");
+    addRoutine("ws", "Auto-approved", "Read x");
+    addBlocking("ws", "Agent error", "boom", undefined, "errored");
+    addBlocking("ws", "Approval needed", "Bash", undefined, "awaiting-approval");
+    addBlocking("ws", "Approval needed (seen)", "Bash", undefined, "awaiting-approval");
+    markRead(getItems()[0].id);
+    addBlocking("other", "Approval needed", "Bash", undefined, "awaiting-approval");
+    dropBlockingForWorkspace("ws", ["awaiting-approval"]);
+    const left = getItems().map((n) => `${n.workspaceId}:${n.title}`);
+    expect(left).toEqual([
+      "other:Approval needed",
+      "ws:Approval needed (seen)",
+      "ws:Agent error",
+      "ws:Auto-approved",
+    ]);
+  });
+
+  it("FEC-23: the kind follows the source state", async () => {
+    const { addBlocking, getItems } = await import("./notifications.svelte");
+    addBlocking("ws", "Agent exited", "", undefined, "exited");
+    addBlocking("ws", "Question", "", undefined, "awaiting-input");
+    addBlocking("ws", "Approval needed", "", undefined, "awaiting-approval");
+    const kinds = Object.fromEntries(getItems().map((n) => [n.title, n.kind]));
+    expect(kinds).toEqual({ "Agent exited": "error", "Question": "info", "Approval needed": "approval" });
+  });
+
+  it("FEC-33: marking read with nothing unread keeps the same array", async () => {
+    const { addRoutine, markAllRead, markReadForWorkspace, getItems } = await import("./notifications.svelte");
+    addRoutine("ws", "x", "y");
+    markAllRead();
+    const before = getItems();
+    markAllRead();
+    markReadForWorkspace("ws");
+    expect(getItems()).toBe(before);
+  });
+});

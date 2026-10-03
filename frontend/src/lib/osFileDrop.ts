@@ -16,6 +16,7 @@
 // handles that drag, and this file does not touch it.
 
 import { writeToPty } from "./wails";
+import { addBlocking } from "./stores/notifications.svelte";
 
 // Attribute that a fileDrop-enabled DragDrop sets on its .drop-zone, so the
 // code can route an OS file drop to the pane under the drop point.
@@ -66,6 +67,10 @@ export function registerOsFileDrop(): () => void {
   // useDropTarget=false: the code hit-tests the coordinates itself against
   // [data-drop-pane], so it does not depend on the --wails-drop-target CSS
   // marker.
-  rt.OnFileDrop((x, y, paths) => { void routeOsFileDrop(x, y, paths); }, false);
+  rt.OnFileDrop((x, y, paths) => {
+    routeOsFileDrop(x, y, paths).catch((e) => {
+      addBlocking("", "Could not send the dropped file", String(e), "error");
+    });
+  }, false);
   return () => { rt.OnFileDropOff?.(); };
 }

@@ -1196,7 +1196,7 @@ describe("App.svelte live event wiring", () => {
 
     // The blocking "Question" notification lights up for ws-2.
     const notifyCb = captured.notify.at(-1)!;
-    notifyCb({ tier: "blocking", title: "Question", body: "Which option?", workspaceId: "ws-2" });
+    notifyCb({ tier: "blocking", title: "Question", body: "Which option?", workspaceId: "ws-2", state: "awaiting-input" });
     await tick();
     expect(getItems().some(n => n.workspaceId === "ws-2" && n.tier === "blocking")).toBe(true);
 
@@ -5575,5 +5575,199 @@ describe("audit regressions: split terminal placement (FEC-4)", () => {
     await tick(); await tick();
     expect(within(secondary()).getAllByTestId("terminal").map((n) => n.dataset.paneId)).toEqual(["p2"]);
     expect(within(primary()).getAllByTestId("terminal").map((n) => n.dataset.paneId)).toEqual(["p1"]);
+  });
+});
+
+describe("audit regressions: session lifecycle and notifications", () => {
+  async function mountWith(list = fakeWorkspaces) {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(list);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await screen.findByRole("button", { name: /^Alpha\b/ });
+  }
+  async function openAlpha() {
+    await fireEvent.click(screen.getByRole("button", { name: /^Alpha\b/ }));
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    await tick();
+  }
+  async function runPaletteCommand(label: RegExp) {
+    await fireEvent.keyDown(document.body, { key: ":" });
+    await waitFor(() => expect(screen.getByRole("dialog", { name: "command palette" })).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("option", { name: label }));
+    await tick();
+  }
+
+  it("FEC-6: a running -> done edge keeps auto-approval entries and errors; only the resolved approval goes", async () => {
+    await mountWith();
+    const { getItems } = await import("./lib/stores/notifications.svelte");
+    const agentCb = captured.agent.at(-1)!;
+    const notifyCb = captured.notify.at(-1)!;
+    agentCb({ workspaceId: "ws-2", kind: "state", state: "awaiting-approval" });
+    notifyCb({ tier: "routine", title: "Auto-approved", body: "Read README.md", workspaceId: "ws-2" });
+    notifyCb({ tier: "blocking", title: "Agent error", body: "boom", workspaceId: "ws-2", state: "errored" });
+    notifyCb({ tier: "blocking", title: "Approval needed", body: "Bash", workspaceId: "ws-2", state: "awaiting-approval" });
+    await tick();
+    agentCb({ workspaceId: "ws-2", kind: "state", state: "done" });
+    await tick();
+    const titles = getItems().filter(n => n.workspaceId === "ws-2").map(n => n.title);
+    expect(titles).toContain("Auto-approved");
+    expect(titles).toContain("Agent error");
+    expect(titles).not.toContain("Approval needed");
+  });
+
+  it("FEC-7: the hub's Do-Not-Disturb toggle goes through the persisted setting", async () => {
+    await mountWith();
+    const { settings } = await import("./lib/stores/settings.svelte");
+    const { getDnd, setDnd } = await import("./lib/stores/notifications.svelte");
+    setDnd(false);
+    await runPaletteCommand(/toggle do not disturb/i);
+    expect(settings.setDnd).toHaveBeenCalledWith(true);
+    expect(getDnd()).toBe(true);
+    setDnd(false);
+  });
+
+  it("FEC-10: closing the active session keeps its terminal mounted (no remount) and its open file", async () => {
+    await mountWith();
+    await openAlpha();
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { terminalMountCounts } = await import("./lib/__stubs__/terminalExit");
+    layout.setView("code");
+    await tick();
+    await fireEvent.click(screen.getByRole("button", { name: "open file" }));
+    await waitFor(() => expect(screen.getByTestId("editor").dataset.path).toBe("/some/file.ts"));
+    layout.setView("agent");
+    await tick();
+    const mounts = terminalMountCounts["p1"] ?? 0;
+    await runPaletteCommand(/close session/i);
+    await waitFor(() => expect(screen.getByTestId("pane-ended")).toBeInTheDocument());
+    expect(terminalMountCounts["p1"] ?? 0).toBe(mounts);
+    layout.setView("code");
+    await tick();
+    expect(screen.getByTestId("editor").dataset.path).toBe("/some/file.ts");
+  });
+
+  it("FEC-12: selecting a cold session with j mounts nothing and spawns no shell; Enter opens it", async () => {
+    await mountWith();
+    const { openWorkspace } = await import("./lib/wails");
+    await fireEvent.keyDown(document.body, { key: "j" });
+    await tick();
+    expect(screen.getByTestId("pane-cold")).toBeInTheDocument();
+    expect(screen.queryAllByTestId("terminal")).toHaveLength(0);
+    expect(document.querySelectorAll("[data-zone='shell-drawer'] [data-testid='shell-drawer-probe']")).toHaveLength(0);
+    await fireEvent.keyDown(document.body, { key: "Enter" });
+    await waitFor(() => expect(openWorkspace).toHaveBeenCalledWith("ws-1"));
+    await waitFor(() => expect(screen.queryByTestId("pane-cold")).toBeNull());
+  });
+
+  it("FEC-14: after Close session, a shell exiting does not spawn a replacement shell", async () => {
+    await mountWith();
+    await openAlpha();
+    const drawer = () => document.querySelector("[data-zone='shell-drawer']") as HTMLElement;
+    await waitFor(() => expect(within(drawer()).getAllByTestId("shell-drawer-probe")).toHaveLength(1));
+    await runPaletteCommand(/close session/i);
+    await waitFor(() => expect(screen.getByTestId("pane-ended")).toBeInTheDocument());
+    // The backend closed the shell; its exit closes the tab.
+    await fireEvent.click(within(drawer()).getByRole("button", { name: /^close shell$/ }));
+    await tick();
+    expect(within(drawer()).queryAllByTestId("shell-drawer-probe")).toHaveLength(0);
+    // Reopening gives the drawer a fresh shell again.
+    await fireEvent.click(screen.getByRole("button", { name: /^reopen$/i }));
+    await waitFor(() => expect(within(drawer()).getAllByTestId("shell-drawer-probe")).toHaveLength(1));
+  });
+
+  it("FEC-21: the removed row stays hidden while the real removal runs", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await mountWith();
+      const { removeWorkspace } = await import("./lib/wails");
+      let finish: () => void = () => {};
+      vi.mocked(removeWorkspace).mockImplementationOnce(() => new Promise<void>((res) => { finish = res; }));
+      await openAlpha();
+      await fireEvent.keyDown(document.body, { key: "x" });
+      await fireEvent.click(await screen.findByRole("button", { name: /^remove$/i }));
+      expect(screen.queryByRole("button", { name: /^Alpha\b/ })).toBeNull();
+      await vi.advanceTimersByTimeAsync(6100);
+      expect(removeWorkspace).toHaveBeenCalledWith("ws-1");
+      expect(screen.queryByRole("button", { name: /^Alpha\b/ })).toBeNull();
+      finish();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("FEC-22: a settings read failure does not stop the session list from loading", async () => {
+    const { settings } = await import("./lib/stores/settings.svelte");
+    const { getItems } = await import("./lib/stores/notifications.svelte");
+    vi.mocked(settings.load).mockRejectedValueOnce(new Error("EIO"));
+    await mountWith();
+    expect(screen.getByRole("button", { name: /^Alpha\b/ })).toBeInTheDocument();
+    expect(getItems().some(n => n.title === "Could not load settings")).toBe(true);
+  });
+
+  it("FEC-23: a blocking notification's kind follows its agent state", async () => {
+    await mountWith();
+    const { getItems } = await import("./lib/stores/notifications.svelte");
+    captured.notify.at(-1)!({ tier: "blocking", title: "Agent exited", body: "", workspaceId: "ws-1", state: "exited" });
+    captured.notify.at(-1)!({ tier: "blocking", title: "Question", body: "", workspaceId: "ws-1", state: "awaiting-input" });
+    await tick();
+    expect(getItems().find(n => n.title === "Agent exited")?.kind).toBe("error");
+    expect(getItems().find(n => n.title === "Question")?.kind).toBe("info");
+  });
+
+  it("FEC-26: a rejected rename rolls the title back and says why", async () => {
+    await mountWith();
+    const { setWorkspaceTitle } = await import("./lib/wails");
+    const { getItems } = await import("./lib/stores/notifications.svelte");
+    vi.mocked(setWorkspaceTitle).mockRejectedValueOnce(new Error("invalid title"));
+    const title = Array.from(document.querySelectorAll(".workspace-title")).find(el => el.textContent === "Alpha")!;
+    await fireEvent.dblClick(title);
+    const input = await screen.findByRole("textbox", { name: "rename session" });
+    await fireEvent.input(input, { target: { value: "Gamma" } });
+    await fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(setWorkspaceTitle).toHaveBeenCalledWith("ws-1", "Gamma"));
+    await waitFor(() => expect(getItems().some(n => n.title === "Could not rename session")).toBe(true));
+    expect(Array.from(document.querySelectorAll(".workspace-title")).map(el => el.textContent)).toContain("Alpha");
+  });
+
+  it("FEC-29: chooseSplit does not undo a selection made while the split session opens", async () => {
+    const gamma = { ...fakeWorkspaces[0], id: "ws-3", title: "Gamma", paneId: "p3", worktreePath: "/tmp/gamma" };
+    await mountWith([...fakeWorkspaces, gamma]);
+    await openAlpha();
+    const { openWorkspace } = await import("./lib/wails");
+    let finish: () => void = () => {};
+    vi.mocked(openWorkspace).mockImplementationOnce(() => new Promise<void>((res) => { finish = res; }));
+    const stage = document.querySelector("[data-zone='stage']") as HTMLElement;
+    const dt = { getData: (t: string) => (t === "application/x-perch-session" ? "ws-2" : ""), types: ["application/x-perch-session"] };
+    await fireEvent.drop(stage, { dataTransfer: dt });
+    // While ws-2 (now transiently active) opens, the user moves to Gamma.
+    await fireEvent.keyDown(document.body, { key: "j" });
+    await tick();
+    expect((document.querySelector(".status-session") as HTMLElement).textContent).toBe("Gamma");
+    finish();
+    await new Promise((r) => setTimeout(r, 20));
+    expect((document.querySelector(".status-session") as HTMLElement).textContent).toBe("Gamma");
+  });
+
+  it("FEC-32: overlapping diff-stat refreshes for one session run one at a time with a trailing rerun", async () => {
+    await mountWith();
+    const { diffStat } = await import("./lib/wails");
+    await new Promise((r) => setTimeout(r, 10));
+    vi.mocked(diffStat).mockClear();
+    const releases: Array<() => void> = [];
+    vi.mocked(diffStat).mockImplementation(() => new Promise((res) => { releases.push(() => res([])); }));
+    const fs = captured.fsChanged.at(-1)!;
+    fs({ workspaceId: "ws-1", path: "/tmp/alpha" });
+    fs({ workspaceId: "ws-1", path: "/tmp/alpha" });
+    fs({ workspaceId: "ws-1", path: "/tmp/alpha" });
+    await tick();
+    expect(diffStat).toHaveBeenCalledTimes(1);
+    releases.shift()!();
+    await waitFor(() => expect(diffStat).toHaveBeenCalledTimes(2));
+    releases.shift()!();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(diffStat).toHaveBeenCalledTimes(2);
+    vi.mocked(diffStat).mockImplementation(async () => []);
   });
 });

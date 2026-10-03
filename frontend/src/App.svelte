@@ -30,7 +30,7 @@
   import { settings, sameAlwaysRule } from "./lib/stores/settings.svelte";
   import ApprovalCard       from "./lib/ApprovalCard.svelte";
   import NotificationHub    from "./lib/NotificationHub.svelte";
-  import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead, markAllRead, markReadForWorkspace, dropForWorkspace, dropAwaitingInputForWorkspace } from "./lib/stores/notifications.svelte";
+  import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead, markAllRead, markReadForWorkspace, dropForWorkspace, dropAwaitingInputForWorkspace, dropBlockingForWorkspace } from "./lib/stores/notifications.svelte";
   import CleanupPanel from "./lib/CleanupPanel.svelte";
   import { listWorkspaces, createWorkspace, setWorkspaceTitle, workspaceForBranch, removeWorkspace, openWorkspace, closeWorkspace, closeShell, revealInFiles, onAgentEvent, onNotify, onFsChanged, onWorkspaceAttach, onWorkspaceRelaunch, approve, pendingApprovals, branches, readFile, setWindowFocus, writeToPty, discoverRepos, diffStat, listStaleSessions, forceRemoveWorkspace, clipboardSetText, getSettings, homeShellCwd as fetchHomeShellCwd } from "./lib/wails";
   import type { WorkspaceVM, ApprovalReq, StaleSessionVM, AgentState, RepoInfo, AlwaysRule } from "./lib/wails";
@@ -248,7 +248,7 @@
     const mountedIds = mountedWorkspaces.map(w => w.id);
     const liveIds = new Set(workspaces.map(w => w.id));
     untrack(() => {
-      for (const id of mountedIds) if (!shellStatesFor[id]) shellStatesFor[id] = initShellState(id);
+      for (const id of mountedIds) if (!shellStatesFor[id] && !shellsClosed.has(id)) shellStatesFor[id] = initShellState(id);
       for (const id of Object.keys(shellStatesFor)) if (!liveIds.has(id)) delete shellStatesFor[id];
     });
   });
@@ -271,7 +271,10 @@
     if (!st) return;
     closeShell(id).catch(() => {}); // reap the pty; idempotent even if it already exited
     let { state, empty } = removeShell(st, id);
-    if (empty) state = addShell(state, wsId).state; // replacement cell mounts, which calls openShell
+    // Replace the last shell, so the drawer is never left empty, unless the
+    // backend is closing this session's shells: a replacement would spawn a
+    // shell for a closed or removed session (FEC-14).
+    if (empty && !shellsClosed.has(wsId)) state = addShell(state, wsId).state; // replacement cell mounts, which calls openShell
     shellStatesFor[wsId] = state;
   }
   function shellToggleSplit(wsId: string) {
@@ -341,8 +344,12 @@
   // toggles the pane off and keeps the assignment. That is what lets a split
   // off-to-on toggle show the SAME live terminal again, instead of rebuilding a
   // blank one.
+  // A COLD active session (selected with j/k, or auto-selected after a
+  // removal, but never opened this run) is NOT mounted: mounting it would
+  // spawn login shells and subscribe a terminal to a pty that does not exist
+  // (FEC-12). The stage shows an "open it" placeholder for it instead.
   const mountedWorkspaces = $derived((() => {
-    let mounted = active && !openIds.has(active.id)
+    let mounted = active && !openIds.has(active.id) && everOpened.has(active.id)
       ? [...openWorkspaces, active]
       : openWorkspaces;
     if (layout.splitId) {
@@ -357,8 +364,28 @@
   // split terminal keeps its live xterm buffer across split on and off toggles.
   const splitZoneEl = $derived(layout.splitId ? termZoneEls[layout.splitId] : undefined);
 
+  // The active session exists but was never opened this run, so nothing of it
+  // is mounted (FEC-12).
+  const activeCold = $derived(!!active && !openIds.has(active.id) && !everOpened.has(active.id));
+
+  // Sessions whose shell drawer stays mounted: every session with shell state.
+  // Shells outlive the agent and a session switch (F20a). Unmounting a panel
+  // and mounting it again later would re-run OpenShell for live shells and
+  // displace them, so a panel stays until its session is removed (FEC-13,
+  // frontend half).
+  const shellWorkspaces = $derived(workspaces.filter(w => shellStatesFor[w.id]));
+
+  // Sessions whose shells are being closed by the backend (session close or
+  // removal). Their shells' exits must not respawn a replacement shell
+  // (FEC-14). openSession clears the flag.
+  let shellsClosed = new SvelteSet<string>();
+
   // Visible sessions. This excludes any session pending an optimistic removal.
-  const pendingRemovalIds = $derived(new Set(pendingRemovals.map(p => p.ws.id)));
+  // Sessions whose real removeWorkspace call is in flight. They stay hidden
+  // until it settles, so the row does not reappear (clickable) for the length
+  // of `git worktree remove` (FEC-21).
+  let removingIds = new SvelteSet<string>();
+  const pendingRemovalIds = $derived(new Set([...pendingRemovals.map(p => p.ws.id), ...removingIds]));
   const visibleWorkspaces = $derived(workspaces.filter(w => !pendingRemovalIds.has(w.id)));
 
   // Apply the user-defined order. Ids in layout.order come first, in that order.
@@ -430,19 +457,47 @@
   // unfocused.
   function onWindowFocus() { windowFocused = true;  setWindowFocus(true).catch(() => {}); }
   function onWindowBlur()  { windowFocused = false; setWindowFocus(false).catch(() => {}); }
+  function flushLayout()   { layout.flush(); }
 
   // Aggregate the +N/-N diff stat for one session.
   // A missing or non-git worktree must not throw. The catch block suppresses
   // errors silently.
+  //
+  // At most one diffStat runs per session; a request that arrives while one is
+  // in flight sets a trailing rerun, so a burst of fs events costs two git runs,
+  // results can never land out of order, and a result for a session removed
+  // meanwhile is dropped (FEC-32).
+  const diffStatInFlight = new Set<string>();
+  const diffStatAgain = new Set<string>();
   async function refreshDiffStat(ws: WorkspaceVM) {
+    const id = ws.id;
+    if (diffStatInFlight.has(id)) { diffStatAgain.add(id); return; }
+    diffStatInFlight.add(id);
     try {
-      const files = await diffStat(ws.worktreePath);
-      let added = 0, removed = 0;
-      for (const f of files) { added += f.added; removed += f.removed; }
-      wsDiffStats = { ...wsDiffStats, [ws.id]: { added, removed, files: files.length } };
-    } catch {
-      // non-git or missing worktree: leave any existing entry untouched
+      do {
+        diffStatAgain.delete(id);
+        try {
+          const files = await diffStat(ws.worktreePath);
+          if (!workspaces.some(w => w.id === id)) return;
+          let added = 0, removed = 0;
+          for (const f of files) { added += f.added; removed += f.removed; }
+          wsDiffStats = { ...wsDiffStats, [id]: { added, removed, files: files.length } };
+        } catch {
+          // non-git or missing worktree: leave any existing entry untouched
+        }
+      } while (diffStatAgain.has(id));
+    } finally {
+      diffStatInFlight.delete(id);
     }
+  }
+
+  // Startup: refresh every session's diff stat, a few at a time, instead of
+  // one git process per session all at once (FEC-32).
+  const DIFFSTAT_STARTUP_CONCURRENCY = 4;
+  async function refreshAllDiffStats(list: WorkspaceVM[]) {
+    const queue = [...list];
+    const worker = async () => { for (let ws = queue.shift(); ws; ws = queue.shift()) await refreshDiffStat(ws); };
+    await Promise.all(Array.from({ length: Math.min(DIFFSTAT_STARTUP_CONCURRENCY, queue.length) }, worker));
   }
 
   // The active session just asked for input. This routes the user to its pane, so
@@ -496,6 +551,8 @@
     setWindowFocus(document.hasFocus()).catch(() => {});
     window.addEventListener("focus", onWindowFocus);
     window.addEventListener("blur",  onWindowBlur);
+    // Write a pending layout save before the page goes away (FEC-26).
+    window.addEventListener("beforeunload", flushLayout);
     // General Ctrl-Shift-C copy for non-terminal surfaces (B3).
     document.addEventListener("keydown", onCopyKeydown);
 
@@ -559,7 +616,10 @@
         // event for a COLD session never marks it open or suppresses its resume
         // preview. The overlay stays gated on openIds.
         openIds.add(ev.workspaceId);
-        dropForWorkspace(ev.workspaceId);
+        // Drop only the notifications this edge resolves: an unread approval
+        // or question. Auto-approval audit entries, errors and the read history
+        // stay for the away catch-up (FEC-6).
+        dropBlockingForWorkspace(ev.workspaceId, ["awaiting-approval", "awaiting-input"]);
       }
       // Leaving awaiting-input for any OTHER state supersedes this session's
       // still-unread "Question" blocking notification. The question is moot once
@@ -675,8 +735,17 @@
       if (p.workspaceId) termEpoch[p.workspaceId] = (termEpoch[p.workspaceId] ?? 0) + 1;
     });
 
-    await Promise.all([settings.load(), layout.restore()]);
-    workspaces = await listWorkspaces();
+    // A settings read failure (unreadable settings.json) must not abort the
+    // rest of startup: keep the defaults and say so (FEC-22).
+    const [settingsResult] = await Promise.allSettled([settings.load(), layout.restore()]);
+    if (settingsResult.status === "rejected") {
+      addBlocking("", "Could not load settings", `${String(settingsResult.reason)}. Using the defaults.`, "error");
+    }
+    try {
+      workspaces = await listWorkspaces();
+    } catch (e) {
+      addBlocking("", "Could not list sessions", String(e), "error");
+    }
     // Seed the approval queue from the backend's authoritative pending set. An
     // approval frame delivered before this mount, or before a webview reload, is
     // otherwise a lost one-shot, which wedges the agent's blocked hook forever.
@@ -685,7 +754,7 @@
     seedPendingApprovals();
     // Refresh diff stats for all loaded sessions. This fires and forgets; event-
     // driven updates follow after startup.
-    for (const ws of workspaces) refreshDiffStat(ws);
+    void refreshAllDiffStats(workspaces);
     try {
       staleSessions = (await listStaleSessions()) ?? [];
     } catch {
@@ -707,6 +776,8 @@
     offOsFileDrop?.();
     window.removeEventListener("focus", onWindowFocus);
     window.removeEventListener("blur",  onWindowBlur);
+    window.removeEventListener("beforeunload", flushLayout);
+    layout.flush();
     document.removeEventListener("keydown", onCopyKeydown);
     // Cancel any pending deferred removals, to avoid use-after-unmount calls.
     for (const p of pendingRemovals) clearTimeout(p.timer);
@@ -752,6 +823,12 @@
     termEpoch[id] = (termEpoch[id] ?? 0) + 1;
     activeId = id;
     openIds.add(id);
+    // A closed session's shells were closed with it. Reopening gives the
+    // drawer a fresh shell again (FEC-14).
+    if (shellsClosed.delete(id)) {
+      const st = shellStatesFor[id];
+      if (st && st.panes.length === 0) shellStatesFor[id] = addShell(st, id).state;
+    }
     everOpened.add(id); // opened this run, so a later click reopens directly (F22)
     try {
       await openWorkspace(id);
@@ -843,7 +920,9 @@
     if (!openIds.has(id)) {
       const prevActive = activeId;
       await openSession(id);
-      if (prevActive) activeId = prevActive;
+      // Restore only if the user did not pick another session meanwhile
+      // (FEC-29): activeId still holds the transient value openSession set.
+      if (prevActive && activeId === id) activeId = prevActive;
     }
     layout.setSplitId(id);
   }
@@ -959,6 +1038,23 @@
     return "Could not create the session. Check the repo and branch, then try again.";
   }
 
+  // Rename optimistically, and roll back if the backend rejects the title
+  // (blank, invalid), so the sidebar never shows a name that was not saved
+  // (FEC-26).
+  async function renameSession(id: string, title: string) {
+    const ws = workspaces.find(w => w.id === id);
+    if (!ws) return;
+    const before = ws.title;
+    ws.title = title;
+    try {
+      await setWorkspaceTitle(id, title);
+    } catch (e) {
+      const cur = workspaces.find(w => w.id === id);
+      if (cur && cur.title === title) cur.title = before;
+      addBlocking(id, "Could not rename session", String(e), "error");
+    }
+  }
+
   function requestRemove(ws: WorkspaceVM) {
     confirmRemove = ws;
   }
@@ -998,22 +1094,31 @@
     if (layout.splitId === wsToRemove.id) layout.setSplitId(null);
 
     const timer = setTimeout(async () => {
-      // Time is up. Commit the removal for real.
-      pendingRemovals = pendingRemovals.filter(p => p.ws.id !== wsToRemove.id);
+      // Time is up. Commit the removal for real. The toast goes away (Undo is
+      // no longer possible), but the row stays hidden until the call settles.
+      const id = wsToRemove.id;
+      pendingRemovals = pendingRemovals.filter(p => p.ws.id !== id);
+      removingIds.add(id);
+      shellsClosed.add(id); // the backend closes its shells (FEC-14)
       try {
-        await removeWorkspace(wsToRemove.id);
-        openIds.delete(wsToRemove.id);
-        everOpened.delete(wsToRemove.id);
-        dropForWorkspace(wsToRemove.id);
-        pruneWorkspaceState(wsToRemove.id);
-        workspaces = await listWorkspaces();
-        if (activeId === wsToRemove.id) activeId = workspaces[0]?.id ?? null;
+        await removeWorkspace(id);
+        openIds.delete(id);
+        everOpened.delete(id);
+        dropForWorkspace(id);
+        pruneWorkspaceState(id);
+        workspaces = await listWorkspaces().catch(() => workspaces.filter(w => w.id !== id));
+        if (activeId === id) activeId = workspaces[0]?.id ?? null;
       } catch (err) {
-        // If the backend call fails, put the session back.
-        workspaces = await listWorkspaces();
+        // If the backend call fails, put the session back and say why.
+        shellsClosed.delete(id);
+        try { workspaces = await listWorkspaces(); } catch { /* keep the current list */ }
         if (String(err).includes("uncommitted changes")) {
           confirmDirty = wsToRemove;
+        } else {
+          addBlocking(id, "Could not remove session", String(err), "error");
         }
+      } finally {
+        removingIds.delete(id);
       }
     }, UNDO_REMOVE_DELAY_MS);
 
@@ -1045,8 +1150,10 @@
     everOpened.delete(id);
     dropForWorkspace(id);
     pruneWorkspaceState(id);
+    shellsClosed.add(id);
     // This fires and forgets, and does not await, so it does not block the caller.
-    removeWorkspace(id).then(() => listWorkspaces()).then(ws => { workspaces = ws; }).catch(() => {});
+    removeWorkspace(id).then(() => listWorkspaces()).then(ws => { workspaces = ws; })
+      .catch((e) => addBlocking(id, "Could not remove session", String(e), "error"));
   }
 
   function handleCancelRemove() {
@@ -1057,6 +1164,7 @@
     if (!confirmDirty) return;
     const ws = confirmDirty;
     confirmDirty = null;
+    shellsClosed.add(ws.id);
     try {
       await forceRemoveWorkspace(ws.id);
       openIds.delete(ws.id);
@@ -1065,8 +1173,10 @@
       pruneWorkspaceState(ws.id);
       workspaces = await listWorkspaces();
       if (activeId === ws.id) activeId = workspaces[0]?.id ?? null;
-    } catch {
-      workspaces = await listWorkspaces();
+    } catch (e) {
+      shellsClosed.delete(ws.id);
+      addBlocking(ws.id, "Could not remove session", String(e), "error");
+      try { workspaces = await listWorkspaces(); } catch { /* keep the current list */ }
     }
   }
 
@@ -1108,7 +1218,7 @@
         // blocking notification, so the stale "approve this" banner does not
         // linger after the request it referred to is gone. It fires only when
         // the queue is now empty.
-        dropForWorkspace(ownerWsId);
+        dropBlockingForWorkspace(ownerWsId, ["awaiting-approval"]); // FEC-6
       }
       clearAttentionBackstop(ownerWsId);
       return true;
@@ -1143,10 +1253,13 @@
     { id: "session:close",  group: "Session", label: "Close session",      run: () => {
         if (!active) return;
         const id = active.id;
+        shellsClosed.add(id); // the backend closes the shells too (FEC-14)
         closeWorkspace(id).then(() => {
-          // Clean up per-session frontend state on close: the approvals queue,
-          // fsVersion, termEpoch, and diff stats.
-          pruneWorkspaceState(id);
+          // Drop the approvals queue: its agent is gone. Keep everything the
+          // still-mounted pane needs (termEpoch, codePaths, termRefs, diff
+          // stats). Pruning those remounted the terminal and blanked the
+          // editor of a session that is only closed, not removed (FEC-10).
+          if (approvals[id]) { const { [id]: _drop, ...rest } = approvals; approvals = rest; }
           // The pty is gone. This drops the id from the open set, so the row
           // dims and a later click routes through the resume-preview reopen path.
           openIds.delete(id);
@@ -1155,12 +1268,17 @@
           if (ws) ws.state = "idle";
           // Keep activeId, so the in-pane "This session has ended / Reopen"
           // overlay stays reachable, since the session left openIds above.
-        }).catch(() => {});
+        }).catch((e) => {
+          shellsClosed.delete(id);
+          addBlocking(id, "Could not close session", String(e), "error");
+        });
       } },
     { id: "session:remove", group: "Session", label: "Remove session",     run: () => { if (active) requestRemove(active); } },
     // Worktree
     { id: "worktree:open",   group: "Worktree", label: "Open worktree",    keybinding: "Enter",       run: () => { if (active && !openIds.has(active.id)) openSession(active.id); } },
-    { id: "worktree:reveal", group: "Worktree", label: "Reveal in Files",  run: () => { if (active) revealInFiles(active.worktreePath); } },
+    { id: "worktree:reveal", group: "Worktree", label: "Reveal in Files",  run: () => {
+        if (active) revealInFiles(active.worktreePath).catch((e) => addBlocking(active?.id ?? "", "Could not reveal the worktree", String(e), "error"));
+      } },
     // View
     { id: "view:agent", group: "View", label: "Agent view",  keybinding: "1",  run: () => layout.setView("agent") },
     { id: "view:code",  group: "View", label: "Code view",   keybinding: "2",  run: () => layout.setView("code")  },
@@ -1176,13 +1294,22 @@
     { id: "agent:deny-all",    group: "Agent", label: "Deny all pending",    run: () => decideAll("deny")  },
     // Notifications
     { id: "notifications:open", group: "Notifications", label: "Open notifications",    run: () => { openNotif(!notifOpen); } },
-    { id: "notifications:dnd",  group: "Notifications", label: "Toggle Do Not Disturb", run: () => setDnd(!getDnd()) },
+    { id: "notifications:dnd",  group: "Notifications", label: "Toggle Do Not Disturb", run: () => toggleDnd() },
     // Help: the two entries open genuinely distinct panels (F53).
     { id: "help:shortcuts", group: "Help", label: "Keyboard shortcuts", run: () => { helpSection = "shortcuts"; helpOpen = true; } },
     { id: "help:about",     group: "Help", label: "About perch",        run: () => { helpSection = "about";     helpOpen = true; } },
     // Settings
     { id: "settings:open", group: "Settings", label: "Settings…", run: () => { settingsOpen = true; } },
   ];
+
+  // Do Not Disturb lives in the persisted settings; the hub toggle and the
+  // command go through the settings store, which also applies it to the
+  // notification store (FEC-7).
+  function toggleDnd() {
+    const next = !getDnd();
+    setDnd(next); // apply now; the store call below persists it
+    settings.setDnd(next).catch((e) => addBlocking("", "Failed to save settings", String(e)));
+  }
 
   function runCommand(id: string) {
     const cmd = commands.find(c => c.id === id);
@@ -1549,7 +1676,7 @@
           />
         {/if}
         <Sidebar workspaces={shownWorkspaces} {activeId} onSelect={onSelect} onNew={openNewSession} onReorder={handleReorder} diffStats={wsDiffStats} openIds={openIds} ackedInputIds={attnAck} ackedDoneIds={attnDoneAck}
-          onRename={(id, title) => { const ws = workspaces.find(w => w.id === id); if (ws) ws.title = title; setWorkspaceTitle(id, title); }}
+          onRename={renameSession}
           onEditStart={() => { previewWs = null; }}
           requestRemove={(id) => { const ws = workspaces.find(w => w.id === id); if (ws) requestRemove(ws); }} />
       </aside>
@@ -1639,6 +1766,17 @@
                 </div>
                 </div>
               {/each}
+              {#if activeCold && active && layout.view !== "diff"}
+                <!-- A session selected with j/k (or after a removal) that was
+                     never opened this run: nothing is mounted for it, so no
+                     shell or pty is spawned just by moving the selection
+                     (FEC-12). -->
+                <div class="pane-cold" data-testid="pane-cold">
+                  <p>This session is not open.</p>
+                  <button class="btn btn-primary" onclick={() => { if (active) openSession(active.id); }}>Open</button>
+                  <p class="pane-cold-hint">Press <kbd>Enter</kbd> to open it.</p>
+                </div>
+              {/if}
               <!-- One code layout per MOUNTED session, kept mounted (hidden with
                    display) so switching sessions preserves each session's open
                    file, folder expansion, scroll position, and unsaved Editor
@@ -1838,7 +1976,7 @@
                independent shell ptys: the shells are their own ptys and outlive
                the agent (F20a). The panel renders only once its shell state is
                seeded, in the effect above, so the {#if} guards that. -->
-          {#each mountedWorkspaces as ws (ws.id)}
+          {#each shellWorkspaces as ws (ws.id)}
             <div style:display={ws.id === activeId ? "contents" : "none"}>
               {#if shellStatesFor[ws.id]}
                 <ShellPanel
@@ -1919,7 +2057,7 @@
           items={getItems()}
           dnd={getDnd()}
           onDismiss={(id) => markRead(id)}
-          onToggleDnd={() => setDnd(!getDnd())}
+          onToggleDnd={toggleDnd}
           onClearRead={clearRead}
           onSelect={onNotificationSelect}
           onClose={() => openNotif(false)}
@@ -2078,6 +2216,16 @@
     text-align: center;
   }
   .pane-ended p { margin: 0; color: var(--perch-text-dim); }
+  .pane-cold {
+    flex: 1; min-height: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: var(--perch-sp-2);
+    color: var(--perch-text);
+    font-family: var(--perch-font-sans); font-size: var(--perch-fs-body);
+    text-align: center;
+  }
+  .pane-cold p { margin: 0; color: var(--perch-text-dim); }
+  .pane-cold-hint { font-size: var(--perch-fs-caption); }
   /* Transient ring pulse that draws the eye when the active agent wants input. */
   .terminal-zone.input-emphasis { animation: perch-emphasis var(--perch-dur-pop) var(--perch-ease); }
   @media (prefers-reduced-motion: reduce) {

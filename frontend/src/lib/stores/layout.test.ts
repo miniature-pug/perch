@@ -126,3 +126,34 @@ describe("layout store", () => {
     expect(layout.collapsed).toEqual({ a: true, b: false });
   });
 });
+
+describe("layout store: audit regressions", () => {
+  it("FEC-30: restore() rejects an unknown view and mistyped split, splitId and order", async () => {
+    const w = await import("../wails");
+    vi.mocked(w.getLayout).mockResolvedValueOnce(JSON.stringify({
+      sidebarW: 240, shellH: 200, view: "files", split: "yes", splitId: 7, order: ["a", 3, null, "b"],
+    }));
+    const { layout } = await import("./layout.svelte");
+    await layout.restore();
+    expect(layout.view).toBe("agent");
+    expect(layout.split).toBe(false);
+    expect(layout.splitId).toBeNull();
+    expect(layout.order).toEqual(["a", "b"]);
+  });
+
+  it("FEC-26: flush() writes a pending save at once, and a failed save is not an unhandled rejection", async () => {
+    const w = await import("../wails");
+    vi.mocked(w.saveLayout).mockRejectedValueOnce(new Error("disk full"));
+    const { layout } = await import("./layout.svelte");
+    await layout.restore();
+    layout.setView("diff");
+    expect(vi.mocked(w.saveLayout)).not.toHaveBeenCalled();
+    layout.flush();
+    expect(vi.mocked(w.saveLayout)).toHaveBeenCalledOnce();
+    expect(JSON.parse(vi.mocked(w.saveLayout).mock.calls[0][0]).view).toBe("diff");
+    // The debounce timer was cancelled: nothing is written twice.
+    vi.advanceTimersByTime(1000);
+    expect(vi.mocked(w.saveLayout)).toHaveBeenCalledOnce();
+    await Promise.resolve();
+  });
+});
