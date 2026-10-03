@@ -210,6 +210,52 @@ type App struct {
 	// timer.
 	titleMu    sync.Mutex
 	titleTimer *time.Timer
+
+	// opMu guards opLocks. opLocks holds one mutex per workspace id while any
+	// lifecycle operation on that id is running or waiting. OpenWorkspace,
+	// CloseWorkspace, RemoveWorkspace, ForceRemoveWorkspace and the per-id
+	// body of CleanupSessions hold it for their whole run, so two lifecycle
+	// operations on one workspace never interleave (APP-10): a concurrent
+	// reopen cannot leak a pty or monitor, and a close or remove cannot run
+	// while an open is half done. The event pump never takes it, so holding it
+	// while tearing down a monitor cannot deadlock the pump. Entries are
+	// reference-counted and dropped when the last holder or waiter releases.
+	opMu    sync.Mutex
+	opLocks map[string]*opLock
+}
+
+// opLock is one workspace's lifecycle mutex plus the number of goroutines
+// holding or waiting for it.
+type opLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// lockWorkspace acquires id's lifecycle mutex and returns its release
+// function. It is safe on an App built as a bare literal.
+func (a *App) lockWorkspace(id string) (unlock func()) {
+	a.opMu.Lock()
+	if a.opLocks == nil {
+		a.opLocks = map[string]*opLock{}
+	}
+	l := a.opLocks[id]
+	if l == nil {
+		l = &opLock{}
+		a.opLocks[id] = l
+	}
+	l.refs++
+	a.opMu.Unlock()
+
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		a.opMu.Lock()
+		l.refs--
+		if l.refs == 0 {
+			delete(a.opLocks, id)
+		}
+		a.opMu.Unlock()
+	}
 }
 
 // NewApp builds the production App.
@@ -835,16 +881,23 @@ func (a *App) SetWorkspaceTitle(id, title string) error {
 	if err := validateSessionID(id); err != nil {
 		return fmt.Errorf("invalid workspace id: %w", err)
 	}
-	w, ok := a.store.Get(id)
-	if !ok {
-		return fmt.Errorf("unknown workspace %q", id)
-	}
 	title = strings.TrimSpace(title)
 	if title == "" {
 		return fmt.Errorf("title must not be blank")
 	}
-	w.Title = title
-	return a.store.Upsert(w)
+	// Update mutates only the Title of the current record, under the store
+	// lock, so a concurrent LastSessionID or LastActive write is never lost,
+	// and a removed workspace is never resurrected.
+	if _, err := a.store.Update(id, func(w *registry.Workspace) error {
+		w.Title = title
+		return nil
+	}); err != nil {
+		if errors.Is(err, registry.ErrNotFound) {
+			return fmt.Errorf("unknown workspace %q", id)
+		}
+		return err
+	}
+	return nil
 }
 
 // WorkspaceForBranch returns the ID of the worktree session that tracks branch
@@ -889,19 +942,32 @@ func (a *App) OpenWorkspace(id string) error {
 	if err := validateSessionID(id); err != nil {
 		return fmt.Errorf("invalid workspace id: %w", err)
 	}
-	w, ok := a.store.Get(id)
-	if !ok {
-		return fmt.Errorf("unknown workspace %q", id)
-	}
+	// Serialize with every other lifecycle operation on this workspace.
+	unlock := a.lockWorkspace(id)
+	defer unlock()
 
 	// OpenWorkspace bumps LastActive when it opens the workspace.
 	// ListStaleSessions and the sidebar order both key on LastActive, so an
 	// actively opened session must not keep reading as stale (previously
 	// LastActive was only ever set at creation). OpenWorkspace persists this
 	// change before it spawns the pty, so the refreshed order survives even if
-	// a later step fails.
-	w.LastActive = time.Now()
-	_ = a.store.Upsert(w)
+	// a later step fails. Update touches only LastActive and never recreates a
+	// record that a concurrent remove already dropped.
+	w, err := a.store.Update(id, func(w *registry.Workspace) error {
+		w.LastActive = time.Now()
+		return nil
+	})
+	if errors.Is(err, registry.ErrNotFound) {
+		return fmt.Errorf("unknown workspace %q", id)
+	}
+	if err != nil {
+		// A failed flush keeps the in-memory record unchanged; opening the
+		// session is still possible.
+		var ok bool
+		if w, ok = a.store.Get(id); !ok {
+			return fmt.Errorf("unknown workspace %q", id)
+		}
+	}
 
 	paneID := paneIDFor(id)
 	event := ptyDataEventPrefix + paneID
@@ -1134,10 +1200,14 @@ func (a *App) OpenWorkspace(id string) error {
 				// id before persisting; an invalid id, for example one
 				// containing shell metacharacters, is silently dropped, so it
 				// can never be concatenated into a shell launch command later.
+				// Update writes only LastSessionID, and returns ErrNotFound
+				// instead of resurrecting a record a concurrent remove dropped.
 				if evt.SessionID != "" && validateSessionID(evt.SessionID) == nil {
 					if cur, ok := a.store.Get(id); ok && cur.LastSessionID != evt.SessionID {
-						cur.LastSessionID = evt.SessionID
-						_ = a.store.Upsert(cur)
+						_, _ = a.store.Update(id, func(w *registry.Workspace) error {
+							w.LastSessionID = evt.SessionID
+							return nil
+						})
 					}
 				}
 				a.emit("agent:event", evt)
@@ -1367,6 +1437,15 @@ func (a *App) CloseWorkspace(id string) error {
 	if err := validateSessionID(id); err != nil {
 		return fmt.Errorf("invalid workspace id: %w", err)
 	}
+	unlock := a.lockWorkspace(id)
+	defer unlock()
+	a.closeWorkspace(id)
+	return nil
+}
+
+// closeWorkspace is CloseWorkspace's body. The caller holds id's lifecycle
+// lock (lockWorkspace).
+func (a *App) closeWorkspace(id string) {
 	paneID := paneIDFor(id)
 	shellPrefix := "shell-" + id
 	a.mu.Lock()
@@ -1443,7 +1522,6 @@ func (a *App) CloseWorkspace(id string) error {
 	// refresh fires, the monitor is already removed above, so attentionCount
 	// reflects the removal.
 	a.scheduleTitleUpdate()
-	return nil
 }
 
 // ErrWorktreeDirty aliases the git-package sentinel so app callers and tests can
@@ -1452,43 +1530,60 @@ var ErrWorktreeDirty = gitpkg.ErrWorktreeDirty
 
 // RemoveWorkspace closes the workspace and removes it from the registry. For
 // Worktree==true sessions it also removes the linked worktree tree from disk.
-// A dirty tree returns ErrWorktreeDirty and leaves the record intact; the
-// caller should then offer a force-confirm that calls ForceRemoveWorkspace.
-// RemoveWorkspace never deletes the branch. For Worktree==false (in-repo,
-// permanent) sessions, RemoveWorkspace drops only the registry record; it
-// never touches the repo root or its branch.
+// A dirty tree returns ErrWorktreeDirty and leaves the record and the live
+// session intact; the caller should then offer a force-confirm that calls
+// ForceRemoveWorkspace. RemoveWorkspace never deletes the branch. For
+// Worktree==false (in-repo, permanent) sessions, RemoveWorkspace drops only
+// the registry record; it never touches the repo root or its branch.
+//
+// RemoveWorkspace stops the agent, the drawer shells and the fs watcher
+// before it deletes the tree, so nothing writes into the directory while git
+// removes it. If the git removal then fails, the record stays (retryable)
+// but the session is already closed; CleanupSessions makes the same trade.
 func (a *App) RemoveWorkspace(id string) error {
 	if err := validateSessionID(id); err != nil {
 		return fmt.Errorf("invalid workspace id: %w", err)
 	}
+	unlock := a.lockWorkspace(id)
+	defer unlock()
 	w, ok := a.store.Get(id)
 	if !ok {
 		return nil // already gone; RemoveWorkspace is idempotent
 	}
-	if w.Worktree {
-		ctx := context.Background()
-		// If something deleted the worktree dir outside perch, WorktreeDirty
-		// (git -C <missing> status) would error, and the record could never
-		// drop, leaving a ghost session forever. This code detects the
-		// missing path up front and treats the worktree as already gone: it
-		// skips the git remove and drops the record cleanly. Only a
-		// present-but-dirty tree returns ErrWorktreeDirty.
-		if worktreePathGone(w.WorktreePath) {
-			_ = a.CloseWorkspace(id)
-			return a.store.Remove(id)
-		}
-		dirty, err := gitpkg.WorktreeDirty(ctx, a.runner(), w.WorktreePath)
-		if err != nil {
-			return fmt.Errorf("check worktree dirty: %w", err)
-		}
-		if dirty {
-			return ErrWorktreeDirty
-		}
-		if err := gitpkg.RemoveWorktree(ctx, a.runner(), w.RepoPath, w.WorktreePath, false); err != nil {
-			return fmt.Errorf("remove worktree: %w", err)
-		}
+	if !w.Worktree {
+		a.closeWorkspace(id)
+		return a.forgetWorkspace(id)
 	}
-	_ = a.CloseWorkspace(id)
+	ctx, cancel := context.WithTimeout(context.Background(), uiGitTimeout)
+	defer cancel()
+	// If something deleted the worktree dir outside perch, WorktreeDirty
+	// (git -C <missing> status) would error, and the record could never
+	// drop, leaving a ghost session forever. This code detects the missing
+	// tree up front and treats the worktree as already gone. It prunes git's
+	// stale registration, so the branch and the path can host a new session,
+	// and drops the record. Only a present-but-dirty tree returns
+	// ErrWorktreeDirty.
+	if worktreeGone(w) {
+		a.closeWorkspace(id)
+		_ = gitpkg.PruneWorktrees(ctx, a.runner(), w.RepoPath)
+		return a.forgetWorkspace(id)
+	}
+	dirty, err := gitpkg.WorktreeDirty(ctx, a.runner(), w.WorktreePath)
+	if err != nil {
+		return fmt.Errorf("check worktree dirty: %w", err)
+	}
+	if dirty {
+		return ErrWorktreeDirty
+	}
+	a.closeWorkspace(id)
+	if err := gitpkg.RemoveWorktree(ctx, a.runner(), w.RepoPath, w.WorktreePath, false); err != nil {
+		return fmt.Errorf("remove worktree: %w", err)
+	}
+	return a.forgetWorkspace(id)
+}
+
+// forgetWorkspace drops id's registry record.
+func (a *App) forgetWorkspace(id string) error {
 	return a.store.Remove(id)
 }
 
@@ -1507,26 +1602,49 @@ func worktreePathGone(path string) bool {
 	return false
 }
 
+// worktreeGone reports whether w's tree no longer exists as a git worktree:
+// its directory is missing, or, for a linked worktree, its ".git" file is.
+// The second case covers a directory deleted outside perch and then
+// recreated by some tool: git can neither inspect nor remove it ("not a git
+// repository", "validation failed"), so callers treat it like a missing
+// tree.
+func worktreeGone(w registry.Workspace) bool {
+	if worktreePathGone(w.WorktreePath) {
+		return true
+	}
+	if !w.Worktree {
+		return false
+	}
+	_, err := os.Lstat(filepath.Join(w.WorktreePath, ".git"))
+	return errors.Is(err, os.ErrNotExist)
+}
+
 // ForceRemoveWorkspace force-removes the linked worktree tree, discarding any
 // uncommitted changes, then drops the registry record. It keeps the branch.
 // For Worktree==false sessions, ForceRemoveWorkspace behaves like
-// RemoveWorkspace: it only drops the record.
+// RemoveWorkspace: it only drops the record. Like RemoveWorkspace, it stops
+// the session before it deletes the tree.
 func (a *App) ForceRemoveWorkspace(id string) error {
 	if err := validateSessionID(id); err != nil {
 		return fmt.Errorf("invalid workspace id: %w", err)
 	}
+	unlock := a.lockWorkspace(id)
+	defer unlock()
 	w, ok := a.store.Get(id)
 	if !ok {
 		return nil
 	}
+	a.closeWorkspace(id)
 	if w.Worktree {
-		ctx := context.Background()
-		if err := gitpkg.RemoveWorktree(ctx, a.runner(), w.RepoPath, w.WorktreePath, true); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), uiGitTimeout)
+		defer cancel()
+		if worktreeGone(w) {
+			_ = gitpkg.PruneWorktrees(ctx, a.runner(), w.RepoPath)
+		} else if err := gitpkg.RemoveWorktree(ctx, a.runner(), w.RepoPath, w.WorktreePath, true); err != nil {
 			return fmt.Errorf("force-remove worktree: %w", err)
 		}
 	}
-	_ = a.CloseWorkspace(id)
-	return a.store.Remove(id)
+	return a.forgetWorkspace(id)
 }
 
 // StaleSessionVM is the frontend-facing view of one stale worktree session.
@@ -1610,66 +1728,80 @@ func (a *App) ListStaleSessions() ([]StaleSessionVM, error) {
 // runs a git op on them. CleanupSessions accumulates errors and tries every
 // id before it returns.
 func (a *App) CleanupSessions(ids []string, force bool) error {
-	ctx := context.Background()
 	var errs []error
 	for _, id := range ids {
 		if err := validateSessionID(id); err != nil {
 			errs = append(errs, fmt.Errorf("invalid id %q: %w", id, err))
 			continue
 		}
-		w, ok := a.store.Get(id)
-		if !ok {
-			continue
-		}
-		if !w.Worktree {
-			_ = a.CloseWorkspace(id)
-			_ = a.store.Remove(id)
-			continue
-		}
-		// When force==false, CleanupSessions checks that the tree is clean
-		// before it tears anything down. Previously CloseWorkspace ran
-		// unconditionally, killing the agent and pty, and only then did
-		// RemoveWorktree(force=false) fail on a dirty tree, leaving a kept
-		// record whose live session was already dead. This code mirrors
-		// RemoveWorkspace: on a dirty tree, it skips this id entirely (the
-		// record, session, and monitor all stay alive) and records the error.
-		// It treats a missing worktree path as clean, because the tree is
-		// already gone, so the record can still be dropped. force==true
-		// bypasses this check and force-removes below.
-		if !force && !worktreePathGone(w.WorktreePath) {
-			dirty, derr := gitpkg.WorktreeDirty(ctx, a.runner(), w.WorktreePath)
-			if derr != nil {
-				errs = append(errs, fmt.Errorf("check worktree dirty %s: %w", id, derr))
-				continue
-			}
-			if dirty {
-				errs = append(errs, fmt.Errorf("remove worktree %s: %w", id, ErrWorktreeDirty))
-				continue
-			}
-		}
-		_ = a.CloseWorkspace(id)
-		if err := gitpkg.RemoveWorktree(ctx, a.runner(), w.RepoPath, w.WorktreePath, force); err != nil {
-			// Worktree removal failed, for example a dirty tree with
-			// force=false. CleanupSessions keeps the record, so the session
-			// stays retryable and the tree is never orphaned. It skips the
-			// branch delete.
-			errs = append(errs, fmt.Errorf("remove worktree %s: %w", id, err))
-			continue
-		}
-		if err := gitpkg.DeleteBranch(ctx, a.runner(), w.RepoPath, w.Branch, force); err != nil {
-			// The branch may stay, for example when it is unmerged with -d;
-			// this is safe. The tree is already gone, so CleanupSessions
-			// still drops the record below.
-			errs = append(errs, fmt.Errorf("delete branch %s: %w", id, err))
-		}
-		if err := a.store.Remove(id); err != nil {
-			errs = append(errs, fmt.Errorf("remove record %s: %w", id, err))
+		if err := a.cleanupSession(id, force); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	if len(errs) > 0 {
 		return errors.Join(errs...)
 	}
 	return nil
+}
+
+// cleanupSession is CleanupSessions' body for one validated id. It holds
+// id's lifecycle lock throughout.
+func (a *App) cleanupSession(id string, force bool) error {
+	unlock := a.lockWorkspace(id)
+	defer unlock()
+	w, ok := a.store.Get(id)
+	if !ok {
+		return nil
+	}
+	if !w.Worktree {
+		a.closeWorkspace(id)
+		return a.forgetWorkspace(id)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), uiGitTimeout)
+	defer cancel()
+	var errs []error
+	// When force==false, CleanupSessions checks that the tree is clean
+	// before it tears anything down. Previously CloseWorkspace ran
+	// unconditionally, killing the agent and pty, and only then did
+	// RemoveWorktree(force=false) fail on a dirty tree, leaving a kept
+	// record whose live session was already dead. This code mirrors
+	// RemoveWorkspace: on a dirty tree, it skips this id entirely (the
+	// record, session, and monitor all stay alive) and records the error.
+	// It treats a missing worktree path as clean, because the tree is
+	// already gone, so the record can still be dropped. force==true
+	// bypasses this check and force-removes below.
+	gone := worktreeGone(w)
+	if !force && !gone {
+		dirty, derr := gitpkg.WorktreeDirty(ctx, a.runner(), w.WorktreePath)
+		if derr != nil {
+			return fmt.Errorf("check worktree dirty %s: %w", id, derr)
+		}
+		if dirty {
+			return fmt.Errorf("remove worktree %s: %w", id, ErrWorktreeDirty)
+		}
+	}
+	a.closeWorkspace(id)
+	if gone {
+		// The tree was deleted outside perch: prune git's stale
+		// registration instead of a remove that git would refuse.
+		_ = gitpkg.PruneWorktrees(ctx, a.runner(), w.RepoPath)
+	} else if err := gitpkg.RemoveWorktree(ctx, a.runner(), w.RepoPath, w.WorktreePath, force); err != nil {
+		// Worktree removal failed, for example a dirty tree with
+		// force=false. CleanupSessions keeps the record, so the session
+		// stays retryable and the tree is never orphaned. It skips the
+		// branch delete.
+		return fmt.Errorf("remove worktree %s: %w", id, err)
+	}
+	if err := gitpkg.DeleteBranch(ctx, a.runner(), w.RepoPath, w.Branch, force); err != nil {
+		// The branch may stay, for example when it is unmerged with -d;
+		// this is safe. The tree is already gone, so CleanupSessions
+		// still drops the record below.
+		errs = append(errs, fmt.Errorf("delete branch %s: %w", id, err))
+	}
+	if err := a.forgetWorkspace(id); err != nil {
+		errs = append(errs, fmt.Errorf("remove record %s: %w", id, err))
+	}
+	return errors.Join(errs...)
 }
 
 // OpenShell spawns a $SHELL -l pty for the shell drawer pane (paneID) in cwd.

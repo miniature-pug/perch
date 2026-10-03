@@ -3128,7 +3128,7 @@ func TestApp_RemoveWorkspace_WorktreeSession_RemovesTree(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cfgDir := t.TempDir()
 	store, _ := registry.Load(cfgDir)
-	tree := t.TempDir()
+	tree := linkedWorktreeDir(t)
 	repo := t.TempDir()
 	_ = store.Upsert(registry.Workspace{
 		ID: "ws-wt", RepoPath: repo, WorktreePath: tree, Worktree: true,
@@ -3163,7 +3163,7 @@ func TestApp_RemoveWorkspace_DirtyWorktree_ReturnsErrWorktreeDirty(t *testing.T)
 	t.Setenv("HOME", t.TempDir())
 	cfgDir := t.TempDir()
 	store, _ := registry.Load(cfgDir)
-	tree := t.TempDir()
+	tree := linkedWorktreeDir(t)
 	repo := t.TempDir()
 	_ = store.Upsert(registry.Workspace{
 		ID: "ws-dirty", RepoPath: repo, WorktreePath: tree, Worktree: true,
@@ -3195,7 +3195,7 @@ func TestApp_ForceRemoveWorkspace_ForcesTree(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cfgDir := t.TempDir()
 	store, _ := registry.Load(cfgDir)
-	tree := t.TempDir()
+	tree := linkedWorktreeDir(t)
 	repo := t.TempDir()
 	_ = store.Upsert(registry.Workspace{
 		ID: "ws-force", RepoPath: repo, WorktreePath: tree, Worktree: true,
@@ -3258,7 +3258,7 @@ func TestApp_ListStaleSessions_FiltersThresholdAndWorktreeOnly(t *testing.T) {
 	cfgDir := t.TempDir()
 	store, _ := registry.Load(cfgDir)
 	repoA := t.TempDir()
-	treeA := t.TempDir()
+	treeA := linkedWorktreeDir(t)
 	repoB := t.TempDir()
 	now := time.Now()
 	_ = store.Upsert(registry.Workspace{
@@ -3266,7 +3266,7 @@ func TestApp_ListStaleSessions_FiltersThresholdAndWorktreeOnly(t *testing.T) {
 		Worktree: true, Agent: "claude", Title: "old-feat", Branch: "feat/old",
 		BaseRef: "main", LastActive: now.Add(-31 * 24 * time.Hour),
 	})
-	freshTree := t.TempDir()
+	freshTree := linkedWorktreeDir(t)
 	_ = store.Upsert(registry.Workspace{
 		ID: "ws-fresh", RepoPath: repoA, WorktreePath: freshTree,
 		Worktree: true, Agent: "claude", Title: "new-feat", Branch: "feat/new",
@@ -3310,7 +3310,7 @@ func TestApp_ListStaleSessions_SafeFlag(t *testing.T) {
 	cfgDir := t.TempDir()
 	store, _ := registry.Load(cfgDir)
 	repo := t.TempDir()
-	tree := t.TempDir()
+	tree := linkedWorktreeDir(t)
 	now := time.Now()
 	_ = store.Upsert(registry.Workspace{
 		ID: "ws-s", RepoPath: repo, WorktreePath: tree,
@@ -3360,7 +3360,7 @@ func TestApp_ListStaleSessions_UnmergedNotSafe(t *testing.T) {
 	cfgDir := t.TempDir()
 	store, _ := registry.Load(cfgDir)
 	repo := t.TempDir()
-	tree := t.TempDir()
+	tree := linkedWorktreeDir(t)
 	now := time.Now()
 	_ = store.Upsert(registry.Workspace{
 		ID: "ws-unmerged", RepoPath: repo, WorktreePath: tree,
@@ -3406,7 +3406,7 @@ func TestApp_CleanupSessions_RemovesTreeAndDeletesBranch(t *testing.T) {
 	cfgDir := t.TempDir()
 	store, _ := registry.Load(cfgDir)
 	repo := t.TempDir()
-	tree := t.TempDir()
+	tree := linkedWorktreeDir(t)
 	_ = store.Upsert(registry.Workspace{
 		ID: "ws-clean", RepoPath: repo, WorktreePath: tree,
 		Worktree: true, Agent: "claude", Title: "t", Branch: "feat/clean",
@@ -3452,7 +3452,7 @@ func TestApp_CleanupSessions_WorktreeRemoveFails_KeepsRecord(t *testing.T) {
 	cfgDir := t.TempDir()
 	store, _ := registry.Load(cfgDir)
 	repo := t.TempDir()
-	tree := t.TempDir()
+	tree := linkedWorktreeDir(t)
 	_ = store.Upsert(registry.Workspace{
 		ID: "ws-dirty", RepoPath: repo, WorktreePath: tree,
 		Worktree: true, Agent: "claude", Title: "t", Branch: "feat/dirty",
@@ -3500,7 +3500,7 @@ func TestApp_CleanupSessions_DirtyWorktree_KeepsRecordAndMonitor(t *testing.T) {
 	cfgDir := t.TempDir()
 	store, _ := registry.Load(cfgDir)
 	repo := t.TempDir()
-	tree := t.TempDir()
+	tree := linkedWorktreeDir(t)
 	_ = store.Upsert(registry.Workspace{
 		ID: "ws-dirty", RepoPath: repo, WorktreePath: tree,
 		Worktree: true, Agent: "claude", Title: "t", Branch: "feat/dirty",
@@ -3575,12 +3575,24 @@ func TestApp_RemoveWorkspace_MissingWorktreePath_DropsRecord(t *testing.T) {
 	if _, ok := store.Get("ws-gone"); ok {
 		t.Error("ghost record survived RemoveWorkspace for a deleted worktree path")
 	}
-	// The code must not call git worktree remove or status on the missing path.
+	// The code must not call git worktree remove or status on the missing
+	// path. A best-effort `worktree prune` in the repo is expected (APP-7).
 	for _, c := range r.Calls {
-		if c.Name == "git" {
+		if c.Name == "git" && !(len(c.Args) == 4 && c.Args[2] == "worktree" && c.Args[3] == "prune") {
 			t.Errorf("unexpected git call for missing worktree path: %v", c.Args)
 		}
 	}
+}
+
+// linkedWorktreeDir returns a temp dir shaped like a linked worktree (it has
+// a ".git" file), so worktreeGone treats it as present.
+func linkedWorktreeDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: /nonexistent\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }
 
 // TestApp_CloseWorkspace_DeniesPendingApprovals is the regression guard for the
