@@ -80,23 +80,25 @@
         const accent = cssVar("--perch-accent", "#d79921");
         return accent.startsWith("#") && accent.length === 7 ? accent + SELECTION_ALPHA_HEX : accent;
       })(),
-      // Standard 16-color ANSI, mapped to Gruvbox equivalents through tokens
-      // where possible
+      // Standard 16-color ANSI. Red, green, yellow and the greys come from the
+      // semantic tokens. Blue, magenta and cyan have their own per-theme
+      // --perch-ansi-* tokens, so blue and cyan are no longer the same color
+      // and magenta is no longer the (orange) accent (FEX-32).
       black:             cssVar("--perch-bg-elev",      "#1d2021"),
       red:               cssVar("--perch-err",          "#fb4934"),
       green:             cssVar("--perch-ok",           "#b8bb26"),
       yellow:            cssVar("--perch-warn",         "#fabd2f"),
-      blue:              cssVar("--perch-info",         "#83a598"),
-      magenta:           cssVar("--perch-accent",       "#d79921"),
-      cyan:              cssVar("--perch-info",         "#83a598"),
+      blue:              cssVar("--perch-ansi-blue",    "#83a598"),
+      magenta:           cssVar("--perch-ansi-magenta", "#d3869b"),
+      cyan:              cssVar("--perch-ansi-cyan",    "#8ec07c"),
       white:             cssVar("--perch-text",         "#ebdbb2"),
       brightBlack:       cssVar("--perch-text-dim",     "#a89984"),
       brightRed:         cssVar("--perch-err",          "#fb4934"),
       brightGreen:       cssVar("--perch-ok",           "#b8bb26"),
       brightYellow:      cssVar("--perch-warn",         "#fabd2f"),
-      brightBlue:        cssVar("--perch-info",         "#83a598"),
-      brightMagenta:     cssVar("--perch-accent",       "#d79921"),
-      brightCyan:        cssVar("--perch-info",         "#83a598"),
+      brightBlue:        cssVar("--perch-ansi-blue",    "#83a598"),
+      brightMagenta:     cssVar("--perch-ansi-magenta", "#d3869b"),
+      brightCyan:        cssVar("--perch-ansi-cyan",    "#8ec07c"),
       brightWhite:       cssVar("--perch-text",         "#ebdbb2"),
     };
   }
