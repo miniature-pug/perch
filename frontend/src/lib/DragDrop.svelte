@@ -61,7 +61,7 @@
     const text = e.dataTransfer.getData(MIME_TEXT);
     if (text) {
       if (paste?.(text)) return;
-      const bytes = Array.from(new TextEncoder().encode(text));
+      const bytes = new TextEncoder().encode(text);
       await writeToPty(paneId, bytes);
     }
     // This handler ignores MIME_SESSION drops on purpose. Stage handles them instead.

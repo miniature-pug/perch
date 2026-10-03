@@ -46,3 +46,31 @@ export function terminalKeyToPty(e: KeyboardEvent): boolean {
   if (!isModifierKey(e)) mode.leavePending = false;
   return true;
 }
+
+/**
+ * The full xterm custom key handler: the host-clipboard copy/paste chords
+ * (Ctrl-Shift-C with a selection, Ctrl-Shift-V), then terminalKeyToPty for
+ * everything else. Every event type goes through terminalKeyToPty, keypress
+ * included: xterm sends printable characters from keypress, so letting a
+ * keypress through in NORMAL mode would type into the agent (review #1).
+ */
+export function makeTerminalKeyHandler(clip: {
+  hasSelection: () => boolean;
+  copy: () => void;
+  paste: () => void;
+}): (e: KeyboardEvent) => boolean {
+  return (e) => {
+    if (e.type === "keydown") {
+      const chord = e.ctrlKey && e.shiftKey;
+      if (chord && (e.key === "C" || e.key === "c") && clip.hasSelection()) {
+        clip.copy();
+        return false;
+      }
+      if (chord && (e.key === "V" || e.key === "v")) {
+        clip.paste();
+        return false;
+      }
+    }
+    return terminalKeyToPty(e);
+  };
+}

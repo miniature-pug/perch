@@ -215,7 +215,11 @@ export function buildInitScriptContent(opts: MockOptions = {}): string {
           return Promise.resolve();
         },
         WriteToPty: function(paneId, data) {
+          // data is one padded standard-base64 string, as Go's []byte expects.
           record('WriteToPty', [paneId, data]);
+          if (typeof data !== 'string' || !/^[A-Za-z0-9+/]*={0,2}$/.test(data) || data.length % 4 !== 0) {
+            return Promise.reject(new Error('WriteToPty: data must be padded standard base64'));
+          }
           return Promise.resolve();
         },
         ResizePty: function(paneId, cols, rows) {
@@ -230,6 +234,21 @@ export function buildInitScriptContent(opts: MockOptions = {}): string {
           record('Approve', [reqId, decision]);
           return Promise.resolve();
         },
+        ApproveAlways: function(reqId) {
+          record('ApproveAlways', [reqId]);
+          var rule = { agent: 'claude', tool: 'mock', pattern: reqId, hash: 'h-' + reqId };
+          _settings = Object.assign({}, _settings, { alwaysRules: (_settings.alwaysRules || []).concat([rule]) });
+          return Promise.resolve({ rule: rule, added: true });
+        },
+        RemoveAlwaysRule: function(rule) {
+          record('RemoveAlwaysRule', [rule]);
+          var before = (_settings.alwaysRules || []);
+          var kept = before.filter(function(r) {
+            return !(r.agent === rule.agent && r.tool === rule.tool && r.pattern === rule.pattern && (r.hash || '') === (rule.hash || ''));
+          });
+          _settings = Object.assign({}, _settings, { alwaysRules: kept });
+          return Promise.resolve(kept.length !== before.length);
+        },
         PendingApprovals: function() {
           record('PendingApprovals', []);
           return Promise.resolve([]);
@@ -242,17 +261,18 @@ export function buildInitScriptContent(opts: MockOptions = {}): string {
           record('Hunks', [worktree, file]);
           return Promise.resolve(_hunks.slice());
         },
-        StageHunk: function(worktree, file, index) {
-          record('StageHunk', [worktree, file, index]);
-          return Promise.resolve();
+        // The hunk mutators take the hunk's content id; an empty id is refused.
+        StageHunk: function(worktree, file, index, id) {
+          record('StageHunk', [worktree, file, index, id]);
+          return id ? Promise.resolve() : Promise.reject(new Error('hunk id must not be empty'));
         },
-        DiscardHunk: function(worktree, file, index) {
-          record('DiscardHunk', [worktree, file, index]);
-          return Promise.resolve();
+        DiscardHunk: function(worktree, file, index, id) {
+          record('DiscardHunk', [worktree, file, index, id]);
+          return id ? Promise.resolve() : Promise.reject(new Error('hunk id must not be empty'));
         },
-        UnstageHunk: function(worktree, file, index) {
-          record('UnstageHunk', [worktree, file, index]);
-          return Promise.resolve();
+        UnstageHunk: function(worktree, file, index, id) {
+          record('UnstageHunk', [worktree, file, index, id]);
+          return id ? Promise.resolve() : Promise.reject(new Error('hunk id must not be empty'));
         },
         ListDir: function(absDir) {
           record('ListDir', [absDir]);

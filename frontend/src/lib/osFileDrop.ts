@@ -42,8 +42,8 @@ export function mentionText(path: string): string {
 
 // Encode a single dropped path as an @mention (see mentionText), as UTF-8
 // bytes ready for writeToPty.
-export function mentionBytes(path: string): number[] {
-  return Array.from(new TextEncoder().encode(mentionText(path)));
+export function mentionBytes(path: string): Uint8Array {
+  return new TextEncoder().encode(mentionText(path));
 }
 
 // Resolve which pane sits under the drop point (x, y in viewport CSS

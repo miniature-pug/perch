@@ -1,6 +1,23 @@
 <!-- frontend/src/lib/Preview.svelte -->
 <script module lang="ts">
   import mermaid from "mermaid";
+  import DOMPurify from "dompurify";
+
+  // Markdown task lists render as <input type="checkbox">. Every other input
+  // is removed, and a kept checkbox is always disabled, so the preview shows
+  // done/open items without offering a form control (review #6).
+  let purifyHooked = false;
+  function hookPurify() {
+    if (purifyHooked) return;
+    purifyHooked = true;
+    DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+      if (node.nodeName !== "INPUT") return;
+      const el = node as Element;
+      if ((el.getAttribute("type") ?? "").toLowerCase() !== "checkbox") { el.remove(); return; }
+      el.setAttribute("disabled", "");
+    });
+  }
+  hookPurify();
 
   // Configure mermaid once per app, not on every render (FEX-25).
   let mermaidReady = false;
@@ -21,42 +38,24 @@
   // onPreviewClick below, never by navigation.
   export const MARKDOWN_PURIFY = {
     USE_PROFILES: { html: true, svg: true, svgFilters: true },
-    FORBID_TAGS: ["style", "link", "meta", "base", "form", "input", "button", "textarea",
+    FORBID_TAGS: ["style", "link", "meta", "base", "form", "button", "textarea",
                   "select", "option", "iframe", "frame", "object", "embed", "dialog"],
     FORBID_ATTR: ["id", "name", "style", "class", "action", "formaction", "target"],
   };
 
-  // External links open in the system browser. Only plain web and mail
-  // links qualify.
-  export function isExternalUrl(href: string): boolean {
-    return /^(https?:|mailto:)/i.test(href);
-  }
-
-  // Resolve a relative link against the previewed file's directory.
-  // Returns null for anchors, absolute URLs with a scheme, and empty links.
-  export function resolveRelative(fromFile: string, href: string): string | null {
-    const target = href.split("#")[0].split("?")[0];
-    if (!target || /^[a-z][a-z0-9+.-]*:/i.test(target)) return null;
-    const base = target.startsWith("/") ? [] : fromFile.split("/").slice(0, -1);
-    for (const part of target.split("/")) {
-      if (part === "" || part === ".") continue;
-      if (part === "..") base.pop();
-      else base.push(part);
-    }
-    let decoded = "/" + base.filter(Boolean).join("/");
-    try { decoded = decodeURIComponent(decoded); } catch { /* keep as is */ }
-    return decoded;
-  }
 </script>
 
 <script lang="ts">
   import { marked } from "marked";
-  import DOMPurify from "dompurify";
+  import { isExternalUrl, resolveRelative } from "./preview";
 
   let {
-    path, kind, content, visible = true, onOpenFile, onEditSource,
+    path, kind, content, visible = true, src = "", onOpenFile, onEditSource,
   }: {
     path: string;
+    // The URL an image preview loads (the backend's /wt-file/ handler,
+    // FEX-11). An absolute filesystem path never loads in the webview.
+    src?: string;
     kind: "markdown" | "mermaid" | "image";
     content: string;
     // False when the preview is mounted but off-screen, for example on the agent
@@ -140,7 +139,11 @@
     </div>
   {/if}
   {#if kind === "image"}
-    <img src={path} alt={path} class="preview-img" />
+    {#if src}
+      <img {src} alt={path} class="preview-img" />
+    {:else}
+      <p class="preview-empty">This image is outside the session's worktree and cannot be previewed.</p>
+    {/if}
   {:else}
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
     <div class="preview-body prose" onclick={onPreviewClick}>{@html html}</div>
@@ -161,6 +164,8 @@
   .preview::-webkit-scrollbar-track { background: transparent; }
   .preview::-webkit-scrollbar-thumb { background: var(--perch-border); border-radius: var(--perch-scrollbar-radius); }
   .preview::-webkit-scrollbar-thumb:hover { background: var(--perch-text-dim); }
+
+  .preview-empty { color: var(--perch-text-dim); margin: 0; }
 
   .preview-toolbar {
     display: flex;

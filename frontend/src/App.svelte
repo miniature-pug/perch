@@ -27,13 +27,13 @@
   import { SvelteSet }      from "svelte/reactivity";
   import { layout }         from "./lib/stores/layout.svelte";
   import { mode }           from "./lib/stores/mode.svelte";
-  import { settings, sameAlwaysRule } from "./lib/stores/settings.svelte";
+  import { settings } from "./lib/stores/settings.svelte";
   import ApprovalCard       from "./lib/ApprovalCard.svelte";
   import NotificationHub    from "./lib/NotificationHub.svelte";
   import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead, markAllRead, markReadForWorkspace, dropForWorkspace, dropAwaitingInputForWorkspace, dropBlockingForWorkspace } from "./lib/stores/notifications.svelte";
   import CleanupPanel from "./lib/CleanupPanel.svelte";
-  import { listWorkspaces, createWorkspace, setWorkspaceTitle, workspaceForBranch, removeWorkspace, openWorkspace, closeWorkspace, closeShell, revealInFiles, onAgentEvent, onNotify, onFsChanged, onWorkspaceAttach, onWorkspaceRelaunch, approve, pendingApprovals, branches, readFile, setWindowFocus, writeToPty, discoverRepos, diffStat, listStaleSessions, forceRemoveWorkspace, clipboardSetText, getSettings, homeShellCwd as fetchHomeShellCwd } from "./lib/wails";
-  import type { WorkspaceVM, ApprovalReq, StaleSessionVM, AgentState, RepoInfo, AlwaysRule } from "./lib/wails";
+  import { listWorkspaces, createWorkspace, setWorkspaceTitle, workspaceForBranch, removeWorkspace, openWorkspace, closeWorkspace, closeShell, revealInFiles, onAgentEvent, onNotify, onFsChanged, onWorkspaceAttach, onWorkspaceRelaunch, approve, pendingApprovals, branches, readFile, setWindowFocus, writeToPty, discoverRepos, diffStat, listStaleSessions, forceRemoveWorkspace, clipboardSetText, approveAlways, removeAlwaysRule, homeShellCwd as fetchHomeShellCwd } from "./lib/wails";
+  import type { WorkspaceVM, ApprovalReq, StaleSessionVM, AgentState, RepoInfo, AlwaysRule, AlwaysGrant } from "./lib/wails";
   import { UNDO_REMOVE_DELAY_MS, GCHORD_TIMEOUT_MS, SIDEBAR_MIN_W, SIDEBAR_MAX_W, SHELL_MIN_H, SHELL_MAX_H, RESIZE_STEP_PX, THEMES, MIME_SESSION, MENTION_PREFIX, AGENT_CLAUDE, AGENT_OPENCODE } from "./lib/constants";
 
   let workspaces      = $state<WorkspaceVM[]>([]);
@@ -368,9 +368,21 @@
   // split terminal keeps its live xterm buffer across split on and off toggles.
   const splitZoneEl = $derived(layout.splitId ? termZoneEls[layout.splitId] : undefined);
 
-  // The active session exists but was never opened this run, so nothing of it
-  // is mounted (FEC-12).
+  // The active session exists but was never opened this run, so no terminal
+  // or shell of it is mounted (FEC-12). Its Code view needs no pty, so it still
+  // gets one (review #8).
   const activeCold = $derived(!!active && !openIds.has(active.id) && !everOpened.has(active.id));
+  const codeWorkspaces = $derived(activeCold && active ? [...mountedWorkspaces, active] : mountedWorkspaces);
+
+  // URL of a worktree image for the Preview, served by the backend's
+  // /wt-file/ asset handler (FEX-11). The version busts the webview cache
+  // when the file changes on disk.
+  function worktreeFileUrl(ws: WorkspaceVM, abs: string, version: number): string {
+    const prefix = ws.worktreePath.endsWith("/") ? ws.worktreePath : ws.worktreePath + "/";
+    if (!abs.startsWith(prefix)) return "";
+    const rel = abs.slice(prefix.length).split("/").map(encodeURIComponent).join("/");
+    return `/wt-file/${encodeURIComponent(ws.id)}/${rel}?v=${version}`;
+  }
 
   // Sessions whose shell drawer stays mounted: every session with shell state.
   // Shells outlive the agent and a session switch (F20a). Unmounting a panel
@@ -583,6 +595,12 @@
           approvals[ev.workspaceId] = [...q, ev.approval];
         }
       }
+      // A pending approval was answered (here, by an always-allow rule, or in
+      // the agent's own TUI) or taken away (close, reopen, reload, exit). Retract
+      // its card. The same id can arrive more than once; removal is idempotent.
+      if (ev.resolvedReqId) retractApproval(ev.workspaceId, ev.resolvedReqId);
+      // "approval-resolved" carries no state: nothing else to do.
+      if (ev.kind === "approval-resolved") return;
       const ws = workspaces.find(w => w.id === ev.workspaceId);
       if (!ws) return;
       const prev = ws.state;
@@ -700,8 +718,16 @@
       fsVersion[p.workspaceId] = (fsVersion[p.workspaceId] ?? 0) + 1;
       // Per-path bump. Only the Editor or Preview showing THIS exact file reloads,
       // so an agent write to an unrelated file never disturbs the edited buffer
-      // (F15).
-      if (p.path) fsPathVersion[p.path] = (fsPathVersion[p.path] ?? 0) + 1;
+      // (F15). `paths` lists the changed files (FEC-1, FEX-4). Past the
+      // backend's cap it is empty and `truncated` is set, and an older backend
+      // sends no list at all: then anything may have changed, so the session's
+      // open file reloads (a clean buffer reloads; a dirty one checks on save).
+      if (p.truncated || !Array.isArray(p.paths)) {
+        const open = codePaths[p.workspaceId];
+        if (open) fsPathVersion[open] = (fsPathVersion[open] ?? 0) + 1;
+      } else {
+        for (const f of p.paths) fsPathVersion[f] = (fsPathVersion[f] ?? 0) + 1;
+      }
       const ws = workspaces.find(w => w.id === p.workspaceId);
       if (ws) refreshDiffStat(ws);
     });
@@ -856,7 +882,18 @@
       // worktree that fails to spawn a pty, was once silently swallowed here,
       // leaving the row dimmed with no explanation. This surfaces the error, so
       // the user knows the reopen did not work (F35).
-      addBlocking(id, "Could not open session", String(e), "error");
+      const msg = String(e);
+      const ws = workspaces.find(w => w.id === id);
+      if (msg.includes("session directory is missing") && ws) {
+        // ErrWorktreeMissing: the worktree was deleted outside perch. Offer
+        // the one action that helps: removing the session (RemoveWorkspace
+        // drops it and prunes git).
+        addBlocking(id, "Session directory is missing",
+          `The worktree ${ws.worktreePath} no longer exists. Remove the session to clean it up.`, "error");
+        confirmRemove = ws;
+        return;
+      }
+      addBlocking(id, "Could not open session", msg, "error");
     }
   }
 
@@ -1015,6 +1052,18 @@
       // example "exit status 128: fatal: ...". Log it for diagnosis, and show a
       // human-readable message inline, where the user can act on it (FEC-27).
       console.error("create session failed:", e);
+      // ErrBranchInUse: another session already has this branch. Go to it.
+      if (worktree && String(e).includes("already checked out by a session")) {
+        try {
+          const owner = await workspaceForBranch(repo, branch);
+          if (owner.found) {
+            newSessionOpen = false;
+            newSessionInitialAgent = null;
+            onSelect(owner.id);
+            return;
+          }
+        } catch { /* fall through to the inline message */ }
+      }
       createError = createErrorMessage(String(e), branch);
       // Keep the dialog open, so the user can correct their choice.
     }
@@ -1022,6 +1071,17 @@
 
   // Map the backend's create sentinels to actionable copy (F26a, FEC-27).
   function createErrorMessage(msg: string, branch: string): string {
+    if (msg.includes("worktree path already exists")) {
+      // ErrWorktreePathExists: the directory, not the branch, is taken. It must
+      // match before /already exists/ below, and must NOT suggest "Use
+      // existing branch".
+      return `A directory for the branch "${branch}" already exists. Remove or rename it, or choose a different branch name.`;
+    }
+    if (msg.includes("another open session is working in this checkout")) {
+      // ErrCheckoutInUse: an in-repo session would switch the branch under
+      // another open session.
+      return "Another open session is working in this checkout. Close it first, or turn on Worktree to work on a separate checkout.";
+    }
     if (msg.includes("uncommitted changes")) {
       // ErrWorktreeDirty: a non-worktree session cannot switch to a different
       // branch while the working tree has uncommitted changes.
@@ -1200,35 +1260,52 @@
     if (ws && ws.state === "awaiting-approval") ws.state = "idle";
   }
 
+  // Drop one request from a session's approval queue, if it is still there.
+  // When the queue empties, its "Approval needed" notification is moot too.
+  function retractApproval(wsId: string, reqId: string) {
+    const q = approvals[wsId];
+    if (!q || !q.some(r => r.reqId === reqId)) return;
+    const rest = q.filter(r => r.reqId !== reqId);
+    if (rest.length) approvals[wsId] = rest;
+    else {
+      const { [wsId]: _drop, ...others } = approvals; approvals = others;
+      dropBlockingForWorkspace(wsId, ["awaiting-approval"]);
+    }
+  }
+
   // Resolve ONE queued request by reqId. This calls approve(), then pops the
   // request from its owning session's queue and runs the attention backstop. It
   // guards against a concurrent in-flight decide of the same reqId.
-  async function decideOne(reqId: string, decision: "allow" | "deny" | "always"): Promise<boolean> {
-    if (decidingReqs.has(reqId)) return false;
+  async function decideOne(reqId: string, decision: "allow" | "deny" | "always"): Promise<{ ok: boolean; grant?: AlwaysGrant }> {
+    if (decidingReqs.has(reqId)) return { ok: false };
     // Locate the owning session, the queue that holds this reqId.
     const ownerEntry = Object.entries(approvals).find(([, q]) => q.some(r => r.reqId === reqId));
     const ownerWsId = ownerEntry?.[0] ?? activeId;
-    if (!ownerWsId) return false;
+    if (!ownerWsId) return { ok: false };
     decidingReqs.add(reqId);
     try {
-      await approve(reqId, decision);
-      // Pop this reqId from the owner's queue, and leave any siblings so the next
-      // request surfaces.
-      const q = (approvals[ownerWsId] ?? []).filter(r => r.reqId !== reqId);
-      if (q.length) approvals[ownerWsId] = q;
-      else {
-        const { [ownerWsId]: _drop, ...rest } = approvals; approvals = rest;
-        // This session's last pending approval is resolved. This clears its
-        // blocking notification, so the stale "approve this" banner does not
-        // linger after the request it referred to is gone. It fires only when
-        // the queue is now empty.
-        dropBlockingForWorkspace(ownerWsId, ["awaiting-approval"]); // FEC-6
-      }
+      // "always" goes through ApproveAlways, which reports the exact rule it
+      // added, so the Undo toast can revoke that rule and nothing else.
+      let grant: AlwaysGrant | undefined;
+      if (decision === "always") grant = await approveAlways(reqId);
+      else await approve(reqId, decision);
+      // Pop this reqId from the owner's queue, and leave any siblings so the
+      // next request surfaces. The last one also clears its notification.
+      retractApproval(ownerWsId, reqId);
       clearAttentionBackstop(ownerWsId);
-      return true;
+      return { ok: true, grant };
     } catch (e) {
-      addBlocking(ownerWsId, "Approval failed", String(e), "error");
-      return false;
+      const msg = String(e);
+      // The request WAS allowed; only the standing rule failed to save.
+      if (decision === "always" && msg.includes("allowed, but could not save the always-allow rule")) {
+        retractApproval(ownerWsId, reqId);
+        clearAttentionBackstop(ownerWsId);
+        addBlocking(ownerWsId, "Always-allow rule not saved",
+          `The request was allowed, but the rule could not be saved, so the next identical request will ask again. ${msg}`, "error");
+        return { ok: true };
+      }
+      addBlocking(ownerWsId, "Approval failed", msg, "error");
+      return { ok: false };
     } finally {
       decidingReqs.delete(reqId);
     }
@@ -1597,7 +1674,7 @@
     // is bracketed and never submitted line by line (FEX-28). Fall back to a
     // raw write when the pane has no mounted terminal.
     if (termRefs[active.id]?.paste?.(text)) return;
-    const bytes = Array.from(new TextEncoder().encode(text));
+    const bytes = new TextEncoder().encode(text);
     writeToPty(active.paneId, bytes).catch((e) => {
       addBlocking(active?.id ?? "", "Could not send to the agent", String(e), "error");
     });
@@ -1615,36 +1692,34 @@
     if (decision !== "always") { await decideOne(reqId, decision); return; }
     // "Always allow" adds a standing rule in the backend. App hosts the Undo
     // toast, because the card unmounts or moves to the next request as soon
-    // as the grant lands (FEC-15, FEX-9). The rule the grant added is the
-    // difference between the rule list before and after it, so Undo removes
-    // exactly that rule, matched by identity on a fresh read.
+    // as the grant lands (FEC-15, FEX-9). ApproveAlways reports the rule the
+    // grant added, and Undo revokes exactly that rule in the backend
+    // (review #10); a duplicate grant added nothing, so it offers no Undo.
     const tool = Object.values(approvals).flat().find(r => r.reqId === reqId)?.tool ?? "this tool";
-    const before = await getSettings().then(s => s.alwaysRules ?? []).catch(() => null);
-    if (!(await decideOne(reqId, "always"))) return; // the grant failed: no rule, nothing to undo
-    const after = await getSettings().then(s => s.alwaysRules ?? []).catch(() => null);
-    const added = before && after ? after.filter(r => !before.some(b => sameAlwaysRule(b, r))) : [];
-    showAlwaysToast(tool, added);
+    const r = await decideOne(reqId, "always");
+    if (!r.ok) return; // the grant failed: no rule, nothing to undo
+    showAlwaysToast(tool, r.grant?.added ? r.grant.rule : null);
   }
 
-  // Post-grant "Always allow" toast. `rules` is empty when the added rule
-  // could not be identified; the toast then points at Settings instead of
-  // offering an Undo that would do nothing.
   // The docked approval card, for the NORMAL-mode `a` focus shortcut.
   let approvalCardRef = $state<{ focusCard: () => void } | undefined>();
-  let alwaysToast = $state<{ tool: string; rules: AlwaysRule[] } | null>(null);
+  // Post-grant "Always allow" toast. `rule` is null when the grant added no
+  // rule (an identical one existed, or saving it failed); the toast then
+  // offers no Undo.
+  let alwaysToast = $state<{ tool: string; rule: AlwaysRule | null } | null>(null);
   let alwaysToastTimer: ReturnType<typeof setTimeout> | undefined;
-  function showAlwaysToast(tool: string, rules: AlwaysRule[]) {
+  function showAlwaysToast(tool: string, rule: AlwaysRule | null) {
     clearTimeout(alwaysToastTimer);
-    alwaysToast = { tool, rules };
+    alwaysToast = { tool, rule };
     alwaysToastTimer = setTimeout(() => { alwaysToast = null; }, UNDO_REMOVE_DELAY_MS);
   }
   async function undoAlways() {
     const t = alwaysToast;
     clearTimeout(alwaysToastTimer);
     alwaysToast = null;
-    if (!t || t.rules.length === 0) return;
+    if (!t || !t.rule) return;
     try {
-      await settings.removeAlwaysRules(t.rules);
+      await removeAlwaysRule(t.rule);
     } catch (e) {
       addBlocking("", "Could not undo the always-allow rule", `${String(e)}. Remove it in Settings.`, "error");
     }
@@ -1783,7 +1858,7 @@
                 </div>
                 </div>
               {/each}
-              {#if activeCold && active && layout.view !== "diff"}
+              {#if activeCold && active && layout.view === "agent"}
                 <!-- A session selected with j/k (or after a removal) that was
                      never opened this run: nothing is mounted for it, so no
                      shell or pty is spawned just by moving the selection
@@ -1804,9 +1879,10 @@
                    codePaths keep each file selection independent, and the
                    `visible` prop freezes a hidden pane, so it does no background
                    listing, reloading, or rendering. -->
-              {#each mountedWorkspaces as ws (ws.id)}
+              {#each codeWorkspaces as ws (ws.id)}
                 {@const codePath = codePaths[ws.id] ?? null}
                 {@const showing  = ws.id === activeId && layout.view === "code"}
+                {@const previewing = isPreviewable(codePath) && !(codePath && sourceView.has(codePath))}
                 <div class="code-layout" style:display={showing ? "" : "none"}>
                   <!-- FileTree re-lists IN PLACE on a file write, through the
                        monotonic refresh signal. It is never remounted, since that
@@ -1830,7 +1906,7 @@
                         codePaths[ws.id] = p;
                       }
                     }} />
-                  {#if isPreviewable(codePath) && !(codePath && sourceView.has(codePath))}
+                  {#if previewing}
                     <!-- Keyed only by the file path, the same key on every view, so
                          a file switch gives a fresh render but an fs change does
                          not remount. The render side effect is frozen with
@@ -1840,22 +1916,27 @@
                          source editor (FEX-23). -->
                     {#key codePath}
                       <Preview path={codePath ?? ""} kind={previewKind(codePath ?? "")}
+                               src={codePath ? worktreeFileUrl(ws, codePath, fsPathVersion[codePath] ?? 0) : ""}
                                content={previewContent.path === codePath ? previewContent.content : ""}
                                visible={showing}
                                onOpenFile={(p: string) => { if (p.startsWith(ws.worktreePath + "/")) codePaths[ws.id] = p; }}
                                onEditSource={() => { if (codePath) sourceView.add(codePath); }} />
                     {/key}
-                  {:else}
-                    <!-- reloadToken is the monotonic per-file fs version, so the
-                         editor reloads only when ITS file changes on disk, and only
-                         when it has no unsaved edits, never on an unrelated write
-                         or a view toggle. Visibility is handled by `visible`. -->
+                  {/if}
+                  <!-- reloadToken is the monotonic per-file fs version, so the
+                       editor reloads only when ITS file changes on disk, and only
+                       when it has no unsaved edits, never on an unrelated write
+                       or a view toggle. Visibility is handled by `visible`.
+                       The Editor stays mounted, hidden, while a Preview is shown:
+                       destroying it would drop unsaved edits whose save failed
+                       (review #3). -->
+                  <div class="editor-slot" style:display={previewing ? "none" : "contents"}>
                     <Editor path={codePath} worktree={ws.worktreePath} workspaceId={ws.id}
                             reloadToken={fsPathVersion[codePath ?? ""] ?? 0}
-                            visible={showing}
+                            visible={showing && !previewing}
                             onShowPreview={codePath && isPreviewable(codePath) ? () => { if (codePath) sourceView.delete(codePath); } : undefined}
                             onSendToAgent={sendToAgent} />
-                  {/if}
+                  </div>
                 </div>
               {/each}
               {#if active}
@@ -2179,7 +2260,7 @@
       <div class="undo-toast-stack" aria-live="polite">
         {#if alwaysToast}
           <div class="undo-toast" role="status" data-testid="always-toast">
-            {#if alwaysToast.rules.length > 0}
+            {#if alwaysToast.rule}
               <span class="undo-toast-msg">Always-allow rule added for {alwaysToast.tool}</span>
               <button class="undo-toast-btn" onclick={undoAlways}>Undo</button>
             {:else}

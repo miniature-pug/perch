@@ -65,9 +65,9 @@ test("OS file drop routes ABSOLUTE paths to the pty via the Wails OnFileDrop cal
   document.elementFromPoint = () => zone;
   try {
     dropCb!(10, 20, ["/wt/src/main.go"]);
-    await waitFor(() => expect(w.writeToPty).toHaveBeenCalledWith("p1", expect.any(Array)));
+    await waitFor(() => expect(w.writeToPty).toHaveBeenCalledWith("p1", expect.anything()));
     const [, bytes] = vi.mocked(w.writeToPty).mock.calls[0];
-    const decoded = new TextDecoder().decode(new Uint8Array(bytes as number[]));
+    const decoded = new TextDecoder().decode(bytes as Uint8Array);
     expect(decoded).toBe("@/wt/src/main.go "); // a plain path stays bare (FEX-27)
   } finally {
     document.elementFromPoint = origEFP;
@@ -96,7 +96,7 @@ test("in-app text drop calls writeToPty with UTF-8 encoded bytes for paneId", as
   const zone = screen.getByRole("region", { name: /drop zone/i });
   const text = "@/x.go ";
   await fireEvent.drop(zone, { dataTransfer: fakeDataTransfer({ textData: text }) });
-  const expectedBytes = Array.from(new TextEncoder().encode(text));
+  const expectedBytes = new TextEncoder().encode(text);
   await waitFor(() =>
     expect(w.writeToPty).toHaveBeenCalledWith("pane-42", expectedBytes)
   );

@@ -42,7 +42,7 @@ test("mounts the git change gutter for a changed file", async () => {
   const w = await import("./wails");
   vi.mocked(w.readFile).mockResolvedValueOnce("line1\nline2\nline3\n");
   vi.mocked(w.hunks).mockResolvedValueOnce([{
-    file: "/wt/src/main.go", index: 0, header: "@@ -1,1 +1,2 @@",
+    file: "/wt/src/main.go", index: 0, id: "h0", header: "@@ -1,1 +1,2 @@",
     oldStart: 1, oldLines: 1, newStart: 1, newLines: 2,
     lines: [{ kind: "add", text: "line1a" }, { kind: "ctx", text: "line2" }],
   }]);
@@ -632,4 +632,157 @@ test("FEX-30: an unknown file type gets no JavaScript language support", async (
   await waitFor(() => expect(document.querySelector(".cm-editor")).not.toBeNull());
   const view = EditorView.findFromDOM(document.querySelector(".cm-editor") as HTMLElement)!;
   expect(view.state.facet(language)).toBeNull();
+});
+
+// --- Adversarial review regressions (review #2-#5) and the save-conflict check (FEX-4) ---
+
+describe("review: Editor edge cases", () => {
+  async function setup(initial: string | null = "/wt/a.ts") {
+    const w = await import("./wails");
+    const { flushSync } = await import("svelte");
+    const { EditorView } = await import("@codemirror/view");
+    const { default: Host } = await import("./__stubs__/EditorHost.svelte");
+    vi.mocked(w.readFile).mockReset();
+    vi.mocked(w.readFile).mockImplementation(async (p: string) => "content of " + p);
+    vi.mocked(w.writeFile).mockReset();
+    vi.mocked(w.writeFile).mockImplementation(async () => {});
+    vi.mocked(w.hunks).mockReset();
+    vi.mocked(w.hunks).mockImplementation(async () => []);
+    const r = render(Host, { props: { path: initial } });
+    const cmView = () => {
+      const el = document.querySelector(".cm-editor") as HTMLElement | null;
+      return el ? EditorView.findFromDOM(el) : null;
+    };
+    const shown = () => cmView()?.state.doc.toString() ?? null;
+    const type = (text: string) => { cmView()!.dispatch({ changes: { from: 0, insert: text } }); };
+    const setPath = (p: string | null) => { r.component.setPath(p); flushSync(); };
+    const bump = () => { r.component.bump(); flushSync(); };
+    if (initial) await waitFor(() => expect(shown()).toBe("content of " + initial));
+    return { w, r, shown, type, setPath, bump, cmView };
+  }
+
+  test("review #2: edits typed while the next file's read fails are saved, not dropped", async () => {
+    const { w, type, setPath } = await setup();
+    let rejectB: (e: Error) => void = () => {};
+    vi.mocked(w.readFile).mockImplementation((p: string) =>
+      p === "/wt/b.ts" ? new Promise<string>((_, rej) => { rejectB = rej; }) : Promise.resolve("content of " + p));
+    setPath("/wt/b.ts");
+    await waitFor(() => expect(w.readFile).toHaveBeenCalledWith("/wt/b.ts"));
+    type("TYPED ");
+    rejectB(new Error("file too large"));
+    await waitFor(() => expect(w.writeFile).toHaveBeenCalledWith("/wt/a.ts", "TYPED content of /wt/a.ts"));
+  });
+
+  test("review #4: fs bumps of the target while a switch is blocked do not retry or re-notify", async () => {
+    const { w, type, setPath, bump } = await setup();
+    const { getItems } = await import("./stores/notifications.svelte");
+    const before = getItems().filter((n) => n.title === "Save failed").length;
+    vi.mocked(w.writeFile).mockRejectedValue(new Error("ENOENT"));
+    type("EDIT ");
+    setPath("/wt/b.ts");
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toMatch(/could not be saved/));
+    bump(); await new Promise((r) => setTimeout(r, 10));
+    bump(); await new Promise((r) => setTimeout(r, 10));
+    expect(getItems().filter((n) => n.title === "Save failed").length - before).toBe(1);
+    expect(vi.mocked(w.writeFile).mock.calls.length).toBe(1);
+  });
+
+  test("review #5: overlapping saves land in order, so the newest text stays on disk", async () => {
+    const { w, type } = await setup();
+    type("ONE ");
+    let release1: () => void = () => {};
+    const disk: string[] = [];
+    vi.mocked(w.writeFile).mockImplementationOnce((_p: string, c: string) =>
+      new Promise<void>((res) => { release1 = () => { disk.push(c); res(); }; }));
+    await fireEvent.keyDown(document, { key: "s", ctrlKey: true });
+    type("TWO ");
+    vi.mocked(w.writeFile).mockImplementationOnce(async (_p: string, c: string) => { disk.push(c); });
+    await fireEvent.keyDown(document, { key: "s", ctrlKey: true });
+    await new Promise((r) => setTimeout(r, 5));
+    release1();
+    await waitFor(() => expect(disk).toHaveLength(2));
+    expect(disk.at(-1)).toBe("TWO ONE content of /wt/a.ts");
+    expect(document.querySelector(".dirty-dot")).toBeNull();
+  });
+
+  test("review #3: a blocked switch offers Discard and Copy, and a preview swap keeps the edits", async () => {
+    const { w, type, setPath, shown } = await setup();
+    vi.mocked(w.writeFile).mockRejectedValue(new Error("ENOENT"));
+    type("EDIT ");
+    setPath("/wt/b.ts");
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toMatch(/could not be saved/));
+    // The natural escape, a previewable file, must not lose the edits.
+    setPath("/wt/README.md");
+    await new Promise((r) => setTimeout(r, 20));
+    setPath("/wt/a.ts");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(shown()).toBe("EDIT content of /wt/a.ts");
+    // Copy puts the text on the clipboard; Discard drops the edits and moves on.
+    setPath("/wt/b.ts");
+    await waitFor(() => screen.getByRole("button", { name: /discard changes/i }));
+    await fireEvent.click(screen.getByRole("button", { name: /copy text/i }));
+    expect(w.clipboardSetText).toHaveBeenCalledWith("EDIT content of /wt/a.ts");
+    await fireEvent.click(screen.getByRole("button", { name: /discard changes/i }));
+    await waitFor(() => expect(shown()).toBe("content of /wt/b.ts"));
+  });
+
+  test("ErrBinaryFile: a binary file shows a notice, keeps no buffer, and Ctrl-S writes nothing", async () => {
+    const { w, setPath, shown } = await setup();
+    vi.mocked(w.readFile).mockRejectedValueOnce(new Error("fs: binary or non-UTF-8 file"));
+    setPath("/wt/logo.bin");
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toMatch(/not editable/));
+    expect(shown()).toBeNull();
+    await fireEvent.keyDown(document, { key: "s", ctrlKey: true });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(w.writeFile).not.toHaveBeenCalled();
+  });
+
+  describe("FEX-4: save conflicts", () => {
+    test("a dirty buffer whose file changed on disk is not silently written over", async () => {
+      const { w, type, bump } = await setup();
+      type("MINE ");
+      // The agent rewrites the file; the backend reports it.
+      vi.mocked(w.readFile).mockImplementation(async () => "AGENT VERSION");
+      bump();
+      await new Promise((r) => setTimeout(r, 10));
+      await fireEvent.keyDown(document, { key: "s", ctrlKey: true });
+      await waitFor(() => expect(screen.getByRole("alert").textContent).toMatch(/changed on disk/));
+      expect(w.writeFile).not.toHaveBeenCalled();
+    });
+
+    test("Overwrite writes the buffer; Reload takes the disk version", async () => {
+      const { w, type, bump, shown } = await setup();
+      type("MINE ");
+      vi.mocked(w.readFile).mockImplementation(async () => "AGENT VERSION");
+      bump();
+      await new Promise((r) => setTimeout(r, 10));
+      await fireEvent.keyDown(document, { key: "s", ctrlKey: true });
+      await fireEvent.click(await screen.findByRole("button", { name: /overwrite/i }));
+      await waitFor(() => expect(w.writeFile).toHaveBeenCalledWith("/wt/a.ts", "MINE content of /wt/a.ts"));
+
+      // A second round, answered with Reload.
+      type("AGAIN ");
+      vi.mocked(w.readFile).mockImplementation(async () => "AGENT VERSION 2");
+      bump();
+      await new Promise((r) => setTimeout(r, 10));
+      await fireEvent.keyDown(document, { key: "s", ctrlKey: true });
+      await fireEvent.click(await screen.findByRole("button", { name: /reload from disk/i }));
+      await waitFor(() => expect(shown()).toBe("AGENT VERSION 2"));
+      expect(vi.mocked(w.writeFile).mock.calls).toHaveLength(1);
+    });
+
+    test("no prompt when the change on disk was our own save", async () => {
+      const { w, type, bump } = await setup();
+      type("ONE ");
+      await fireEvent.keyDown(document, { key: "s", ctrlKey: true });
+      await waitFor(() => expect(w.writeFile).toHaveBeenCalledTimes(1));
+      type("TWO ");
+      vi.mocked(w.readFile).mockImplementation(async () => "ONE content of /wt/a.ts");
+      bump(); // the watcher reports our own write
+      await new Promise((r) => setTimeout(r, 10));
+      await fireEvent.keyDown(document, { key: "s", ctrlKey: true });
+      await waitFor(() => expect(w.writeFile).toHaveBeenCalledTimes(2));
+      expect(screen.queryByText(/changed on disk/)).toBeNull();
+    });
+  });
 });

@@ -23,11 +23,18 @@ test("renders mermaid", async () => {
   expect(m.default.render).toHaveBeenCalled();
 });
 
-test("renders image", async () => {
+test("FEX-11: renders an image from the backend's /wt-file/ URL, not the filesystem path", async () => {
   const { default: Preview } = await import("./Preview.svelte");
-  render(Preview, { props: { path: "/wt/logo.png", kind: "image", content: "" } });
+  render(Preview, { props: { path: "/wt/logo.png", kind: "image", content: "", src: "/wt-file/ws-1/logo.png?v=0" } });
   await waitFor(() => screen.getByRole("img"));
-  expect(screen.getByRole("img")).toHaveAttribute("src", "/wt/logo.png");
+  expect(screen.getByRole("img")).toHaveAttribute("src", "/wt-file/ws-1/logo.png?v=0");
+});
+
+test("FEX-11: an image with no served URL shows a note instead of a broken image", async () => {
+  const { default: Preview } = await import("./Preview.svelte");
+  render(Preview, { props: { path: "/elsewhere/logo.png", kind: "image", content: "" } });
+  expect(screen.queryByRole("img")).toBeNull();
+  expect(screen.getByText(/cannot be previewed/)).toBeInTheDocument();
 });
 
 // --- F8b: the render side-effect is gated on `visible` (no work while off-screen) ---
@@ -136,4 +143,27 @@ test("FEX-23: markdown offers an Edit source button when the host supports it", 
   render(Preview, { props: { path: "/wt/a.md", kind: "markdown", content: "# a", onEditSource } });
   await fireEvent.click(screen.getByRole("button", { name: /edit source/i }));
   expect(onEditSource).toHaveBeenCalled();
+});
+
+test("review #6: task-list checkboxes survive (disabled); other inputs do not", async () => {
+  const w = await import("marked");
+  vi.mocked(w.marked).mockReturnValueOnce(
+    '<ul><li><input checked="" type="checkbox"> done</li><li><input type="checkbox"> open</li></ul>' +
+    '<input type="text" value="phish"><input type="password">' as any);
+  const { default: Preview } = await import("./Preview.svelte");
+  render(Preview, { props: { path: "/wt/todo.md", kind: "markdown", content: "x" } });
+  await waitFor(() => expect(document.querySelector(".preview-body li")).not.toBeNull());
+  const boxes = Array.from(document.querySelectorAll(".preview-body input")) as HTMLInputElement[];
+  expect(boxes.map((b) => b.type)).toEqual(["checkbox", "checkbox"]);
+  expect(boxes.map((b) => b.checked)).toEqual([true, false]);
+  expect(boxes.every((b) => b.disabled)).toBe(true);
+});
+
+test("review #7: percent-encoded .. cannot escape through a relative link", async () => {
+  const { resolveRelative } = await import("./preview");
+  expect(resolveRelative("/wt/docs/a.md", "%2e%2e/%2e%2e/other/x")).toBe("/other/x");
+  expect(resolveRelative("/wt/docs/a.md", "..%2F..%2Fother%2Fx")).toBeNull();
+  expect(resolveRelative("/wt/docs/a.md", "a%00b.md")).toBeNull();
+  expect(resolveRelative("/wt/docs/a.md", "my%20notes.md")).toBe("/wt/docs/my notes.md");
+  expect(resolveRelative("/wt/docs/a.md", "%E0%A4%A")).toBeNull();
 });

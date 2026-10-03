@@ -4,7 +4,7 @@
   import { FitAddon }  from "@xterm/addon-fit";
   import { onPtyData, onPtyExit, writeToPty, resizePty, clipboardSetText, clipboardText } from "./wails";
   import { TERMINAL_SCROLLBACK, PTY_MAX_DIM } from "./constants";
-  import { terminalKeyToPty } from "./terminalKeys";
+  import { makeTerminalKeyHandler } from "./terminalKeys";
 
   // `visible` mirrors the pattern that Editor, FileTree, and Preview already
   // use: the pane stays mounted and is merely hidden by an ancestor
@@ -203,31 +203,23 @@
       term.write(`\r\n\x1b[2m[process exited: ${code}]\x1b[0m\r\n`);
       onExit?.(code);
     });
-    term.onData((d) => writeToPty(paneId, Array.from(new TextEncoder().encode(d))));
+    term.onData((d) => { writeToPty(paneId, new TextEncoder().encode(d)).catch(() => {}); });
 
     // Copy/paste: return false only for the two exact chords, so xterm
     // suppresses its default handling. Return true for everything else, so
     // ordinary keys, and bare ctrl-c (SIGINT/cancel), still reach the pty
     // untouched. This routes through the host clipboard (WebKit2GTK) because
     // navigator.clipboard is unreliable there.
-    term.attachCustomKeyEventHandler((e) => {
-      if (e.type !== "keydown") return true;
-      const chord = e.ctrlKey && e.shiftKey;
-      if (chord && (e.key === "C" || e.key === "c") && term.hasSelection()) {
-        void clipboardSetText(term.getSelection());
-        return false;
-      }
-      if (chord && (e.key === "V" || e.key === "v")) {
-        // term.paste routes through onData -> writeToPty and honors bracketed
-        // paste mode, so shells and TUIs that opt in are protected. No manual
-        // encoding happens here.
-        void clipboardText().then((t) => { if (t && !disposed) term.paste(t); });
-        return false;
-      }
-      // Hand app keys back to the window keymap: everything outside TERMINAL
-      // mode, and the Ctrl-\ Ctrl-n leave sequence inside it (FEC-2).
-      return terminalKeyToPty(e);
-    });
+    // The handler (lib/terminalKeys.ts) also hands app keys back to the
+    // window keymap: every key, and every keypress, outside TERMINAL mode, and
+    // the Ctrl-\ Ctrl-n leave sequence inside it (FEC-2).
+    term.attachCustomKeyEventHandler(makeTerminalKeyHandler({
+      hasSelection: () => term.hasSelection(),
+      copy: () => { void clipboardSetText(term.getSelection()); },
+      // term.paste routes through onData -> writeToPty and honors bracketed
+      // paste mode, so shells and TUIs that opt in are protected.
+      paste: () => { void clipboardText().then((t) => { if (t && !disposed) term.paste(t); }); },
+    }));
 
     obs = new ResizeObserver(() => {
       // Coalesce fit() to one layout pass per frame. Many ticks can land

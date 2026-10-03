@@ -96,7 +96,7 @@ function buildDiffInitScript(workspaces: MockWorkspace[]) {
   ]);
   const hunks = JSON.stringify([
     {
-      file: "__file__", index: 0,
+      file: "__file__", index: 0, id: "h-sweep-0",
       header: "@@ -10,7 +10,9 @@",
       oldStart: 10, oldLines: 7, newStart: 10, newLines: 9,
       lines: [
@@ -109,7 +109,7 @@ function buildDiffInitScript(workspaces: MockWorkspace[]) {
       staged: false,
     },
     {
-      file: "__file__", index: 1,
+      file: "__file__", index: 1, id: "h-sweep-1",
       header: "@@ -55,4 +57,6 @@",
       oldStart: 55, oldLines: 4, newStart: 57, newLines: 6,
       lines: [
@@ -192,8 +192,8 @@ test("03-agent-terminal-pane: active workspace, agent view", async ({ page }) =>
   await activateWorkspace(page);
   // Emit some pty data to make the terminal look populated
   await page.evaluate(() => {
-    const bytes = Array.from(new TextEncoder().encode("$ perch running...\r\nAgent: Analyzing codebase...\r\n"));
-    (window as any).__emit("pty:data:pane-ws-1", bytes);
+    const b64 = btoa(String.fromCharCode(...new TextEncoder().encode("$ perch running...\r\nAgent: Analyzing codebase...\r\n")));
+    (window as any).__emit("pty:data:pane-ws-1", b64);
   });
   await page.waitForTimeout(600);
   await shot(page, "03-agent-terminal-pane");
@@ -361,8 +361,8 @@ test("09-shell-drawer-open: Ctrl+` toggles shell", async ({ page }) => {
   await page.waitForTimeout(500);
   // Emit some shell output to make it look alive
   await page.evaluate(() => {
-    const bytes = Array.from(new TextEncoder().encode("$ ls -la\r\ntotal 48\r\ndrwxr-xr-x  user user  4096 app.go\r\n"));
-    (window as any).__emit("pty:data:shell-ws-1", bytes);
+    const b64 = btoa(String.fromCharCode(...new TextEncoder().encode("$ ls -la\r\ntotal 48\r\ndrwxr-xr-x  user user  4096 app.go\r\n")));
+    (window as any).__emit("pty:data:shell-ws-1", b64);
   });
   await page.waitForTimeout(500);
   await shot(page, "09-shell-drawer-open");

@@ -6,6 +6,7 @@ vi.mock("../wails", () => ({
     theme: "gruvbox", density: "dense", font: "geist", dnd: false, glassDisabled: false, alwaysRules: [],
   })),
   saveSettings: vi.fn(async () => {}),
+  removeAlwaysRule: vi.fn(async () => true),
 }));
 
 beforeEach(() => { vi.clearAllMocks(); vi.resetModules(); });
@@ -193,17 +194,17 @@ describe("settings store: audit regressions", () => {
     expect(vi.mocked(w.saveSettings)).toHaveBeenCalledWith(expect.objectContaining({ dnd: true }));
   });
 
-  it("FEX-13/FEC-15: removeAlwaysRules filters a fresh read by identity, keeping rules added since", async () => {
+  it("review #10: removeAlwaysRules goes through the backend per rule and never writes the whole list", async () => {
     const w = await import("../wails");
-    const keep1 = { agent: "claude", tool: "Read", pattern: "*" };
-    const gone = { agent: "claude", tool: "Bash", pattern: "npm test" };
-    const addedLater = { agent: "claude", tool: "Edit", pattern: "*" };
+    const gone = { agent: "claude", tool: "Bash", pattern: "npm test", hash: "h1" };
+    const late = { agent: "claude", tool: "Edit", pattern: "*", hash: "h2" };
     vi.mocked(w.getSettings).mockResolvedValueOnce({
-      theme: "gruvbox", density: "dense", font: "geist", dnd: false, glassDisabled: false,
-      alwaysRules: [keep1, gone, addedLater],
+      theme: "gruvbox", density: "dense", font: "geist", dnd: false, glassDisabled: false, alwaysRules: [late],
     });
     const { settings } = await import("./settings.svelte");
-    await settings.removeAlwaysRules([{ ...gone }]);
-    expect(vi.mocked(w.saveSettings)).toHaveBeenCalledWith(expect.objectContaining({ alwaysRules: [keep1, addedLater] }));
+    const left = await settings.removeAlwaysRules([gone]);
+    expect(vi.mocked(w.removeAlwaysRule)).toHaveBeenCalledWith(gone);
+    expect(vi.mocked(w.saveSettings)).not.toHaveBeenCalled();
+    expect(left).toEqual([late]);
   });
 });

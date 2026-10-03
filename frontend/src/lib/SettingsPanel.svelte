@@ -94,9 +94,9 @@
     try { await settingsStore.setGlass(!next); } catch (err) { addBlocking("", "Failed to save settings", String(err)); }
   }
 
-  // Validate as a non-negative integer. A blank value clears the override; the
+  // Validate as a positive integer. A blank value clears the override; the
   // backend then falls back to its default of 30 days. The input ignores
-  // anything negative or non-numeric and keeps its prior committed value.
+  // zero, anything negative, or non-numeric and keeps its prior committed value.
   async function onStaleThresholdChange(e: Event) {
     const raw = (e.currentTarget as HTMLInputElement).value.trim();
     let v: number | undefined;
@@ -104,7 +104,8 @@
       v = undefined;
     } else {
       const n = Number(raw);
-      if (!Number.isInteger(n) || n < 0) return;
+      // The backend treats 0 as "use the default", so 0 is not a threshold.
+      if (!Number.isInteger(n) || n < 1) return;
       v = n;
     }
     settings = { ...settings, staleThresholdDays: v };
@@ -203,14 +204,14 @@
           <span class="setting-label">Stale after</span>
           <input
             type="number"
-            min="0"
+            min="1"
             step="1"
             aria-label="Stale threshold (days)"
             class="setting-number"
             value={settings.staleThresholdDays ?? ""}
             oninput={onStaleThresholdChange}
           />
-          <span class="setting-hint">Days of inactivity before a session is flagged stale in Cleanup (0 or blank = default 30)</span>
+          <span class="setting-hint">Days of inactivity before a session is flagged stale in Cleanup (blank = default 30)</span>
         </div>
       </section>
 

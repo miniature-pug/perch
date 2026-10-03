@@ -7,7 +7,7 @@
  * Note: xterm.js, without a canvas or WebGL addon, uses a DOM renderer that writes
  * text into .xterm-rows span elements. The test asserts that the text appears there.
  * The event channel for pty data is "pty:data:" + paneId (from wails.ts onPtyData).
- * The event payload is number[], a byte array (wails.ts: Uint8Array.from(data)).
+ * The event payload is one padded standard-base64 string per event (wails.ts base64ToBytes).
  *
  * The test cannot assert that the text is in visible rows without a real viewport.
  * So instead it asserts that the write arrived, by checking xterm's internal state
@@ -67,8 +67,8 @@ test("terminal container is present in agent view", async ({ page }) => {
 
 test("pty:data event causes xterm to write content", async ({ page }) => {
   // Emit pty data. The channel is "pty:data:" + paneId.
-  // The payload is number[], a byte array, per wails.ts.
-  const textBytes = Array.from(new TextEncoder().encode(TEST_TEXT));
+  // The payload is one padded standard-base64 string, per wails.ts.
+  const textBytes = Buffer.from(TEST_TEXT, "utf8").toString("base64");
 
   await page.evaluate(
     ({ channel, bytes }) => {

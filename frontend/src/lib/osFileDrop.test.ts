@@ -12,7 +12,7 @@ import {
 
 vi.mock("./wails", () => ({ writeToPty: vi.fn(async () => {}) }));
 
-const decode = (bytes: number[]) => new TextDecoder().decode(new Uint8Array(bytes));
+const decode = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
 
 test("shellQuote wraps in single quotes and escapes embedded single quotes", () => {
   expect(shellQuote("/a/b.go")).toBe("'/a/b.go'");
@@ -72,8 +72,8 @@ test("routeOsFileDrop writes one @mention per path to the pane under the point",
   }
   expect(vi.mocked(writeToPty).mock.calls.length).toBe(2);
   expect(vi.mocked(writeToPty).mock.calls[0][0]).toBe("p9");
-  expect(decode(vi.mocked(writeToPty).mock.calls[0][1] as number[])).toBe("@/x/a.go ");
-  expect(decode(vi.mocked(writeToPty).mock.calls[1][1] as number[])).toBe("@/x/b.go ");
+  expect(decode(vi.mocked(writeToPty).mock.calls[0][1] as Uint8Array)).toBe("@/x/a.go ");
+  expect(decode(vi.mocked(writeToPty).mock.calls[1][1] as Uint8Array)).toBe("@/x/b.go ");
 });
 
 test("routeOsFileDrop is a no-op when the drop lands on no pane", async () => {

@@ -3,24 +3,52 @@ import { vi, beforeEach, test, expect } from "vitest";
 
 beforeEach(() => { (globalThis as any).window = globalThis; });
 
-test("onPtyData subscribes with colon-separated event name and decodes bytes", async () => {
+test("onPtyData subscribes with colon-separated event name and decodes each base64 event", async () => {
   const eventsOn = vi.fn(() => () => {});
   (globalThis as any).runtime = { EventsOn: eventsOn };
   const mod = await import("./wails");
-  let received: Uint8Array | undefined;
-  mod.onPtyData("pane1", (b) => (received = b));
+  const received: Uint8Array[] = [];
+  mod.onPtyData("pane1", (b) => received.push(b));
   expect(eventsOn).toHaveBeenCalledWith("pty:data:pane1", expect.any(Function));
-  const [, cb] = eventsOn.mock.calls[0] as unknown as [string, (d: number[]) => void];
-  cb([104, 105]);
-  expect(received).toEqual(Uint8Array.from([104, 105]));
+  const [, cb] = eventsOn.mock.calls[0] as unknown as [string, (d: string | number[]) => void];
+  cb("aGk=");                 // "hi", padded on its own
+  cb("IQ==");                 // "!", a second independently padded event
+  cb([104, 105]);             // an older backend's number[] still works
+  expect(received).toEqual([Uint8Array.from([104, 105]), Uint8Array.from([33]), Uint8Array.from([104, 105])]);
 });
 
-test("writeToPty dispatches to window.go.app.App.WriteToPty", async () => {
+test("writeToPty sends one padded standard-base64 string", async () => {
   const WriteToPty = vi.fn(async () => {});
   (globalThis as any).go = { app: { App: { WriteToPty } } };
   const mod = await import("./wails");
-  await mod.writeToPty("pane1", [65, 66]);
-  expect(WriteToPty).toHaveBeenCalledWith("pane1", [65, 66]);
+  await mod.writeToPty("pane1", new Uint8Array([65, 66]));
+  expect(WriteToPty).toHaveBeenCalledWith("pane1", "QUI=");
+});
+
+test("FEC-31: bytesToBase64 is padded standard base64 that round-trips for 1..4 bytes and > 0x8000 bytes", async () => {
+  const mod = await import("./wails");
+  const STD = /^[A-Za-z0-9+/]*={0,2}$/;
+  const sizes = [0, 1, 2, 3, 4, 0x8000 - 1, 0x8000, 0x8000 + 1, 0x8000 * 2 + 2];
+  for (const n of sizes) {
+    const bytes = new Uint8Array(n);
+    for (let i = 0; i < n; i++) bytes[i] = (i * 37 + 11) & 0xff;
+    const b64 = mod.bytesToBase64(bytes);
+    expect(b64).toMatch(STD);
+    expect(b64.length % 4).toBe(0);
+    // Padding only at the very end, never mid-string.
+    expect(b64.replace(/=+$/, "")).not.toContain("=");
+    expect(mod.base64ToBytes(b64)).toEqual(bytes);
+    expect(Buffer.from(b64, "base64")).toEqual(Buffer.from(bytes));
+  }
+});
+
+test("writeTextToPty encodes text as UTF-8 first (non-Latin-1 text does not throw)", async () => {
+  const WriteToPty = vi.fn(async () => {});
+  (globalThis as any).go = { app: { App: { WriteToPty } } };
+  const mod = await import("./wails");
+  await mod.writeTextToPty("pane1", "héllo ✓");
+  const [, b64] = WriteToPty.mock.calls[0] as unknown as [string, string];
+  expect(Buffer.from(b64, "base64").toString("utf8")).toBe("héllo ✓");
 });
 
 test("resizePty dispatches to ResizePty", async () => {

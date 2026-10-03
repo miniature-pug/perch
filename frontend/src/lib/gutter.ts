@@ -32,6 +32,10 @@ export function gutterChangesFromHunks(hunkList: Hunk[]): GutterChanges {
   const deleted = new Set<number>();
 
   for (const h of hunkList) {
+    // A staged hunk's line numbers are relative to the index, not to the
+    // working file the editor shows, so only unstaged hunks are plotted
+    // (wiring-gitfs #4).
+    if (h.staged) continue;
     // Pure deletion: newLines === 0. Mark the boundary line as deleted.
     if (h.newLines === 0) {
       deleted.add(Math.max(1, h.newStart));

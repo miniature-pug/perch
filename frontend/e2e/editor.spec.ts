@@ -33,6 +33,7 @@ const MOCK_HUNKS = [
   {
     file: MOCK_FILE_PATH,
     index: 0,
+    id: "h-editor-0",
     header: "@@ -1,1 +1,2 @@",
     oldStart: 1, oldLines: 1, newStart: 1, newLines: 2,
     lines: [

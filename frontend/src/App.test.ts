@@ -40,6 +40,7 @@ vi.mock("./lib/Editor.svelte", async () => {
       $.template_effect(() => {
         $.set_attribute(div, "data-path", $$props.path ?? "");
         $.set_attribute(div, "data-worktree", $$props.worktree ?? "");
+        $.set_attribute(div, "data-reload", String($$props.reloadToken ?? 0));
       });
       $.append($$anchor, div);
       $.pop();
@@ -77,6 +78,8 @@ vi.mock("./lib/wails", () => ({
   revealInFiles:   vi.fn(async () => {}),
   readFile:        vi.fn(async () => "# mock content"),
   approve:         vi.fn(async () => {}),
+  approveAlways:   vi.fn(async () => ({ rule: { agent: "claude", tool: "Bash", pattern: "x", hash: "h" }, added: true })),
+  removeAlwaysRule: vi.fn(async () => true),
   createWorkspace: vi.fn(async (_agent: string, _repo: string, _baseRef: string, _branch: string, _title: string, _worktree: boolean) => ({
     id: "ws-new", title: "New", branch: "main", state: "idle",
     worktreePath: "/tmp/new", agent: "claude", paneId: "p-new", lastActive: "",
@@ -122,8 +125,7 @@ vi.mock("./lib/wails", () => ({
 
 // NOTE: the layout and mode stores are not mocked. The tests use the real $state runes stores.
 // restore() calls getLayout(), which is mocked to return "{}". This makes onMount safe.
-vi.mock("./lib/stores/settings.svelte", async (importOriginal) => ({
-  sameAlwaysRule: ((await importOriginal()) as any).sameAlwaysRule,
+vi.mock("./lib/stores/settings.svelte", () => ({
   settings: {
     theme:   "gruvbox",
     density: "dense",
@@ -453,7 +455,8 @@ describe("App.svelte Stage content routing", () => {
     await waitFor(() => {
       expect(screen.getByTestId("preview")).toBeInTheDocument();
       expect(screen.getByTestId("preview").dataset.path).toBe("/some/file.md");
-      expect(screen.queryByTestId("editor")).not.toBeInTheDocument();
+      // The Editor stays mounted but hidden behind the Preview (review #3).
+      expect(screen.getByTestId("editor")).not.toBeVisible();
     });
 
     // Open a .ts file with the FileTreeProbe "open file" button. The Editor mounts and the Preview is gone.
@@ -508,8 +511,8 @@ describe("App.svelte Stage content routing", () => {
       expect(screen.getByTestId("preview")).toBeInTheDocument();
       expect(screen.getByTestId("preview").dataset.path).toBe("/some/file.md");
     });
-    // The Editor must not be present. This confirms the Preview routing is correct.
-    expect(screen.queryByTestId("editor")).not.toBeInTheDocument();
+    // The Editor is hidden. This confirms the Preview routing is correct.
+    expect(screen.getByTestId("editor")).not.toBeVisible();
   });
 
   it("activeId null → no child probes, empty-state placeholder shown", async () => {
@@ -3696,7 +3699,7 @@ describe("App.svelte: FileTree @mention prefix routes to sendToAgent", () => {
       expect(writeToPty).toHaveBeenCalledTimes(1);
       const [paneId, bytes] = vi.mocked(writeToPty).mock.calls[0];
       expect(paneId).toBe("p1");
-      expect(new TextDecoder().decode(new Uint8Array(bytes as number[]))).toBe("@/some/file.ts ");
+      expect(new TextDecoder().decode(bytes as Uint8Array)).toBe("@/some/file.ts ");
     });
 
     // readFile must not be called. @mention does not set codePath.
@@ -5329,34 +5332,59 @@ describe("audit regressions: approvals", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument());
   }
 
-  it("FEC-15/FEX-9: Undo on the Always-allow toast removes exactly the rule the grant added", async () => {
-    const { getSettings, approve } = await import("./lib/wails");
-    const { settings } = await import("./lib/stores/settings.svelte");
-    const old = { agent: "claude", tool: "Read", pattern: "*" };
-    const added = { agent: "claude", tool: "Bash", pattern: "npm test" };
-    // The backend appends the rule when approve(..., "always") lands.
-    let granted = false;
-    (approve as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => { granted = true; });
-    (getSettings as ReturnType<typeof vi.fn>).mockImplementation(async () =>
-      ({ alwaysRules: granted ? [old, added] : [old] }));
+  it("FEC-15/FEX-9/review #10: Undo removes exactly the rule ApproveAlways reported", async () => {
+    const { approveAlways, removeAlwaysRule } = await import("./lib/wails");
+    const added = { agent: "claude", tool: "Bash", pattern: "npm test", hash: "abc" };
+    vi.mocked(approveAlways).mockResolvedValueOnce({ rule: added, added: true });
     await openAlphaWithApproval({ reqId: "req-a", tool: "Bash", summary: "npm test" });
     await fireEvent.click(screen.getByRole("button", { name: /always allow/i }));
-    await waitFor(() => expect(approve).toHaveBeenCalledWith("req-a", "always"));
+    await waitFor(() => expect(approveAlways).toHaveBeenCalledWith("req-a"));
     const toast = await screen.findByTestId("always-toast");
     expect(toast.textContent).toContain("Bash");
     await fireEvent.click(within(toast).getByRole("button", { name: /undo/i }));
-    await waitFor(() => expect(settings.removeAlwaysRules).toHaveBeenCalledWith([added]));
-    (getSettings as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    await waitFor(() => expect(removeAlwaysRule).toHaveBeenCalledWith(added));
   });
 
-  it("FEX-9: a failed always-allow grant shows no Undo toast", async () => {
-    const { approve } = await import("./lib/wails");
-    (approve as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("agent gone"));
+  it("review #10: a grant that added no rule (duplicate) offers no Undo", async () => {
+    const { approveAlways } = await import("./lib/wails");
+    vi.mocked(approveAlways).mockResolvedValueOnce({ rule: { agent: "", tool: "", pattern: "" }, added: false });
+    await openAlphaWithApproval({ reqId: "req-d", tool: "Bash", summary: "ls" });
+    await fireEvent.click(screen.getByRole("button", { name: /always allow/i }));
+    const toast = await screen.findByTestId("always-toast");
+    expect(within(toast).queryByRole("button", { name: /undo/i })).toBeNull();
+  });
+
+  it("FEX-9: a failed always-allow grant shows no Undo toast and keeps the card", async () => {
+    const { approveAlways } = await import("./lib/wails");
+    vi.mocked(approveAlways).mockRejectedValueOnce(new Error("agent gone"));
     await openAlphaWithApproval({ reqId: "req-f", tool: "Bash", summary: "x" });
     await fireEvent.click(screen.getByRole("button", { name: /always allow/i }));
-    await waitFor(() => expect(approve).toHaveBeenCalledWith("req-f", "always"));
+    await waitFor(() => expect(approveAlways).toHaveBeenCalledWith("req-f"));
     await new Promise((r) => setTimeout(r, 20));
     expect(screen.queryByTestId("always-toast")).toBeNull();
+    expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument();
+  });
+
+  it("APP-17: allowed but the rule failed to save: the card goes and the user is told", async () => {
+    const { approveAlways } = await import("./lib/wails");
+    const { getItems } = await import("./lib/stores/notifications.svelte");
+    vi.mocked(approveAlways).mockRejectedValueOnce(new Error("allowed, but could not save the always-allow rule: EACCES"));
+    await openAlphaWithApproval({ reqId: "req-s", tool: "Bash", summary: "x" });
+    await fireEvent.click(screen.getByRole("button", { name: /always allow/i }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Allow" })).toBeNull());
+    expect(getItems().some((n) => n.title === "Always-allow rule not saved")).toBe(true);
+  });
+
+  it("resolvedReqId retracts the card; a repeat is harmless; approval-resolved changes no state", async () => {
+    await openAlphaWithApproval({ reqId: "raw1:ws-1", tool: "Bash", summary: "x" });
+    const cb = captured.agent.at(-1)!;
+    cb({ workspaceId: "ws-1", kind: "approval-resolved", resolvedReqId: "raw1:ws-1" });
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Allow" })).toBeNull());
+    cb({ workspaceId: "ws-1", kind: "approval-resolved", resolvedReqId: "raw1:ws-1" });
+    cb({ workspaceId: "ws-1", kind: "state", state: "running", resolvedReqId: "raw1:ws-1" });
+    await tick();
+    expect(screen.queryByRole("button", { name: "Allow" })).toBeNull();
+    expect((document.querySelector(".status-state") as HTMLElement).textContent).toBe("running");
   });
 
   it("FEC-3: NORMAL-mode `a` only focuses the pending card; it never decides", async () => {
@@ -5799,5 +5827,119 @@ describe("audit regressions: session lifecycle and notifications", () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(diffStat).toHaveBeenCalledTimes(2);
     vi.mocked(diffStat).mockImplementation(async () => []);
+  });
+});
+
+describe("backend contract wiring", () => {
+  async function openAlphaCode() {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await fireEvent.click(await screen.findByRole("button", { name: /^Alpha\b/ }));
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    layout.setView("code");
+    await tick();
+  }
+  const reloadOf = () => Number(screen.getByTestId("editor").dataset.reload);
+
+  it("fs:changed bumps only the files it lists (FEC-1/FEX-4)", async () => {
+    await openAlphaCode();
+    await fireEvent.click(screen.getByRole("button", { name: "open file" }));
+    const before = reloadOf();
+    const fs = captured.fsChanged.at(-1)!;
+    fs({ workspaceId: "ws-1", path: "/tmp/alpha", paths: ["/tmp/alpha/other.ts"], truncated: false });
+    await tick();
+    expect(reloadOf()).toBe(before);
+    fs({ workspaceId: "ws-1", path: "/tmp/alpha", paths: ["/some/file.ts", "/tmp/alpha/x.ts"], truncated: false });
+    await tick();
+    expect(reloadOf()).toBe(before + 1);
+  });
+
+  it("a truncated fs:changed (or one without paths) reloads the session's open file", async () => {
+    await openAlphaCode();
+    await fireEvent.click(screen.getByRole("button", { name: "open file" }));
+    const before = reloadOf();
+    const fs = captured.fsChanged.at(-1)!;
+    fs({ workspaceId: "ws-1", path: "/tmp/alpha", paths: [], truncated: true });
+    await tick();
+    expect(reloadOf()).toBe(before + 1);
+    fs({ workspaceId: "ws-1", path: "/tmp/alpha" });
+    await tick();
+    expect(reloadOf()).toBe(before + 2);
+    // Another session's truncated event leaves this file alone.
+    fs({ workspaceId: "ws-2", path: "/tmp/beta", paths: [], truncated: true });
+    await tick();
+    expect(reloadOf()).toBe(before + 2);
+  });
+
+  it("FEX-11: an image preview loads from the backend's /wt-file/ URL", async () => {
+    await openAlphaCode();
+    await fireEvent.click(screen.getByRole("button", { name: "open image" }));
+    await waitFor(() => expect(screen.getByTestId("preview").dataset.src).toBe("/wt-file/ws-1/img/logo%20one.png?v=0"));
+  });
+
+  it("review #8: a cold session selected with j still has a Code view (no pty spawned)", async () => {
+    const { listWorkspaces, openWorkspace } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { layout } = await import("./lib/stores/layout.svelte");
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await screen.findByRole("button", { name: /^Alpha\b/ });
+    await fireEvent.keyDown(document.body, { key: "j" });
+    layout.setView("code");
+    await tick();
+    const tree = screen.getByTestId("filetree");
+    expect(tree.dataset.root).toBe("/tmp/alpha");
+    expect(tree).toBeVisible();
+    expect(screen.queryByTestId("pane-cold")).toBeNull();
+    expect(screen.queryAllByTestId("terminal")).toHaveLength(0);
+    expect(openWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("ErrWorktreeMissing on open offers to remove the session", async () => {
+    const { listWorkspaces, openWorkspace } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    vi.mocked(openWorkspace).mockRejectedValueOnce(new Error("open: session directory is missing; remove the session"));
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await fireEvent.click(await screen.findByRole("button", { name: /^Alpha\b/ }));
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    await waitFor(() => expect(screen.getByText(/Remove workspace "Alpha"/)).toBeInTheDocument());
+  });
+
+  async function createWithError(message: string) {
+    const { listWorkspaces, createWorkspace } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([fakeWorkspaces[0]]);
+    vi.mocked(createWorkspace).mockRejectedValueOnce(new Error(message));
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await screen.findByRole("button", { name: /^Alpha\b/ });
+    await fireEvent.click(screen.getByRole("button", { name: "New session" }));
+    await waitFor(() => expect((screen.getByLabelText(/starting point/i) as HTMLSelectElement).value).not.toBe(""));
+    await fireEvent.click(screen.getByRole("button", { name: "Create" }));
+  }
+
+  it("ErrWorktreePathExists gets its own message and never suggests 'Use existing branch'", async () => {
+    await createWithError("git: worktree path already exists: /r.worktrees/claude-work");
+    await waitFor(() => expect(screen.getByRole("dialog", { name: "new session" }).textContent).toMatch(/A directory for the branch/));
+    expect(within(screen.getByRole("dialog", { name: "new session" })).getByRole("alert").textContent).not.toMatch(/Use existing branch/);
+  });
+
+  it("ErrCheckoutInUse shows actionable copy", async () => {
+    await createWithError("another open session is working in this checkout; close it or use a worktree session");
+    await waitFor(() => expect(screen.getByRole("dialog", { name: "new session" }).textContent).toMatch(/Close it first, or turn on Worktree/));
+  });
+
+  it("ErrBranchInUse routes to the session that has the branch", async () => {
+    const { workspaceForBranch } = await import("./lib/wails");
+    vi.mocked(workspaceForBranch)
+      .mockResolvedValueOnce({ id: "", found: false })          // the pre-create guard
+      .mockResolvedValueOnce({ id: "ws-1", found: true });      // after ErrBranchInUse
+    await createWithError("create: branch already checked out by a session");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "new session" })).toBeNull());
   });
 });

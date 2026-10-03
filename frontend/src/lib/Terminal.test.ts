@@ -94,7 +94,9 @@ describe("Terminal.svelte", () => {
     const w = await import("./wails");
     render(Terminal, { props: { paneId: "pane3", cwd: "/repo" } });
     onDataCbs[onDataCbs.length - 1]("x");
-    expect(w.writeToPty).toHaveBeenCalledWith("pane3", [120]);
+    const [id, bytes] = vi.mocked(w.writeToPty).mock.calls.at(-1)!;
+    expect(id).toBe("pane3");
+    expect(new TextDecoder().decode(bytes as Uint8Array)).toBe("x");
   });
   it("disposes xterm on unmount (leak guard)", async () => {
     const { default: Terminal } = await import("./Terminal.svelte");

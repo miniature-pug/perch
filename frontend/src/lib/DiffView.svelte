@@ -96,6 +96,13 @@
   // header match wins; otherwise the content must match exactly one hunk.
   // Returns null when the change is gone or ambiguous.
   function findSameHunk(list: Hunk[], want: Hunk): Hunk | null {
+    // The backend's content id, when present, is the authority.
+    if (want.id) {
+      const byId = list.filter((h) => h.id === want.id && !!h.staged === !!want.staged);
+      if (byId.length === 1) return byId[0];
+      if (byId.length > 1) return byId.find((h) => h.header === want.header) ?? null;
+      return null;
+    }
     const key = hunkKey(want);
     const same = list.filter((h) => hunkKey(h) === key);
     if (same.length === 1) return same[0];
@@ -189,9 +196,18 @@
   // Re-fetch the hunk list for a file. A `finally` block calls this function
   // to keep the indices current. A result for another worktree, or for a
   // file the user collapsed meanwhile, is dropped.
+  //
+  // Refreshes for one file can overlap (an fs event and a stage's `finally`).
+  // Only the most recently STARTED request may write its result, so an older
+  // list that resolves last can never restore stale indices (review #9).
+  const hunkSeq = new Map<string, number>();
   async function refreshHunks(file: string, wt: string = worktree) {
+    const key = wt + "\u0000" + file;
+    const seq = (hunkSeq.get(key) ?? 0) + 1;
+    hunkSeq.set(key, seq);
     try {
       const hs = await fetchHunks(wt, file);
+      if (hunkSeq.get(key) !== seq) return;
       if (mounted && wt === worktree && expanded[file]) {
         expanded = { ...expanded, [file]: withoutPending(wt, file, hs) };
       }
@@ -200,14 +216,28 @@
     }
   }
 
+  // The backend refuses a hunk action when the hunk at that index no longer
+  // has the content the user saw (the agent edited the file meanwhile).
+  function isHunkChanged(e: unknown): boolean {
+    return /hunk changed since it was displayed/i.test(e instanceof Error ? e.message : String(e));
+  }
+  function reportHunkError(action: string, file: string, e: unknown) {
+    if (isHunkChanged(e)) {
+      addBlocking(workspaceId, `${action} skipped`,
+        `The change in ${file} was modified since it was shown, so nothing was changed. The diff has been refreshed; review it and try again.`, "info");
+      return;
+    }
+    const msg = e instanceof Error ? e.message : String(e);
+    addBlocking(workspaceId, `${action} failed`, `Could not ${action.toLowerCase()} hunk in ${file}: ${msg}`);
+  }
+
   async function stage(h: Hunk) {
     const wt = worktree;
     try {
-      await stageHunk(wt, h.file, h.index);
+      await stageHunk(wt, h.file, h.index, h.id);
       if (mounted && wt === worktree) flashFile = h.file;
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      addBlocking(workspaceId, "Stage failed", `Could not stage hunk in ${h.file}: ${msg}`);
+      reportHunkError("Stage", h.file, e);
     } finally {
       // Always re-fetch. This stops stale hunk indices from persisting
       // after a partial operation.
@@ -220,11 +250,10 @@
   async function unstage(h: Hunk) {
     const wt = worktree;
     try {
-      await unstageHunk(wt, h.file, h.index);
+      await unstageHunk(wt, h.file, h.index, h.id);
       if (mounted && wt === worktree) flashFile = h.file;
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      addBlocking(workspaceId, "Unstage failed", `Could not unstage hunk in ${h.file}: ${msg}`);
+      reportHunkError("Unstage", h.file, e);
     } finally {
       await refreshHunks(h.file, wt);
       await refreshFiles();
@@ -255,21 +284,22 @@
     if (p.worktree === worktree) void refreshHunks(p.file);
   }
 
-  // Discard the hunk with the pending discard's content, at its CURRENT
-  // index. If the change is gone, or no longer matches exactly one hunk,
-  // nothing is discarded and the user is told (FEX-7). The backend will
-  // also verify the content; this check keeps the window small until then.
+  // Discard the hunk the user discarded: the content id captured at click
+  // time, at that hunk's CURRENT index (an agent edit above it can shift the
+  // index during the undo window). The backend refuses when the hunk at that
+  // index no longer has that id (ErrHunkChanged), so nothing else can be
+  // reverted. If the change is gone or ambiguous, nothing is discarded and
+  // the user is told (FEX-7).
   async function discardByContent(p: PendingDiscard): Promise<void> {
+    const skipped = () => addBlocking(workspaceId, "Discard skipped",
+      `The change in ${p.file} was modified after you discarded it, so it was kept. Review it and discard again.`, "info");
     try {
       const fresh = await fetchHunks(p.worktree, p.file);
       const target = findSameHunk(fresh, p.hunk);
-      if (!target) {
-        addBlocking(workspaceId, "Discard skipped", 
-          `The change in ${p.file} was modified after you discarded it, so it was kept. Review it and discard again.`, "info");
-        return;
-      }
-      await discardHunk(p.worktree, p.file, target.index);
+      if (!target) { skipped(); return; }
+      await discardHunk(p.worktree, p.file, target.index, p.hunk.id);
     } catch (e) {
+      if (isHunkChanged(e)) { skipped(); return; }
       const msg = e instanceof Error ? e.message : String(e);
       addBlocking(workspaceId, "Discard failed", `Could not discard hunk in ${p.file}: ${msg}`);
     }
