@@ -725,7 +725,7 @@ func TestOpencodeMonitorPrepare_ExitSentinelUsesEnvNotLiteralToken(t *testing.T)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	for _, want := range []string{"; ec=$?", "$PERCH_EXIT_TOKEN", "$PERCH_EXIT_URL", "AgentExit"} {
+	for _, want := range []string{"; ec=$?", "$PERCH_EXIT_TOKEN", "$PERCH_EXIT_URL", "agent_exit=$ec"} {
 		if !strings.Contains(cmd, want) {
 			t.Errorf("launch cmd missing %q; got %q", want, cmd)
 		}

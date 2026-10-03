@@ -74,6 +74,14 @@ type Event struct {
 	// persists it, so perch can resume the session on the next
 	// OpenWorkspace call.
 	SessionID string `json:"sessionId,omitempty"`
+	// ResolvedReqID names an approval (the monitor's RAW reqID, as in
+	// ApprovalReq.ReqID before the app composes it) that is no longer
+	// pending: the user answered it in the agent's own TUI, the hook was
+	// cancelled, or perch's own verdict cleared it. Consumers drop the
+	// matching approval card. Kind "approval-resolved" carries it for a
+	// retraction perch did not cause; State is then set only when the
+	// awaiting-approval state clears.
+	ResolvedReqID string `json:"resolvedReqId,omitempty"`
 }
 
 type Monitor interface {

@@ -112,7 +112,7 @@ func TestStopEventArrives(t *testing.T) {
 	}
 }
 
-func TestPreToolUse_ClientCancelDoesNotHang(t *testing.T) {
+func TestPermissionRequest_ClientCancelDoesNotHang(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	l, err := hooklistener.New()
 	if err != nil {
@@ -121,7 +121,7 @@ func TestPreToolUse_ClientCancelDoesNotHang(t *testing.T) {
 	defer func() { _ = l.Close() }()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	payload := `{"hook_event_name":"PreToolUse","session_id":"s","tool_name":"Bash","tool_input":{}}`
+	payload := `{"hook_event_name":"PermissionRequest","session_id":"s","tool_name":"Bash","tool_input":{}}`
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+l.Addr()+"/hook", strings.NewReader(payload))
 	req.Header.Set("Authorization", "Bearer "+l.Token())
 	req.Header.Set("Content-Type", "application/json")
@@ -138,7 +138,7 @@ func TestPreToolUse_ClientCancelDoesNotHang(t *testing.T) {
 	// Wait until the approval is parked (event delivered), then cancel.
 	select {
 	case ev := <-l.Events():
-		if ev.Type != "PreToolUse" {
+		if ev.Type != "PermissionRequest" {
 			t.Errorf("unexpected event: %+v", ev)
 		}
 	case <-time.After(2 * time.Second):
@@ -267,7 +267,7 @@ func TestDecideDoubleCallDoesNotBlock(t *testing.T) {
 	}
 	defer func() { _ = l.Close() }()
 
-	payload := `{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Bash","tool_input":{"command":"ls"}}`
+	payload := `{"hook_event_name":"PermissionRequest","session_id":"s1","tool_name":"Bash","tool_input":{"command":"ls"}}`
 	req, _ := http.NewRequest(http.MethodPost, "http://"+l.Addr()+"/hook", strings.NewReader(payload))
 	req.Header.Set("Authorization", "Bearer "+l.Token())
 	req.Header.Set("Content-Type", "application/json")
@@ -294,7 +294,7 @@ func TestDecideDoubleCallDoesNotBlock(t *testing.T) {
 	var reqID string
 	select {
 	case ev := <-l.Events():
-		if ev.Type != "PreToolUse" || ev.ReqID == "" {
+		if ev.Type != "PermissionRequest" || ev.ReqID == "" {
 			t.Fatalf("bad event: %+v", ev)
 		}
 		reqID = ev.ReqID
@@ -327,7 +327,7 @@ func TestDecideDoubleCallDoesNotBlock(t *testing.T) {
 		if r.code != http.StatusOK {
 			t.Errorf("want 200, got %d", r.code)
 		}
-		if !strings.Contains(r.body, `"permissionDecision":"allow"`) {
+		if !strings.Contains(r.body, `"behavior":"allow"`) {
 			t.Errorf("first verdict must win: body %q, want allow", r.body)
 		}
 	case <-ctx.Done():
@@ -352,7 +352,7 @@ func TestHookBodySizeLimit(t *testing.T) {
 	// read mid-stream, so Decode sees invalid or short JSON and returns an
 	// error (400). Memory use stays bounded.
 	var b strings.Builder
-	b.WriteString(`{"hook_event_name":"PreToolUse","session_id":"s","tool_name":"Bash","tool_input":"`)
+	b.WriteString(`{"hook_event_name":"PermissionRequest","session_id":"s","tool_name":"Bash","tool_input":"`)
 	for b.Len() < 2<<20 {
 		b.WriteString("AAAAAAAAAAAAAAAA")
 	}
@@ -378,7 +378,7 @@ func TestHookBodySizeLimit(t *testing.T) {
 	}
 }
 
-func TestPreToolUseAllowDeny(t *testing.T) {
+func TestPermissionRequestAllowDeny(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		allow bool
@@ -395,7 +395,7 @@ func TestPreToolUseAllowDeny(t *testing.T) {
 			}
 			defer func() { _ = l.Close() }()
 
-			payload := `{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Bash","tool_input":{"command":"ls"}}`
+			payload := `{"hook_event_name":"PermissionRequest","session_id":"s1","tool_name":"Bash","tool_input":{"command":"ls"}}`
 			req, _ := http.NewRequest(http.MethodPost, "http://"+l.Addr()+"/hook", strings.NewReader(payload))
 			req.Header.Set("Authorization", "Bearer "+l.Token())
 			req.Header.Set("Content-Type", "application/json")
@@ -420,7 +420,7 @@ func TestPreToolUseAllowDeny(t *testing.T) {
 			defer cancel()
 			select {
 			case ev := <-l.Events():
-				if ev.Type != "PreToolUse" || ev.ReqID == "" {
+				if ev.Type != "PermissionRequest" || ev.ReqID == "" {
 					t.Errorf("bad event: %+v", ev)
 				}
 				l.Decide(ev.ReqID, hooklistener.Decision{Allow: tc.allow})
@@ -433,7 +433,7 @@ func TestPreToolUseAllowDeny(t *testing.T) {
 				if r.code != http.StatusOK {
 					t.Errorf("want 200, got %d", r.code)
 				}
-				want := `"permissionDecision":"` + tc.want + `"`
+				want := `"behavior":"` + tc.want + `"`
 				if !strings.Contains(r.body, want) {
 					t.Errorf("body %q missing %q", r.body, want)
 				}
@@ -481,7 +481,7 @@ func TestListenerRejectsNonPost(t *testing.T) {
 // TestListenerServerTimeouts asserts that the slowloris-hardening deadlines
 // are set on the http.Server: ReadHeaderTimeout, ReadTimeout, and IdleTimeout
 // are non-zero. WriteTimeout MUST stay 0. Go's write deadline covers the
-// whole ServeHTTP lifetime, so any finite value would abort a PreToolUse
+// whole ServeHTTP lifetime, so any finite value would abort a PermissionRequest
 // approval while it waits for the user's decision.
 func TestListenerServerTimeouts(t *testing.T) {
 	t.Parallel()

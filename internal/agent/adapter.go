@@ -4,6 +4,8 @@
 // interface.
 package agent
 
+import "strings"
+
 // Adapter is the seam between perch's orchestration logic and a specific AI
 // coding tool. Each tool (claude, opencode) provides one Adapter
 // implementation.
@@ -33,4 +35,25 @@ type Adapter interface {
 	// model. For claude, NewArgs returns nil. For opencode, NewArgs also
 	// returns nil, because opencode attach takes no --model flag.
 	NewArgs() []string
+}
+
+// binNamer is implemented by the concrete adapters (Claude, Opencode): it
+// returns the configured binary name or path (the Bin field, or the default).
+type binNamer interface{ bin() string }
+
+// launchBin returns the binary a monitor types into the launch line for a.
+// It honours the adapter's Bin, so a custom Bin that passes Detect also
+// launches (AGT-19). A Bin that is not a plain shell-safe word (whitespace,
+// quotes, $, backslash) falls back to the canonical Name rather than risk a
+// mangled or injected launch line.
+func launchBin(a Adapter, fallback string) string {
+	if a == nil {
+		return fallback
+	}
+	if b, ok := a.(binNamer); ok {
+		if s := b.bin(); shellSafeWord(s) && !strings.ContainsAny(s, " \t;&|<>()*?[]{}~#") {
+			return s
+		}
+	}
+	return a.Name()
 }
