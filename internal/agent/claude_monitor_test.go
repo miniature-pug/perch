@@ -27,6 +27,7 @@ func newMonitorWithTestListener(t *testing.T) (*agent.ClaudeMonitor, *hooklisten
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("TMPDIR", t.TempDir())
+	t.Setenv("XDG_RUNTIME_DIR", "")
 	l, err := hooklistener.New()
 	if err != nil {
 		t.Fatalf("listener: %v", err)
@@ -97,7 +98,7 @@ func TestClaudeMonitorPrepare_HooksLiveOutsideWorktree(t *testing.T) {
 		t.Errorf("settings file lacks this session's listener addr/token:\n%s", raw)
 	}
 	hooks := readHookSettings(t, m)
-	for _, ev := range []string{"PermissionRequest", "PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop", "StopFailure", "SessionStart"} {
+	for _, ev := range []string{"PermissionRequest", "PreToolUse", "PostToolUse", "Notification", "UserPromptSubmit", "Stop", "StopFailure", "SessionStart"} {
 		if arr, _ := hooks[ev].([]any); len(arr) != 1 {
 			t.Errorf("hooks[%q] = %v, want one group", ev, hooks[ev])
 		}
@@ -106,9 +107,12 @@ func TestClaudeMonitorPrepare_HooksLiveOutsideWorktree(t *testing.T) {
 	// scoped to AskUserQuestion.
 	for _, ev := range []string{"PreToolUse", "PostToolUse"} {
 		g := hooks[ev].([]any)[0].(map[string]any)
-		if g["matcher"] != "AskUserQuestion" {
-			t.Errorf("%s matcher = %v, want AskUserQuestion", ev, g["matcher"])
+		if g["matcher"] != "AskUserQuestion|ExitPlanMode" {
+			t.Errorf("%s matcher = %v, want AskUserQuestion|ExitPlanMode", ev, g["matcher"])
 		}
+	}
+	if g := hooks["Notification"].([]any)[0].(map[string]any); g["matcher"] != "idle_prompt" {
+		t.Errorf("Notification matcher = %v, want idle_prompt", g["matcher"])
 	}
 	pr := hooks["PermissionRequest"].([]any)[0].(map[string]any)["hooks"].([]any)[0].(map[string]any)
 	if pr["timeout"] == nil {
@@ -187,6 +191,8 @@ func TestClaudeMonitorPrepare_CleansLegacyPerchOnlyFile(t *testing.T) {
 		wantGone      bool
 	}{
 		{"perch-only", perchOnly, true},
+		{"old-teardown-leftover", "{\n  \"hooks\": {}\n}\n", true},
+		{"empty-object", "{}", true},
 		{"mixed", mixed, false},
 		{"other-keys", `{"model":"x","hooks":{"Stop":[{"hooks":[{"type":"command","command":"` + legacyCmd + `"}]}]}}`, false},
 	} {
@@ -672,11 +678,16 @@ func TestClaudeMonitor_ParallelApprovalsClearOnLast(t *testing.T) {
 	if m.CurrentState() != agent.StateAwaitingApproval {
 		t.Fatalf("one of two approvals answered: state = %q, want awaiting-approval", m.CurrentState())
 	}
+	// Every resolution is reported, so the frontend can always retract the
+	// card; the first one changes no state.
+	if e := <-m.Events(); e.Kind != "approval-resolved" || e.ResolvedReqID != a.Approval.ReqID || e.State != "" {
+		t.Errorf("first resolution: want approval-resolved for %s with no state, got %+v", a.Approval.ReqID, e)
+	}
 	_ = m.Approve(b.Approval.ReqID, agent.Decision{Allow: true})
 	select {
 	case e := <-m.Events():
-		if e.State != agent.StateRunning {
-			t.Errorf("after the last approval want running, got %+v", e)
+		if e.State != agent.StateRunning || e.ResolvedReqID != b.Approval.ReqID {
+			t.Errorf("after the last approval want running carrying its reqID, got %+v", e)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("no clearing event after the last approval")
@@ -712,8 +723,8 @@ func TestClaudeMonitor_CancelledApprovalIsRetracted(t *testing.T) {
 	<-done
 	select {
 	case ev := <-m.Events():
-		if ev.Kind != "approval-resolved" || ev.ResolvedReqID != appr.Approval.ReqID || ev.State != agent.StateRunning {
-			t.Errorf("want approval-resolved for %s with state running, got %+v", appr.Approval.ReqID, ev)
+		if ev.ResolvedReqID != appr.Approval.ReqID || ev.State != agent.StateRunning {
+			t.Errorf("want a running event retracting %s, got %+v", appr.Approval.ReqID, ev)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("cancelled approval was never retracted")
@@ -802,16 +813,18 @@ func TestClaudeMonitorApprove_DoesNotClobberNewerState(t *testing.T) {
 		t.Fatalf("pre-condition: CurrentState = %q, want done", m.CurrentState())
 	}
 
-	// Now the user's decision lands. It must NOT emit an event, and must
-	// NOT clobber Done.
+	// Now the user's decision lands. It must NOT clobber Done: it only
+	// reports the resolution (so the card can be retracted), with no state.
 	if err := m.Approve(appr.Approval.ReqID, agent.Decision{Allow: true}); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
 	select {
 	case ev := <-m.Events():
-		t.Fatalf("Approve emitted an event after state advanced to Done — clobbered newer state: %+v", ev)
-	case <-time.After(300 * time.Millisecond):
-		// no event, correct
+		if ev.State != "" || ev.Kind != "approval-resolved" || ev.ResolvedReqID != appr.Approval.ReqID {
+			t.Fatalf("Approve after Done must only retract the card, got %+v", ev)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Approve did not report the resolution")
 	}
 	if m.CurrentState() != agent.StateDone {
 		t.Errorf("CurrentState after Approve = %q, want %q (Done must not be clobbered)", m.CurrentState(), agent.StateDone)

@@ -141,7 +141,15 @@ func (a *asyncNotifier) Notify(title, body string) error {
 func runNotifySend(name string, args ...string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
 	defer cancel()
-	return exec.CommandContext(ctx, name, args...).Run()
+	return exec.CommandContext(ctx, name, notifySendArgs(args)...).Run()
+}
+
+// notifySendArgs puts "--" before the positional title and body, so agent
+// or provider text that starts with "-" is never parsed as a notify-send
+// option. The RunFunc seam keeps receiving (title, body); only the real
+// exec adds the separator.
+func notifySendArgs(args []string) []string {
+	return append([]string{"--"}, args...)
 }
 
 // New returns the production Notifier. Delivery is asynchronous: Notify

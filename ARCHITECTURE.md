@@ -306,8 +306,12 @@ kind `approval-resolved`) so the card disappears. `awaiting-approval` clears
 only when the last pending approval resolves, and `Monitor.Approve` never
 blocks. The lifecycle hooks map `SessionStart` to idle (a compaction keeps the
 state), `UserPromptSubmit` to running, `Stop` to done, and `StopFailure` to
-errored. `PreToolUse` and `PostToolUse`, matched to `AskUserQuestion` only,
-raise and clear the question signal. For opencode, the same lifecycle events
+errored. `PreToolUse` and `PostToolUse`, matched to `AskUserQuestion` and
+`ExitPlanMode` only, raise and clear the question signal; perch never answers
+those two tools' own dialogs. Stop does not fire when you interrupt a turn, so
+a `Notification` hook (`idle_prompt`, about a minute after Claude stops) settles
+an interrupted turn to idle. Every resolved approval emits one event carrying
+`ResolvedReqID`. For opencode, the same lifecycle events
 arrive over the `opencode serve` SSE stream: `session.status` carries busy and
 idle and the session id used for resume, and `session.error` becomes errored
 and stays errored across the idle opencode sends right after it (an Esc abort
@@ -334,14 +338,17 @@ registers a pending opencode approval to answer.
 
 Claude status reporting needs no manual setup, and perch writes nothing into the
 worktree. `Prepare` writes the session's hooks (its listener address and token)
-to a private per-session settings file (a `0700` temp directory, a `0600`
-file) and the launch line loads it with `claude --settings <file>`. Claude
+to a private per-session settings file (a `0700` directory under
+`$XDG_RUNTIME_DIR`, else the temp directory, and a `0600` file; leftovers of a
+crashed perch are swept) and the launch line loads it with `claude --settings <file>`. Claude
 merges hook lists across settings sources, so the repository's and the user's
 own hooks still run. `Teardown` deletes the file. Two sessions on one cwd each
 reach their own listener, a crash leaves no stale hook in the repository, and
 `git status` stays clean. A `.claude/settings.json` left in a worktree by an
 older perch is deleted once, and only if it holds nothing but perch's own
-hooks. opencode reports natively over its SSE stream.
+hooks and git does not track it. opencode reports natively over its SSE stream;
+its Basic-auth password reaches the pane as `PERCH_OPENCODE_PASSWORD` and the
+launch line exports it, with the pinned username, after the login rc runs.
 
 ### States and the attention model
 
@@ -438,7 +445,7 @@ startup and tears down at exit (`app/app.go`, wired alongside the baseline
 | Port | Ephemeral, one listener shared by every workspace |
 | Auth | Per-workspace bearer token, minted on first use (`TokenFor`) and compared with `subtle.ConstantTimeCompare`; a token minted for one workspace is rejected for another (`workspace mismatch`, 403) |
 | Body | Capped at 1 MiB |
-| Storage | `computeDelta` keeps only keys new or changed versus the app's baseline `os.Environ()`, excludes `PERCH_*` and shell-volatile keys (`PWD`, `OLDPWD`, `SHLVL`, `_`, `COLUMNS`, `LINES`), and stores the result in an in-memory-only overlay (`App.envOverlay`), never written to disk or logged. `NewWithDelta` also reports keys the user unset (`Delta.Unset`) |
+| Storage | `computeDelta` keeps only keys new or changed versus the app's baseline `os.Environ()`, excludes `PERCH_*` and shell-volatile keys (`PWD`, `OLDPWD`, `SHLVL`, `_`, `COLUMNS`, `LINES`), and stores the result in an in-memory-only overlay (`App.envOverlay`), never written to disk or logged. `NewWithDelta` also reports keys the user unset (`Delta.Unset`). `*PATH` values are deduplicated so repeated reloads do not grow them |
 | Revocation | `Revoke(workspaceID)` invalidates a workspace's token |
 | Relaunch | `onSync` stores the overlay, then dispatches `OpenWorkspace` on its own goroutine, never inline in the handler, so the conversation resumes from its saved session id (claude `--resume`, opencode `--session`) without stalling the request or the event pump |
 | Lifetime | One listener for the app's whole run; closed on shutdown |

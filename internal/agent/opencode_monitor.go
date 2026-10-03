@@ -147,18 +147,27 @@ const (
 	// attach is NOT exec'd: when it exits (/exit or a crash), the subshell
 	// kills the backgrounded serve and exits with attach's status, which the
 	// exit sentinel reports. The HUP/TERM trap covers the pane being closed
-	// while attach runs. Before, serve was orphaned to init and kept its
-	// port, memory and LSP children until logout (AGT-4).
+	// during the poll or while attach runs: it kills serve and exits, rather
+	// than polling on and attaching to a hung-up tty. Before, serve was
+	// orphaned to init and kept its port, memory and LSP children until
+	// logout (AGT-4).
 	//
-	// The Basic-auth password and username are NOT in the line: they travel
-	// through PaneEnv, so the shell neither echoes them nor writes them to
-	// history (AGT-11, AGT-12). The poll count and interval are DERIVED from
+	// The Basic-auth password is NOT in the line: it travels through PaneEnv
+	// as PERCH_OPENCODE_PASSWORD, and the subshell exports it BY REFERENCE
+	// as OPENCODE_SERVER_PASSWORD, together with the pinned username. So the
+	// shell neither echoes the secret nor records it in history (AGT-12),
+	// and the export runs AFTER the login rc files and is immune to a
+	// `perch reload` overlay (which never touches PERCH_* keys), so a user's
+	// own OPENCODE_SERVER_* values cannot make the monitor's requests fail
+	// with 401 (AGT-11). The poll count and interval are DERIVED from
 	// firstConnectDeadline (see the var block below), so the poll budget and
 	// the monitor's connect deadline stay in lockstep. The line contains no
 	// single quote and no backslash, so wrapForLoginShell can run it under
 	// `sh -c` for non-POSIX login shells.
-	serveAndAttachFmt = "( %s serve --port %s --hostname " + hooklistener.LoopbackHost + " >/dev/null 2>&1 & sp=$!;" +
-		` trap "kill $sp 2>/dev/null" HUP TERM;` +
+	serveAndAttachFmt = "( export " + envOpencodePassword + `="$` + envPerchOpencodePassword + `" ` +
+		envOpencodeUsername + "=" + opencodeBasicAuthUser + ";" +
+		" %s serve --port %s --hostname " + hooklistener.LoopbackHost + " >/dev/null 2>&1 & sp=$!;" +
+		` trap "kill $sp 2>/dev/null; exit 129" HUP TERM;` +
 		" i=0; while [ $i -lt %s ]; do curl -s -o /dev/null %s && break; i=$((i+1)); sleep %s; done;" +
 		" %s; ec=$?; kill $sp 2>/dev/null; exit $ec )" + exitSentinel
 
@@ -166,6 +175,9 @@ const (
 	// the server's Basic auth (v1.15.12 server/auth.ts).
 	envOpencodePassword = "OPENCODE_SERVER_PASSWORD"
 	envOpencodeUsername = "OPENCODE_SERVER_USERNAME"
+	// envPerchOpencodePassword carries the generated password in the pane
+	// env; the launch line exports it under envOpencodePassword.
+	envPerchOpencodePassword = "PERCH_OPENCODE_PASSWORD"
 )
 
 // opencodeServePollMaxIters and opencodeServePollIntervalSec are the
@@ -300,17 +312,14 @@ func (m *OpencodeMonitor) Prepare(_ context.Context, _, _, resumeID string) (str
 }
 
 // PaneEnv supplies, through the pane shell's process environment, the exit
-// sentinel's token and URL and the opencode server's Basic-auth username
-// and password. The launch line references none of them, so the shell
-// echoes no secret. The username is pinned, because the server reads
-// OPENCODE_SERVER_USERNAME and a user-set value would make the monitor's
-// /event requests fail with 401 (AGT-11). Call PaneEnv after Prepare.
+// sentinel's token and URL and the opencode server's Basic-auth password
+// (as PERCH_OPENCODE_PASSWORD, which the launch line exports by reference;
+// see serveAndAttachFmt). The shell echoes no secret. Call PaneEnv after
+// Prepare.
 func (m *OpencodeMonitor) PaneEnv() []string {
 	env := exitPaneEnv(m.exitListener)
 	if m.password != "" {
-		env = append(env,
-			envOpencodePassword+"="+m.password,
-			envOpencodeUsername+"="+opencodeBasicAuthUser)
+		env = append(env, envPerchOpencodePassword+"="+m.password)
 	}
 	return env
 }
@@ -860,7 +869,14 @@ func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
 			SessionID string `json:"sessionID"`
 		}
 		_ = json.Unmarshal(env.Properties, &p)
-		ev = Event{Kind: "question", State: StateAwaitingInput, SessionID: p.SessionID}
+		sid := p.SessionID
+		if m.isChild(sid) {
+			// A subagent's question still needs the user, so the signal
+			// stays, but the child id must not become the persisted resume
+			// id (AGT-6).
+			sid = ""
+		}
+		ev = Event{Kind: "question", State: StateAwaitingInput, SessionID: sid}
 	case "question.replied", "question.rejected":
 		// The question was resolved in the TUI. Clear the
 		// awaiting-input signal. replied means the agent resumes
@@ -894,13 +910,19 @@ func (m *OpencodeMonitor) translateSSE(ctx context.Context, data []byte) {
 		// The user answered the permission in the TUI (v1.15.12
 		// permission/index.ts: {sessionID, requestID, reply}). Clear the
 		// amber signal now rather than at the next step's busy, which can be
-		// minutes away for a long tool run (AGT-10). The turn flag is kept,
-		// so the turn's final idle still reports done.
+		// minutes away for a long tool run (AGT-10). On once/always the turn
+		// flag is kept, so the turn's final idle still reports done. A
+		// reject stops opencode's loop, so it ends the turn: the idle that
+		// follows is a steady idle, not a "Turn complete". A reject with
+		// feedback continues, and its next busy re-arms the turn.
 		var p struct {
 			Reply string `json:"reply"`
 		}
 		if json.Unmarshal(env.Properties, &p) != nil {
 			return
+		}
+		if p.Reply == "reject" {
+			_ = m.takeTurnRunning()
 		}
 		m.mu.Lock()
 		awaiting := m.state == StateAwaitingApproval

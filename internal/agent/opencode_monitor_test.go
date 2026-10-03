@@ -180,11 +180,17 @@ func TestOpencodeMonitorPrepare_Resume(t *testing.T) {
 	if !strings.HasSuffix(fresh, "\n") {
 		t.Errorf("launch command must end with a newline to submit to the shell: %q", fresh)
 	}
-	if strings.Contains(fresh, "OPENCODE_SERVER_PASSWORD") || strings.Contains(fresh, "pw;") {
-		t.Errorf("the typed line must not carry the password (AGT-12): %q", fresh)
+	// AGT-11/12: the password travels as PERCH_OPENCODE_PASSWORD and is
+	// exported BY REFERENCE inside the subshell, after the login rc, together
+	// with the pinned username; the literal never appears in the line.
+	if strings.Contains(fresh, "=pw") {
+		t.Errorf("the typed line must not carry the password: %q", fresh)
 	}
-	if !envSliceHas(om.PaneEnv(), "OPENCODE_SERVER_PASSWORD=pw") || !envSliceHas(om.PaneEnv(), "OPENCODE_SERVER_USERNAME=opencode") {
-		t.Errorf("PaneEnv must carry the server password and pinned username: %v", om.PaneEnv())
+	if !strings.Contains(fresh, `export OPENCODE_SERVER_PASSWORD="$PERCH_OPENCODE_PASSWORD" OPENCODE_SERVER_USERNAME=opencode;`) {
+		t.Errorf("the subshell must export the credentials by reference: %q", fresh)
+	}
+	if !envSliceHas(om.PaneEnv(), "PERCH_OPENCODE_PASSWORD=pw") {
+		t.Errorf("PaneEnv must carry PERCH_OPENCODE_PASSWORD: %v", om.PaneEnv())
 	}
 	for _, want := range []string{
 		"opencode serve --port 1234 --hostname 127.0.0.1",
@@ -232,7 +238,7 @@ func TestOpencodeMonitorPrepare_SelfAssignsPortAndPassword(t *testing.T) {
 	// typed line (AGT-12). A 16-byte hex password is 32 chars.
 	var token string
 	for _, e := range mon.PaneEnv() {
-		if v, ok := strings.CutPrefix(e, "OPENCODE_SERVER_PASSWORD="); ok {
+		if v, ok := strings.CutPrefix(e, "PERCH_OPENCODE_PASSWORD="); ok {
 			token = v
 		}
 	}

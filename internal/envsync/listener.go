@@ -313,12 +313,39 @@ func computeDelta(baseline map[string]string, env []string) []string {
 		if ignoredKey(key) {
 			continue
 		}
+		if isPathList(key) {
+			val = dedupPathList(val)
+			e = key + "=" + val
+		}
 		if base, exists := baseline[key]; exists && base == val {
 			continue // unchanged versus baseline
 		}
 		out = append(out, e)
 	}
 	return out
+}
+
+// isPathList reports whether key holds a colon-separated search path
+// (PATH, MANPATH, LD_LIBRARY_PATH, PYTHONPATH, ...).
+func isPathList(key string) bool { return strings.HasSuffix(key, "PATH") }
+
+// dedupPathList drops repeated entries from a colon-separated list, keeping
+// the first occurrence (which is the one that wins a lookup). The drawer's
+// login rc prepends to a PATH that already carries the previous reload's
+// prepends; without this, every `perch reload` would add one more copy.
+// Deduplicating keeps the captured value bounded.
+func dedupPathList(v string) string {
+	parts := strings.Split(v, ":")
+	seen := make(map[string]bool, len(parts))
+	out := parts[:0]
+	for _, p := range parts {
+		if seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	return strings.Join(out, ":")
 }
 
 // computeUnset returns the baseline keys absent from env, sorted, excluding

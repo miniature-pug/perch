@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -105,7 +106,9 @@ type HookEvent struct {
 	// Source is SessionStart's trigger: startup, resume, clear, compact, or
 	// fork.
 	Source string `json:"source"`
-	ReqID  string `json:"-"` // the listener sets this field
+	// NotificationType is the Notification hook's type, e.g. idle_prompt.
+	NotificationType string `json:"notification_type"`
+	ReqID            string `json:"-"` // the listener sets this field
 }
 
 type pending struct{ ch chan Decision }
@@ -209,6 +212,13 @@ func (l *Listener) handleHook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
+	// Read the body to EOF (MaxBytesReader still caps it). net/http only
+	// starts watching for the client closing the connection, which is what
+	// cancels r.Context(), once the body is fully consumed. Without this a
+	// body with bytes past the JSON value (curl --data-binary keeps a
+	// trailing newline) may never report the hook being killed, and a parked
+	// PermissionRequest would never be retracted.
+	_, _ = io.Copy(io.Discard, r.Body)
 	if ev.Type != EventPermissionRequest {
 		// Every other event is non-blocking: lifecycle hooks (Stop,
 		// StopFailure, SessionStart, UserPromptSubmit, PostToolUse), the

@@ -10,9 +10,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
+	"time"
 	"unicode/utf8"
 
 	"github.com/miniature-pug/perch/internal/hooklistener"
@@ -169,12 +173,29 @@ func (m *ClaudeMonitor) translate(he hooklistener.HookEvent) {
 		// A new turn starts (AGT-7).
 		ev = Event{Kind: "state", State: StateRunning, SessionID: he.SessionID}
 	case "PostToolUse":
-		// Installed only for AskUserQuestion: the user answered, so the agent
-		// works again (AGT-7).
-		if m.state != StateAwaitingInput && !(m.state == StateAwaitingApproval && len(m.pending) == 0) {
+		// Installed only for the interactive tools (AskUserQuestion,
+		// ExitPlanMode): the user answered, so the agent works again (AGT-7).
+		clearable := m.state == StateAwaitingInput || (m.state == StateAwaitingApproval && len(m.pending) == 0)
+		if !clearable {
 			return
 		}
 		ev = Event{Kind: "state", State: StateRunning}
+	case "Notification":
+		// Installed only for idle_prompt: claude has sat at its prompt for
+		// about a minute. Stop does not fire on a user interrupt (Esc, or
+		// "No" in claude's own permission dialog), and PostToolUse does not
+		// fire for a dismissed question, so this is what settles a turn the
+		// user interrupted instead of leaving "running" or "awaiting-input"
+		// lit until the next prompt. done and errored stay as they are.
+		if he.NotificationType != "idle_prompt" || len(m.pending) > 0 {
+			return
+		}
+		switch m.state {
+		case StateRunning, StateAwaitingInput, StateAwaitingApproval:
+		default:
+			return
+		}
+		ev = Event{Kind: "state", State: StateIdle}
 	case "Stop":
 		// Stop means the agent finished its turn. Emit StateDone, and let
 		// dispatchNotify fire the "Turn complete" ambient toast.
@@ -188,20 +209,22 @@ func (m *ClaudeMonitor) translate(he hooklistener.HookEvent) {
 		ev = Event{Kind: "state", State: StateExited, Err: exitReason(he.ErrorType)}
 		m.exited = true
 	case "PreToolUse":
-		// Installed only for AskUserQuestion. The agent is asking the USER to
-		// choose, which is an attention SIGNAL, not an approval. The listener
-		// already answered the hook with no decision, so claude renders the
-		// question in its own pane TUI through its normal flow (AGT-23).
-		if he.ToolName != toolAskUserQuestion {
+		// Installed only for the interactive tools. The agent is asking the
+		// USER to choose (a question, or a plan to accept), which is an
+		// attention SIGNAL, not an approval. The listener already answered
+		// the hook with no decision, so claude renders its own dialog in the
+		// pane through its normal flow (AGT-23).
+		if !interactiveTools[he.ToolName] {
 			return
 		}
 		ev = Event{Kind: "question", State: StateAwaitingInput}
 	case hooklistener.EventPermissionRequest:
-		if he.ToolName == toolAskUserQuestion {
-			// The question UI is claude's own dialog. Never answer it: an
-			// explicit allow can complete the tool without showing the
-			// question (AGT-23). The PreToolUse signal already raised
-			// awaiting-input.
+		if interactiveTools[he.ToolName] {
+			// The question and plan-approval UIs are claude's own dialogs
+			// (ExitPlanMode's carries mode choices and a feedback path that a
+			// two-button card would lose). Never answer them: an explicit
+			// allow can complete the tool without showing the dialog
+			// (AGT-23). The PreToolUse signal already raised awaiting-input.
 			m.listener.Decide(he.ReqID, hooklistener.Decision{Abstain: true})
 			return
 		}
@@ -217,11 +240,7 @@ func (m *ClaudeMonitor) translate(he hooklistener.HookEvent) {
 		if _, ok := m.pending[he.ReqID]; !ok {
 			return
 		}
-		delete(m.pending, he.ReqID)
-		ev = Event{Kind: "approval-resolved", ResolvedReqID: he.ReqID}
-		if len(m.pending) == 0 && m.state == StateAwaitingApproval {
-			ev.State = StateRunning
-		}
+		ev = m.resolveLocked(he.ReqID)
 	default:
 		// NOTE: there is no "Notification" case. perch does not install that
 		// hook, and no UI surface consumes it.
@@ -259,17 +278,19 @@ func newApprovalReq(reqID, tool string, raw json.RawMessage) *ApprovalReq {
 		InputHash: approvalInputHash(tool, raw)}
 }
 
-// nonSemanticInputKeys lists tool_input keys that do not change what a tool
-// call DOES and that the model rewrites freely between otherwise identical
-// calls. They are left out of the always-rule key, so "always allow
-// `npm test`" matches the next `npm test` even when the model words its
-// description differently (AGT-9). Everything else, including
-// security-relevant flags such as Bash's dangerouslyDisableSandbox, stays in
-// the key.
+// nonSemanticInputKeys lists, per built-in tool, tool_input keys that do
+// not change what the call DOES and that the model rewrites freely between
+// otherwise identical calls. They are left out of the always-rule key, so
+// "always allow `npm test`" matches the next `npm test` even when the model
+// words its description differently (AGT-9). Only listed built-in tools are
+// stripped: for any other tool, MCP tools included, every key stays in the
+// key, because there a field such as `description` can be the payload.
+// Security-relevant flags such as Bash's dangerouslyDisableSandbox always
+// stay.
 var nonSemanticInputKeys = map[string][]string{
-	"*":        {"description"},
-	"Bash":     {"timeout", "run_in_background"},
-	"WebFetch": {"prompt"},
+	"Bash":       {"description", "timeout", "run_in_background"},
+	"PowerShell": {"description", "timeout", "run_in_background"},
+	"WebFetch":   {"prompt"},
 }
 
 // approvalInputHash is the hex sha256 of the canonical always-rule key for
@@ -280,9 +301,6 @@ func approvalInputHash(tool string, raw json.RawMessage) string {
 	canon := []byte(raw)
 	var obj map[string]json.RawMessage
 	if json.Unmarshal(raw, &obj) == nil && obj != nil {
-		for _, k := range nonSemanticInputKeys["*"] {
-			delete(obj, k)
-		}
 		for _, k := range nonSemanticInputKeys[tool] {
 			delete(obj, k)
 		}
@@ -320,13 +338,32 @@ func (m *ClaudeMonitor) Approve(reqID string, d Decision) error {
 	if _, known := m.pending[reqID]; !known {
 		return nil
 	}
-	delete(m.pending, reqID)
-	if m.exited || m.state != StateAwaitingApproval || len(m.pending) > 0 {
+	if m.exited {
+		delete(m.pending, reqID)
 		return nil
 	}
-	m.state = StateRunning
-	m.enqueueLocked(Event{Kind: "state", State: StateRunning, ResolvedReqID: reqID})
+	ev := m.resolveLocked(reqID)
+	if ev.State != "" {
+		m.state = ev.State
+	}
+	m.enqueueLocked(ev)
 	return nil
+}
+
+// resolveLocked removes reqID from the pending set and returns the ONE
+// event that reports its resolution. Every resolution (perch's verdict, or
+// a cancelled hook) emits exactly one event carrying ResolvedReqID, so a
+// consumer can always retract the card. When it was the last pending
+// approval and the state is still awaiting-approval, the event is
+// Kind "state" with StateRunning (the agent is unblocked); otherwise it is
+// Kind "approval-resolved" with no state change. Caller holds m.mu and
+// applies ev.State.
+func (m *ClaudeMonitor) resolveLocked(reqID string) Event {
+	delete(m.pending, reqID)
+	if len(m.pending) == 0 && m.state == StateAwaitingApproval {
+		return Event{Kind: "state", State: StateRunning, ResolvedReqID: reqID}
+	}
+	return Event{Kind: "approval-resolved", ResolvedReqID: reqID}
 }
 
 func (m *ClaudeMonitor) CurrentState() State {
@@ -352,6 +389,14 @@ const monitorEventChanBuf = 64
 // the user a multiple-choice question. perch treats it as an attention
 // SIGNAL (StateAwaitingInput) and never answers its permission.
 const toolAskUserQuestion = "AskUserQuestion"
+
+// toolExitPlanMode is the claude built-in tool that presents a plan for the
+// user to accept. It is interactive like AskUserQuestion.
+const toolExitPlanMode = "ExitPlanMode"
+
+// interactiveTools are claude's tools whose permission dialog IS the user
+// interaction. perch signals them (awaiting-input) and never answers them.
+var interactiveTools = map[string]bool{toolAskUserQuestion: true, toolExitPlanMode: true}
 
 // toolInputSummaryCutoff is the maximum raw ToolInput byte length included
 // verbatim in the approval-event Summary. perch ELLIPSIZES an input at or
@@ -404,9 +449,69 @@ const permissionHookTimeoutSec = 86400
 // claudeSettingsFile is the per-session settings file's base name.
 const claudeSettingsFile = "settings.json"
 
-// settingsTempRoot returns the parent for the per-session settings
-// directory. It is a var so tests can redirect it.
-var settingsTempRoot = os.TempDir
+// settingsRoots returns the candidate parents for the per-session
+// settings directory, in preference order. $XDG_RUNTIME_DIR comes first: it
+// is per-user, 0700, and never age-cleaned, whereas systemd-tmpfiles can
+// expire a long-lived session's file under /tmp. It is a var so tests can
+// redirect it.
+var settingsRoots = func() []string {
+	var roots []string
+	if d := os.Getenv("XDG_RUNTIME_DIR"); d != "" && filepath.IsAbs(d) {
+		roots = append(roots, d)
+	}
+	return append(roots, os.TempDir(), "/tmp")
+}
+
+// settingsDirPrefix names the per-session settings directories:
+// perch-claude-<pid>-<random>. The pid lets the sweep tell a crashed perch's
+// leftovers from a live one's.
+const settingsDirPrefix = "perch-claude-"
+
+// staleSettingsAge is how old a settings directory without a parseable
+// owner pid must be before the sweep removes it.
+const staleSettingsAge = 24 * time.Hour
+
+var sweepOnce sync.Once
+
+// sweepStaleSettingsDirs removes per-session settings directories that a
+// crashed or killed perch left behind (each holds a dead listener's token).
+// It only touches directories named perch-claude-* that the current user
+// owns, and only when their owning pid is dead, or, for a name without a
+// pid, when they are older than staleSettingsAge. It never touches this
+// process's own directories.
+func sweepStaleSettingsDirs(roots []string) {
+	self := os.Getpid()
+	uid := os.Getuid()
+	for _, root := range roots {
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			name := e.Name()
+			if !e.IsDir() || !strings.HasPrefix(name, settingsDirPrefix) {
+				continue
+			}
+			full := filepath.Join(root, name)
+			fi, err := os.Lstat(full)
+			if err != nil || !fi.IsDir() {
+				continue
+			}
+			if st, ok := fi.Sys().(*syscall.Stat_t); !ok || int(st.Uid) != uid {
+				continue
+			}
+			pidStr, _, _ := strings.Cut(strings.TrimPrefix(name, settingsDirPrefix), "-")
+			if pid, err := strconv.Atoi(pidStr); err == nil && pid > 0 {
+				if pid == self || syscall.Kill(pid, 0) != syscall.ESRCH {
+					continue // ours, or its perch is still alive
+				}
+			} else if time.Since(fi.ModTime()) < staleSettingsAge {
+				continue
+			}
+			_ = os.RemoveAll(full)
+		}
+	}
+}
 
 // buildHookSettings returns the per-session settings JSON: perch's hooks,
 // pointing at this session's listener.
@@ -414,8 +519,10 @@ var settingsTempRoot = os.TempDir
 //   - PermissionRequest (all tools) blocks on perch's approval card. It fires
 //     only when claude would itself ask, so claude's allow rules and
 //     acceptEdits/bypassPermissions modes keep working (AGT-8).
-//   - PreToolUse and PostToolUse, matched to AskUserQuestion only, raise and
-//     clear the "asking you" signal without gating any tool.
+//   - PreToolUse and PostToolUse, matched to AskUserQuestion|ExitPlanMode
+//     only, raise and clear the "asking you" signal without gating any tool.
+//   - Notification (idle_prompt) settles a turn the user interrupted, for
+//     which Stop never fires.
 //   - UserPromptSubmit, Stop, StopFailure, SessionStart drive the lifecycle
 //     state (AGT-7).
 func buildHookSettings(addr, token string) ([]byte, error) {
@@ -436,11 +543,12 @@ func buildHookSettings(addr, token string) ([]byte, error) {
 		}
 		return g
 	}
-	all, ask := "", toolAskUserQuestion
+	all, ask, idle := "", toolAskUserQuestion+"|"+toolExitPlanMode, "idle_prompt"
 	hooks := map[string]any{
 		hooklistener.EventPermissionRequest: []any{group(&all, blocking, permissionHookTimeoutSec)},
 		"PreToolUse":                        []any{group(&ask, signal, 0)},
 		"PostToolUse":                       []any{group(&ask, signal, 0)},
+		"Notification":                      []any{group(&idle, signal, 0)},
 		"UserPromptSubmit":                  []any{group(nil, signal, 0)},
 		"Stop":                              []any{group(nil, signal, 0)},
 		"StopFailure":                       []any{group(nil, signal, 0)},
@@ -495,9 +603,11 @@ func (m *ClaudeMonitor) writeSettings() error {
 		return err
 	}
 	m.removeSettings()
+	roots := settingsRoots()
+	sweepOnce.Do(func() { sweepStaleSettingsDirs(roots) })
 	var dir string
-	for _, root := range []string{settingsTempRoot(), "/tmp"} {
-		d, err := os.MkdirTemp(root, "perch-claude-") // 0700
+	for _, root := range roots {
+		d, err := os.MkdirTemp(root, settingsDirPrefix+strconv.Itoa(os.Getpid())+"-") // 0700
 		if err != nil {
 			continue
 		}
@@ -553,10 +663,13 @@ func (m *ClaudeMonitor) RewriteHooks() error { return nil }
 
 // cleanupLegacyWorktreeHooks removes a `.claude/settings.json` that an
 // older perch version left in the worktree, but ONLY when the file holds
-// nothing except perch's own hook groups. It then also removes `.claude/`
-// if that is left empty. A file with any user content is never touched:
-// rewriting it would reformat the user's file, and a stale perch group in
-// it only makes a failing, non-blocking curl.
+// nothing except perch's own hook groups or nothing at all (`{}`, or
+// `{"hooks": {}}`, which is what the old Teardown left behind), and ONLY
+// when git does not track it: deleting a tracked file would itself dirty
+// the tree. It then also removes `.claude/` if that is left empty. A file
+// with any user content is never touched: rewriting it would reformat the
+// user's file, and a stale perch group in it only makes a failing,
+// non-blocking curl.
 func cleanupLegacyWorktreeHooks(cwd string) {
 	if cwd == "" {
 		return
@@ -564,15 +677,35 @@ func cleanupLegacyWorktreeHooks(cwd string) {
 	dir := filepath.Join(cwd, ".claude")
 	path := filepath.Join(dir, "settings.json")
 	data, err := os.ReadFile(path)
-	if err != nil || !bytes.Contains(data, []byte(perchMonitorSentinel)) {
+	if err != nil || !onlyPerchHooks(data) {
 		return
 	}
-	if !onlyPerchHooks(data) {
+	if gitTracksFile(cwd, filepath.Join(".claude", "settings.json")) {
 		return
 	}
 	if os.Remove(path) == nil {
 		_ = os.Remove(dir) // fails, harmlessly, unless the directory is empty
 	}
+}
+
+// gitTracksFile reports whether git tracks rel inside cwd. It answers false
+// only when git positively says the file is untracked (exit 1) or cwd is
+// not a repository (exit 128); when git is missing or fails otherwise it
+// answers true, so the caller leaves the file alone. It is a var so tests
+// can stub it.
+var gitTracksFile = func(cwd, rel string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "-C", cwd, "ls-files", "--error-unmatch", "--", rel)
+	err := cmd.Run()
+	if err == nil {
+		return true
+	}
+	var ee *exec.ExitError
+	if errors.As(err, &ee) && (ee.ExitCode() == 1 || ee.ExitCode() == 128) {
+		return false
+	}
+	return true
 }
 
 // onlyPerchHooks reports whether a settings document holds nothing but
