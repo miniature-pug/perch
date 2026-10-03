@@ -264,6 +264,35 @@ func TestPruneBuildArtifacts(t *testing.T) {
 	}
 }
 
+// TestPrunedNameDirThatIsARepoIsFound verifies that a repo whose own directory
+// is named like a prune entry (build, dist, target...) is still discovered,
+// while a pruned-name directory without .git is skipped.
+func TestPrunedNameDirThatIsARepoIsFound(t *testing.T) {
+	root := t.TempDir()
+	want := []string{}
+	for _, d := range []string{"build", "dist", "target", "venv"} {
+		dir := makeDir(t, root, d)
+		makeGitDir(t, dir)
+		want = append(want, dir)
+	}
+	// Plain pruned dir without .git, and a nested pruned dir inside a repo.
+	makeGitDir(t, makeDir(t, root, "out", "dist", "inner"))
+	makeGitDir(t, makeDir(t, root, "build", "dist", "inner"))
+	got, err := sortedScan(t, root, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(want)
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	}
+}
+
 // TestScanContextCancelled verifies that a cancelled context aborts the walk.
 func TestScanContextCancelled(t *testing.T) {
 	root := t.TempDir()

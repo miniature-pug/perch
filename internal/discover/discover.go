@@ -168,7 +168,13 @@ func ScanContext(ctx context.Context, root string, opts Options) ([]string, erro
 		}
 
 		// Prune gate: never descend into directories on the prune list.
+		// A directory with a ".git" entry is a repo itself (for example
+		// ~/code/build), so keep walking: the walk then sees the ".git" entry
+		// and records the candidate. Its pruned-name children are still skipped.
 		if pruneSet[name] {
+			if _, statErr := os.Lstat(filepath.Join(path, ".git")); statErr == nil {
+				return nil
+			}
 			return fs.SkipDir
 		}
 
