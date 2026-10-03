@@ -1,8 +1,8 @@
 // Command perch is a keyboard-first GUI that manages AI coding sessions
 // (claude, opencode) across git worktrees. Run it without arguments, or
 // with a path, and it launches the Wails desktop GUI. It also provides the
-// attach, doctor, reload, and version subcommands (plus a hidden debug
-// subcommand). See ARCHITECTURE.md for the full design.
+// attach, doctor, reload, install-desktop, and version subcommands (plus a
+// hidden debug subcommand). See ARCHITECTURE.md for the full design.
 package main
 
 import (
@@ -19,6 +19,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/miniature-pug/perch/app"
+	"github.com/miniature-pug/perch/internal/desktop"
 	"github.com/miniature-pug/perch/internal/discover"
 	"github.com/miniature-pug/perch/internal/doctor"
 	"github.com/miniature-pug/perch/internal/envsync"
@@ -57,6 +59,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return handleAttach(args[1:], stdout, stderr)
 	case "reload":
 		return handleReload(stdout, stderr)
+	case "install-desktop":
+		return handleInstallDesktop(args[1:], stdout, stderr)
 	default:
 		// Treat the first argument as a path to a project root.
 		return handlePathArg(args[0], stdout, stderr)
@@ -211,6 +215,66 @@ func handleReload(stdout, stderr io.Writer) int {
 	return 0
 }
 
+// selfPath is the seam tests replace. It returns the absolute,
+// symlink-resolved path of the running binary.
+var selfPath = func() (string, error) {
+	exe, err := os.Executable() // Linux: /proc/self/exe, " (deleted)" stripped
+	if err != nil {
+		return "", err
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	return filepath.Abs(exe)
+}
+
+// Seams tests replace, so `go test` never touches ~/.local/share or runs
+// gtk-update-icon-cache.
+var (
+	installDesktop     = desktop.Install
+	installDesktopIcon = desktop.InstallIcon
+	desktopNeedsUpdate = desktop.NeedsUpdate
+	desktopIconMissing = desktop.IconMissing
+	geteuid            = os.Geteuid
+)
+
+// handleInstallDesktop implements `perch install-desktop`. It installs the
+// app icon and a perch.desktop entry whose Exec is this binary, under
+// $XDG_DATA_HOME (default ~/.local/share), and refreshes the icon cache and
+// the desktop database. GNOME on Wayland shows the dock icon only through
+// this entry. Unlike the automatic install at GUI start, it always rewrites
+// the entry.
+func handleInstallDesktop(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 0 {
+		_, _ = fmt.Fprintln(stderr, "Usage: perch install-desktop")
+		return 2
+	}
+	if runtime.GOOS != "linux" {
+		_, _ = fmt.Fprintln(stderr, "perch install-desktop: only Linux desktops use .desktop entries")
+		return 1
+	}
+	if geteuid() == 0 && os.Getenv("SUDO_USER") != "" {
+		_, _ = fmt.Fprintln(stderr, "perch install-desktop: running under sudo would install into root's home; run it as yourself, without sudo")
+		return 1
+	}
+	bin, err := selfPath()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "perch install-desktop: cannot resolve the perch binary path: %v\n", err)
+		return 1
+	}
+	if err := installDesktop(desktop.Options{BinPath: bin, Icon: app.AppIcon()}); err != nil {
+		_, _ = fmt.Fprintf(stderr, "perch install-desktop: %v\n", err)
+		return 1
+	}
+	if p, err := desktop.DefaultPaths(); err == nil {
+		_, _ = fmt.Fprintf(stdout, "installed %s\n", p.DesktopFile)
+		_, _ = fmt.Fprintf(stdout, "installed %s\n", p.IconFile)
+	}
+	_, _ = fmt.Fprintf(stdout, "Exec=%s\n", bin)
+	_, _ = fmt.Fprintln(stdout, "If the dock still shows a generic icon, log out and back in once.")
+	return 0
+}
+
 // printUsage writes the usage summary to w.
 // Note: printUsage intentionally omits "debug". It is a hidden diagnostic
 // surface.
@@ -218,6 +282,9 @@ func printUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "Usage: perch [path]")
 	_, _ = fmt.Fprintln(w, "       perch attach <query>")
 	_, _ = fmt.Fprintln(w, "       perch doctor")
+	// install.sh decides whether a binary has this subcommand by grepping the
+	// usage for the literal "perch install-desktop". Keep this line.
+	_, _ = fmt.Fprintln(w, "       perch install-desktop")
 	_, _ = fmt.Fprintln(w, "       perch reload")
 	_, _ = fmt.Fprintln(w, "       perch version")
 }

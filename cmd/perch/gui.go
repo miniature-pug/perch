@@ -5,15 +5,71 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 
 	perch "github.com/miniature-pug/perch"
 	"github.com/miniature-pug/perch/app"
 	"github.com/miniature-pug/perch/internal/config"
+	"github.com/miniature-pug/perch/internal/desktop"
 )
 
-// launchGUI is the seam tests replace so `go test` never opens a webview.
+// launchGUI is the seam tests replace so `go test` never opens a webview
+// (or touches the desktop entry).
 var launchGUI = func(roots []string) error {
+	ensureDesktopEntry(os.Stderr)
 	return app.Run(perch.Assets, roots)
+}
+
+// ensureDesktopEntry installs the perch.desktop entry and icon in a
+// goroutine (the cache refresh can take seconds; the window must not wait),
+// but only when there is no perch.desktop or its Exec target no longer
+// exists. Without the entry, GNOME on Wayland shows a generic dock icon. It
+// never rewrites an entry that launches another working binary (a dev build
+// must not take the entry from the installed one, and a hand-made entry
+// stays as written); for such an entry it adds only a missing perch icon. It
+// does nothing as root, off Linux, for `go run` and temp-dir binaries, or
+// with PERCH_NO_DESKTOP_ENTRY set. Failures go to log, never to the caller:
+// `perch install-desktop` is the explicit path. The returned channel closes
+// when the background work is done.
+func ensureDesktopEntry(log io.Writer) <-chan struct{} {
+	done := make(chan struct{})
+	if runtime.GOOS != "linux" || geteuid() == 0 || os.Getenv("PERCH_NO_DESKTOP_ENTRY") != "" {
+		close(done)
+		return done
+	}
+	bin, err := selfPath()
+	if err != nil || ephemeralBinary(bin) {
+		close(done)
+		return done
+	}
+	go func() {
+		defer close(done)
+		defer func() {
+			if r := recover(); r != nil {
+				_, _ = fmt.Fprintf(log, "perch: desktop entry: %v\n", r)
+			}
+		}()
+		opts := desktop.Options{BinPath: bin, Icon: app.AppIcon()}
+		switch {
+		case desktopNeedsUpdate(bin):
+			if err := installDesktop(opts); err != nil {
+				_, _ = fmt.Fprintf(log, "perch: installing the desktop entry: %v\n", err)
+			}
+		case desktopIconMissing():
+			if err := installDesktopIcon(opts); err != nil {
+				_, _ = fmt.Fprintf(log, "perch: installing the desktop icon: %v\n", err)
+			}
+		}
+	}()
+	return done
+}
+
+// ephemeralBinary reports whether bin is a `go run` or temp-dir build, which
+// must not become the desktop entry's target.
+func ephemeralBinary(bin string) bool {
+	return strings.Contains(bin, string(os.PathSeparator)+"go-build") ||
+		strings.HasPrefix(bin, filepath.Clean(os.TempDir())+string(os.PathSeparator))
 }
 
 // worktreeDirSuffix names the sibling directory that holds a repo's linked
