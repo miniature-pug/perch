@@ -200,6 +200,10 @@ export function buildInitScriptContent(opts: MockOptions = {}): string {
           record('SetWorkspaceTitle', [id, title]);
           return Promise.resolve();
         },
+        RetypeLaunch: function(id) {
+          record('RetypeLaunch', [id]);
+          return Promise.resolve();
+        },
         WorkspaceForBranch: function(repoPath, branch) {
           record('WorkspaceForBranch', [repoPath, branch]);
           // No pre-existing workspace for the branch by default. Shape matches the

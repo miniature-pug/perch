@@ -69,6 +69,7 @@ const captured = {
 vi.mock("./lib/wails", () => ({
   listWorkspaces:  vi.fn(async () => []),
   openWorkspace:   vi.fn(async () => {}),
+  retypeLaunch:    vi.fn(async () => {}),
   closeWorkspace:  vi.fn(async () => {}),
   openShell:       vi.fn(async () => {}),
   getLayout:       vi.fn(async () => "{}"),
@@ -5941,5 +5942,75 @@ describe("backend contract wiring", () => {
       .mockResolvedValueOnce({ id: "ws-1", found: true });      // after ErrBranchInUse
     await createWithError("create: branch already checked out by a session");
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "new session" })).toBeNull());
+  });
+});
+
+describe("launch gate: Retype launch (wiring-frontend-2)", () => {
+  const RETYPE = {
+    tier: "blocking", title: "Agent didn't start", workspaceId: "ws-1", action: "retype-launch",
+    body: "The shell is still busy (for example a prompt in your shell startup files). Answer it, then use Retype launch.",
+  };
+  async function openAlpha() {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(fakeWorkspaces);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await fireEvent.click(await screen.findByRole("button", { name: /^Alpha\b/ }));
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    await tick();
+  }
+  async function palette() {
+    await fireEvent.keyDown(document.body, { key: ":" });
+    await waitFor(() => expect(screen.getByRole("dialog", { name: "command palette" })).toBeInTheDocument());
+  }
+  async function openHub() {
+    await palette();
+    await fireEvent.click(screen.getByRole("option", { name: /open notifications/i }));
+    await waitFor(() => expect(screen.getByRole("region", { name: "notification hub" })).toBeInTheDocument());
+  }
+
+  it("the notification offers Retype launch, which calls RetypeLaunch", async () => {
+    const { retypeLaunch } = await import("./lib/wails");
+    await openAlpha();
+    captured.notify.at(-1)!(RETYPE);
+    await openHub();
+    await fireEvent.click(screen.getByRole("button", { name: "Retype launch" }));
+    await waitFor(() => expect(retypeLaunch).toHaveBeenCalledWith("ws-1"));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Retype launch" })).toBeNull());
+  });
+
+  it("an agent:event for the session withdraws the button and the palette entry", async () => {
+    await openAlpha();
+    captured.notify.at(-1)!(RETYPE);
+    await palette();
+    expect(screen.getByRole("option", { name: /retype launch/i })).toBeInTheDocument();
+    await fireEvent.keyDown(document.body, { key: "Escape" });
+    captured.agent.at(-1)!({ workspaceId: "ws-1", kind: "state", state: "running" });
+    await tick();
+    await openHub();
+    expect(screen.queryByRole("button", { name: "Retype launch" })).toBeNull();
+    const { mode } = await import("./lib/stores/mode.svelte");
+    mode.leaveCommand();
+    await palette();
+    expect(screen.queryByRole("option", { name: /retype launch/i })).toBeNull();
+  });
+
+  it("a refusal is shown as a notification", async () => {
+    const { retypeLaunch } = await import("./lib/wails");
+    const { getItems } = await import("./lib/stores/notifications.svelte");
+    vi.mocked(retypeLaunch).mockRejectedValueOnce("the agent already started in this session");
+    await openAlpha();
+    await palette();
+    await fireEvent.click(screen.getByRole("option", { name: /retype launch/i }));
+    await waitFor(() => expect(getItems().some((n) => n.title === "Could not retype the launch" && /already started/.test(n.body))).toBe(true));
+  });
+
+  it("an unknown action renders no button", async () => {
+    await openAlpha();
+    captured.notify.at(-1)!({ ...RETYPE, action: "launch-rockets" });
+    await openHub();
+    expect(screen.getAllByText("Agent didn't start").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: "Retype launch" })).toBeNull();
   });
 });

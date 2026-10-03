@@ -21,6 +21,9 @@ export interface Notification {
   // optional: locally authored notifications, such as open errors or
   // branch-switch warnings, carry no source state.
   state?: string;
+  // An action the notification offers ("retype-launch"). Unknown values
+  // render nothing.
+  action?: string;
 }
 
 // Hard cap on retained notifications. The code prepends to the hub on
@@ -62,7 +65,7 @@ function defaultKind(tier: Tier, title: string, state?: string): Kind {
   return "info";
 }
 
-function add(tier: Tier, workspaceId: string, title: string, body: string, kind?: Kind, state?: string) {
+function add(tier: Tier, workspaceId: string, title: string, body: string, kind?: Kind, state?: string, action?: string) {
   const id = `notif-${++_seq}`;
   // DND silences tiers 2 and 3. It does not drop them. The code still logs
   // them to the hub, so the away catch-up stays complete, but marks them
@@ -71,7 +74,7 @@ function add(tier: Tier, workspaceId: string, title: string, body: string, kind?
   // blocking only. DND never silences blocking (tier 1) notifications.
   // Silencing means muting the interruption while keeping the record.
   const silenced = dnd && tier !== "blocking";
-  items = [{ id, workspaceId, tier, kind: kind ?? defaultKind(tier, title, state), title, body, read: silenced, ts: Date.now(), state }, ...items];
+  items = [{ id, workspaceId, tier, kind: kind ?? defaultKind(tier, title, state), title, body, read: silenced, ts: Date.now(), state, action }, ...items];
   trimToCap();
 
   // No auto-dismiss timer. The hub stays docked; it is not a temporary
@@ -104,7 +107,7 @@ function trimToCap() {
   items = items.filter((n) => keep.has(n.id));
 }
 
-export function addBlocking(w: string, t: string, b: string, kind?: Kind, state?: string) { add("blocking", w, t, b, kind, state); }
+export function addBlocking(w: string, t: string, b: string, kind?: Kind, state?: string, action?: string) { add("blocking", w, t, b, kind, state, action); }
 export function addAmbient (w: string, t: string, b: string, kind?: Kind, state?: string) { add("ambient",  w, t, b, kind, state); }
 export function addRoutine (w: string, t: string, b: string, kind?: Kind, state?: string) { add("routine",  w, t, b, kind, state); }
 
@@ -168,6 +171,13 @@ export function dropBlockingForWorkspace(wsId: string, states: string[]) {
     n.workspaceId === wsId && n.tier === "blocking" && !n.read && n.state !== undefined && states.includes(n.state);
   if (!items.some(drop)) return;
   items = items.filter((n) => !drop(n));
+}
+
+// Withdraw an offered action from a session's notifications, for example
+// "retype-launch" once the agent has reported in.
+export function clearActionForWorkspace(wsId: string, action: string) {
+  if (!items.some((n) => n.workspaceId === wsId && n.action === action)) return;
+  items = items.map((n) => n.workspaceId === wsId && n.action === action ? { ...n, action: undefined } : n);
 }
 
 export function clearRead() { items = items.filter((n) => !n.read); }

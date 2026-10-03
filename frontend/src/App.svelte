@@ -30,9 +30,9 @@
   import { settings } from "./lib/stores/settings.svelte";
   import ApprovalCard       from "./lib/ApprovalCard.svelte";
   import NotificationHub    from "./lib/NotificationHub.svelte";
-  import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead, markAllRead, markReadForWorkspace, dropForWorkspace, dropAwaitingInputForWorkspace, dropBlockingForWorkspace } from "./lib/stores/notifications.svelte";
+  import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead, markAllRead, markReadForWorkspace, dropForWorkspace, dropAwaitingInputForWorkspace, dropBlockingForWorkspace, clearActionForWorkspace } from "./lib/stores/notifications.svelte";
   import CleanupPanel from "./lib/CleanupPanel.svelte";
-  import { listWorkspaces, createWorkspace, setWorkspaceTitle, workspaceForBranch, removeWorkspace, openWorkspace, closeWorkspace, closeShell, revealInFiles, onAgentEvent, onNotify, onFsChanged, onWorkspaceAttach, onWorkspaceRelaunch, approve, pendingApprovals, branches, readFile, setWindowFocus, writeToPty, discoverRepos, diffStat, listStaleSessions, forceRemoveWorkspace, clipboardSetText, approveAlways, removeAlwaysRule, homeShellCwd as fetchHomeShellCwd } from "./lib/wails";
+  import { listWorkspaces, createWorkspace, setWorkspaceTitle, workspaceForBranch, removeWorkspace, openWorkspace, closeWorkspace, closeShell, revealInFiles, onAgentEvent, onNotify, onFsChanged, onWorkspaceAttach, onWorkspaceRelaunch, approve, pendingApprovals, branches, readFile, setWindowFocus, writeToPty, discoverRepos, diffStat, listStaleSessions, forceRemoveWorkspace, clipboardSetText, approveAlways, removeAlwaysRule, retypeLaunch, homeShellCwd as fetchHomeShellCwd } from "./lib/wails";
   import type { WorkspaceVM, ApprovalReq, StaleSessionVM, AgentState, RepoInfo, AlwaysRule, AlwaysGrant } from "./lib/wails";
   import { UNDO_REMOVE_DELAY_MS, GCHORD_TIMEOUT_MS, SIDEBAR_MIN_W, SIDEBAR_MAX_W, SHELL_MIN_H, SHELL_MAX_H, RESIZE_STEP_PX, THEMES, MIME_SESSION, MENTION_PREFIX, AGENT_CLAUDE, AGENT_OPENCODE } from "./lib/constants";
 
@@ -391,6 +391,11 @@
   // frontend half).
   const shellWorkspaces = $derived(workspaces.filter(w => shellStatesFor[w.id]));
 
+  // Sessions whose agent has sent at least one agent:event since the last
+  // launch. "Retype launch" is offered only before that (the backend refuses
+  // after it).
+  let agentReported = new SvelteSet<string>();
+
   // Sessions whose shells are being closed by the backend (session close or
   // removal). Their shells' exits must not respawn a replacement shell
   // (FEC-14). openSession clears the flag.
@@ -599,6 +604,11 @@
       // the agent's own TUI) or taken away (close, reopen, reload, exit). Retract
       // its card. The same id can arrive more than once; removal is idempotent.
       if (ev.resolvedReqId) retractApproval(ev.workspaceId, ev.resolvedReqId);
+      // The agent is running: "Retype launch" no longer applies to this launch.
+      if (!agentReported.has(ev.workspaceId)) {
+        agentReported.add(ev.workspaceId);
+        clearActionForWorkspace(ev.workspaceId, "retype-launch");
+      }
       // "approval-resolved" carries no state: nothing else to do.
       if (ev.kind === "approval-resolved") return;
       const ws = workspaces.find(w => w.id === ev.workspaceId);
@@ -699,7 +709,9 @@
     });
 
     offNotify = onNotify((n) => {
-      if      (n.tier === "blocking") addBlocking(n.workspaceId, n.title, n.body, undefined, n.state);
+      // An agent that already reported in makes "Retype launch" moot.
+      const action = n.action === "retype-launch" && agentReported.has(n.workspaceId) ? undefined : n.action;
+      if      (n.tier === "blocking") addBlocking(n.workspaceId, n.title, n.body, undefined, n.state, action);
       else if (n.tier === "ambient")  addAmbient (n.workspaceId, n.title, n.body, undefined, n.state);
       else                            addRoutine (n.workspaceId, n.title, n.body, undefined, n.state);
       // This deliberately does NOT auto-read on arrival, even for the session on
@@ -851,6 +863,7 @@
   // live.
   async function openSession(id: string) {
     termEpoch[id] = (termEpoch[id] ?? 0) + 1;
+    agentReported.delete(id); // a new launch: no agent event yet
     activeId = id;
     openIds.add(id);
     // A closed session's shells were closed with it. Reopening gives the
@@ -1355,6 +1368,7 @@
         });
       } },
     { id: "session:remove", group: "Session", label: "Remove session",     run: () => { if (active) requestRemove(active); } },
+    { id: "session:retype-launch", group: "Session", label: "Retype launch", run: () => { if (active) doRetypeLaunch(active.id); } },
     // Worktree
     { id: "worktree:open",   group: "Worktree", label: "Open worktree",    keybinding: "Enter",       run: () => { if (active && !openIds.has(active.id)) openSession(active.id); } },
     { id: "worktree:reveal", group: "Worktree", label: "Reveal in Files",  run: () => {
@@ -1391,6 +1405,23 @@
     setDnd(next); // apply now; the store call below persists it
     settings.setDnd(next).catch((e) => addBlocking("", "Failed to save settings", String(e)));
   }
+
+  // Retype the agent launch line for a session whose login shell was busy at
+  // launch (a startup-file prompt). The backend refusal is authoritative; it
+  // is shown as a notification.
+  async function doRetypeLaunch(wsId: string, notifId?: string) {
+    try {
+      await retypeLaunch(wsId);
+      if (notifId) markRead(notifId);
+      clearActionForWorkspace(wsId, "retype-launch");
+    } catch (e) {
+      addBlocking(wsId, "Could not retype the launch", String(e), "error");
+    }
+  }
+  // The palette offers "Retype launch" only for an open session whose agent
+  // has not reported in yet.
+  const canRetypeLaunch = $derived(!!active && openIds.has(active.id) && !agentReported.has(active.id));
+  const paletteCommands = $derived(commands.filter(c => c.id !== "session:retype-launch" || canRetypeLaunch));
 
   function runCommand(id: string) {
     const cmd = commands.find(c => c.id === id);
@@ -2125,7 +2156,7 @@
 
     <CommandPalette
       open={mode.current === "command"}
-      {commands}
+      commands={paletteCommands}
       onRun={(id) => { runCommand(id); mode.leaveCommand(); }}
       onClose={() => mode.leaveCommand()}
     />
@@ -2159,6 +2190,7 @@
           onToggleDnd={toggleDnd}
           onClearRead={clearRead}
           onSelect={onNotificationSelect}
+          onAction={(n) => { if (n.action === "retype-launch") doRetypeLaunch(n.workspaceId, n.id); }}
           onClose={() => openNotif(false)}
         />
       </div>

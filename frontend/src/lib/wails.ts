@@ -72,6 +72,9 @@ interface App {
   SetWorkspaceTitle(id: string, title: string): Promise<void>;
   WorkspaceForBranch(repoPath: string, branch: string): Promise<{ id: string; found: boolean }>;
   OpenWorkspace(id: string): Promise<void>;
+  // Types the agent launch line again into an open session whose login shell
+  // was still busy at launch. Rejects once the agent has reported in.
+  RetypeLaunch(id: string): Promise<void>;
   CloseWorkspace(id: string): Promise<void>;
   RemoveWorkspace(id: string): Promise<void>;
   ForceRemoveWorkspace(id: string): Promise<void>;
@@ -136,6 +139,7 @@ export const createWorkspace      = (agent: string, repoPath: string, baseRef: s
 export const setWorkspaceTitle    = (id: string, title: string)                                                           => app().SetWorkspaceTitle(id, title);
 export const workspaceForBranch   = (repoPath: string, branch: string)                                                    => app().WorkspaceForBranch(repoPath, branch);
 export const openWorkspace   = (id: string)                                       => app().OpenWorkspace(id);
+export const retypeLaunch    = (workspaceId: string)                              => app().RetypeLaunch(workspaceId);
 export const closeWorkspace  = (id: string)                                       => app().CloseWorkspace(id);
 export const removeWorkspace      = (id: string)                                  => app().RemoveWorkspace(id);
 export const forceRemoveWorkspace = (id: string)                                  => app().ForceRemoveWorkspace(id);
@@ -234,7 +238,9 @@ export function onFsChanged(cb: (p: FsChanged) => void): () => void {
   return window.runtime.EventsOn(EVT_FS_CHANGED, cb);
 }
 export function onNotify(
-  cb: (p: { tier: "blocking"|"ambient"|"routine"; title: string; body: string; workspaceId: string; state?: string }) => void,
+  // `action` names an action the notification offers; "retype-launch" is the
+  // only one today. Unknown values are ignored.
+  cb: (p: { tier: "blocking"|"ambient"|"routine"; title: string; body: string; workspaceId: string; state?: string; action?: string }) => void,
 ): () => void {
   return window.runtime.EventsOn(EVT_NOTIFY, cb);
 }

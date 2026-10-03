@@ -99,3 +99,12 @@ describe("wails.ts contract: backend wiring", () => {
     expect([h.id, d.oldPath, fs.paths?.length, ev.resolvedReqId]).toEqual(["x", "old.go", 1, "r:w"]);
   });
 });
+
+test("retypeLaunch dispatches RetypeLaunch(workspaceId)", async () => {
+  let got: unknown;
+  (globalThis as any).window = globalThis;
+  (globalThis as any).go = { app: { App: { RetypeLaunch: (id: string) => { got = id; return Promise.resolve(); } } } };
+  const mod = await import("./wails");
+  await mod.retypeLaunch("ws-7");
+  expect(got).toBe("ws-7");
+});
