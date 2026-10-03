@@ -28,7 +28,10 @@ func main() {
 		switch parts[0] {
 		case "SessionStart":
 			postHook(hookURL, token, map[string]any{"hook_event_name": "SessionStart", "session_id": sessionID})
-		case "PreToolUse":
+		case "PreToolUse", "PermissionRequest":
+			// PermissionRequest is the blocking approval hook (its reply is
+			// hookSpecificOutput.decision.behavior). PreToolUse is only a
+			// signal; perch answers it with no decision.
 			toolName, inputJSON := "Unknown", "{}"
 			for _, kv := range parts[1:] {
 				if after, ok := strings.CutPrefix(kv, "tool="); ok {
@@ -39,7 +42,7 @@ func main() {
 				}
 			}
 			resp := postHook(hookURL, token, map[string]any{
-				"hook_event_name": "PreToolUse",
+				"hook_event_name": parts[0],
 				"session_id":      sessionID,
 				"tool_name":       toolName,
 				"tool_input":      json.RawMessage(inputJSON),
@@ -47,13 +50,18 @@ func main() {
 			var dec struct {
 				HookSpecificOutput struct {
 					PermissionDecision string `json:"permissionDecision"`
+					Decision           struct {
+						Behavior string `json:"behavior"`
+					} `json:"decision"`
 				} `json:"hookSpecificOutput"`
 			}
 			_ = json.Unmarshal(resp, &dec)
-			if dec.HookSpecificOutput.PermissionDecision == "deny" {
+			if dec.HookSpecificOutput.PermissionDecision == "deny" || dec.HookSpecificOutput.Decision.Behavior == "deny" {
 				fmt.Fprintln(os.Stderr, "fake-agent: denied")
 				os.Exit(1)
 			}
+		case "UserPromptSubmit":
+			postHook(hookURL, token, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": sessionID})
 		case "Stop":
 			postHook(hookURL, token, map[string]any{"hook_event_name": "Stop", "session_id": sessionID})
 		}

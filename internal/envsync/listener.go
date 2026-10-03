@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -75,6 +76,20 @@ const (
 // overlay and dispatches the relaunch on its own goroutine.
 type SyncFunc func(workspaceID string, delta []string)
 
+// Delta is the full environment change a `perch reload` carries: Set holds
+// KEY=VALUE entries that are new or changed versus the baseline, and Unset
+// holds the KEYs present in the baseline but absent from the terminal's
+// environment (the user ran `unset KEY`). Both exclude PERCH_* plumbing and
+// shell-volatile variables.
+type Delta struct {
+	Set   []string
+	Unset []string
+}
+
+// DeltaFunc receives the authenticated workspace id and the full Delta. It
+// must not block, like SyncFunc.
+type DeltaFunc func(workspaceID string, d Delta)
+
 // SyncRequest is the wire format `perch reload` POSTs to the endpoint.
 // SyncRequest is the single source of truth for the request shape: cmd/perch
 // encodes it, and this file decodes it.
@@ -94,7 +109,7 @@ type Listener struct {
 	srv      *http.Server
 	ln       net.Listener
 	baseline map[string]string
-	onSync   SyncFunc
+	onSync   DeltaFunc
 
 	mu      sync.Mutex
 	tokens  map[string]string // token → workspaceID
@@ -105,7 +120,20 @@ type Listener struct {
 // baseline is the app's os.Environ(), captured at start. The listener
 // computes every delta against this reference. New invokes onSync after each
 // valid POST.
+//
+// New delivers only Delta.Set to onSync. Use NewWithDelta to also receive
+// the variables the user unset.
 func New(baseline []string, onSync SyncFunc) (*Listener, error) {
+	var f DeltaFunc
+	if onSync != nil {
+		f = func(ws string, d Delta) { onSync(ws, d.Set) }
+	}
+	return NewWithDelta(baseline, f)
+}
+
+// NewWithDelta is New with a callback that receives the full Delta,
+// including Unset.
+func NewWithDelta(baseline []string, onSync DeltaFunc) (*Listener, error) {
 	ln, err := net.Listen("tcp", hooklistener.LoopbackHost+":0")
 	if err != nil {
 		return nil, err
@@ -160,6 +188,18 @@ func (l *Listener) TokenFor(workspaceID string) (string, error) {
 	l.tokens[tok] = workspaceID
 	l.wsToken[workspaceID] = tok
 	return tok, nil
+}
+
+// Revoke invalidates workspaceID's token, so a removed workspace's shell
+// drawer can no longer trigger a relaunch. A later TokenFor mints a fresh
+// token.
+func (l *Listener) Revoke(workspaceID string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if tok, ok := l.wsToken[workspaceID]; ok {
+		delete(l.tokens, tok)
+		delete(l.wsToken, workspaceID)
+	}
 }
 
 // resolve returns the workspace id that a presented bearer token
@@ -220,9 +260,9 @@ func (l *Listener) handleSync(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "workspace mismatch", http.StatusForbidden)
 		return
 	}
-	delta := computeDelta(l.baseline, req.Env)
+	d := Delta{Set: computeDelta(l.baseline, req.Env), Unset: computeUnset(l.baseline, req.Env)}
 	if l.onSync != nil {
-		l.onSync(tokenWS, delta)
+		l.onSync(tokenWS, d)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -244,10 +284,25 @@ func baselineMap(env []string) map[string]string {
 	return m
 }
 
+// volatileKeys are variables every shell rewrites for itself (working
+// directory, nesting depth, last command, terminal size). They differ between
+// the drawer shell and perch's launch environment without any user intent,
+// and carrying them into a relaunch would give the agent shell a stale PWD
+// or an inflated SHLVL (AGT-21).
+var volatileKeys = map[string]bool{
+	"PWD": true, "OLDPWD": true, "SHLVL": true, "_": true, "COLUMNS": true, "LINES": true,
+}
+
+// ignoredKey reports whether key never belongs in a Delta.
+func ignoredKey(key string) bool {
+	return strings.HasPrefix(key, perchPrefix) || volatileKeys[key]
+}
+
 // computeDelta returns the KEY=VALUE entries in env whose key is new or whose
 // value differs from baseline. computeDelta always excludes keys prefixed
-// PERCH_ (perch plumbing, never the user's intent). It skips malformed
-// entries too (no '=', or an empty key). The result keeps env's order.
+// PERCH_ (perch plumbing, never the user's intent) and shell-volatile keys.
+// It skips malformed entries too (no '=', or an empty key). The result keeps
+// env's order.
 func computeDelta(baseline map[string]string, env []string) []string {
 	var out []string
 	for _, e := range env {
@@ -255,13 +310,58 @@ func computeDelta(baseline map[string]string, env []string) []string {
 		if !ok || key == "" {
 			continue
 		}
-		if strings.HasPrefix(key, perchPrefix) {
+		if ignoredKey(key) {
 			continue
+		}
+		if isPathList(key) {
+			val = dedupPathList(val)
+			e = key + "=" + val
 		}
 		if base, exists := baseline[key]; exists && base == val {
 			continue // unchanged versus baseline
 		}
 		out = append(out, e)
 	}
+	return out
+}
+
+// isPathList reports whether key holds a colon-separated search path
+// (PATH, MANPATH, LD_LIBRARY_PATH, PYTHONPATH, ...).
+func isPathList(key string) bool { return strings.HasSuffix(key, "PATH") }
+
+// dedupPathList drops repeated entries from a colon-separated list, keeping
+// the first occurrence (which is the one that wins a lookup). The drawer's
+// login rc prepends to a PATH that already carries the previous reload's
+// prepends; without this, every `perch reload` would add one more copy.
+// Deduplicating keeps the captured value bounded.
+func dedupPathList(v string) string {
+	parts := strings.Split(v, ":")
+	seen := make(map[string]bool, len(parts))
+	out := parts[:0]
+	for _, p := range parts {
+		if seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	return strings.Join(out, ":")
+}
+
+// computeUnset returns the baseline keys absent from env, sorted, excluding
+// PERCH_* and shell-volatile keys: the variables the user unset in the
+// terminal, which a relaunch must drop too (AGT-21).
+func computeUnset(baseline map[string]string, env []string) []string {
+	present := baselineMap(env)
+	var out []string
+	for key := range baseline {
+		if ignoredKey(key) {
+			continue
+		}
+		if _, ok := present[key]; !ok {
+			out = append(out, key)
+		}
+	}
+	sort.Strings(out)
 	return out
 }
