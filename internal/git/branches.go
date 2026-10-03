@@ -28,10 +28,15 @@ type WorktreeInfo struct {
 // default, for example the New Session dialog's base-ref field, take
 // branches[0]. Without this order, they would pick whatever branch sorts
 // first alphabetically, such as "aardvark" instead of "main".
+//
+// Branches lists refs/heads with for-each-ref and strips exactly the
+// "refs/heads/" prefix. `git branch --format=%(refname:short)` would also
+// list a "(HEAD detached at ...)" pseudo-entry, and would print
+// "heads/<name>" for a branch that shares its name with a tag.
 func Branches(ctx context.Context, r proc.Runner, repo string) ([]string, error) {
-	out, errOut, err := r.Run(ctx, "git", "-C", repo, "branch", "--format=%(refname:short)")
+	out, errOut, err := r.Run(ctx, "git", "-C", repo, "for-each-ref", "--format=%(refname:lstrip=2)", "refs/heads/")
 	if err != nil {
-		return nil, fmt.Errorf("git branch: %w: %s", err, strings.TrimSpace(string(errOut)))
+		return nil, fmt.Errorf("git for-each-ref: %w: %s", err, strings.TrimSpace(string(errOut)))
 	}
 	branches := make([]string, 0)
 	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {

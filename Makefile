@@ -1,8 +1,11 @@
 .DELETE_ON_ERROR:
 SHELL := /bin/bash
-.FORCE:
 
-ROOT_DIR := $(shell git rev-parse --show-toplevel)
+# ROOT_DIR is the directory that holds this Makefile. It does not use git: in
+# a source tarball, a ZIP download, or a checkout nested in another repo,
+# `git rev-parse --show-toplevel` is empty or names the wrong tree, and BIN_DIR
+# would become /bin.
+ROOT_DIR := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 BIN      := perch
 BIN_DIR  := $(ROOT_DIR)/bin
 PKG      := ./...
@@ -11,7 +14,8 @@ LDFLAGS  := -s -w -X main.version=$(VERSION)
 
 # The build is hermetic and reproducible: it uses vendored dependencies and needs no network access.
 export GOFLAGS := -mod=vendor
-# Dev tools use pinned versions. Run them with `go run tool@version`. Never use a floating install.
+# Dev tools use pinned versions. The container image bakes these exact versions
+# (see the image target). Never use a floating install.
 GOLANGCI := v2.11.4
 GOVULN   := v1.3.0
 
@@ -24,15 +28,21 @@ TAGS := production webkit2_41
 # ── Container framework ────────────────────────────────────────────────────
 # All versions come from .tool-versions only. The image hardcodes none of them.
 IMAGE        := perch-dev
-GO_VERSION   := $(shell awk '$$1=="golang"{print $$2}' .tool-versions)
-NODE_VERSION := $(shell awk '$$1=="nodejs"{print $$2}' .tool-versions)
+GO_VERSION   := $(shell awk '$$1=="golang"{print $$2}' $(ROOT_DIR)/.tool-versions)
+NODE_VERSION := $(shell awk '$$1=="nodejs"{print $$2}' $(ROOT_DIR)/.tool-versions)
 # The build runs in a container by default. Set CONTAINERIZE=0 to run the
 # target directly. Use this flag when you re-enter the image, or when a
 # pipeline already runs in a container.
 CONTAINERIZE ?= 1
 
+# Host Go is needed only by targets that run on the host. The containerized
+# targets (image, shell, and the DZ set below with CONTAINERIZE=1) need
+# podman, not Go, so a contributor without Go can still run them.
+HOST_GO_GOALS := build install run gui-build gui-install gui-run coverage fmt tidy vendor verify doctor cross
 ifeq (, $(shell command -v go))
+ifneq (,$(strip $(filter $(HOST_GO_GOALS),$(MAKECMDGOALS)) $(if $(MAKECMDGOALS),,default) $(filter 0,$(CONTAINERIZE))))
 $(error 'go' not found on PATH)
+endif
 endif
 
 .PHONY: build install run gui-build gui-install gui-run desktop image shell test test-integration test-front test-e2e test-all gui-check coverage lint fmt vet tidy vendor verify vulncheck verify-all doctor clean cross
@@ -51,10 +61,14 @@ run: build            ## Build, then run. This needs an X or Wayland display for
 	@$(BIN_DIR)/$(BIN)
 
 gui-build:            ## Build the production GUI binary: the frontend build, then go build -tags '$(TAGS)'.
-	npm --prefix frontend ci
+	npm --prefix frontend ci --prefer-offline
 	npm --prefix frontend run build
 	@mkdir -p $(BIN_DIR)
 	@go build -tags '$(TAGS)' -trimpath -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/$(BIN) ./cmd/perch
+	@# vite overwrote the tracked go:embed stub. The binary already embeds the
+	@# real index, so restore the stub to keep the work tree clean (and VERSION
+	@# free of a -dirty suffix on the next make).
+	@git checkout -- frontend/dist/index.html 2>/dev/null || true
 
 gui-install: gui-build desktop  ## Build the GUI binary and install the launcher icon. This does not launch the app; run $(BIN_DIR)/$(BIN) yourself.
 
@@ -65,7 +79,11 @@ desktop:              ## Install a user .desktop entry and icon. GNOME on Waylan
 	@mkdir -p $(HOME)/.local/share/icons/hicolor/512x512/apps $(HOME)/.local/share/applications
 	@cp app/appicon.png $(HOME)/.local/share/icons/hicolor/512x512/apps/perch.png
 	@printf '[Desktop Entry]\nType=Application\nName=perch\nComment=Cockpit for AI coding agents\nExec=%s\nIcon=perch\nTerminal=false\nCategories=Development;\nStartupWMClass=perch\n' "$(abspath $(BIN_DIR)/$(BIN))" > $(HOME)/.local/share/applications/perch.desktop
-	@command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -f -t $(HOME)/.local/share/icons/hicolor >/dev/null 2>&1 || true
+	@# Bump the theme dir mtime and refresh only an existing icon cache, as
+	@# xdg-icon-resource does. Creating a new user-level cache would hide icons
+	@# other apps add later (GTK checks a cache against the dir mtime only).
+	@touch $(HOME)/.local/share/icons/hicolor
+	@if [ -f $(HOME)/.local/share/icons/hicolor/icon-theme.cache ] && command -v gtk-update-icon-cache >/dev/null 2>&1; then gtk-update-icon-cache -f -t $(HOME)/.local/share/icons/hicolor >/dev/null 2>&1 || true; fi
 	@command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database $(HOME)/.local/share/applications >/dev/null 2>&1 || true
 	@echo "==> installed perch.desktop (StartupWMClass=perch). Log out/in if the icon does not refresh."
 
@@ -87,15 +105,14 @@ shell: | image        ## Open an interactive shell in perch-dev.
 # committed go:embed stub.
 DZ := test test-integration test-front test-e2e lint vet vulncheck gui-check
 ifeq ($(CONTAINERIZE),1)
-gui-build: export PERCH_MASK_DIST = 1
 test-e2e: export PERCH_MASK_DIST = 1
 $(DZ): | image
 	@bash containers/run.sh dev make CONTAINERIZE=0 $@
 else
 test:             ; go test -race -count=1 $(PKG)
 test-integration: ; go test -race -count=1 -tags=integration $(PKG)
-test-front:       ; npm --prefix frontend ci && npm --prefix frontend audit --omit=dev --audit-level=high && npm --prefix frontend run check && npm --prefix frontend test
-test-e2e:         ; npm --prefix frontend ci && npm --prefix frontend run test:e2e
+test-front:       ; npm --prefix frontend ci --prefer-offline && npm --prefix frontend audit --omit=dev --audit-level=high && npm --prefix frontend run check && npm --prefix frontend test
+test-e2e:         ; npm --prefix frontend ci --prefer-offline && npm --prefix frontend run test:e2e
 lint:             ; golangci-lint run
 vet:              ; go vet $(PKG)
 vulncheck:        ; govulncheck ./...
@@ -115,7 +132,13 @@ coverage:             ## Show a coverage report for the internal/ packages.
 	@go tool cover -func=coverage.out | tail -1
 
 fmt:                  ## Run gofmt and goimports.
-	@gofmt -w . && (command -v goimports >/dev/null && goimports -w . || true)
+	@if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
+		gofiles() { git ls-files -z '*.go' ':!:vendor/**'; }; \
+	else \
+		gofiles() { find . \( -name vendor -o -name node_modules -o \( -name '.*' ! -name . \) \) -prune -o -name '*.go' -print0; }; \
+	fi; \
+	gofiles | xargs -0 -r gofmt -w; \
+	if command -v goimports >/dev/null; then gofiles | xargs -0 -r goimports -w; fi
 
 tidy:                 ## Tidy go.mod and go.sum, then refresh the vendor tree.
 	@GOFLAGS= go mod tidy && go mod vendor
@@ -139,4 +162,4 @@ cross:                ## Cross-compile for linux/amd64. The GUI uses cgo and Web
 	  -o $(BIN_DIR)/$(BIN)-linux-amd64 ./cmd/perch
 
 clean:
-	@rm -rf $(BIN_DIR)
+	@test -n "$(BIN_DIR)" && test "$(BIN_DIR)" != "/bin" && rm -rf "$(BIN_DIR)"

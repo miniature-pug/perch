@@ -1,19 +1,24 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/miniature-pug/perch/app"
 	"github.com/miniature-pug/perch/internal/discover"
 	"github.com/miniature-pug/perch/internal/envsync"
 	"github.com/miniature-pug/perch/internal/model"
+	"github.com/miniature-pug/perch/internal/registry"
 )
 
 // helper executes run and returns stdout, stderr, and the exit code.
@@ -464,5 +469,147 @@ func TestRun_ValidPath_LaunchesGUI(t *testing.T) {
 	}
 	if len(gotRoots) == 0 {
 		t.Error("expected guiRoots to supply at least one root")
+	}
+}
+
+// ── guiRoots ──────────────────────────────────────────────────────────────────
+
+// TestGuiRoots_ConfigErrorReported is the MSC-10 regression guard: a broken
+// config.toml is reported on stderr, not silently replaced by the cwd.
+func TestGuiRoots_ConfigErrorReported(t *testing.T) {
+	cfgHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfgHome)
+	if err := os.MkdirAll(filepath.Join(cfgHome, "perch"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgHome, "perch", "config.toml"), []byte("roots = [unterminated"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	var stderr bytes.Buffer
+	roots := guiRoots(dir, false, &stderr)
+	if !strings.Contains(stderr.String(), "config") {
+		t.Errorf("stderr = %q, want a config error", stderr.String())
+	}
+	if len(roots) != 1 || roots[0] != dir {
+		t.Errorf("roots = %v, want [%s]", roots, dir)
+	}
+}
+
+// TestGuiRoots_RepoAddsSiblingWorktreeDir is the APP-3 regression guard: a
+// launch inside a repo with no configured roots also covers the sibling
+// <repo>__worktrees directory, where worktree sessions are created.
+func TestGuiRoots_RepoAddsSiblingWorktreeDir(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	repo := filepath.Join(t.TempDir(), "myrepo")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	roots := guiRoots(repo, false, io.Discard)
+	want := []string{repo, repo + "__worktrees"}
+	if strings.Join(roots, "|") != strings.Join(want, "|") {
+		t.Errorf("roots = %v, want %v", roots, want)
+	}
+	plain := t.TempDir()
+	if roots := guiRoots(plain, false, io.Discard); len(roots) != 1 || roots[0] != plain {
+		t.Errorf("non-repo roots = %v, want [%s]", roots, plain)
+	}
+}
+
+// TestGuiRoots_ExplicitPathJoinsConfiguredRoots is the APP-22c regression
+// guard: `perch <path>` covers <path> even when config.toml sets roots.
+func TestGuiRoots_ExplicitPathJoinsConfiguredRoots(t *testing.T) {
+	cfgHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfgHome)
+	configured := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cfgHome, "perch"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgHome, "perch", "config.toml"), []byte(fmt.Sprintf("roots = [%q]\n", configured)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	named := t.TempDir()
+	if roots := guiRoots(named, true, io.Discard); strings.Join(roots, "|") != named+"|"+configured {
+		t.Errorf("explicit roots = %v, want [%s %s]", roots, named, configured)
+	}
+	if roots := guiRoots(named, false, io.Discard); strings.Join(roots, "|") != configured {
+		t.Errorf("implicit roots = %v, want [%s]", roots, configured)
+	}
+}
+
+// TestRun_RelativePath_PassesAbsoluteRoot is the APP-4 regression guard.
+func TestRun_RelativePath_PassesAbsoluteRoot(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	orig := launchGUI
+	t.Cleanup(func() { launchGUI = orig })
+	var gotRoots []string
+	launchGUI = func(roots []string) error { gotRoots = roots; return nil }
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if code := run([]string{"."}, io.Discard, io.Discard); code != 0 {
+		t.Fatalf("exit code = %d", code)
+	}
+	if len(gotRoots) == 0 || !filepath.IsAbs(gotRoots[0]) {
+		t.Errorf("roots = %v, want an absolute first root", gotRoots)
+	}
+}
+
+// initCommittedRepo creates a git repo with one commit at dir.
+func initCommittedRepo(t *testing.T, dir string) {
+	t.Helper()
+	for _, args := range [][]string{{"init", "-q", dir}, {"-C", dir, "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q", "--allow-empty", "-m", "i"}} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+}
+
+// TestGuiRoots_SymlinkedLaunchDirCoversWorktrees is the review #3
+// regression guard: launched in a repo reached through a symlinked
+// directory, discovery reports the resolved repo path, so the worktree path
+// is resolved too, and the roots must cover it.
+func TestGuiRoots_SymlinkedLaunchDirCoversWorktrees(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	real := t.TempDir()
+	initCommittedRepo(t, filepath.Join(real, "r"))
+	link := filepath.Join(t.TempDir(), "code")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	roots := guiRoots(filepath.Join(link, "r"), false, io.Discard)
+	store, err := registry.Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := app.NewApp(store, roots)
+	repos, err := a.DiscoverRepos()
+	if err != nil || len(repos) == 0 {
+		t.Fatalf("DiscoverRepos = %v, %v", repos, err)
+	}
+	if _, err := a.CreateWorkspace("claude", repos[0].Path, "HEAD", "feat-x", "", true); err != nil {
+		t.Errorf("CreateWorkspace(worktree) from a symlinked launch dir (roots %v): %v", roots, err)
+	}
+}
+
+// TestGuiRoots_ExplicitRepoWithConfigCoversWorktrees is the review #4
+// regression guard: `perch <repo>` with configured roots also covers the
+// repo's sibling worktree directory.
+func TestGuiRoots_ExplicitRepoWithConfigCoversWorktrees(t *testing.T) {
+	cfgHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfgHome)
+	configured := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cfgHome, "perch"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgHome, "perch", "config.toml"), []byte(fmt.Sprintf("roots = [%q]\n", configured)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	repo := filepath.Join(t.TempDir(), "r")
+	initCommittedRepo(t, repo)
+	roots := guiRoots(repo, true, io.Discard)
+	want := []string{repo, repo + "__worktrees", configured}
+	if strings.Join(roots, "|") != strings.Join(want, "|") {
+		t.Errorf("roots = %v, want %v", roots, want)
 	}
 }

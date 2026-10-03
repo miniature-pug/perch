@@ -92,7 +92,7 @@ func TestCreateWorkspace_RollsBackWorktreeOnPersistFailure(t *testing.T) {
 	}
 
 	// ── assertion 3: no phantom registry record references the removed tree ───
-	if id, found := a.WorkspaceForBranch(repo, branch); found {
+	if id, found := a.workspaceForBranch(repo, branch); found {
 		t.Errorf("phantom workspace record %q still tracks branch %q after a failed create", id, branch)
 	}
 

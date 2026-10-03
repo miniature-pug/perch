@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -501,8 +502,7 @@ func TestSecFix_RevealInFiles_RejectsOutsideRoots(t *testing.T) {
 // TestClampPtyDim pins the backend pty-dimension clamp. The frontend already
 // clamps pty dimensions, but ResizePty must not trust the frontend.
 // clampPtyDim converts a 0 dimension to ptyMinDim.
-// clampPtyDim caps an over-cap value at ptyMaxDim.
-// In-range values pass through unchanged.
+// In-range values, up to the uint16 maximum, pass through unchanged.
 func TestClampPtyDim(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -512,7 +512,7 @@ func TestClampPtyDim(t *testing.T) {
 		{"zero becomes min", 0, ptyMinDim},
 		{"min stays", ptyMinDim, ptyMinDim},
 		{"normal passthrough", 120, 120},
-		{"max stays", ptyMaxDim, ptyMaxDim},
+		{"max stays", math.MaxUint16, math.MaxUint16},
 	} {
 		if got := clampPtyDim(tc.in); got != tc.want {
 			t.Errorf("%s: clampPtyDim(%d) = %d, want %d", tc.name, tc.in, got, tc.want)

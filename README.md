@@ -84,16 +84,52 @@ is the minimum. Anything newer on the 4.1 line works.
 Each [GitHub Release](https://github.com/miniature-pug/perch/releases) attaches
 a prebuilt binary for each linux architecture, `perch-linux-amd64` and
 `perch-linux-arm64`, plus a `SHA256SUMS` file. Download the binary for your
-architecture and the checksums, then run:
+architecture and the checksums, install the binary as `~/.local/bin/perch`,
+and register it with the desktop:
 
 ```sh
 # Pick perch-linux-amd64 (Intel or AMD) or perch-linux-arm64 (ARM).
 curl -LO https://github.com/miniature-pug/perch/releases/latest/download/perch-linux-amd64
 curl -LO https://github.com/miniature-pug/perch/releases/latest/download/SHA256SUMS
 sha256sum --check --ignore-missing SHA256SUMS
-chmod +x perch-linux-amd64
-./perch-linux-amd64
+install -D -m 0755 perch-linux-amd64 ~/.local/bin/perch
+~/.local/bin/perch install-desktop
+perch
 ```
+
+`perch install-desktop` writes the perch icon and a `perch.desktop` entry
+under `~/.local/share` (or `$XDG_DATA_HOME`), pointing at the binary you ran
+it with. GNOME on Wayland takes the dock and app-switcher icon only from that
+entry, so without it the dock shows a generic icon. It also adds perch to the
+app menu. Run it as yourself, not with `sudo`, and run it again if you move
+the binary. If `perch` is not found, add `~/.local/bin` to your `PATH`. Keep
+the binary in a directory whose path has no `%` in it, because GNOME cannot
+launch such a path from a `.desktop` entry.
+
+Releases up to v0.1.0 predate `install-desktop`. On those, the command
+prints `perch: "install-desktop" is not an existing directory` followed by
+the usage. If you see that, install the entry with `install.sh` instead. It
+writes the same entry for any release:
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/miniature-pug/perch/main/install.sh
+sh install.sh --upgrade --prefix="$HOME/.local/bin"
+```
+
+If you are already on the newest release, the script changes no binary and
+only writes the entry. You can also write the entry by hand:
+
+```sh
+mkdir -p ~/.local/share/icons/hicolor/512x512/apps ~/.local/share/applications
+curl -fsSL -o ~/.local/share/icons/hicolor/512x512/apps/perch.png \
+  https://raw.githubusercontent.com/miniature-pug/perch/main/app/appicon.png
+printf '[Desktop Entry]\nType=Application\nName=perch\nComment=Cockpit for AI coding agents\nExec="%s"\nIcon=perch\nTerminal=false\nCategories=Development;\nStartupWMClass=perch\n' \
+  "$HOME/.local/bin/perch" > ~/.local/share/applications/perch.desktop
+touch ~/.local/share/icons/hicolor
+```
+
+The `Exec` line holds the path exactly as written. If that path contains a
+`"`, `` ` ``, `$`, or `\`, use `install.sh`, which escapes them.
 
 Each release also ships a signed build provenance attestation. To check that
 GitHub built the binary from this repository's release workflow, use the
@@ -108,7 +144,8 @@ The binary links WebKit2GTK and GTK3 dynamically, so the
 to run it. To learn about a new version, watch the repository on GitHub and
 pick Releases under the Custom watch options. You can also check the
 [releases page](https://github.com/miniature-pug/perch/releases). `perch
-version` prints the build you are running.
+version` prints the build you are running. [Upgrading](#upgrading) covers
+moving to a new release.
 
 ### Build from source
 
@@ -139,8 +176,9 @@ a blank window. This happens with `make build`, `make install`, or a bare
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
 `make gui-build` does not install the launcher icon. The GNOME and Wayland
-dock reads the icon from a `.desktop` entry. `make desktop` writes that
-entry. To build the icon and run the binary yourself, use `make gui-install`
+dock reads the icon from a `.desktop` entry. `make desktop` (or
+`./bin/perch install-desktop`) writes that entry. To build the icon and run
+the binary yourself, use `make gui-install`
 followed by `./bin/perch`. Log out and back in once if the icon does not
 refresh. `make gui-run` does the same build and icon install, then launches
 the binary for you.
@@ -156,9 +194,58 @@ make install
 gui-build` first. Otherwise, `make install` embeds the placeholder, and the
 guard above stops the binary at launch.
 
-Building from source needs the Go toolchain (`go1.26.5`) and Node.js
+Building from source needs the Go toolchain (`go1.26.6`) and Node.js
 (`22.22.3`). The exact pins live in `.tool-versions`. Module path:
 `github.com/miniature-pug/perch`.
+
+### Upgrading
+
+`install.sh --upgrade` replaces an installed perch with the newest stable
+release. It works in two modes:
+
+- **Release mode** downloads the release binary. It is the default when you
+  run the script outside a git checkout, or pick it with `--upgrade=release`.
+  The script needs only `curl` and `sha256sum`:
+
+  ```sh
+  curl -fsSLO https://raw.githubusercontent.com/miniature-pug/perch/main/install.sh
+  sh install.sh --upgrade
+  ```
+
+  It resolves the newest release, downloads `perch-linux-<arch>` and
+  `SHA256SUMS`, and checks the binary against its checksum line. If the
+  installed perch reports no release version (a commit hash or `dev`, from a
+  source build), the script cannot compare versions. It says so and installs
+  the release.
+- **Source mode** builds the newest release tag. It is the default when you
+  run `./install.sh --upgrade` from a clone, or pick it with
+  `--upgrade=source`. It refuses a checkout with uncommitted changes, runs
+  `git fetch --tags`, and picks the newest `v*` tag (pre-release tags are
+  skipped). It stops when the installed build already contains that tag. For
+  a build that reports a commit hash, it asks git, using the hash or your
+  checkout's `HEAD`. It runs the toolchain checks before it checks out the
+  tag. It then builds the tag with the same steps as a fresh install. If
+  anything fails after the checkout, the clone returns to your branch. On
+  success, your clone stays on the tag. The script prints the `git checkout`
+  command that returns you to your branch. Run source mode as the clone's
+  owner. The script refuses it under `sudo`, because git, npm, and Go would
+  leave root-owned files in your clone. Use `--prefix="$HOME/.local/bin"`, or
+  `sudo ./install.sh --upgrade=release` for a system-wide perch.
+
+Both modes upgrade the `perch` first on your `PATH`, or the binary in
+`--prefix=DIR`. Both stop without changes when that binary is already the
+newest release. Before the swap, the new binary must run `perch version` and
+report exactly the expected tag. A failed download, a checksum mismatch, or a failed
+smoke test leaves the installed binary untouched. The previous binary stays
+next to the new one as `perch.prev`. To roll back, run `mv -f perch.prev
+perch` in that directory. The script then refreshes the desktop entry and
+prints the old and new versions.
+
+Quit perch before you upgrade, or quit it and start it again afterwards. The
+running window keeps the old binary. While it runs, starting `perch` only
+raises the old window, so the upgrade looks like it did nothing. The script
+warns you when perch is still running. It also warns when another `perch`
+earlier on your `PATH` shadows the one it upgraded.
 
 ## Quick start
 
@@ -179,8 +266,9 @@ keyboard control, read the [usage guide](docs/usage.md).
 | `perch` | Open the cockpit. The project root is the current directory |
 | `perch <path>` | Open the cockpit. The project root is the given directory |
 | `perch attach <query>` | Focus the running window on the session matching the query, or launch the cockpit if none is running |
-| `perch doctor` | Check that dependencies and configuration are in order |
+| `perch doctor` | Check that `git`, `go` (build-only), and at least one agent CLI (`claude` or `opencode`) are installed and not older than the versions in `.tool-versions`. It does not check WebKit2GTK or `config.toml` |
 | `perch version` | Print version and build information |
+| `perch install-desktop` | Install the perch icon and a `perch.desktop` entry for this binary under `~/.local/share`, so the dock and app menu show perch's icon |
 | `perch reload` | Run inside a session terminal. Sends the environment to the agent and relaunches it, and the conversation continues |
 
 `perch attach` relies on a single-instance lock. If perch is already running,
@@ -238,7 +326,9 @@ Perch keeps its state under `~/.config/perch` (or `$XDG_CONFIG_HOME/perch`):
 | `layout.json` | Saved window layout |
 | `config.toml` | The project `roots` perch scans for repositories |
 
-With no `config.toml`, the launch directory is the only root. Perch reads no
+With no `config.toml`, the launch directory is the only root (plus its sibling
+`<repo>__worktrees` directory when it is a repository). A path given on the
+command line is always a root. Perch reads no
 project-local config, so opening a repository cannot change how perch behaves.
 
 ## Security

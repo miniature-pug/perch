@@ -31,7 +31,7 @@ The shape of the system:
 Facts of record:
 
 - Module: `github.com/miniature-pug/perch`
-- Go toolchain: `go1.26.5` (language floor `go 1.25.0`)
+- Go toolchain: `go1.26.6` (language floor `go 1.25.0`)
 - Frontend: Svelte 5 runes built by Vite, in `frontend/`
 - Key dependencies: `creack/pty` (the pty bridge), `bmatcuk/doublestar/v4`
   (globbing), `BurntSushi/toml` (config)
@@ -91,18 +91,20 @@ callable over the bridge. The load-bearing methods:
 | `ListWorkspaces() []WorkspaceVM` | All registered sessions, with live state and caps for any that are open |
 | `CreateWorkspace(agentName, repoPath, baseRef, branch, title string, worktree bool) (WorkspaceVM, error)` | Validate, resolve or create the worktree, and register the session; a blank title falls back to the branch slug |
 | `SetWorkspaceTitle(id, title string) error` | Rename a session; rejects a blank title |
-| `OpenWorkspace(id string) error` | Spawn the pty, prepare and start the Monitor, begin streaming |
-| `CloseWorkspace(id string) error` | Tear down the pty bridge and Monitor; keep the record |
-| `RemoveWorkspace(id string) error` | Remove the record; for worktree sessions run `git worktree remove`, returning `ErrWorktreeDirty` on uncommitted changes; the branch is kept |
-| `ForceRemoveWorkspace(id string) error` | Force-remove the worktree tree, discarding changes; the branch is kept |
-| `ListStaleSessions() ([]StaleSessionVM, error)` | Worktree sessions unused past the stale threshold, with per-row clean and merged state |
+| `WorkspaceForBranch(repoPath, branch string) BranchOwner` | `{id, found}`: the worktree session that already tracks a branch |
+| `OpenWorkspace(id string) error` | Spawn the pty, prepare and start the Monitor, begin streaming; refuses a session whose tree is gone (`ErrWorktreeMissing`); with the agent CLI missing, opens a plain shell and creates no Monitor |
+| `CloseWorkspace(id string) error` | Tear down the pty bridge, drawer shells and Monitor; keep the record |
+| `RemoveWorkspace(id string) error` | Close the session, then remove the record; for worktree sessions run `git worktree remove`, returning `ErrWorktreeDirty` (session left running) on uncommitted changes; for a tree deleted outside perch, only that tree's stale git registration is dropped (never a repository-wide `git worktree prune`); the branch is kept |
+| `ForceRemoveWorkspace(id string) error` | Close the session, then force-remove the worktree tree, discarding changes; the branch is kept |
+| `ListStaleSessions() ([]StaleSessionVM, error)` | Closed worktree sessions unused past the stale threshold, with per-row clean, merged and uncommitted line counts (four rows at a time, one deadline) |
 | `CleanupSessions(ids []string, force bool) error` | Bulk-remove sessions: remove the tree and delete the branch |
-| `WriteToPty(paneID string, data []int) error` | Forward keystrokes to a pane's pty |
+| `WriteToPty(paneID string, data []byte) error` | Forward keystrokes to a pane's pty; the frontend sends a base64 string |
 | `ResizePty(paneID string, cols, rows uint16) error` | Resize a pane's pty |
-| `OpenShell(paneID, cwd string) error` | Spawn an auxiliary login-shell pty for the shell drawer |
+| `OpenShell(paneID, cwd string) error` | Spawn an auxiliary login-shell pty: `shell-home` (always in `HomeShellCwd`) or a drawer `shell-<id>[_<n>]` of a known session, with a cwd inside its tree |
 | `HomeShellCwd() string` | The working directory for the home shell |
 | `Approve(reqID, decision string) error` | Resolve a pending approval as allow, deny, or always |
-| `DiffStat / Hunks / StageHunk / DiscardHunk` | The diff view and per-hunk staging for a worktree |
+| `DiffStat / Hunks` | The changed files (`git status` v2 plus net line counts, renames with `oldPath`) and the hunks of one file, each with a content `id` |
+| `StageHunk / DiscardHunk / UnstageHunk(worktree, file string, index int, id string) error` | Act on the hunk whose content `id` the user saw; a hunk that changed since is refused with "hunk changed since it was displayed" |
 | `Branches(repo string) ([]string, error)` | Local branch names |
 | `ListDir / ReadFile / WriteFile / RevealInFiles / CopyPath` | File-tree operations |
 | `GetSettings / SaveSettings / GetLayout / SaveLayout` | Persisted UI state |
@@ -112,6 +114,13 @@ callable over the bridge. The load-bearing methods:
 The full set is in [internal/README.md](internal/README.md) and `app/app.go`.
 There is no model or token parameter anywhere: perch chooses its agents per
 session and never meters usage.
+
+Lifecycle calls on one session (`OpenWorkspace`, `CloseWorkspace`,
+`RemoveWorkspace`, `ForceRemoveWorkspace`, each id of `CleanupSessions`, and
+a drawer's `OpenShell`) hold a per-session lock, so a remove never races a half-done open or an
+env-sync relaunch. Registry writes after creation go through
+`registry.Store.Update`, which changes only the named fields and never
+recreates a removed record.
 
 `app.App` validates every argument that crosses the bridge before any pty or
 git work. It checks session and pane identifiers against an `A-Za-z0-9_-`
@@ -133,8 +142,14 @@ carries an exit sentinel. After the agent command, the shell captures `$?` and
 pings a loopback listener. The Monitor translates this into the `exited` state. The listener's token and
 URL reach the shell through its process environment (`Monitor.PaneEnv`,
 injected at spawn) rather than the typed line, which the interactive shell
-would echo. Closing the bridge kills the whole process group, so the shell's
-children die with it.
+would echo. Closing the bridge kills every process in the shell's session:
+the shell's own process group and the background jobs that job control put
+in groups of their own. Only a process that started a new session (a daemon)
+escapes. Once the shell has exited and been reaped, closing signals nothing,
+because its pid may have been reused. The opencode launch line also kills its
+backgrounded `opencode serve` itself when `attach` exits. The launch lines are
+POSIX `sh`; when the login shell is fish, nushell, elvish, csh/tcsh or
+PowerShell, the line is typed as `sh -c '…'` instead.
 
 ### The agent Monitor seam
 
@@ -161,22 +176,25 @@ an `agent:event`, after stamping the workspace id and a routable approval id.
 ### State sync
 
 The backend forwards Monitor events to the frontend in real time and emits
-`fs:changed` from a per-session filesystem watcher, debounced by 150ms. The
-frontend reacts to create, open, close, and remove optimistically, so the
-sidebar stays responsive. On each `fs:changed`, the frontend refreshes the
-diffstat for the affected session and shows the result as a change count in the
-sidebar row and the status line.
+`fs:changed` from a per-session filesystem watcher, debounced by 150ms. Each
+event lists the paths that changed in its window (at most 200; past that,
+`paths` is empty and `truncated` is true, and the frontend reloads every file
+it shows). The frontend reacts to create, open, close, and remove
+optimistically, so the sidebar stays responsive. On each `fs:changed`, the
+frontend refreshes the diffstat for the affected session and shows the result
+as a change count in the sidebar row and the status line.
 
 The Go-to-frontend events:
 
 | Event | Payload | Trigger |
 |-------|---------|---------|
-| `agent:event` | `agent.Event` | A Monitor produces a state, approval, or question event |
-| `fs:changed` | `{workspaceId, path}` | The per-session watcher fires, debounced |
+| `agent:event` | `agent.Event` | A Monitor produces a state, approval, or question event; `resolvedReqId` (`<raw>:<workspaceId>`) names an approval card to drop |
+| `fs:changed` | `{workspaceId, path, paths, truncated}` | The per-session watcher fires, debounced; `path` is the worktree root, `paths` the changed absolute paths |
 | `notify` | `{tier, title, body, workspaceId}` | A notification is dispatched |
-| `pty:data:<paneId>` | byte values | The pty read loop has output |
+| `pty:data:<paneId>` | base64 string | The pty read loop has output |
 | `pty:exit:<paneId>` | exit code | A pty process exits |
 | `workspace:attach` | `{query}` | A second instance forwarded a query |
+| `workspace:relaunch` | `{workspaceId}` | A `perch reload` is relaunching an open session's agent |
 
 These event names are string literals in the backend, with named constants only
 for the two pty prefixes; the frontend mirrors them as `EVT_*` constants in
@@ -192,7 +210,7 @@ for the two pty prefixes; the frontend mirrors them as `EVT_*` constants in
 | `app/` | The Wails `App`: bound-method API, input validation, pty and Monitor lifecycle, event forwarding, the fs-watcher debounce |
 | `internal/pty` | The direct pty bridge; runs a login shell, forwards output, routes keystrokes and resize |
 | `internal/agent` | The Monitor seam and Adapter interface, with `ClaudeMonitor` and `OpencodeMonitor` |
-| `internal/hooklistener` | The per-session loopback listener that receives Claude hook posts and blocks `PreToolUse` |
+| `internal/hooklistener` | The per-session loopback listener that receives Claude hook posts and blocks `PermissionRequest` |
 | `internal/envsync` | The one-per-app loopback listener behind `perch reload`, with a per-workspace bearer token and an in-memory-only environment delta |
 | `internal/registry` | The workspace registry persisted at `~/.config/perch/workspaces.json` |
 | `internal/config` | The single-layer TOML config that exposes `Config{Roots}` |
@@ -201,7 +219,7 @@ for the two pty prefixes; the frontend mirrors them as `EVT_*` constants in
 | `internal/git` | git subprocess wrappers behind `proc.Runner`, including ref validation and diff and hunk staging |
 | `internal/fs` | Worktree filesystem helpers: directory listing and a change watcher |
 | `internal/model` | Shared domain vocabulary as pure data |
-| `internal/notify` | Desktop-notification tiering over D-Bus, with a `notify-send` fallback |
+| `internal/notify` | Asynchronous desktop notifications over D-Bus, with a `notify-send` fallback |
 | `internal/proc` | The `Runner` interface, its `ExecRunner`, and the `FakeRunner` used in tests |
 | `frontend/` | The Svelte 5 SPA |
 
@@ -218,7 +236,12 @@ type Runner interface {
 }
 ```
 
-Production code uses `ExecRunner`, which wraps `os/exec`. Unit tests inject
+Production code uses `ExecRunner`, which wraps `os/exec`. It runs each command
+in its own process group and kills the whole group when the context ends, so
+hooks git started die with it, and it waits at most two seconds for output
+pipes a lingering grandchild still holds. git runs with
+`GIT_OPTIONAL_LOCKS=0` (background `status` never takes `index.lock` from the
+agent), `GIT_TERMINAL_PROMPT=0`, and untranslated messages. Unit tests inject
 `FakeRunner`, which records the argv of every call and never spawns a process.
 This makes the whole non-frontend surface testable without a live repository.
 Integration tests, tagged `//go:build integration`, exercise real worktree and
@@ -271,9 +294,9 @@ state only for sessions that are open. Settings, including the always-allow
 rules and the stale threshold (30 days by default), live in `settings.json`.
 
 Discovery starts from the roots, the launch directory by default. `discover.Scan`
-walks each root to a maximum depth of 8, pruning `node_modules`, `vendor`, and
-`.git`, and returns the directories that contain a `.git` entry, ordered by
-frecency. `DiscoverRepos` runs this across all roots, dedupes by repository, and
+walks each root (a symlinked root is resolved first) to a maximum depth of 8, pruning `node_modules`, `vendor`, build-output directories such as `target`, `build`, and `dist`, and
+`.git`, and returns the directories that contain a `.git` entry. `discover.Projects` orders them alphabetically; the
+frecency ranking exists but nothing records access stats yet. `DiscoverRepos` runs this across all roots, dedupes by repository, and
 reports an error only when every root fails.
 
 ## Status and approval pipeline
@@ -284,7 +307,7 @@ For Claude, approval is a hook loop:
 
 ```
 claude agent
-  -> hooklistener (PreToolUse POST, blocks)
+  -> hooklistener (PermissionRequest POST, blocks)
     -> app.App emits "agent:event" (approval)
       -> Svelte ApprovalCard
         -> user clicks Allow / Deny / Always
@@ -293,12 +316,29 @@ claude agent
               -> App emits a state event and the UI re-renders
 ```
 
-`ClaudeMonitor` installs four hooks: `PreToolUse`, `Stop`, `StopFailure`, and
-`SessionStart`. The non-`PreToolUse` events become lifecycle events
-(`SessionStart` to running, `Stop` to done, `StopFailure` to errored). For
-opencode, the same lifecycle events arrive over the `opencode serve` SSE stream:
-`session.status` carries busy and idle and the session id used for resume, and
-`session.error` becomes errored. opencode's experimental step frames sit behind
+`ClaudeMonitor` installs its hooks through a per-session settings file (see
+below). `PermissionRequest` fires only when Claude would itself show a
+permission dialog, so Claude's allow rules and permission modes keep working;
+Claude shows its own dialog while the hook waits, and if you answer there, the
+hook is cancelled and the listener emits a retraction (`Event.ResolvedReqID`,
+kind `approval-resolved`) so the card disappears. `awaiting-approval` clears
+only when the last pending approval resolves, and `Monitor.Approve` never
+blocks. The lifecycle hooks map `SessionStart` to idle (a compaction keeps the
+state), `UserPromptSubmit` to running, `Stop` to done, and `StopFailure` to
+errored. `PreToolUse` and `PostToolUse`, matched to `AskUserQuestion` and
+`ExitPlanMode` only, raise and clear the question signal; perch never answers
+those two tools' own dialogs. Stop does not fire when you interrupt a turn, so
+a `Notification` hook (`idle_prompt`, about a minute after Claude stops) settles
+an interrupted turn to idle. Every resolved approval emits one event carrying
+`ResolvedReqID`. For opencode, the same lifecycle events
+arrive over the `opencode serve` SSE stream: `session.status` carries busy and
+idle and the session id used for resume, and `session.error` becomes errored
+and stays errored across the idle opencode sends right after it (an Esc abort
+or an auto-compacting context overflow is not an error). Frames of subagent
+sessions (those with a `parentID`) are ignored, and `permission.replied` clears
+the approval signal. The SSE reader skips over-long frames, reconnects a stream
+silent for 30 seconds with backoff, and resyncs from `GET /session/status`
+after a reconnect. opencode's experimental step frames sit behind
 an environment flag perch never sets, so they never fire. For both agents, the
 exit sentinel's `AgentExit` ping becomes the `exited` state, distinct from
 `errored`, so a graceful `/exit` never reads as a failure. For opencode, a
@@ -315,9 +355,19 @@ decides in opencode's own prompt. `OpencodeMonitor.Approve` remains only to
 satisfy the Monitor interface. It is an unreachable no-op, since nothing ever
 registers a pending opencode approval to answer.
 
-Claude status reporting needs no manual setup. The monitor writes the hook
-config into the worktree's `.claude/settings.json` when the session opens.
-opencode reports natively over its SSE stream.
+Claude status reporting needs no manual setup, and perch writes nothing into the
+worktree. `Prepare` writes the session's hooks (its listener address and token)
+to a private per-session settings file (a `0700` directory under
+`$XDG_RUNTIME_DIR`, else the temp directory, and a `0600` file; leftovers of a
+crashed perch are swept) and the launch line loads it with `claude --settings <file>`. Claude
+merges hook lists across settings sources, so the repository's and the user's
+own hooks still run. `Teardown` deletes the file. Two sessions on one cwd each
+reach their own listener, a crash leaves no stale hook in the repository, and
+`git status` stays clean. A `.claude/settings.json` left in a worktree by an
+older perch is deleted once, and only if it holds nothing but perch's own
+hooks and git does not track it. opencode reports natively over its SSE stream;
+its Basic-auth password reaches the pane as `PERCH_OPENCODE_PASSWORD` and the
+launch line exports it, with the pinned username, after the login rc runs.
 
 ### States and the attention model
 
@@ -335,15 +385,16 @@ and for state events a `State`. The seven states:
 | `exited` | The agent process is gone (graceful `/exit` or crash) while its shell lives; reopen from the in-pane overlay |
 
 For Claude, an approval is a request to act. perch gates it behind the approval
-card until you decide, because Claude's blocking `PreToolUse` hook lets perch own
-the answer and suppress Claude's own prompt. For opencode, `awaiting-approval` is
+card until you decide, because Claude's blocking `PermissionRequest` hook lets
+perch answer the prompt Claude would otherwise ask you in the pane. For opencode, `awaiting-approval` is
 a signal only: opencode's `attach` terminal owns the permission prompt, so perch
 renders no card, registers no pending, and sends no reply. It behaves exactly
 like a question in that respect, but keeps its own distinct amber
 `awaiting-approval` glance so you can tell an approval apart from a question.
 
 A question is the agent asking you to choose: Claude's `AskUserQuestion`, whose
-`PreToolUse` perch auto-allows so the agent renders the question in its own pane,
+hooks perch answers with no decision so the agent renders the question in its
+own pane through its normal flow,
 and opencode's `question.asked`. A question is a signal only. perch renders no
 card and sends no reply. You answer in the agent's pane. Claude's `ExitPlanMode`
 stays on the normal approval path, so you still review a plan. opencode's
@@ -371,9 +422,8 @@ together so it never relies on color alone. The sidebar suppresses pulses under
 ### Remove
 
 1. A confirm dialog, then a deferred removal with an undo window.
-2. perch tears down the pty bridge and Monitor. The Monitor's `Teardown` removes
-   the session's hook entries from `.claude/settings.json` and closes the
-   listener.
+2. perch tears down the pty bridge and Monitor. The Monitor's `Teardown` deletes
+   the session's private hook settings file and closes the listener.
 3. perch removes the record. For a worktree session, `git worktree remove`
    deletes the tree; a dirty tree requires `ForceRemoveWorkspace`. An in-repo
    session is record-only, and remove never deletes the branch.
@@ -396,8 +446,8 @@ port, guarded by a per-listener bearer token of 32 random bytes.
 | Bind address | `127.0.0.1:0`, loopback only |
 | Port | Ephemeral, assigned by the kernel per listener |
 | Auth | Random bearer token, compared with `subtle.ConstantTimeCompare` |
-| Blocking | `PreToolUse` blocks in the handler until `Decide` supplies a verdict; client disconnect or shutdown cancels cleanly |
-| Lifetime | One listener per active Claude session; `Teardown` closes it and strips its hook entries |
+| Blocking | `PermissionRequest` blocks in the handler until `Decide` supplies a verdict; a client disconnect emits a `PermissionRequestCancelled` event, and shutdown cancels cleanly. Every other event returns at once with no decision |
+| Lifetime | One listener per active Claude session; `Teardown` closes it and deletes its hook settings file |
 
 ### The env-sync listener for `perch reload`
 
@@ -414,7 +464,8 @@ startup and tears down at exit (`app/app.go`, wired alongside the baseline
 | Port | Ephemeral, one listener shared by every workspace |
 | Auth | Per-workspace bearer token, minted on first use (`TokenFor`) and compared with `subtle.ConstantTimeCompare`; a token minted for one workspace is rejected for another (`workspace mismatch`, 403) |
 | Body | Capped at 1 MiB |
-| Storage | `computeDelta` keeps only keys new or changed versus the app's baseline `os.Environ()`, excludes `PERCH_*`, and stores the result in an in-memory-only overlay (`App.envOverlay`), never written to disk or logged |
+| Storage | `computeDelta` keeps only keys new or changed versus the app's baseline `os.Environ()`, excludes `PERCH_*` and shell-volatile keys (`PWD`, `OLDPWD`, `SHLVL`, `_`, `COLUMNS`, `LINES`), and stores the result in an in-memory-only overlay (`App.envOverlay`), never written to disk or logged. `NewWithDelta` also reports keys the user unset (`Delta.Unset`). `*PATH` values are deduplicated so repeated reloads do not grow them |
+| Revocation | `Revoke(workspaceID)` invalidates a workspace's token |
 | Relaunch | `onSync` stores the overlay, then dispatches `OpenWorkspace` on its own goroutine, never inline in the handler, so the conversation resumes from its saved session id (claude `--resume`, opencode `--session`) without stalling the request or the event pump |
 | Lifetime | One listener for the app's whole run; closed on shutdown |
 
@@ -425,7 +476,9 @@ surface.
 
 When you choose "Always," perch stores an `AlwaysRule{agent, tool, pattern,
 hash}` in `settings.json`. The `hash` is the SHA-256 of the full tool input
-captured when you clicked. `pattern` is a truncated copy kept only for display,
+captured when you clicked, canonicalized with the model's free-text keys
+removed (`description`, Bash `timeout` and `run_in_background`, WebFetch
+`prompt`), so a re-worded description still matches. `pattern` is a truncated copy kept only for display,
 not the boundary. A later request auto-approves only when the agent, the tool,
 and the input hash all match. A rule with no hash never auto-approves. Hashing
 the full input means two calls that share a prefix but differ later cannot
@@ -438,7 +491,7 @@ collide, so a rule never grants more than the exact request you approved.
 | Identifiers | Session and pane ids are checked against an `A-Za-z0-9_-` allowlist |
 | Worktree paths | Resolved to absolute paths and verified under the roots |
 | Git refs | `git.ValidRef` rejects empty names, leading `-`, `..`, control characters, and other forms `git check-ref-format` forbids |
-| Process groups | Closing a pty bridge kills the shell's whole process group, so agent children cannot outlive the session |
+| Process groups | Closing a pty bridge kills the shell's process group and hangs up the tty, which reaches the agent job (its own process group) while it is in the foreground; the opencode launch line kills its backgrounded `serve` when `attach` exits |
 
 ### Repository trust
 
@@ -454,9 +507,9 @@ The second path travels with the tree. An agent reads its configuration from the
 worktree on startup: `claude` from `.claude/settings.json`, opencode from its own
 config. A repository can commit such a file, and the agent runtime executes its
 `PreToolUse` or command hooks as shell the moment a session opens. Perch's
-own approval channel is itself one such command hook, so `ClaudeMonitor.writeHooks`
-merges into a repository's existing `.claude/settings.json` rather than replacing
-it, preserving any hooks already committed there. The approval gate intercepts the
+own approval channel is itself a command hook, but it lives in a per-session file
+outside the tree, loaded with `--settings`, so perch never touches a repository's
+`.claude/settings.json`. The approval gate intercepts the
 tool calls an agent routes through the loopback listener. It does not intercept
 the configuration's own hooks, which the runtime executes before and outside
 that channel. Committed agent-config hooks therefore run ungated. Before opening
@@ -468,8 +521,8 @@ repositories you trust.
 Each Monitor advertises `Caps{approvals, attention}`. The frontend surfaces only
 the controls an agent supports. It hides, rather than disables, the surface for
 any capability an agent omits. Both monitors advertise `attention`. Only Claude
-advertises `approvals`, because only Claude's blocking hook lets perch own the
-decision and suppress the agent's own prompt. opencode returns `approvals: false`,
+advertises `approvals`, because only Claude's blocking hook lets perch answer
+the agent's permission prompt. opencode returns `approvals: false`,
 so the card stays hidden and its own terminal owns the approval.
 
 ## Debug aids

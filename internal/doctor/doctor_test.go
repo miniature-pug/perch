@@ -3,9 +3,12 @@ package doctor
 import (
 	"errors"
 	"io"
-	"os"
+	"os/exec"
 	"strings"
 	"testing"
+	"time"
+
+	perch "github.com/miniature-pug/perch"
 )
 
 // ── fakeSystem ────────────────────────────────────────────────────────────────
@@ -19,20 +22,6 @@ type fakeSystem struct {
 
 	// outputs maps "name args[0] args[1]..." to (stdout, error).
 	outputs map[string]fakeOutput
-
-	// home and homeErr are the values homeDir returns.
-	home    string
-	homeErr error
-
-	// statPaths holds the paths that exist (stat returns nil). Any other
-	// path returns ErrNotExist.
-	statPaths map[string]bool
-
-	// readFiles maps a path to its content. A missing key returns ErrNotExist.
-	readFiles map[string][]byte
-	// readFileErr maps a path to a custom error, which overrides the
-	// readFiles logic.
-	readFileErr map[string]error
 }
 
 type fakeOutput struct {
@@ -58,32 +47,16 @@ func (f *fakeSystem) output(name string, args ...string) ([]byte, error) {
 	return nil, errors.New("no output configured for: " + key)
 }
 
-func (f *fakeSystem) homeDir() (string, error) {
-	return f.home, f.homeErr
-}
-
-func (f *fakeSystem) stat(path string) error {
-	if f.statPaths[path] {
-		return nil
-	}
-	return os.ErrNotExist
-}
-
-func (f *fakeSystem) readFile(path string) ([]byte, error) {
-	if err, ok := f.readFileErr[path]; ok {
-		return nil, err
-	}
-	if data, ok := f.readFiles[path]; ok {
-		return data, nil
-	}
-	return nil, os.ErrNotExist
-}
-
 // fullSystem returns a fakeSystem where everything is present and healthy.
 // Tests override individual fields to simulate failures.
+// pinnedGoVersionOutput returns `go version` output for exactly the pinned
+// toolchain, so a healthy fake system stays healthy when the pin is bumped.
+func pinnedGoVersionOutput() string {
+	return "go version go" + ParseToolVersions(perch.ToolVersions)["golang"] + " linux/amd64"
+}
+
 func fullSystem(home string) *fakeSystem {
 	return &fakeSystem{
-		home: home,
 		paths: map[string]string{
 			"go":       "/usr/local/go/bin/go",
 			"git":      "/usr/bin/git",
@@ -91,7 +64,7 @@ func fullSystem(home string) *fakeSystem {
 			"opencode": "/home/user/.local/bin/opencode",
 		},
 		outputs: map[string]fakeOutput{
-			"go version":         {out: []byte("go version go1.26.5 linux/amd64")},
+			"go version":         {out: []byte(pinnedGoVersionOutput())},
 			"git --version":      {out: []byte("git version 2.43.0")},
 			"claude --version":   {out: []byte("2.1.158")},
 			"opencode --version": {out: []byte("1.15.12")},
@@ -346,7 +319,6 @@ func TestRunDrift_OlderInstalled_Warn(t *testing.T) {
 func TestRunSummary_DynamicWarnCount(t *testing.T) {
 	// Trigger exactly one warning: opencode absent, everything else healthy.
 	sys := &fakeSystem{
-		home: "/home/tester",
 		paths: map[string]string{
 			"go":     "/usr/local/go/bin/go",
 			"git":    "/usr/bin/git",
@@ -354,7 +326,7 @@ func TestRunSummary_DynamicWarnCount(t *testing.T) {
 			// opencode absent
 		},
 		outputs: map[string]fakeOutput{
-			"go version":       {out: []byte("go version go1.26.5 linux/amd64")},
+			"go version":       {out: []byte(pinnedGoVersionOutput())},
 			"git --version":    {out: []byte("git version 2.43.0")},
 			"claude --version": {out: []byte("2.1.158")},
 		},
@@ -399,5 +371,69 @@ func TestRunOutput_ContainsPaths(t *testing.T) {
 	output := out.String()
 	if !strings.Contains(output, "/usr/bin/git") {
 		t.Errorf("expected git path in output; got:\n%s", output)
+	}
+}
+
+func TestRunSummary_HardFailDoesNotSayPassed(t *testing.T) {
+	sys := fullSystem("/home/tester")
+	delete(sys.paths, "git")
+	var out strings.Builder
+	if code := Run("v0.1.0-dev", &out, sys); code != 1 {
+		t.Fatalf("exit = %d, want 1", code)
+	}
+	if strings.Contains(out.String(), "All checks passed") {
+		t.Errorf("summary claims pass despite hard failure:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "1 required check failed") {
+		t.Errorf("expected required-failure summary, got:\n%s", out.String())
+	}
+}
+
+func TestRunSummary_NoAgentsDoesNotCountAgentWarnings(t *testing.T) {
+	sys := fullSystem("/home/tester")
+	delete(sys.paths, "claude")
+	delete(sys.paths, "opencode")
+	var out strings.Builder
+	if code := Run("v0.1.0-dev", &out, sys); code != 1 {
+		t.Fatalf("exit = %d, want 1", code)
+	}
+	if strings.Contains(out.String(), "warning") && !strings.Contains(out.String(), "[warn]") {
+		t.Errorf("unexpected warning count in summary:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "1 required check failed.") || strings.Contains(out.String(), "2 warnings") {
+		t.Errorf("summary should report only the agents failure:\n%s", out.String())
+	}
+}
+
+func TestRun_UnknownVersionIsWarn(t *testing.T) {
+	sys := fullSystem("/home/tester")
+	sys.outputs["claude --version"] = fakeOutput{err: errors.New("exit status 1")}
+	var out strings.Builder
+	code := Run("v0.1.0-dev", &out, sys)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0 (warning only)", code)
+	}
+	if !strings.Contains(out.String(), "[warn]") || strings.Contains(out.String(), "All checks passed") {
+		t.Errorf("unreadable version should warn:\n%s", out.String())
+	}
+}
+
+func TestRealSystem_OutputTimesOut(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow")
+	}
+	if _, err := exec.LookPath("sleep"); err != nil {
+		t.Skip("no sleep binary")
+	}
+	old := versionTimeout
+	versionTimeout = 200 * time.Millisecond
+	defer func() { versionTimeout = old }()
+	start := time.Now()
+	_, err := RealSystem().output("sleep", "30")
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Fatalf("output did not honor the timeout: %v", time.Since(start))
 	}
 }

@@ -219,3 +219,41 @@ claude   = "/usr/local/bin/claude"
 		t.Errorf("Roots = %v; want [%s]", cfg.Roots, tmp)
 	}
 }
+
+func TestRootsNormalisation(t *testing.T) {
+	tmp := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PERCH_TEST_ROOT", "/srv/code")
+
+	globalPath := filepath.Join(tmp, "config.toml")
+	writeFile(t, globalPath, `roots = ["~", "~/a/", "", "  ", "$PERCH_TEST_ROOT/x", "rel/dir", "/abs//dir/../b"]`)
+
+	cfg, err := config.Load(globalPath, "/start")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := []string{
+		home,
+		filepath.Join(home, "a"),
+		"/srv/code/x",
+		filepath.Join(tmp, "rel", "dir"),
+		"/abs/b",
+	}
+	if strings.Join(cfg.Roots, "\n") != strings.Join(want, "\n") {
+		t.Errorf("Roots = %q; want %q", cfg.Roots, want)
+	}
+}
+
+func TestRootsAllEmptyFallsBackToStartDir(t *testing.T) {
+	tmp := t.TempDir()
+	globalPath := filepath.Join(tmp, "config.toml")
+	writeFile(t, globalPath, `roots = ["", " "]`)
+	cfg, err := config.Load(globalPath, "/start")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Roots) != 1 || cfg.Roots[0] != "/start" {
+		t.Errorf("Roots = %q; want [/start]", cfg.Roots)
+	}
+}

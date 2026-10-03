@@ -342,3 +342,16 @@ func TestProjects_SkipOnRunnerError(t *testing.T) {
 		t.Errorf("Project.Path = %q, want %q", results[0].Project.Path, good)
 	}
 }
+
+// TestProjects_ContextCancelledReturnsError verifies that a timeout is
+// reported instead of silently returning a truncated list as complete.
+func TestProjects_ContextCancelledReturnsError(t *testing.T) {
+	root := t.TempDir()
+	makeFakeRepo(t, filepath.Join(root, "a"), true)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := Projects(ctx, proc.NewFakeRunner(), root, Options{}, map[string]ProjectStat{}, 0)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("want context.Canceled, got %v", err)
+	}
+}

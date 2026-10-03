@@ -16,8 +16,14 @@ echo "    ${FILE_OUTPUT}"
 echo "${FILE_OUTPUT}" | grep -q "ELF"       || { echo "ERROR: not ELF" >&2; exit 1; }
 echo "${FILE_OUTPUT}" | grep -q "executable" || { echo "ERROR: not executable" >&2; exit 1; }
 
-if ldd "${BIN}" 2>/dev/null | grep -qi tmux; then
-  echo "ERROR: binary links tmux (should be removed)" >&2; exit 1
+# The production build must link WebKitGTK 4.1 (the webkit2_41 tag). A build
+# without the tag, or against the end-of-life 4.0, fails here instead of at
+# the first launch.
+# Capture ldd first: under pipefail, grep -q exiting early can SIGPIPE ldd and
+# fail the pipeline on a good binary.
+LDD_OUTPUT="$(ldd "${BIN}" 2>/dev/null || true)"
+if ! grep -q 'libwebkit2gtk-4\.1' <<<"${LDD_OUTPUT}"; then
+  echo "ERROR: binary does not link libwebkit2gtk-4.1" >&2; exit 1
 fi
 
 echo "==> PASS: ${BIN} is a valid ELF executable."

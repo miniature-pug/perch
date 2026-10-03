@@ -60,14 +60,16 @@ the toolchain only.
 - perch always masks `frontend/node_modules`. The container runs `npm ci`
   into the empty volume, because the host copy is built for the host.
 - perch masks `frontend/dist` only for frontend-building targets, through
-  `PERCH_MASK_DIST=1`. Those targets run `vite build`. Without the mask,
+  `PERCH_MASK_DIST=1` (only the value `1` enables the mask). Those targets run
+  `vite build`. Without the mask,
   `vite build` would overwrite the committed `//go:embed frontend/dist`
   stub. Go targets must not mask it, or the embed finds an empty directory
   and fails to compile. `test-e2e` sets `PERCH_MASK_DIST=1` itself when
   `make` dispatches it through `run.sh`.
 
-Named cache volumes, the Go build cache and the baked Playwright browser,
-persist across runs for speed.
+Named cache volumes, the Go build cache (`perch-go-build`), the npm download
+cache (`perch-npm-cache`) and the baked Playwright browser, persist across runs
+for speed. The npm cache lets each run's `npm ci` reuse downloaded packages.
 
 ## The GUI build
 
@@ -87,7 +89,8 @@ PERCH_MASK_DIST=1 bash containers/run.sh dev make gui-build CONTAINERIZE=0
 `run.sh` reads `PERCH_MASK_DIST` from the host, masks `frontend/dist`, and lets
 `vite build` write the throwaway volume, so the committed stub stays intact.
 Without the prefix, the check still passes, but the check regenerates the
-host stub. Do not commit that stub.
+host stub. Do not commit that stub. (`make gui-build` on the host restores
+the tracked stub itself after the Go build.)
 
 ## devcontainer
 

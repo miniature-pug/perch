@@ -20,7 +20,36 @@ checklist is what the gate cannot see.
 - [ ] `shellcheck -s sh install.sh` and `sh -n install.sh` both exit 0.
 - [ ] A fresh `./install.sh` (optionally `--skip-agents`) runs end to end with no
       error and installs the `perch` binary. There is no setup or status step.
-      The run must never invoke one.
+      The run must never invoke one. The script builds the frontend (`npm ci`
+      and `npm run build`) before `go build`, so Node.js and npm must be present.
+- [ ] The installed `perch` launches a window. It must not exit with "this binary
+      was built without the frontend". `perch version` alone does not catch that.
+- [ ] On GNOME Wayland, the running window's dock and Alt-Tab icon is the perch
+      icon, not the generic gear. `~/.local/share/applications/perch.desktop`
+      has `Exec=` pointing at the installed binary and `StartupWMClass=perch`.
+- [ ] `sudo ./install.sh` does not leave the entry only in `/root`: it lands in
+      the invoking user's `~/.local/share`, or the script says how to add it.
+
+## Desktop entry and upgrade
+
+- [ ] A downloaded release binary at `~/.local/bin/perch` plus `perch
+      install-desktop` gives the perch dock icon (log out and in once if
+      GNOME still shows the old one). The perch entry shows in the app menu.
+- [ ] Move the binary somewhere else and run `perch install-desktop` again. The
+      entry's `Exec=` follows it, and launching from the app menu works.
+- [ ] With an older release installed and perch running, `sh install.sh
+      --upgrade` (outside a checkout) prints `perch vOLD -> vNEW`, keeps
+      `perch.prev`, and warns that perch is running. After quitting and
+      restarting, `perch version` reports the new tag.
+- [ ] Re-running `--upgrade` reports nothing to upgrade and changes nothing.
+- [ ] From a clean clone, `./install.sh --upgrade` builds the newest `v*` tag
+      and swaps it in. With an uncommitted change it refuses to start.
+      `sudo ./install.sh --upgrade` in your own clone refuses, and changes
+      nothing.
+- [ ] After any of the above, `~/.local/share/icons/hicolor/icon-theme.cache`
+      exists only if it existed before.
+- [ ] On v0.1.0 (no `install-desktop`), the README fallback (`sh install.sh
+      --upgrade --prefix="$HOME/.local/bin"`) writes the entry and icon.
 
 ## Environment
 

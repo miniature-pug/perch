@@ -45,7 +45,7 @@ func TestBranches_PinsDefaultOrCurrentFirst(t *testing.T) {
 
 	t.Run("current branch pinned first", func(t *testing.T) {
 		r := proc.NewFakeRunner()
-		r.Respond(branchList, "git", "-C", "/repo", "branch", "--format=%(refname:short)")
+		r.Respond(branchList, "git", "-C", "/repo", "for-each-ref", "--format=%(refname:lstrip=2)", "refs/heads/")
 		// HEAD is on "main" → it is pinned first.
 		r.Respond(proc.FakeResult{Stdout: []byte("main\n")},
 			"git", "-C", "/repo", "symbolic-ref", "--quiet", "--short", "HEAD")
@@ -62,7 +62,7 @@ func TestBranches_PinsDefaultOrCurrentFirst(t *testing.T) {
 
 	t.Run("detached HEAD falls back to origin/HEAD default", func(t *testing.T) {
 		r := proc.NewFakeRunner()
-		r.Respond(branchList, "git", "-C", "/repo", "branch", "--format=%(refname:short)")
+		r.Respond(branchList, "git", "-C", "/repo", "for-each-ref", "--format=%(refname:lstrip=2)", "refs/heads/")
 		// Detached HEAD → symbolic-ref HEAD fails.
 		r.Respond(proc.FakeResult{Err: proc.FakeExitError{Code: 1}},
 			"git", "-C", "/repo", "symbolic-ref", "--quiet", "--short", "HEAD")
@@ -81,7 +81,7 @@ func TestBranches_PinsDefaultOrCurrentFirst(t *testing.T) {
 
 	t.Run("no HEAD/origin info falls back to main convention", func(t *testing.T) {
 		r := proc.NewFakeRunner()
-		r.Respond(branchList, "git", "-C", "/repo", "branch", "--format=%(refname:short)")
+		r.Respond(branchList, "git", "-C", "/repo", "for-each-ref", "--format=%(refname:lstrip=2)", "refs/heads/")
 		r.Respond(proc.FakeResult{Err: proc.FakeExitError{Code: 1}},
 			"git", "-C", "/repo", "symbolic-ref", "--quiet", "--short", "HEAD")
 		r.Respond(proc.FakeResult{Err: proc.FakeExitError{Code: 1}},

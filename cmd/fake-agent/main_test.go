@@ -39,7 +39,7 @@ func TestFakeAgent_PostsHooksAndPrintsLines(t *testing.T) {
 		got.types = append(got.types, ev.HookEventName)
 		got.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintln(w, `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}`)
+		fmt.Fprintln(w, `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}`)
 	}))
 	t.Cleanup(srv.Close)
 
@@ -49,7 +49,7 @@ func TestFakeAgent_PostsHooksAndPrintsLines(t *testing.T) {
 		"PERCH_HOOK_URL="+srv.URL+"/hook",
 		"PERCH_HOOK_TOKEN=test-token",
 		"PERCH_SESSION_ID=ses_fake01",
-		"PERCH_SCRIPT=SessionStart;PreToolUse,tool=Write,input={};Stop",
+		"PERCH_SCRIPT=SessionStart;PermissionRequest,tool=Write,input={};Stop",
 		"PERCH_LINES=hello from fake agent|diff --git a/f b/f",
 	)
 	cmd.Stdout = &stdoutBuf
@@ -78,7 +78,7 @@ func TestFakeAgent_PostsHooksAndPrintsLines(t *testing.T) {
 	got.mu.Lock()
 	types := append([]string(nil), got.types...)
 	got.mu.Unlock()
-	for i, ev := range []string{"SessionStart", "PreToolUse", "Stop"} {
+	for i, ev := range []string{"SessionStart", "PermissionRequest", "Stop"} {
 		if i >= len(types) || types[i] != ev {
 			t.Errorf("hook[%d]: got %v, want %q", i, types, ev)
 		}

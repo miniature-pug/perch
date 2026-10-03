@@ -48,7 +48,28 @@ jobs:
     runs-on: ${{ matrix.runner }}
     # Fail fast on a hung step instead of running to the 6-hour default.
     timeout-minutes: 45
+    permissions:
+      contents: read
+      # Read the CI check run of the tagged commit (gate step below).
+      checks: read
     steps:
+      # A tag push must not publish a commit that never passed CI. The CI
+      # workflow's `gate` job is the required check, so require a successful
+      # run of it on this exact commit. If the tag was pushed before CI
+      # finished, wait for CI and re-run this workflow.
+      - name: Require a passing CI gate on the tagged commit
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          conclusion="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100" \
+            --jq '[.check_runs[] | select(.name == "gate" or .name == "CI / gate")] | sort_by(.completed_at) | last | .conclusion // "none"')"
+          echo "CI gate conclusion for ${GITHUB_SHA}: ${conclusion}"
+          if [ "${conclusion}" != "success" ]; then
+            echo "::error::CI gate has not passed on ${GITHUB_SHA} (${conclusion}). Refusing to release."
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@v7
         with:
@@ -75,17 +96,25 @@ jobs:
         run: make image
 
       # Build the frontend and the cgo GUI binary inside perch-dev, into
-      # bin/perch. The host computes the version from the tag and passes it as a
-      # make override, so the build never depends on git ownership inside the
-      # container. PERCH_MASK_DIST keeps the build off the checked-out
+      # bin/perch. The host computes the version and passes it as a make
+      # override, so the build never depends on git ownership inside the
+      # container. A tag run stamps the pushed tag name itself, not `git
+      # describe`: describe can pick another tag on the same commit (an
+      # annotated v1.0.0-rc1 next to a lightweight v1.0.0), and
+      # `install.sh --upgrade` requires the binary to report exactly the
+      # release tag. PERCH_MASK_DIST keeps the build off the checked-out
       # frontend/dist stub; the real frontend still builds into the masked
       # volume and embeds into the binary.
       - name: Build production GUI binary (linux/${{ matrix.arch }})
         env:
           PERCH_MASK_DIST: 1
         run: |
-          bash containers/run.sh dev make CONTAINERIZE=0 gui-build \
-            VERSION="$(git describe --tags --always --dirty)"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME}"
+          else
+            version="$(git describe --tags --always --dirty)"
+          fi
+          bash containers/run.sh dev make CONTAINERIZE=0 gui-build VERSION="${version}"
 
       - name: Package binary
         run: |
@@ -93,7 +122,18 @@ jobs:
           # Check that the tag flowed into the binary version. Run inside
           # perch-dev, which has the WebKitGTK runtime libraries the binary
           # links against, on this runner's own architecture.
-          bash containers/run.sh dev ./bin/perch version
+          out="$(bash containers/run.sh dev ./bin/perch version)"
+          echo "$out"
+          # Only a tag run must carry the tag, and exactly the tag: the first
+          # line must be "perch <tag>" (install.sh --upgrade compares it). A
+          # workflow_dispatch dry run builds an arbitrary ref.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            first="$(printf '%s\n' "$out" | head -n 1 | tr -d '\r')"
+            if [ "$first" != "perch ${GITHUB_REF_NAME}" ]; then
+              echo "::error::perch version reports '${first}', expected 'perch ${GITHUB_REF_NAME}'"
+              exit 1
+            fi
+          fi
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
@@ -156,3 +196,5 @@ jobs:
             dist/SHA256SUMS
           fail_on_unmatched_files: true
           generate_release_notes: true
+          # A tag with a pre-release suffix (v1.0.0-rc1) is not a stable release.
+          prerelease: ${{ contains(github.ref_name, '-') }}

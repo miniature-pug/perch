@@ -17,10 +17,10 @@ import (
 // ── AddWorktreeExisting ───────────────────────────────────────────────────────
 
 // TestAddWorktreeExisting_CallArgs verifies the FakeRunner sees the exact
-// "worktree add <tree> <branch>" argv (no -b).
+// "worktree add -- <tree> <branch>" argv (no -b).
 func TestAddWorktreeExisting_CallArgs(t *testing.T) {
 	r := proc.NewFakeRunner()
-	wantArgs := []string{"-C", "/repos/proj", "worktree", "add",
+	wantArgs := []string{"-C", "/repos/proj", "worktree", "add", "--",
 		"/repos/proj__worktrees/feat-x", "feat-x"}
 	r.Respond(proc.FakeResult{}, "git", wantArgs...)
 
@@ -389,10 +389,10 @@ func TestDeleteBranch_SafeRefusesUnmerged(t *testing.T) {
 
 // ── CheckoutBranch ────────────────────────────────────────────────────────────
 
-// TestCheckoutBranch_CallArgs verifies the exact argv for "checkout <branch>".
+// TestCheckoutBranch_CallArgs verifies the exact argv for "switch --no-guess <branch>".
 func TestCheckoutBranch_CallArgs(t *testing.T) {
 	r := proc.NewFakeRunner()
-	wantArgs := []string{"-C", "/repos/proj", "checkout", "feat-x"}
+	wantArgs := []string{"-C", "/repos/proj", "switch", "--no-guess", "feat-x"}
 	r.Respond(proc.FakeResult{}, "git", wantArgs...)
 
 	err := git.CheckoutBranch(context.Background(), r, "/repos/proj", "feat-x")

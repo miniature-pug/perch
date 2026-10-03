@@ -80,19 +80,72 @@ func mergeEnv(base, injected, overlay []string) []string {
 // overlayFor returns the in-memory env overlay captured for a workspace. It
 // returns nil when no capture exists. a.mu guards this function.
 func (a *App) overlayFor(workspaceID string) []string {
+	overlay, _ := a.envFor(workspaceID)
+	return overlay
+}
+
+// envFor returns the env overlay and the unset list captured for a
+// workspace by its last `perch reload`. Both are nil when no capture exists.
+func (a *App) envFor(workspaceID string) (overlay, unset []string) {
 	if workspaceID == "" {
-		return nil
+		return nil, nil
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.envOverlay[workspaceID]
+	return a.envOverlay[workspaceID], a.envUnset[workspaceID]
 }
 
-// onEnvSync is the env-sync endpoint's callback. It stores the captured delta
-// as the workspace's in-memory overlay. onEnvSync never persists the
-// overlay, because the payload may hold secrets. onEnvSync then dispatches a
-// relaunch that keeps the conversation, and runs the relaunch
-// asynchronously.
+// withoutKeys returns env minus every KEY=VALUE entry whose KEY is in keys.
+// It never drops a PERCH_-prefixed key: perch plumbing is not user
+// environment, and the env-sync delta never lists it anyway. With no keys it
+// returns env unchanged.
+func withoutKeys(env, keys []string) []string {
+	if len(keys) == 0 {
+		return env
+	}
+	drop := make(map[string]struct{}, len(keys))
+	for _, k := range keys {
+		if !strings.HasPrefix(k, perchEnvPrefix) {
+			drop[k] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(env))
+	for _, e := range env {
+		key, _, _ := strings.Cut(e, "=")
+		if _, gone := drop[key]; gone {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+// forgetEnv drops a workspace's captured env state and revokes its env-sync
+// token, so no process that inherited a drawer's environment can trigger a
+// relaunch or mint state for it any more.
+func (a *App) forgetEnv(workspaceID string, dropOverlay bool) {
+	if dropOverlay {
+		a.mu.Lock()
+		delete(a.envOverlay, workspaceID)
+		delete(a.envUnset, workspaceID)
+		a.mu.Unlock()
+	}
+	if a.envsync != nil {
+		a.envsync.Revoke(workspaceID)
+	}
+}
+
+// onEnvSync is the env-sync endpoint's callback. It stores the captured
+// delta (the variables to set and the ones to drop) as the workspace's
+// in-memory overlay, replacing the previous capture: each reload reports the
+// terminal's full difference from the baseline. onEnvSync never persists the
+// overlay, because the payload may hold secrets.
+//
+// When the workspace's agent pane is live, onEnvSync then relaunches it,
+// keeping the conversation. When the session is closed it only stores the
+// overlay, which the next open picks up: a stray `perch reload` from a
+// process that outlived its drawer never reopens a closed session in the
+// background.
 //
 // The relaunch must never run inline in the HTTP handler. OpenWorkspace
 // takes a.mu, and tears down and rebuilds the pane. A synchronous call would
@@ -100,13 +153,21 @@ func (a *App) overlayFor(workspaceID string) []string {
 // and could cause reentrancy with the event pump. onEnvSync stores the
 // overlay before it starts the goroutine. This guarantees the relaunch sees
 // the fresh delta.
-func (a *App) onEnvSync(workspaceID string, delta []string) {
+func (a *App) onEnvSync(workspaceID string, d envsync.Delta) {
 	a.mu.Lock()
 	if a.envOverlay == nil {
 		a.envOverlay = map[string][]string{}
 	}
-	a.envOverlay[workspaceID] = delta
+	if a.envUnset == nil {
+		a.envUnset = map[string][]string{}
+	}
+	a.envOverlay[workspaceID] = d.Set
+	a.envUnset[workspaceID] = d.Unset
+	_, live := a.bridges[paneIDFor(workspaceID)]
 	a.mu.Unlock()
+	if !live {
+		return
+	}
 
 	// Tell the frontend to remount this workspace's agent terminal with a fresh
 	// xterm. Do this before the relaunch respawns the pty. The respawn reuses
@@ -116,13 +177,40 @@ func (a *App) onEnvSync(workspaceID string, delta []string) {
 	// an empty xterm, the same as the user-reopen path already does. The
 	// fresh mount then resends resizePty, so the agent redraws clean at the
 	// right size. perch emits this event before the goroutine starts, so the
-	// fresh pane is ready when the agent draws.
+	// fresh pane is ready when the agent draws. If the relaunch then fails,
+	// the old agent keeps running in the remounted terminal (its next redraw
+	// repaints it) and a blocking notice says why.
 	a.emit(evtWorkspaceRelaunch, map[string]any{"workspaceId": workspaceID})
 
 	go func() {
 		defer safe.Recover("envsync-relaunch")
-		_ = a.OpenWorkspace(workspaceID)
+		if err := a.relaunchWorkspace(workspaceID); err != nil {
+			a.emit("notify", map[string]any{
+				"tier":        "blocking",
+				"title":       "Reload failed",
+				"body":        fmt.Sprintf("Could not relaunch the agent with the new environment: %v", err),
+				"workspaceId": workspaceID,
+			})
+		}
 	}()
+}
+
+// relaunchWorkspace reopens workspaceID only if its agent pane is still live
+// once the lifecycle lock is held, so a close that won the race is never
+// undone.
+func (a *App) relaunchWorkspace(workspaceID string) error {
+	if err := validateSessionID(workspaceID); err != nil {
+		return fmt.Errorf("invalid workspace id: %w", err)
+	}
+	unlock := a.lockWorkspace(workspaceID)
+	defer unlock()
+	a.mu.Lock()
+	_, live := a.bridges[paneIDFor(workspaceID)]
+	a.mu.Unlock()
+	if !live {
+		return nil
+	}
+	return a.openWorkspace(workspaceID)
 }
 
 // shellQuote wraps s in single quotes so a shell command line can safely
