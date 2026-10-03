@@ -306,3 +306,31 @@ describe("SettingsPanel — close behaviour", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 });
+
+describe("SettingsPanel — audit regressions (FEX-13)", () => {
+  it("re-reads settings on every open, so a rule granted since startup is listed", async () => {
+    const w = await import("./wails");
+    const { default: SettingsPanel } = await import("./SettingsPanel.svelte");
+    const r = render(SettingsPanel, { props: { open: true, onClose: vi.fn() } });
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "Revoke" })).toHaveLength(2));
+    await r.rerender({ open: false, onClose: vi.fn() });
+    vi.mocked(w.getSettings).mockResolvedValueOnce({
+      ...fixture, alwaysRules: [...fixture.alwaysRules, { agent: "claude", tool: "Edit", pattern: "*" }],
+    });
+    await r.rerender({ open: true, onClose: vi.fn() });
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "Revoke" })).toHaveLength(3));
+  });
+
+  it("revoke removes the rule from a fresh read, keeping rules granted after the panel loaded", async () => {
+    const w = await import("./wails");
+    const { default: SettingsPanel } = await import("./SettingsPanel.svelte");
+    render(SettingsPanel, { props: { open: true, onClose: vi.fn() } });
+    const revokeBtns = await screen.findAllByRole("button", { name: "Revoke" });
+    const late = { agent: "claude", tool: "Edit", pattern: "*" };
+    vi.mocked(w.getSettings).mockResolvedValueOnce({ ...fixture, alwaysRules: [...fixture.alwaysRules, late] });
+    await fireEvent.click(revokeBtns[0]);
+    await waitFor(() => expect(w.saveSettings).toHaveBeenCalled());
+    const saved = vi.mocked(w.saveSettings).mock.calls.at(-1)![0];
+    expect(saved.alwaysRules).toEqual([fixture.alwaysRules[1], late]);
+  });
+});

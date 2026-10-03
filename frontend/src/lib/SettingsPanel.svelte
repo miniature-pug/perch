@@ -1,10 +1,10 @@
 <!-- frontend/src/lib/SettingsPanel.svelte -->
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { untrack } from "svelte";
   import { getSettings, type AppSettings } from "./wails";
   import { trapFocus } from "./actions";
   import { settings as settingsStore } from "./stores/settings.svelte";
-  import { setDnd, addBlocking } from "./stores/notifications.svelte";
+  import { addBlocking } from "./stores/notifications.svelte";
   import { THEMES, DENSITIES, FONTS, DEFAULT_THEME, DEFAULT_DENSITY, DEFAULT_FONT, type Density } from "./constants";
 
   let {
@@ -44,12 +44,19 @@
     theme: DEFAULT_THEME, density: DEFAULT_DENSITY as Density, font: DEFAULT_FONT, dnd: false, glassDisabled: false, alwaysRules: [],
   });
 
-  onMount(async () => {
+  // The panel stays mounted for the whole run, so a single read at startup
+  // went stale: rules granted through "Always allow" never appeared, and DND
+  // or theme changes made elsewhere showed old values. Re-read on every open
+  // (FEX-13).
+  async function refresh() {
     try {
       settings = await getSettings();
     } catch (e) {
       addBlocking("", "Failed to load settings", String(e));
     }
+  }
+  $effect(() => {
+    if (open) untrack(() => { void refresh(); });
   });
 
   function handleKey(e: KeyboardEvent) {
@@ -77,7 +84,7 @@
   async function toggleDnd() {
     const next = !settings.dnd;
     settings = { ...settings, dnd: next };
-    setDnd(next);
+    // The settings store applies DND to the notification store and persists it.
     try { await settingsStore.setDnd(next); } catch (err) { addBlocking("", "Failed to save settings", String(err)); }
   }
 
@@ -104,10 +111,20 @@
     try { await settingsStore.setStaleThresholdDays(v); } catch (err) { addBlocking("", "Failed to save settings", String(err)); }
   }
 
+  // Revoke one rule by identity against a fresh read of the backend list,
+  // so a rule granted after this panel loaded is never dropped by writing a
+  // stale copy back (FEX-13).
   async function revokeRule(i: number) {
-    const reduced = settings.alwaysRules.filter((_, j) => j !== i);
-    settings = { ...settings, alwaysRules: reduced };
-    try { await settingsStore.setAlwaysRules(reduced); } catch (err) { addBlocking("", "Failed to save settings", String(err)); }
+    const rule = settings.alwaysRules[i];
+    if (!rule) return;
+    settings = { ...settings, alwaysRules: settings.alwaysRules.filter((_, j) => j !== i) };
+    try {
+      const saved = await settingsStore.removeAlwaysRules([rule]);
+      settings = { ...settings, alwaysRules: saved };
+    } catch (err) {
+      addBlocking("", "Failed to save settings", String(err));
+      void refresh();
+    }
   }
 </script>
 
