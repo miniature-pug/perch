@@ -91,18 +91,20 @@ callable over the bridge. The load-bearing methods:
 | `ListWorkspaces() []WorkspaceVM` | All registered sessions, with live state and caps for any that are open |
 | `CreateWorkspace(agentName, repoPath, baseRef, branch, title string, worktree bool) (WorkspaceVM, error)` | Validate, resolve or create the worktree, and register the session; a blank title falls back to the branch slug |
 | `SetWorkspaceTitle(id, title string) error` | Rename a session; rejects a blank title |
-| `OpenWorkspace(id string) error` | Spawn the pty, prepare and start the Monitor, begin streaming |
-| `CloseWorkspace(id string) error` | Tear down the pty bridge and Monitor; keep the record |
-| `RemoveWorkspace(id string) error` | Remove the record; for worktree sessions run `git worktree remove`, returning `ErrWorktreeDirty` on uncommitted changes; the branch is kept |
-| `ForceRemoveWorkspace(id string) error` | Force-remove the worktree tree, discarding changes; the branch is kept |
-| `ListStaleSessions() ([]StaleSessionVM, error)` | Worktree sessions unused past the stale threshold, with per-row clean and merged state |
+| `WorkspaceForBranch(repoPath, branch string) BranchOwner` | `{id, found}`: the worktree session that already tracks a branch |
+| `OpenWorkspace(id string) error` | Spawn the pty, prepare and start the Monitor, begin streaming; refuses a session whose tree is gone (`ErrWorktreeMissing`); with the agent CLI missing, opens a plain shell and creates no Monitor |
+| `CloseWorkspace(id string) error` | Tear down the pty bridge, drawer shells and Monitor; keep the record |
+| `RemoveWorkspace(id string) error` | Close the session, then remove the record; for worktree sessions run `git worktree remove`, returning `ErrWorktreeDirty` (session left running) on uncommitted changes; a tree deleted outside perch is pruned from git; the branch is kept |
+| `ForceRemoveWorkspace(id string) error` | Close the session, then force-remove the worktree tree, discarding changes; the branch is kept |
+| `ListStaleSessions() ([]StaleSessionVM, error)` | Closed worktree sessions unused past the stale threshold, with per-row clean, merged and uncommitted line counts (four rows at a time, one deadline) |
 | `CleanupSessions(ids []string, force bool) error` | Bulk-remove sessions: remove the tree and delete the branch |
-| `WriteToPty(paneID string, data []int) error` | Forward keystrokes to a pane's pty |
+| `WriteToPty(paneID string, data []byte) error` | Forward keystrokes to a pane's pty; the frontend sends a base64 string |
 | `ResizePty(paneID string, cols, rows uint16) error` | Resize a pane's pty |
-| `OpenShell(paneID, cwd string) error` | Spawn an auxiliary login-shell pty for the shell drawer |
+| `OpenShell(paneID, cwd string) error` | Spawn an auxiliary login-shell pty: `shell-home` (always in `HomeShellCwd`) or a drawer `shell-<id>[_<n>]` of a known session, with a cwd inside its tree |
 | `HomeShellCwd() string` | The working directory for the home shell |
 | `Approve(reqID, decision string) error` | Resolve a pending approval as allow, deny, or always |
-| `DiffStat / Hunks / StageHunk / DiscardHunk` | The diff view and per-hunk staging for a worktree |
+| `DiffStat / Hunks` | The changed files (`git status` v2 plus net line counts, renames with `oldPath`) and the hunks of one file, each with a content `id` |
+| `StageHunk / DiscardHunk / UnstageHunk(worktree, file string, index int, id string) error` | Act on the hunk whose content `id` the user saw; a hunk that changed since is refused with "hunk changed since it was displayed" |
 | `Branches(repo string) ([]string, error)` | Local branch names |
 | `ListDir / ReadFile / WriteFile / RevealInFiles / CopyPath` | File-tree operations |
 | `GetSettings / SaveSettings / GetLayout / SaveLayout` | Persisted UI state |
@@ -112,6 +114,13 @@ callable over the bridge. The load-bearing methods:
 The full set is in [internal/README.md](internal/README.md) and `app/app.go`.
 There is no model or token parameter anywhere: perch chooses its agents per
 session and never meters usage.
+
+Lifecycle calls on one session (`OpenWorkspace`, `CloseWorkspace`,
+`RemoveWorkspace`, `ForceRemoveWorkspace`, and each id of `CleanupSessions`)
+hold a per-session lock, so a remove never races a half-done open or an
+env-sync relaunch. Registry writes after creation go through
+`registry.Store.Update`, which changes only the named fields and never
+recreates a removed record.
 
 `app.App` validates every argument that crosses the bridge before any pty or
 git work. It checks session and pane identifiers against an `A-Za-z0-9_-`
@@ -167,22 +176,25 @@ an `agent:event`, after stamping the workspace id and a routable approval id.
 ### State sync
 
 The backend forwards Monitor events to the frontend in real time and emits
-`fs:changed` from a per-session filesystem watcher, debounced by 150ms. The
-frontend reacts to create, open, close, and remove optimistically, so the
-sidebar stays responsive. On each `fs:changed`, the frontend refreshes the
-diffstat for the affected session and shows the result as a change count in the
-sidebar row and the status line.
+`fs:changed` from a per-session filesystem watcher, debounced by 150ms. Each
+event lists the paths that changed in its window (at most 200; past that,
+`paths` is empty and `truncated` is true, and the frontend reloads every file
+it shows). The frontend reacts to create, open, close, and remove
+optimistically, so the sidebar stays responsive. On each `fs:changed`, the
+frontend refreshes the diffstat for the affected session and shows the result
+as a change count in the sidebar row and the status line.
 
 The Go-to-frontend events:
 
 | Event | Payload | Trigger |
 |-------|---------|---------|
-| `agent:event` | `agent.Event` | A Monitor produces a state, approval, or question event |
-| `fs:changed` | `{workspaceId, path}` | The per-session watcher fires, debounced |
+| `agent:event` | `agent.Event` | A Monitor produces a state, approval, or question event; `resolvedReqId` (`<raw>:<workspaceId>`) names an approval card to drop |
+| `fs:changed` | `{workspaceId, path, paths, truncated}` | The per-session watcher fires, debounced; `path` is the worktree root, `paths` the changed absolute paths |
 | `notify` | `{tier, title, body, workspaceId}` | A notification is dispatched |
-| `pty:data:<paneId>` | byte values | The pty read loop has output |
+| `pty:data:<paneId>` | base64 string | The pty read loop has output |
 | `pty:exit:<paneId>` | exit code | A pty process exits |
 | `workspace:attach` | `{query}` | A second instance forwarded a query |
+| `workspace:relaunch` | `{workspaceId}` | A `perch reload` is relaunching an open session's agent |
 
 These event names are string literals in the backend, with named constants only
 for the two pty prefixes; the frontend mirrors them as `EVT_*` constants in

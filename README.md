@@ -238,7 +238,9 @@ Perch keeps its state under `~/.config/perch` (or `$XDG_CONFIG_HOME/perch`):
 | `layout.json` | Saved window layout |
 | `config.toml` | The project `roots` perch scans for repositories |
 
-With no `config.toml`, the launch directory is the only root. Perch reads no
+With no `config.toml`, the launch directory is the only root (plus its sibling
+`<repo>__worktrees` directory when it is a repository). A path given on the
+command line is always a root. Perch reads no
 project-local config, so opening a repository cannot change how perch behaves.
 
 ## Security

@@ -14,7 +14,11 @@ perch /path/to/code   # project root is the given directory
 ```
 
 The project root is where perch looks for repositories. With a `config.toml`
-listing `roots`, perch scans those instead. The sidebar on the left lists your
+listing `roots`, perch scans those instead; a path given on the command line is
+scanned as well. Without a `config.toml`, a launch inside a repository also
+covers its sibling `<repo>__worktrees` directory, where worktree sessions are
+created. A `config.toml` that cannot be read is reported in the terminal and
+ignored. The sidebar on the left lists your
 sessions. The main stage on the right shows the selected session.
 
 ## Sessions
@@ -210,9 +214,13 @@ never sees it. The agent started before the export, and has no way to notice
 a variable made later. Two things close that gap: running `perch reload` in
 the session terminal, or clicking the reload button in that session's shell
 drawer. Both take the drawer's current environment and relaunch the agent
-with it. The same conversation continues, rather than starting over. The
+with it. The same conversation continues, rather than starting over. A
+variable you `unset` in the drawer is removed from the agent too. The
 reload button sits in the drawer's header, next to the collapse control. It
 is absent on the home shell, because the home shell has no agent to relaunch.
+A reload for a session that is closed only remembers the environment for its
+next open; closing or removing a session invalidates its drawers' reload
+credentials.
 
 Most credential refreshes need no reload at all. Something like `aws sso login`
 writes a fresh token to a cache file on disk. The agent's SDK rereads that
