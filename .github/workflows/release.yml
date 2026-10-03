@@ -96,17 +96,25 @@ jobs:
         run: make image
 
       # Build the frontend and the cgo GUI binary inside perch-dev, into
-      # bin/perch. The host computes the version from the tag and passes it as a
-      # make override, so the build never depends on git ownership inside the
-      # container. PERCH_MASK_DIST keeps the build off the checked-out
+      # bin/perch. The host computes the version and passes it as a make
+      # override, so the build never depends on git ownership inside the
+      # container. A tag run stamps the pushed tag name itself, not `git
+      # describe`: describe can pick another tag on the same commit (an
+      # annotated v1.0.0-rc1 next to a lightweight v1.0.0), and
+      # `install.sh --upgrade` requires the binary to report exactly the
+      # release tag. PERCH_MASK_DIST keeps the build off the checked-out
       # frontend/dist stub; the real frontend still builds into the masked
       # volume and embeds into the binary.
       - name: Build production GUI binary (linux/${{ matrix.arch }})
         env:
           PERCH_MASK_DIST: 1
         run: |
-          bash containers/run.sh dev make CONTAINERIZE=0 gui-build \
-            VERSION="$(git describe --tags --always --dirty)"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME}"
+          else
+            version="$(git describe --tags --always --dirty)"
+          fi
+          bash containers/run.sh dev make CONTAINERIZE=0 gui-build VERSION="${version}"
 
       - name: Package binary
         run: |
@@ -116,11 +124,15 @@ jobs:
           # links against, on this runner's own architecture.
           out="$(bash containers/run.sh dev ./bin/perch version)"
           echo "$out"
-          # Only a tag run must carry the tag. A workflow_dispatch dry run
-          # builds an arbitrary ref.
+          # Only a tag run must carry the tag, and exactly the tag: the first
+          # line must be "perch <tag>" (install.sh --upgrade compares it). A
+          # workflow_dispatch dry run builds an arbitrary ref.
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            printf '%s\n' "$out" | grep -F -- "${GITHUB_REF_NAME}" \
-              || { echo "::error::perch version does not report ${GITHUB_REF_NAME}"; exit 1; }
+            first="$(printf '%s\n' "$out" | head -n 1 | tr -d '\r')"
+            if [ "$first" != "perch ${GITHUB_REF_NAME}" ]; then
+              echo "::error::perch version reports '${first}', expected 'perch ${GITHUB_REF_NAME}'"
+              exit 1
+            fi
           fi
 
       - name: Upload binary artifact

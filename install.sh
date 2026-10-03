@@ -33,6 +33,7 @@ UPGRADE=""
 
 # The GitHub repository that publishes the release binaries.
 PERCH_REPO_URL="https://github.com/miniature-pug/perch"
+PERCH_RAW_URL="https://raw.githubusercontent.com/miniature-pug/perch"
 
 # Remember where the user ran the script, so a relative --prefix resolves
 # against that directory and not against the repo root.
@@ -162,14 +163,44 @@ supports_install_desktop() {
   "$1" /nonexistent/.perch-usage-probe 2>&1 | grep -q 'perch install-desktop'
 }
 
+# is_png FILE: succeeds when FILE starts with the PNG signature.
+is_png() {
+  [ -s "$1" ] && [ "$(dd if="$1" bs=1 skip=1 count=3 2>/dev/null)" = "PNG" ]
+}
+
+# icon_source: set ICON_SRC to the perch icon to install. A checkout has
+# app/appicon.png next to this script. A standalone copy of the script (the
+# release-mode upgrade) fetches the icon of the release tag it installs,
+# best effort: the icon is cosmetic, so it is not checksummed, only checked
+# to be a PNG. Call it directly, never in $(...): ICON_TMP must reach
+# on_exit in this shell.
+icon_source() {
+  ICON_SRC=""
+  if [ -f "${REPO_ROOT}/app/appicon.png" ]; then
+    ICON_SRC="${REPO_ROOT}/app/appicon.png"
+    return 0
+  fi
+  [ -n "${RELEASE_TAG:-}" ] || return 1
+  if [ -z "${ICON_TMP:-}" ]; then
+    ICON_TMP="$(mktemp "${TMPDIR:-/tmp}/perch-icon.XXXXXX")" || return 1
+  fi
+  if curl -fsSL -o "$ICON_TMP" "${PERCH_RAW_URL}/${RELEASE_TAG}/app/appicon.png" 2>/dev/null \
+    && is_png "$ICON_TMP"; then
+    ICON_SRC="$ICON_TMP"
+    return 0
+  fi
+  return 1
+}
+
 # write_desktop_entry_inline BIN: the fallback for a perch binary without
-# the install-desktop subcommand. It writes the same files the subcommand
-# writes, each through a temp file and a rename, then refreshes the caches.
+# the install-desktop subcommand (v0.1.0 and older). It writes the same files
+# the subcommand writes, each through a temp file and a rename, then
+# refreshes the caches.
 write_desktop_entry_inline() {
-  _icon_src="${REPO_ROOT}/app/appicon.png"
-  if [ ! -f "$_icon_src" ]; then
-    printf '[warn]  no app/appicon.png next to this script; skipping the desktop entry\n'
-    printf '        Run "perch install-desktop" with a perch that has the subcommand.\n'
+  if ! icon_source; then
+    printf '[warn]  no perch icon available (no app/appicon.png next to this script, and the\n'
+    printf '        download failed); skipping the desktop entry. Run "perch install-desktop"\n'
+    printf '        with a perch that has the subcommand, or ./install.sh from a clone.\n'
     return 0
   fi
   _data="${XDG_DATA_HOME:-}"
@@ -178,14 +209,14 @@ write_desktop_entry_inline() {
     *) _data="${HOME}/.local/share" ;;
   esac
   # Exec quoting per the Desktop Entry spec: inside double quotes escape \ " `
-  # and $ with a backslash, double every %, then double every backslash again
-  # for the string-value escape layer.
+  # and $ with a backslash, then double every backslash again for the
+  # string-value escape layer. (desktop_entry already refused a path with %.)
   _exec="$(printf '%s' "$1" \
-    | sed -e 's/\\/\\\\/g' -e 's/["`$]/\\&/g' -e 's/%/%%/g' -e 's/\\/\\\\/g')"
+    | sed -e 's/\\/\\\\/g' -e 's/["`$]/\\&/g' -e 's/\\/\\\\/g')"
   _icon_dir="${_data}/icons/hicolor/512x512/apps"
   _apps_dir="${_data}/applications"
   mkdir -p "$_icon_dir" "$_apps_dir" || return 1
-  cp "$_icon_src" "${_icon_dir}/.perch.png.$$" \
+  cp "$ICON_SRC" "${_icon_dir}/.perch.png.$$" \
     && chmod 0644 "${_icon_dir}/.perch.png.$$" \
     && mv -f "${_icon_dir}/.perch.png.$$" "${_icon_dir}/perch.png" || return 1
   cat > "${_apps_dir}/.perch.desktop.$$" <<DESKTOP || return 1
@@ -202,8 +233,13 @@ DESKTOP
   chmod 0644 "${_apps_dir}/.perch.desktop.$$" \
     && mv -f "${_apps_dir}/.perch.desktop.$$" "${_apps_dir}/perch.desktop" || return 1
   # Best effort: GNOME also notices the files on its own, at the latest on
-  # the next login.
-  if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+  # the next login. As xdg-icon-resource does, bump the theme dir's mtime and
+  # refresh only an existing icon cache. Never create one: GTK checks a
+  # cache against the theme dir's mtime only, so a new user-level cache
+  # would hide icons other apps add to its size dirs later.
+  touch "${_data}/icons/hicolor" 2>/dev/null || true
+  if [ -f "${_data}/icons/hicolor/icon-theme.cache" ] \
+    && command -v gtk-update-icon-cache >/dev/null 2>&1; then
     run_bounded gtk-update-icon-cache -f -t "${_data}/icons/hicolor" >/dev/null 2>&1 || true
   fi
   if command -v update-desktop-database >/dev/null 2>&1; then
@@ -223,6 +259,15 @@ desktop_entry() {
     printf '[skip] desktop entry (no perch binary at %s)\n' "$_bin"
     return 0
   fi
+  case "$_bin" in
+    *%*)
+      # GLib resolves Exec's program before it expands %%, so GNOME drops
+      # an entry for such a path.
+      printf '[warn]  skipping the desktop entry: %s contains %%, which GNOME cannot launch\n' "$_bin"
+      printf '        from a .desktop entry. Install perch in a directory without %% in its path.\n'
+      return 0
+      ;;
+  esac
   # Under sudo, HOME is root's home: an entry written there is invisible to
   # the desktop user. Write it as the user who ran sudo instead.
   _as_user=""
@@ -267,13 +312,29 @@ perch_version() {
   fi
 }
 
-# version_core V: the numeric core of a tag or describe string
-# ("v1.2.3-rc1" -> "1.2.3").
+# version_core V: the numeric core of a release version or a describe
+# string built on one ("v1.2.3-rc1" -> "1.2.3"), or nothing for anything
+# else. "git describe --always" in a clone without tags gives a bare hash
+# ("527c10b"), and a build without ldflags reports "dev": neither is a
+# version, and a hash must never be read as a number.
 version_core() {
-  printf '%s' "$1" | sed -e 's/^v//' -e 's/[^0-9.].*$//'
+  case "$1" in
+    v[0-9]*.[0-9]*) ;;
+    *) return 0 ;;
+  esac
+  _vc="$(printf '%s' "$1" | sed -e 's/^v//' -e 's/[^0-9.].*$//')"
+  case "$_vc" in
+    [0-9]*.[0-9]*) printf '%s' "$_vc" ;;
+  esac
 }
 
-# version_newer A B: succeeds when A's numeric core is strictly newer than B's.
+# is_release_version V: succeeds when V is (or builds on) a vN.N tag.
+is_release_version() {
+  [ -n "$(version_core "$1")" ]
+}
+
+# version_newer A B: succeeds when A's numeric core is strictly newer than
+# B's. Fails when either is not a release version.
 version_newer() {
   _va="$(version_core "$1")"
   _vb="$(version_core "$2")"
@@ -322,8 +383,23 @@ resolve_upgrade_target() {
 make_upgrade_tmp() {
   UPGRADE_TMP="$(mktemp -d "${INSTALL_PREFIX}/.perch-upgrade.XXXXXX")" \
     || die "cannot create a temp directory in ${INSTALL_PREFIX}"
-  trap 'rm -rf "$UPGRADE_TMP"' EXIT
-  trap 'exit 130' INT TERM
+}
+
+# installed_rev: the commit the installed perch was built from, when its
+# version is a bare hash ("527c10b" or "527c10b-dirty") this clone knows;
+# otherwise HEAD.
+installed_rev() {
+  _h="${OLD_VERSION%-dirty}"
+  case "$_h" in
+    '' | *[!0-9a-f]*) ;;
+    *)
+      if git -C "$REPO_ROOT" rev-parse --verify -q "${_h}^{commit}" >/dev/null 2>&1; then
+        printf '%s' "$_h"
+        return 0
+      fi
+      ;;
+  esac
+  printf 'HEAD'
 }
 
 # exit_if_current TAG: stop when the installed perch is already TAG, or is a
@@ -334,18 +410,44 @@ exit_if_current() {
     desktop_entry "$TARGET"
     exit 0
   fi
-  case "$OLD_VERSION" in
-    "$1"-[0-9]*-g*)
-      printf '[ok]    perch %s at %s is ahead of the newest release %s; nothing to upgrade\n' \
+  if [ -z "$OLD_VERSION" ]; then
+    return 0
+  fi
+  if is_release_version "$OLD_VERSION"; then
+    case "$OLD_VERSION" in
+      "$1"-[0-9]*-g*)
+        printf '[ok]    perch %s at %s is ahead of the newest release %s; nothing to upgrade\n' \
+          "$OLD_VERSION" "$TARGET" "$1"
+        exit 0
+        ;;
+    esac
+    if version_newer "$OLD_VERSION" "$1"; then
+      printf '[ok]    perch %s at %s is newer than the newest release %s; nothing to upgrade\n' \
         "$OLD_VERSION" "$TARGET" "$1"
       exit 0
-      ;;
-  esac
-  if [ -n "$OLD_VERSION" ] && version_newer "$OLD_VERSION" "$1"; then
-    printf '[ok]    perch %s at %s is newer than the newest release %s; nothing to upgrade\n' \
-      "$OLD_VERSION" "$TARGET" "$1"
-    exit 0
+    fi
+    return 0
   fi
+  # Not a release version: a bare commit hash or "dev". Source mode asks git
+  # whether that build (or, failing that, this checkout) already contains
+  # the tag. Release mode cannot tell, so it upgrades.
+  if [ "$UPGRADE" = "source" ]; then
+    _rev="$(installed_rev)"
+    if git -C "$REPO_ROOT" merge-base --is-ancestor "$1" "$_rev" 2>/dev/null; then
+      if [ "$_rev" = "HEAD" ]; then
+        printf '[ok]    this checkout already contains %s (installed perch reports "%s"); nothing to upgrade\n' \
+          "$1" "$OLD_VERSION"
+        printf '        Run ./install.sh (without --upgrade) to install this checkout as it is.\n'
+      else
+        printf '[ok]    perch %s at %s already contains %s; nothing to upgrade\n' \
+          "$OLD_VERSION" "$TARGET" "$1"
+      fi
+      exit 0
+    fi
+    return 0
+  fi
+  printf '[upgrade] installed perch reports "%s", which is not a release version; installing %s\n' \
+    "$OLD_VERSION" "$1"
 }
 
 # smoke_test BIN: BIN must run and report NEW_TAG. Sets NEW_VERSION.
@@ -409,6 +511,8 @@ upgrade_release() {
     v[0-9]*) ;;
     *) die "no published release found (${PERCH_REPO_URL}/releases/latest resolved to ${_latest})" ;;
   esac
+  # The inline desktop-entry fallback fetches this tag's icon.
+  RELEASE_TAG="$NEW_TAG"
   printf '[upgrade] newest release: %s; installed: %s\n' "$NEW_TAG" "${OLD_VERSION:-(none)}"
   exit_if_current "$NEW_TAG"
 
@@ -441,9 +545,24 @@ upgrade_release() {
   finish_upgrade
 }
 
-# upgrade_source_checkout: in a clean checkout, fetch tags and check out the
-# newest stable v* tag. The normal build path then builds it.
-upgrade_source_checkout() {
+# upgrade_source_resolve: in a clean checkout this user owns, fetch tags and
+# pick the newest stable v* tag. Exits when there is nothing to upgrade.
+# Nothing in the checkout changes yet.
+upgrade_source_resolve() {
+  # As root (sudo), git, npm and go would leave root-owned objects, refs and
+  # build output in a clone another user owns, and break that user's next
+  # fetch. Refuse instead of half-working. (Checked before any git call:
+  # git itself may refuse a repository another user owns.)
+  if [ "$(id -u)" = "0" ] && [ -e "${REPO_ROOT}/.git" ]; then
+    _owner="$(stat -c %u "${REPO_ROOT}/.git" 2>/dev/null || stat -f %u "${REPO_ROOT}/.git" 2>/dev/null || true)"
+    if [ -n "$_owner" ] && [ "$_owner" != "0" ]; then
+      printf 'error: refusing --upgrade=source as root: the checkout at %s belongs to uid %s,\n' "$REPO_ROOT" "$_owner" >&2
+      printf 'and git, npm and go would leave root-owned files in it. Either:\n' >&2
+      printf "  - re-run without sudo: ./install.sh --upgrade --prefix=\"\$HOME/.local/bin\"\n" >&2
+      printf '  - or upgrade from the release binary: sudo ./install.sh --upgrade=release\n' >&2
+      exit 1
+    fi
+  fi
   in_checkout || die "--upgrade=source must run from a perch git checkout; ${REPO_ROOT} is not one"
   if [ -n "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no)" ]; then
     die "the checkout at ${REPO_ROOT} has uncommitted changes. Commit or stash them, then re-run."
@@ -455,11 +574,45 @@ upgrade_source_checkout() {
   [ -n "$NEW_TAG" ] || die "no v* release tag found in ${REPO_ROOT}"
   printf '[upgrade] newest release tag: %s; installed: %s\n' "$NEW_TAG" "${OLD_VERSION:-(none)}"
   exit_if_current "$NEW_TAG"
-  if [ "$(git -C "$REPO_ROOT" rev-parse HEAD)" != "$(git -C "$REPO_ROOT" rev-parse "${NEW_TAG}^{commit}")" ]; then
-    _from="$(git -C "$REPO_ROOT" symbolic-ref --short -q HEAD || git -C "$REPO_ROOT" rev-parse --short HEAD)"
-    git -C "$REPO_ROOT" checkout --quiet "$NEW_TAG" || die "cannot check out ${NEW_TAG}"
-    printf '[upgrade] checked out %s (was %s). "git checkout %s" returns to it.\n' \
-      "$NEW_TAG" "$_from" "$_from"
+}
+
+# upgrade_source_checkout: check out NEW_TAG, after the prerequisite checks
+# passed. RESTORE_REF makes on_exit return the checkout to the original
+# branch (or commit) if anything later fails.
+upgrade_source_checkout() {
+  if [ "$(git -C "$REPO_ROOT" rev-parse HEAD)" = "$(git -C "$REPO_ROOT" rev-parse "${NEW_TAG}^{commit}")" ]; then
+    return 0
+  fi
+  _from="$(git -C "$REPO_ROOT" symbolic-ref --short -q HEAD || git -C "$REPO_ROOT" rev-parse HEAD)"
+  git -C "$REPO_ROOT" checkout --quiet "$NEW_TAG" || die "cannot check out ${NEW_TAG}"
+  RESTORE_REF="$_from"
+  printf '[upgrade] checked out %s (was %s)\n' "$NEW_TAG" "$_from"
+}
+
+# on_exit: the one EXIT trap. It removes temp files, restores the tracked
+# frontend/dist stub that a build overwrote, and, when a source upgrade
+# fails after its checkout, returns the checkout to the original ref.
+on_exit() {
+  _rc=$?
+  if [ -n "${UPGRADE_TMP:-}" ]; then
+    rm -rf "$UPGRADE_TMP"
+  fi
+  if [ -n "${ICON_TMP:-}" ]; then
+    rm -f "$ICON_TMP"
+  fi
+  if [ -n "${GO_TMPFILE:-}" ] || [ -n "${GO_STAGE_DIR:-}" ]; then
+    $SUDO rm -rf "${GO_TMPFILE:-}" "${GO_STAGE_DIR:-}"
+  fi
+  if [ "${DIST_TOUCHED:-0}" = "1" ]; then
+    git -C "$REPO_ROOT" checkout -- frontend/dist/index.html 2>/dev/null || true
+  fi
+  if [ "$_rc" -ne 0 ] && [ -n "${RESTORE_REF:-}" ]; then
+    if git -C "$REPO_ROOT" checkout --quiet "$RESTORE_REF" 2>/dev/null; then
+      printf '[upgrade] failed; returned the checkout to %s\n' "$RESTORE_REF" >&2
+    else
+      printf '[warn]  could not return the checkout to %s; run: git checkout %s\n' \
+        "$RESTORE_REF" "$RESTORE_REF" >&2
+    fi
   fi
 }
 
@@ -469,6 +622,9 @@ if [ "$(id -u)" = "0" ]; then
 else
   SUDO="sudo"
 fi
+
+trap on_exit EXIT
+trap 'exit 130' INT TERM
 
 # ---------------------------------------------------------------------------
 # Architecture / OS detection
@@ -532,11 +688,16 @@ fi
 
 # ---------------------------------------------------------------------------
 # --upgrade: release mode replaces the binary here and exits. Source mode
-# checks out the newest tag here, then continues through the normal build
-# (agents are left alone) into a temp file, and swaps it in at Step 6.
+# resolves the newest tag here, checks it out after the preflight below
+# passes, then continues through the normal build (agents are left alone)
+# into a temp file, and swaps it in at Step 6. If anything fails after the
+# checkout, on_exit returns the clone to its original branch.
 # ---------------------------------------------------------------------------
 if [ "$UPGRADE" = "auto" ]; then
-  if in_checkout; then
+  # A clone is recognised by its files, not by asking git, so a clone git
+  # distrusts (another user's, under sudo) still picks source mode and gets
+  # its clear refusal rather than a silent switch to release mode.
+  if [ -f "${REPO_ROOT}/cmd/perch/main.go" ] && [ -e "${REPO_ROOT}/.git" ]; then
     UPGRADE="source"
   else
     UPGRADE="release"
@@ -549,7 +710,7 @@ if [ -n "$UPGRADE" ]; then
     upgrade_release
     exit 0
   fi
-  upgrade_source_checkout
+  upgrade_source_resolve
   SKIP_AGENTS=1
 fi
 
@@ -604,6 +765,10 @@ if [ "$SKIP_BUILD" != "1" ]; then
     exit 1
   fi
   printf '[ok]    node %s and npm present\n' "$_node_ver"
+fi
+
+if [ "$UPGRADE" = "source" ]; then
+  upgrade_source_checkout
 fi
 
 # ---------------------------------------------------------------------------
@@ -663,8 +828,10 @@ else
   TMPFILE="$(mktemp "${TMPDIR:-/tmp}/go-install.XXXXXX")"
   # Use a staging directory on the same filesystem as /usr/local, so the move is atomic.
   STAGE_DIR="/usr/local/.perch-go-$$"
-  # Remove the temp file and staging directory on any exit, including on errors.
-  trap '$SUDO rm -rf "$TMPFILE" "$STAGE_DIR"' EXIT
+  # on_exit removes the temp file and staging directory on any exit,
+  # including on errors.
+  GO_TMPFILE="$TMPFILE"
+  GO_STAGE_DIR="$STAGE_DIR"
 
   curl -fsSL -o "$TMPFILE" "$DOWNLOAD_URL" \
     || die "Failed to download Go tarball from ${DOWNLOAD_URL}"
@@ -693,10 +860,11 @@ else
   $SUDO rm -rf /usr/local/go
   $SUDO mv "${STAGE_DIR}/go" /usr/local/go
 
-  # Clean up temp files now. The trap also fires on EXIT, but this cleans up sooner.
+  # Clean up temp files now, rather than on exit.
   rm -f "$TMPFILE"
   $SUDO rm -rf "$STAGE_DIR"
-  trap '' EXIT
+  GO_TMPFILE=""
+  GO_STAGE_DIR=""
 
   printf '[ok]    go %s installed at /usr/local/go\n' "$GO_VERSION"
 fi
@@ -845,12 +1013,20 @@ else
   fi
   printf '[install] building perch -> %s/perch\n' "$INSTALL_PREFIX"
   cd "$REPO_ROOT" || die "Cannot cd to repo root: ${REPO_ROOT}"
-  PERCH_VERSION="$(git describe --tags --always 2>/dev/null || printf 'dev')"
+  if [ "$UPGRADE" = "source" ]; then
+    # Stamp the tag itself. git describe could name another tag on the same
+    # commit (say an annotated v1.0.0-rc1 next to a lightweight v1.0.0), and
+    # the smoke test requires exactly NEW_TAG.
+    PERCH_VERSION="$NEW_TAG"
+  else
+    PERCH_VERSION="$(git describe --tags --always 2>/dev/null || printf 'dev')"
+  fi
 
   # The committed frontend/dist/index.html is only a go:embed stub, and app.Run
   # refuses to start with it. Build the real frontend first, as `make
-  # gui-build` does.
+  # gui-build` does. on_exit restores the stub if the build fails.
   printf '[install] building frontend (npm ci && npm run build)\n'
+  DIST_TOUCHED=1
   npm --prefix frontend ci || die "npm ci failed in frontend/"
   npm --prefix frontend run build || die "npm run build failed in frontend/"
   if [ ! -s frontend/dist/index.html ] || ! grep -q '<script' frontend/dist/index.html; then
@@ -864,10 +1040,17 @@ else
   # vite overwrote the tracked stub. The binary already embeds the real index,
   # so restore the stub to leave the work tree clean.
   git -C "$REPO_ROOT" checkout -- frontend/dist/index.html 2>/dev/null || true
+  DIST_TOUCHED=0
 
   if [ "$UPGRADE" = "source" ]; then
     smoke_test "$BUILD_OUT"
     swap_in "$BUILD_OUT"
+    # The new binary is in place: keep the checkout on the tag it came from.
+    if [ -n "${RESTORE_REF:-}" ]; then
+      printf '[upgrade] the checkout stays at %s; "git checkout %s" returns to where it was\n' \
+        "$NEW_TAG" "$RESTORE_REF"
+      RESTORE_REF=""
+    fi
   else
     "$BUILD_OUT" version >/dev/null 2>&1 \
       || die "the built binary at ${BUILD_OUT} does not run"
