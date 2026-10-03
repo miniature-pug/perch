@@ -24,8 +24,9 @@ const worktreeDirSuffix = "__worktrees"
 // agree on scope. start is the absolute launch directory (cwd, or the
 // path given on the command line); explicit reports that the user named it.
 //
-//   - config.toml roots win. An explicitly named directory is added in front
-//     of them, so `perch <path>` always covers <path>.
+//   - config.toml roots win. The roots of an explicitly named directory
+//     (see implicitRoots) are added in front of them, so `perch <path>`
+//     always covers <path> and its worktree sessions.
 //   - With no configured roots, start is the only root, plus its sibling
 //     "<repo>__worktrees" directory when start is a repository, so the
 //     default worktree sessions of a `perch` launched inside a repo stay
@@ -45,21 +46,37 @@ func guiRoots(start string, explicit bool, stderr io.Writer) []string {
 	if !explicit {
 		return configured
 	}
-	roots := []string{start}
+	roots := implicitRoots(start)
+	seen := map[string]bool{}
+	for _, r := range roots {
+		seen[r] = true
+	}
 	for _, r := range configured {
-		if r != start {
+		if !seen[r] {
+			seen[r] = true
 			roots = append(roots, r)
 		}
 	}
 	return roots
 }
 
-// implicitRoots returns dir, plus its sibling worktree directory when dir is
-// the top of a git repository or linked worktree.
+// implicitRoots returns the roots that cover dir: dir itself, its
+// symlink-resolved spelling when that differs, and, when dir is the top of a
+// git repository or linked worktree, the sibling worktree directory of the
+// resolved spelling. Discovery reports repositories by their resolved path,
+// so worktree paths are derived from it; the sibling spelled through a
+// symlink (which need not exist yet) would not contain them.
 func implicitRoots(dir string) []string {
 	roots := []string{dir}
+	resolved := dir
+	if r, err := filepath.EvalSymlinks(dir); err == nil {
+		resolved = r
+	}
+	if resolved != dir {
+		roots = append(roots, resolved)
+	}
 	if _, err := os.Lstat(filepath.Join(dir, ".git")); err == nil {
-		roots = append(roots, filepath.Join(filepath.Dir(dir), filepath.Base(dir)+worktreeDirSuffix))
+		roots = append(roots, filepath.Join(filepath.Dir(resolved), filepath.Base(resolved)+worktreeDirSuffix))
 	}
 	return roots
 }

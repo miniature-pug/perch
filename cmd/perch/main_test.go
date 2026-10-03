@@ -8,14 +8,17 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/miniature-pug/perch/app"
 	"github.com/miniature-pug/perch/internal/discover"
 	"github.com/miniature-pug/perch/internal/envsync"
 	"github.com/miniature-pug/perch/internal/model"
+	"github.com/miniature-pug/perch/internal/registry"
 )
 
 // helper executes run and returns stdout, stderr, and the exit code.
@@ -548,5 +551,65 @@ func TestRun_RelativePath_PassesAbsoluteRoot(t *testing.T) {
 	}
 	if len(gotRoots) == 0 || !filepath.IsAbs(gotRoots[0]) {
 		t.Errorf("roots = %v, want an absolute first root", gotRoots)
+	}
+}
+
+// initCommittedRepo creates a git repo with one commit at dir.
+func initCommittedRepo(t *testing.T, dir string) {
+	t.Helper()
+	for _, args := range [][]string{{"init", "-q", dir}, {"-C", dir, "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q", "--allow-empty", "-m", "i"}} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+}
+
+// TestGuiRoots_SymlinkedLaunchDirCoversWorktrees is the review #3
+// regression guard: launched in a repo reached through a symlinked
+// directory, discovery reports the resolved repo path, so the worktree path
+// is resolved too, and the roots must cover it.
+func TestGuiRoots_SymlinkedLaunchDirCoversWorktrees(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	real := t.TempDir()
+	initCommittedRepo(t, filepath.Join(real, "r"))
+	link := filepath.Join(t.TempDir(), "code")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	roots := guiRoots(filepath.Join(link, "r"), false, io.Discard)
+	store, err := registry.Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := app.NewApp(store, roots)
+	repos, err := a.DiscoverRepos()
+	if err != nil || len(repos) == 0 {
+		t.Fatalf("DiscoverRepos = %v, %v", repos, err)
+	}
+	if _, err := a.CreateWorkspace("claude", repos[0].Path, "HEAD", "feat-x", "", true); err != nil {
+		t.Errorf("CreateWorkspace(worktree) from a symlinked launch dir (roots %v): %v", roots, err)
+	}
+}
+
+// TestGuiRoots_ExplicitRepoWithConfigCoversWorktrees is the review #4
+// regression guard: `perch <repo>` with configured roots also covers the
+// repo's sibling worktree directory.
+func TestGuiRoots_ExplicitRepoWithConfigCoversWorktrees(t *testing.T) {
+	cfgHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfgHome)
+	configured := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cfgHome, "perch"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgHome, "perch", "config.toml"), []byte(fmt.Sprintf("roots = [%q]\n", configured)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	repo := filepath.Join(t.TempDir(), "r")
+	initCommittedRepo(t, repo)
+	roots := guiRoots(repo, true, io.Discard)
+	want := []string{repo, repo + "__worktrees", configured}
+	if strings.Join(roots, "|") != strings.Join(want, "|") {
+		t.Errorf("roots = %v, want %v", roots, want)
 	}
 }
