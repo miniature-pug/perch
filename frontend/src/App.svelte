@@ -244,8 +244,12 @@
   // tracks mountedWorkspaces and workspaces. The mutations run untracked, so writing
   // shellStatesFor never re-invalidates this effect. The effect converges once every
   // mounted session is seeded and no stale ids remain.
+  //
+  // Only a session opened this run gets shells. A split session restored from
+  // layout.json is mounted as a backstop but is still cold, and must not spawn
+  // a login shell just by being on screen (FEC-12).
   $effect(() => {
-    const mountedIds = mountedWorkspaces.map(w => w.id);
+    const mountedIds = mountedWorkspaces.map(w => w.id).filter(id => openIds.has(id) || everOpened.has(id));
     const liveIds = new Set(workspaces.map(w => w.id));
     untrack(() => {
       for (const id of mountedIds) if (!shellStatesFor[id] && !shellsClosed.has(id)) shellStatesFor[id] = initShellState(id);

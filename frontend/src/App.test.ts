@@ -5680,6 +5680,17 @@ describe("audit regressions: session lifecycle and notifications", () => {
     await waitFor(() => expect(screen.queryByTestId("pane-cold")).toBeNull());
   });
 
+  it("FEC-12: a cold split session (e.g. restored from layout.json) spawns no shell", async () => {
+    await mountWith();
+    await openAlpha();
+    const { layout } = await import("./lib/stores/layout.svelte");
+    layout.setSplit(true);
+    layout.setSplitId("ws-2");
+    await tick(); await tick();
+    const probes = Array.from(document.querySelectorAll("[data-zone='shell-drawer'] [data-testid='shell-drawer-probe']"));
+    expect(probes.map((p) => p.getAttribute("data-pane-id"))).toEqual(["shell-ws-1"]);
+  });
+
   it("FEC-14: after Close session, a shell exiting does not spawn a replacement shell", async () => {
     await mountWith();
     await openAlpha();
