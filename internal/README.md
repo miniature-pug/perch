@@ -20,6 +20,7 @@ exposes them to the frontend. For how the packages interact, see
 | `doctor` | The `perch doctor` health check for `go`, `git`, and the agents, with OS calls injected for testing. | `Run`, `RealSystem`, `ParseToolVersions` |
 | `config` | The single-layer global TOML config that exposes the project roots. | `Config`, `Load`, `DefaultGlobalPath` |
 | `model` | Shared domain vocabulary as pure data, no I/O. | `Tool`, `ToolClaude`, `ToolOpencode`, `Project`, `Tree` |
+| `desktop` | The per-user freedesktop.org integration: the hicolor icon and `perch.desktop`, written atomically, with best-effort cache refresh. | `Install`, `InstallIcon`, `Options`, `Status`, `IsInstalled`, `NeedsUpdate`, `IconMissing`, `DefaultPaths`, `ExecValue` |
 | `proc` | The subprocess seam every shell-out goes through. | `Runner`, `ExecRunner`, `FakeRunner` |
 
 ## Conventions

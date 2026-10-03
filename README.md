@@ -106,6 +106,11 @@ the binary. If `perch` is not found, add `~/.local/bin` to your `PATH`. Keep
 the binary in a directory whose path has no `%` in it, because GNOME cannot
 launch such a path from a `.desktop` entry.
 
+When the GUI starts and finds no `perch.desktop`, or one whose `Exec` target
+no longer exists, it installs the entry in the background. It never rewrites
+an entry that launches another working binary, and it does nothing as root or
+when `PERCH_NO_DESKTOP_ENTRY` is set.
+
 Releases up to v0.1.0 predate `install-desktop`. On those, the command
 prints `perch: "install-desktop" is not an existing directory` followed by
 the usage. If you see that, install the entry with `install.sh` instead. It
