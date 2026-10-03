@@ -1527,6 +1527,17 @@
       }
       // New session: the one-key entry point matching the sidebar CTA and menu (F23).
       case "n": e.preventDefault(); openNewSession(); break;
+      // Focus the pending approval card. It never decides: the card is armed
+      // again, and a / d inside it decide (FEC-3). Keys typed into the card
+      // itself are its own.
+      case "a": {
+        if (t?.closest?.("[data-zone='approval-dock']")) break;
+        if (active && active.caps.approvals && approvals[active.id]?.[0]) {
+          e.preventDefault();
+          approvalCardRef?.focusCard();
+        }
+        break;
+      }
       // Remove the active session. This opens the CANCELABLE confirm dialog
       // instead of acting right away, so a stray keypress can never destroy a
       // worktree, since tmux-style `x` means kill or remove. The lone destructive
@@ -1614,6 +1625,8 @@
   // Post-grant "Always allow" toast. `rules` is empty when the added rule
   // could not be identified; the toast then points at Settings instead of
   // offering an Undo that would do nothing.
+  // The docked approval card, for the NORMAL-mode `a` focus shortcut.
+  let approvalCardRef = $state<{ focusCard: () => void } | undefined>();
   let alwaysToast = $state<{ tool: string; rules: AlwaysRule[] } | null>(null);
   let alwaysToastTimer: ReturnType<typeof setTimeout> | undefined;
   function showAlwaysToast(tool: string, rules: AlwaysRule[]) {
@@ -2039,7 +2052,7 @@
              keyboard arming delay, and no focus or pending keypress carried
              over from the request before it (FEC-16). -->
         {#key headReq.reqId}
-          <ApprovalCard
+          <ApprovalCard bind:this={approvalCardRef}
             req={headReq}
             sessionCount={approvals[active.id].length}
             queue={approvals[active.id] ?? []}

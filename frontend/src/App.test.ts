@@ -5359,6 +5359,26 @@ describe("audit regressions: approvals", () => {
     expect(screen.queryByTestId("always-toast")).toBeNull();
   });
 
+  it("FEC-3: NORMAL-mode `a` only focuses the pending card; it never decides", async () => {
+    const { approve } = await import("./lib/wails");
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    try {
+      input.focus();
+      await openAlphaWithApproval({ reqId: "req-n", tool: "Bash", summary: "make" });
+      input.blur();
+      vi.mocked(approve).mockClear();
+      await fireEvent.keyDown(document.body, { key: "a" });
+      const allow = screen.getByRole("button", { name: "Allow" });
+      expect(document.activeElement).toBe(allow);
+      // The same key again, right away, is still held back by the re-armed card.
+      await fireEvent.keyDown(allow, { key: "a" });
+      expect(approve).not.toHaveBeenCalled();
+    } finally {
+      input.remove();
+    }
+  });
+
   it("FEC-3: an approval arriving while an input has focus does not take focus", async () => {
     const input = document.createElement("input");
     document.body.appendChild(input);

@@ -51,9 +51,17 @@
   // editor, a terminal, or any input stays where it is, so ordinary typing
   // can never approve or deny a request the user has not read (FEC-3,
   // FEX-8). The user can Tab or click to the card.
+  let allowBtn = $state<HTMLButtonElement | undefined>();
   function focusIfIdle(node: HTMLElement) {
     const a = document.activeElement;
     if (!a || a === document.body || a === document.documentElement) node.focus();
+  }
+
+  /** Move focus to the card on an explicit request (App's NORMAL-mode `a`).
+      Re-arms the delay, so the same keypress, repeated, cannot also decide. */
+  export function focusCard(): void {
+    armedAt = Date.now() + APPROVAL_ARM_MS;
+    allowBtn?.focus();
   }
 
   // Single-key accelerators. They work only while the card holds focus, and
@@ -122,7 +130,7 @@
       </p>
     {/if}
     <div class="approval-actions">
-      <button class="btn btn-primary" onclick={(e) => clickDecision(e, "allow")} disabled={deciding} use:focusIfIdle>Allow</button>
+      <button class="btn btn-primary" bind:this={allowBtn} onclick={(e) => clickDecision(e, "allow")} disabled={deciding} use:focusIfIdle>Allow</button>
       <button class="btn" onclick={(e) => clickDecision(e, "deny")} disabled={deciding}>Deny</button>
       <button class="btn btn-always" onclick={(e) => clickDecision(e, "always")} disabled={deciding}
               title="Adds a standing rule so this tool is auto-approved for this agent. You can undo it right after.">Always allow</button>
