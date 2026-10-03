@@ -3,6 +3,7 @@ package pty
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"os"
@@ -31,18 +32,30 @@ type Bridge struct {
 	// app.OpenWorkspace). A genuine exit must still emit, so suppressExit
 	// stays false on every normally-closed bridge.
 	suppressExit bool
+	// reaped is set under mu by the reaper once the shell has exited and is
+	// about to be reaped. After that its pid may be reused, so closer must
+	// not signal it, its process group, or its session any more.
+	reaped bool
+	// pid is the shell's pid (0 for a test bridge without a process).
+	pid int
 }
 
+// Write sends p to the pty. Write does not hold mu while it writes: a
+// foreground program in raw mode that is not reading lets a large paste
+// block in the kernel, and Close, Resize and the reaper must not wait behind
+// it. Close closes the pty after killing the session, which ends a blocked
+// write.
 func (b *Bridge) Write(p []byte) (int, error) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.writeFn != nil {
-		return b.writeFn(p)
+	writeFn, f := b.writeFn, b.ptyFile
+	b.mu.Unlock()
+	if writeFn != nil {
+		return writeFn(p)
 	}
-	if b.ptyFile == nil {
+	if f == nil {
 		return 0, os.ErrClosed
 	}
-	return b.ptyFile.Write(p)
+	return f.Write(p)
 }
 
 // OverrideWriteForTest replaces the pty write target with fn. This function
@@ -113,8 +126,14 @@ func LoginShellArgv() []string {
 // maxChunk each). When the process exits, whether naturally or through
 // Close, emit fires exitEvent with a map payload {"code": <int>}. code holds
 // the process exit code, or -1 on a signal death or a forced close. Spawn
-// uses no tmux. Closing the returned Bridge kills the process group. The
-// reaper goroutine owns the single cmd.Wait call.
+// uses no tmux. The reaper goroutine owns the single cmd.Wait call.
+//
+// Closing the returned Bridge kills every process in the shell's session:
+// the shell's own process group, and also the background jobs, which an
+// interactive shell puts in process groups of their own (`npm run dev &`).
+// Only processes that started a new session of their own (daemons) escape.
+// Once the shell has exited and been reaped, Close no longer signals
+// anything, because the kernel may have reused its pid.
 //
 // When env is non-nil, it becomes the child process environment verbatim.
 // Callers that want to ADD variables must pass
@@ -122,6 +141,19 @@ func LoginShellArgv() []string {
 // nil env leaves cmd.Env unset, so Go inherits the current process
 // environment unchanged (the plain-shell case).
 func Spawn(ctx context.Context, cwd string, argv []string, env []string, dataEvent, exitEvent string, emit EmitFunc, cols, rows uint16) (*Bridge, error) {
+	return spawn(ctx, cwd, argv, env, dataEvent, exitEvent, emit, cols, rows, intsPayload)
+}
+
+// SpawnBase64 is Spawn, except that each dataEvent payload is the chunk as a
+// standard base64 string instead of a []int. A []int costs about four JSON
+// bytes per output byte and a large allocation per chunk; base64 costs 4/3.
+// The frontend decodes it with
+// Uint8Array.from(atob(s), (c) => c.charCodeAt(0)).
+func SpawnBase64(ctx context.Context, cwd string, argv []string, env []string, dataEvent, exitEvent string, emit EmitFunc, cols, rows uint16) (*Bridge, error) {
+	return spawn(ctx, cwd, argv, env, dataEvent, exitEvent, emit, cols, rows, base64Payload)
+}
+
+func spawn(ctx context.Context, cwd string, argv []string, env []string, dataEvent, exitEvent string, emit EmitFunc, cols, rows uint16, encode func([]byte) any) (*Bridge, error) {
 	if len(argv) == 0 {
 		return nil, fmt.Errorf("pty Spawn: argv must not be empty")
 	}
@@ -136,29 +168,36 @@ func Spawn(ctx context.Context, cwd string, argv []string, env []string, dataEve
 	}
 	b := &Bridge{
 		ptyFile: f,
+		pid:     cmd.Process.Pid,
 		setsize: func(c, r uint16) error {
 			return creackpty.Setsize(f, &creackpty.Winsize{Cols: c, Rows: r})
 		},
-		closer: func() error {
-			// Send SIGKILL to the whole process group BEFORE closing the pty
-			// master fd. Closing first would unblock pumpReader → the reaper
-			// goroutine calls cmd.Wait() → the kernel can reap the pid and could
-			// reuse it before the Kill reaches the (now stale) pgid. Killing
-			// first guarantees the signal targets the correct group.
-			// Fall back to killing just the process on any Kill error.
-			if cmd.Process != nil {
-				if perr := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); perr != nil {
-					_ = cmd.Process.Kill()
-				}
+	}
+	// closer runs with b.mu held (see Close).
+	b.closer = func() error {
+		// Kill BEFORE closing the pty master fd. Closing first would unblock
+		// pumpReader, and the reaper could reap the shell, freeing its pid
+		// for reuse before the signals land. The reaper sets b.reaped under
+		// b.mu before it reaps, so while b.reaped is false the shell is
+		// still alive or an unreaped zombie: its pid, process group id and
+		// session id cannot belong to anyone else.
+		if cmd.Process != nil && !b.reaped {
+			pid := cmd.Process.Pid
+			if perr := syscall.Kill(-pid, syscall.SIGKILL); perr != nil {
+				_ = cmd.Process.Kill()
 			}
-			// Close the pty master fd after the kill, so pumpReader unblocks and
-			// the reaper goroutine can proceed with cmd.Wait().
-			// NOTE: cmd.Wait() is NOT called here. The reaper goroutine below is
-			// the single Wait site. Calling Wait in two places yields an
-			// incorrect ProcessState on the second call. This function must
-			// never call Wait.
-			return f.Close()
-		},
+			// creack/pty makes the shell a session leader, so the session id
+			// is its pid. Background jobs live in other process groups of
+			// that session and survive the group kill above.
+			killSession(pid)
+		}
+		// Close the pty master fd after the kill, so pumpReader unblocks and
+		// the reaper goroutine can proceed with cmd.Wait().
+		// NOTE: cmd.Wait() is NOT called here. The reaper goroutine below is
+		// the single Wait site. Calling Wait in two places yields an
+		// incorrect ProcessState on the second call. This function must
+		// never call Wait.
+		return f.Close()
 	}
 	go func() {
 		defer safe.Recover("pty-reaper")
@@ -168,10 +207,17 @@ func Spawn(ctx context.Context, cwd string, argv []string, env []string, dataEve
 		// reaped below. A panicking reader must never leak the process.
 		func() {
 			defer safe.Recover("pty-pump")
-			pumpReader(f, dataEvent, emit, maxChunk)
+			pump(f, dataEvent, emit, maxChunk, encode)
 		}()
-		// Pump returned ⇒ pty EOF ⇒ the process is ending. This is the single
-		// Wait site (no race).
+		// Pump returned ⇒ pty EOF ⇒ the process is ending. Wait for it to
+		// exit WITHOUT reaping it, then mark it reaped under b.mu, and only
+		// then reap it. A concurrent Close therefore either finishes its
+		// kills while the pid is still reserved, or sees b.reaped and skips
+		// them. This is the single Wait site (no race).
+		waitExited(cmd.Process.Pid)
+		b.mu.Lock()
+		b.reaped = true
+		b.mu.Unlock()
 		_ = cmd.Wait()
 		code := -1 // signal death (forced Close / ctx kill) reports -1
 		if cmd.ProcessState != nil {
@@ -208,16 +254,32 @@ func NewBridgeForTestWithResize(closer func() error, resize func(cols, rows uint
 	return &Bridge{closer: closer, setsize: resize}
 }
 
+// intsPayload encodes a chunk as one int per byte (Spawn's format).
+func intsPayload(chunk []byte) any {
+	out := make([]int, len(chunk))
+	for i, c := range chunk {
+		out[i] = int(c)
+	}
+	return out
+}
+
+// base64Payload encodes a chunk as a standard base64 string (SpawnBase64's format).
+func base64Payload(chunk []byte) any {
+	return base64.StdEncoding.EncodeToString(chunk)
+}
+
 func pumpReader(r io.Reader, event string, emit EmitFunc, maxChunk int) {
+	pump(r, event, emit, maxChunk, intsPayload)
+}
+
+// pump reads r until an error, and emits each chunk read (at most maxChunk
+// bytes) on event, encoded by encode.
+func pump(r io.Reader, event string, emit EmitFunc, maxChunk int, encode func([]byte) any) {
 	buf := make([]byte, maxChunk)
 	for {
 		n, err := r.Read(buf)
 		if n > 0 {
-			out := make([]int, n)
-			for i := 0; i < n; i++ {
-				out[i] = int(buf[i])
-			}
-			emit(event, out)
+			emit(event, encode(buf[:n]))
 		}
 		if err != nil {
 			return

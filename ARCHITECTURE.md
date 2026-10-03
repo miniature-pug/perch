@@ -133,8 +133,11 @@ carries an exit sentinel. After the agent command, the shell captures `$?` and
 pings a loopback listener. The Monitor translates this into the `exited` state. The listener's token and
 URL reach the shell through its process environment (`Monitor.PaneEnv`,
 injected at spawn) rather than the typed line, which the interactive shell
-would echo. Closing the bridge kills the whole process group, so the shell's
-children die with it.
+would echo. Closing the bridge kills every process in the shell's session:
+the shell's own process group and the background jobs that job control put
+in groups of their own. Only a process that started a new session (a daemon)
+escapes. Once the shell has exited and been reaped, closing signals nothing,
+because its pid may have been reused.
 
 ### The agent Monitor seam
 
@@ -218,7 +221,12 @@ type Runner interface {
 }
 ```
 
-Production code uses `ExecRunner`, which wraps `os/exec`. Unit tests inject
+Production code uses `ExecRunner`, which wraps `os/exec`. It runs each command
+in its own process group and kills the whole group when the context ends, so
+hooks git started die with it, and it waits at most two seconds for output
+pipes a lingering grandchild still holds. git runs with
+`GIT_OPTIONAL_LOCKS=0` (background `status` never takes `index.lock` from the
+agent), `GIT_TERMINAL_PROMPT=0`, and untranslated messages. Unit tests inject
 `FakeRunner`, which records the argv of every call and never spawns a process.
 This makes the whole non-frontend surface testable without a live repository.
 Integration tests, tagged `//go:build integration`, exercise real worktree and
