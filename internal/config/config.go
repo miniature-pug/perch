@@ -59,12 +59,19 @@ func Load(globalPath string, projectStartDir string) (*Config, error) {
 	cfg := &Config{}
 
 	if len(gc.Roots) > 0 {
-		expanded, err := expandRoots(gc.Roots)
+		// A relative root resolves against the directory that holds the
+		// config file, so it does not depend on the launch cwd.
+		base := projectStartDir
+		if globalPath != "" {
+			base = filepath.Dir(globalPath)
+		}
+		expanded, err := expandRoots(gc.Roots, base)
 		if err != nil {
 			return nil, err
 		}
 		cfg.Roots = expanded
-	} else {
+	}
+	if len(cfg.Roots) == 0 {
 		// Default roots to the start directory so callers get something useful.
 		if projectStartDir != "" {
 			cfg.Roots = []string{projectStartDir}
@@ -93,15 +100,31 @@ func loadGlobal(globalPath string) (*globalConfig, error) {
 	return gc, nil
 }
 
-// expandRoots replaces a leading ~/ in each root with the user's home directory.
+// expandRoots normalises each configured root:
+//   - empty or whitespace-only entries are dropped;
+//   - environment variables ($HOME, ${XDG_DATA_HOME}) are expanded;
+//   - a bare "~" or a leading "~/" becomes the user's home directory;
+//   - a relative path is made absolute against base (when base is non-empty);
+//   - the result is passed through filepath.Clean.
+//
 // expandRoots resolves HOME lazily: it calls os.UserHomeDir only when a root
 // needs expansion. If os.UserHomeDir fails, expandRoots returns an error so
 // the caller knows the path is unusable.
-func expandRoots(roots []string) ([]string, error) {
-	out := make([]string, len(roots))
+func expandRoots(roots []string, base string) ([]string, error) {
+	out := make([]string, 0, len(roots))
 	var home string
-	for i, r := range roots {
-		if strings.HasPrefix(r, "~/") {
+	for _, r := range roots {
+		r = strings.TrimSpace(r)
+		if r == "" {
+			continue
+		}
+		if strings.Contains(r, "$") {
+			r = os.ExpandEnv(r)
+			if r == "" {
+				continue
+			}
+		}
+		if r == "~" || strings.HasPrefix(r, "~/") {
 			if home == "" {
 				var err error
 				home, err = os.UserHomeDir()
@@ -109,10 +132,12 @@ func expandRoots(roots []string) ([]string, error) {
 					return nil, fmt.Errorf("config: expand root %q: cannot resolve home directory: %w", r, err)
 				}
 			}
-			out[i] = filepath.Join(home, r[2:])
-		} else {
-			out[i] = r
+			r = filepath.Join(home, strings.TrimPrefix(r, "~"))
 		}
+		if !filepath.IsAbs(r) && base != "" {
+			r = filepath.Join(base, r)
+		}
+		out = append(out, filepath.Clean(r))
 	}
 	return out, nil
 }
