@@ -227,6 +227,36 @@ func TestHunks_IgnoresUserDiffConfig(t *testing.T) {
 	}
 }
 
+// apply.whitespace must not refuse (=error) or rewrite (=fix) a staged hunk:
+// the index must get exactly the working-tree content.
+func TestStageHunk_IgnoresApplyWhitespaceConfig(t *testing.T) {
+	for _, mode := range []string{"error", "fix"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			ctx := context.Background()
+			r := proc.ExecRunner{}
+			d := initRepo(t)
+			f := filepath.Join(d, "f.txt")
+			writeFile(t, f, "1\n2\n3\n")
+			commitAll(t, d)
+			runGit(t, d, "config", "apply.whitespace", mode)
+			writeFile(t, f, "1\n2 trailing   \n3\n")
+
+			hs, err := git.Hunks(ctx, r, d, "f.txt")
+			if err != nil || len(hs) != 1 {
+				t.Fatalf("Hunks = %d, %v", len(hs), err)
+			}
+			if err := git.StageHunkChecked(ctx, r, d, "f.txt", 0, hs[0].ID); err != nil {
+				t.Fatalf("StageHunkChecked with apply.whitespace=%s: %v", mode, err)
+			}
+			hs, _ = git.Hunks(ctx, r, d, "f.txt")
+			if len(hs) != 1 || !hs[0].Staged {
+				t.Fatalf("want exactly the staged hunk and no phantom unstaged one, got %+v", hs)
+			}
+		})
+	}
+}
+
 // GFS-5: a file name with glob characters is a literal path, not a pattern.
 func TestHunks_GlobCharactersAreLiteral(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())

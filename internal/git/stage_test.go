@@ -240,7 +240,7 @@ func TestStageHunk_GoesToRunnerSeam(t *testing.T) {
 		"git", "-C", "/repo", "diff", "--unified=3", "--no-color", "--no-ext-diff", "--no-textconv",
 		"--src-prefix=a/", "--dst-prefix=b/", "--", ":(literal)f.txt")
 	// git apply call succeeds (empty stdout/stderr, no error).
-	r.Respond(proc.FakeResult{}, "git", "apply", "--cached", "-")
+	r.Respond(proc.FakeResult{}, "git", "apply", "--whitespace=nowarn", "--cached", "-")
 
 	err := git.StageHunk(ctx, r, "/repo", "f.txt", 0)
 	if err != nil {

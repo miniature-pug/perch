@@ -42,7 +42,7 @@ func TestUnstageHunk_GoesToRunnerSeam(t *testing.T) {
 		"git", "-C", "/repo", "diff", "--cached", "--unified=3", "--no-color", "--no-ext-diff", "--no-textconv",
 		"--src-prefix=a/", "--dst-prefix=b/", "--", ":(literal)f.txt")
 	// The apply must be `git apply --reverse --cached -`.
-	r.Respond(proc.FakeResult{}, "git", "apply", "--reverse", "--cached", "-")
+	r.Respond(proc.FakeResult{}, "git", "apply", "--whitespace=nowarn", "--reverse", "--cached", "-")
 
 	if err := git.UnstageHunk(ctx, r, "/repo", "f.txt", 0); err != nil {
 		t.Fatalf("UnstageHunk: %v", err)
@@ -58,7 +58,7 @@ func TestUnstageHunk_GoesToRunnerSeam(t *testing.T) {
 	if applyCall == nil {
 		t.Fatal("git apply was never invoked through the runner — runner seam bypassed")
 	}
-	wantArgs := []string{"apply", "--reverse", "--cached", "-"}
+	wantArgs := []string{"apply", "--whitespace=nowarn", "--reverse", "--cached", "-"}
 	if strings.Join(applyCall.Args, " ") != strings.Join(wantArgs, " ") {
 		t.Errorf("apply argv = %v, want %v", applyCall.Args, wantArgs)
 	}

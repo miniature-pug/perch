@@ -91,6 +91,72 @@ func TestAddWorktree_FailureDeletesCreatedBranch(t *testing.T) {
 	}
 }
 
+// A failing post-checkout hook makes git exit non-zero after it created the
+// worktree. AddWorktree removes that worktree and the branch, so a retry
+// starts clean.
+func TestAddWorktree_HookFailureLeavesNothingBehind(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ctx := context.Background()
+	r := proc.ExecRunner{}
+	repo := initRepo(t)
+	hook := filepath.Join(repo, ".git", "hooks", "post-checkout")
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(t.TempDir(), "wt")
+
+	if err := git.AddWorktree(ctx, r, repo, "hooked", p, "main"); err == nil {
+		t.Fatal("AddWorktree should report the hook failure")
+	}
+	if _, err := os.Lstat(p); err == nil {
+		t.Error("worktree directory left behind")
+	}
+	if hasBranch(t, repo, "hooked") {
+		t.Error("branch left behind")
+	}
+	if out := gitOut(t, repo, "worktree", "list", "--porcelain"); strings.Contains(out, p) {
+		t.Errorf("worktree still registered:\n%s", out)
+	}
+}
+
+// The cleanup after a failed add runs even when ctx has expired.
+func TestAddWorktree_CleanupSurvivesExpiredContext(t *testing.T) {
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Err: proc.FakeExitError{Code: 1}},
+		"git", "-C", "/repos/proj", "rev-parse", "--verify", "--quiet", "refs/heads/feat-x")
+	r.Respond(proc.FakeResult{Stderr: []byte("fatal: timed out"), Err: context.DeadlineExceeded},
+		"git", "-C", "/repos/proj", "worktree", "add", "-b", "feat-x", "--", "/repos/proj__worktrees/feat-x", "HEAD")
+	r.Respond(proc.FakeResult{}, "git", "-C", "/repos/proj", "branch", "-D", "feat-x")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	cr := &ctxRecordingRunner{inner: r}
+	_ = git.AddWorktree(ctx, cr, "/repos/proj", "feat-x", "/repos/proj__worktrees/feat-x", "HEAD")
+	if !cr.deleteSawLiveCtx {
+		t.Error("branch -D ran with an expired context (or not at all)")
+	}
+}
+
+// ctxRecordingRunner records whether `branch -D` ran under a live context.
+type ctxRecordingRunner struct {
+	inner            *proc.FakeRunner
+	deleteSawLiveCtx bool
+}
+
+func (c *ctxRecordingRunner) Run(ctx context.Context, name string, args ...string) ([]byte, []byte, error) {
+	if len(args) > 3 && args[2] == "branch" && args[3] == "-D" && ctx.Err() == nil {
+		c.deleteSawLiveCtx = true
+	}
+	return c.inner.Run(ctx, name, args...)
+}
+
+func (c *ctxRecordingRunner) RunInDir(ctx context.Context, dir, name string, args ...string) ([]byte, []byte, error) {
+	return c.inner.RunInDir(ctx, dir, name, args...)
+}
+
+func (c *ctxRecordingRunner) RunStdin(ctx context.Context, dir string, stdin []byte, name string, args ...string) ([]byte, []byte, error) {
+	return c.inner.RunStdin(ctx, dir, stdin, name, args...)
+}
+
 // GFS-17: a detached HEAD must not add a "(HEAD detached ...)" entry, and a
 // branch that shares its name with a tag is listed by its plain name.
 func TestBranches_DetachedHeadAndAmbiguousName(t *testing.T) {

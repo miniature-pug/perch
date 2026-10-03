@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/miniature-pug/perch/internal/proc"
@@ -132,6 +133,26 @@ func branchExists(ctx context.Context, r proc.Runner, repoRoot, branch string) (
 	return false, nil
 }
 
+// addCleanupTimeout bounds the best-effort cleanup after a failed AddWorktree.
+const addCleanupTimeout = 15 * time.Second
+
+// cleanupFailedAdd undoes what a failed `worktree add -b` may have left:
+// the worktree itself (a failing post-checkout hook makes git exit non-zero
+// AFTER it created and checked out the worktree) and the new branch.
+// AddWorktree checked that neither path nor branch existed beforehand, so
+// both are ours. The cleanup runs even when ctx has already expired (a
+// timeout during a slow checkout is one way to get here), under its own
+// short deadline. Every step is best-effort.
+func cleanupFailedAdd(ctx context.Context, r proc.Runner, repoRoot, branch, path string) {
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), addCleanupTimeout)
+	defer cancel()
+	if _, err := os.Lstat(path); err == nil {
+		_, _, _ = r.Run(cctx, "git", "-C", repoRoot, "worktree", "remove", "--force", path)
+	}
+	// When git failed before creating the branch, this fails harmlessly.
+	_, _, _ = r.Run(cctx, "git", "-C", repoRoot, "branch", "-D", branch)
+}
+
 // AddWorktree runs `git -C <repoRoot> worktree add -b <branch> -- <path> <base>`.
 // The caller supplies base already resolved (e.g. "HEAD" or a branch name).
 // AddWorktree does not default it.
@@ -146,9 +167,11 @@ func branchExists(ctx context.Context, r proc.Runner, repoRoot, branch string) (
 // (otherwise it returns an error wrapping ErrWorktreePathExists) and that
 // the branch does not exist yet (otherwise ErrBranchExists). Both checks
 // are exact, so a path collision is never reported as an existing branch.
-// git creates the branch before it creates the worktree, so when worktree
-// add still fails, AddWorktree deletes the branch it just created; a failed
-// call leaves no orphan branch behind. Other failures wrap stderr verbatim.
+// git creates the branch before the worktree, and a failing post-checkout
+// hook makes it fail after the worktree exists too. So when worktree add
+// fails, AddWorktree removes any worktree it created at path and deletes
+// the branch (see cleanupFailedAdd), even if ctx has expired. Other
+// failures wrap stderr verbatim.
 func AddWorktree(ctx context.Context, r proc.Runner, repoRoot, branch, path, base string) error {
 	// Validate branch and base before constructing any git argv.
 	if err := ValidRef(branch); err != nil {
@@ -173,10 +196,7 @@ func AddWorktree(ctx context.Context, r proc.Runner, repoRoot, branch, path, bas
 			// Another process created the branch after the check above.
 			return fmt.Errorf("git: worktree add %s: %w (stderr: %s)", repoRoot, ErrBranchExists, msg)
 		}
-		// The branch did not exist before this call, so any branch now
-		// present is ours. Best-effort: when git failed before creating it,
-		// this delete fails harmlessly.
-		_, _, _ = r.Run(ctx, "git", "-C", repoRoot, "branch", "-D", branch)
+		cleanupFailedAdd(ctx, r, repoRoot, branch, path)
 		if len(msg) > 0 {
 			return fmt.Errorf("git: worktree add %s: %w (stderr: %s)", repoRoot, err, msg)
 		}

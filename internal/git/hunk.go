@@ -667,8 +667,12 @@ func applyWorktreeHunk(ctx context.Context, r proc.Runner, worktree, file string
 // gitApplyPatch honors ctx cancellation.
 func gitApplyPatch(ctx context.Context, r proc.Runner, worktree, patch string, flags ...string) error {
 	// git apply <flags...> -. gitApplyPatch builds args once and reuses them across lock retries.
-	args := make([]string, 0, len(flags)+2)
-	args = append(args, "apply")
+	args := make([]string, 0, len(flags)+3)
+	// --whitespace=nowarn: the patch is git's own diff of the user's content.
+	// apply.whitespace=error would refuse it, and apply.whitespace=fix would
+	// stage content that differs from the working tree (trailing spaces
+	// stripped), leaving a phantom unstaged hunk.
+	args = append(args, "apply", "--whitespace=nowarn")
 	args = append(args, flags...)
 	args = append(args, "-")
 	label := strings.Join(flags, " ")
