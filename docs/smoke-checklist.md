@@ -69,6 +69,11 @@ checklist is what the gate cannot see.
 - [ ] Pick a repository, a branch, and the `claude` agent.
 - [ ] Create. The session appears in the sidebar and its terminal opens with a
       live shell. The pty spawns on create, with no extra click.
+- [ ] The agent launch line types only once the shell prompt is ready. With a
+      blocking prompt in your shell rc (for example `read -p x`), the agent does
+      not start and an "Agent didn't start" notification appears. Answer the
+      prompt, click Retype launch, and the agent starts. Keys typed meanwhile
+      are discarded, not mixed into the launch line.
 
 ## The terminal pane
 
@@ -220,7 +225,8 @@ is no automated real-binary test. Verify against a real `opencode`.
 - [ ] Switch to the diff view.
 - [ ] The changed-file list shows the written file.
 - [ ] Open a file to see its hunks with `+` lines.
-- [ ] Stage stages a hunk. Discard reverts it.
+- [ ] Stage stages a hunk. Discard reverts it. Hunks are addressed by
+      content, so staging one hunk of a file with several never touches another.
 - [ ] The sidebar row and the status line show live `+N -N` counts that update
       after a file changes.
 - [ ] When you stage a hunk, its file row flashes, and the file leaves the

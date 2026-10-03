@@ -298,12 +298,13 @@ rereads that file on its next call. A reload does not help in that case. Use
 Each agent plugs in behind a Monitor seam in `internal/agent`. Two integrations
 ship today.
 
-- **claude** reports through hooks. When you open a Claude session, perch writes
-  a hook configuration with a listener URL and a bearer token into the
-  worktree's `.claude/settings.json`. Claude then posts tool and lifecycle
-  events back, and a `PreToolUse` event blocks until you approve. That hook
-  blocks, and perch answers it, so perch owns Claude's approval. Perch shows
-  the approval card. Claude's own prompt never appears.
+- **claude** reports through hooks. When you open a Claude session, perch
+  writes a private per-session settings file (under `$XDG_RUNTIME_DIR`, else the
+  temp directory) holding a listener URL and a bearer token, and launches
+  `claude --settings <file>`. Nothing is written into the worktree. Claude posts
+  tool and lifecycle events back, and a `PermissionRequest` hook blocks until
+  you decide. It fires only when Claude would itself prompt, so perch owns
+  Claude's approval and Claude's own prompt never appears.
 - **opencode** reports through its own loopback HTTP server. Perch launches
   `opencode serve`, then reads the Server-Sent-Events stream to follow
   lifecycle, approval, and question events. opencode's `attach` terminal is an
@@ -349,7 +350,7 @@ open.
 - **One small agent listener.** Each Claude session gets its own listener,
   bound to `127.0.0.1` on an ephemeral port. A random per-listener bearer
   token guards it. Perch compares the token in constant time. The listener
-  receives Claude's hook posts and blocks `PreToolUse` until you decide.
+  receives Claude's hook posts and blocks `PermissionRequest` until you decide.
   perch tears it down when the session closes.
 - **One env-sync listener for `perch reload`.** The app binds a single loopback
   listener on `127.0.0.1` at startup, shared by every session. Each session's
@@ -375,10 +376,10 @@ already sitting in your local clone.
 
 The second does travel with a clone. A repository can commit an agent's own
 configuration: a `.claude/settings.json` file or an opencode config. That
-file can hold `PreToolUse` or command entries. The agent runtime executes
+file can hold hook or command entries. The agent runtime executes
 those entries as shell, the moment a session opens in that worktree. perch
-merges its listener into that file. perch leaves any hooks it finds there
-untouched. Perch's approval boundary covers only the tool calls an agent
+adds its own hooks through a separate `--settings` file and leaves any hooks
+it finds in the repository untouched. Perch's approval boundary covers only the tool calls an agent
 asks to make. It does not cover the hooks the agent's configuration runs on
 startup. Committed agent hooks therefore run ungated. Open repositories you
 trust. Before you open a session in an unfamiliar repository, read its
