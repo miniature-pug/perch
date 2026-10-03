@@ -1,12 +1,10 @@
 <!-- frontend/src/lib/ApprovalCard.svelte -->
 <script lang="ts">
-  import { onDestroy } from "svelte";
   import type { ApprovalReq, AgentCaps } from "./wails";
-  import { focusOnMount } from "./actions";
-  import { UNDO_REMOVE_DELAY_MS } from "./constants";
+  import { APPROVAL_ARM_MS } from "./constants";
 
   let {
-    req, sessionCount = 1, queue, caps, onDecision, onApproveAll, onDenyAll, onUndoAlways,
+    req, sessionCount = 1, queue, caps, onDecision, onApproveAll, onDenyAll,
   }: {
     req: ApprovalReq;
     // sessionCount counts the requests queued for this session, including the one shown now.
@@ -14,23 +12,27 @@
     sessionCount?: number;
     queue: ApprovalReq[];
     caps: AgentCaps;
-    onDecision: (reqId: string, decision: "allow" | "deny" | "always") => void;
+    // The host owns the post-grant "Always allow" Undo toast, because this
+    // card unmounts (or moves on to the next request) as soon as the grant
+    // lands. See App.svelte.
+    onDecision: (reqId: string, decision: "allow" | "deny" | "always") => void | Promise<unknown>;
     onApproveAll?: () => void;
     onDenyAll?: () => void;
-    // Optional. The host (App) removes the new standing rule when the user selects
-    // Undo on the toast shown after grant. This callback is optional so the
-    // approval card stays self-contained. If the callback is absent, Undo only
-    // closes the toast.
-    onUndoAlways?: (reqId: string) => void;
   } = $props();
 
   let deciding = $state(false);
-  // This is the undo control for the standing "Always allow" rule. The approval
-  // card grants the rule immediately, for lowest friction. A brief toast then
-  // offers Undo.
-  let alwaysUndo = $state(false);
-  let undoTimer: ReturnType<typeof setTimeout> | undefined;
-  let destroyed = false;
+
+  // Keyboard arming. A request that arrives while the user is typing must not
+  // be decided by the next keystroke, and a double-tap or key repeat must not
+  // decide the request that surfaces after the first one (FEC-3, FEC-16).
+  // Keyboard decisions are ignored until APPROVAL_ARM_MS after the card
+  // shows a request. App keys this card by reqId, and the effect below also
+  // re-arms when the request changes in place.
+  let armedAt = Date.now() + APPROVAL_ARM_MS;
+  $effect(() => {
+    req.reqId; // track: a new request re-arms the delay
+    armedAt = Date.now() + APPROVAL_ARM_MS;
+  });
 
   async function handleDecision(reqId: string, decision: "allow" | "deny" | "always") {
     if (deciding) return;
@@ -38,46 +40,38 @@
     try { await Promise.resolve(onDecision(reqId, decision)); } finally { deciding = false; }
   }
 
-  async function handleAlways() {
-    if (deciding) return;
-    try {
-      await handleDecision(req.reqId, "always");
-    } catch {
-      return; // The grant failed. No rule exists, so there is nothing to undo.
-    }
-    // The host may remove this approval card as soon as the grant finishes.
-    // Show the local toast only if the approval card is still mounted. The App
-    // component has hosted this toast since Phase 3.
-    if (destroyed) return;
-    alwaysUndo = true;
-    startUndoTimer();
+  // A pointer click decides the request, except the extra clicks of a
+  // double- or triple-click, which would otherwise land on the next request.
+  function clickDecision(e: MouseEvent, decision: "allow" | "deny" | "always") {
+    if (e.detail > 1) return;
+    handleDecision(req.reqId, decision);
   }
 
-  function startUndoTimer() {
-    clearUndoTimer();
-    undoTimer = setTimeout(() => { alwaysUndo = false; undoTimer = undefined; }, UNDO_REMOVE_DELAY_MS);
+  // Take focus on arrival only when nothing else holds it. Focus in the
+  // editor, a terminal, or any input stays where it is, so ordinary typing
+  // can never approve or deny a request the user has not read (FEC-3,
+  // FEX-8). The user can Tab or click to the card.
+  function focusIfIdle(node: HTMLElement) {
+    const a = document.activeElement;
+    if (!a || a === document.body || a === document.documentElement) node.focus();
   }
-  function clearUndoTimer() {
-    if (undoTimer !== undefined) { clearTimeout(undoTimer); undoTimer = undefined; }
-  }
-  function undoAlways() {
-    clearUndoTimer();
-    alwaysUndo = false;
-    onUndoAlways?.(req.reqId);
-  }
-  onDestroy(() => { destroyed = true; clearUndoTimer(); });
 
-  // These are single-key accelerators. They work while the approval card holds
-  // focus. The Allow button gets focus when the card opens, so Enter also
-  // approves. The 'a' key allows and the 'd' key denies. The standing grant is
-  // riskier, so it needs the Shift+A chord. A lone keypress never triggers it.
+  // Single-key accelerators. They work only while the card holds focus, and
+  // only once the card is armed. The 'a' key allows and the 'd' key denies.
+  // The standing grant is riskier, so it needs the Shift+A chord. Enter and
+  // Space on a focused button are held back the same way.
   function handleKeydown(e: KeyboardEvent) {
-    if (deciding || alwaysUndo) return;
     const key = e.key.toLowerCase();
+    const decisive = key === "a" || key === "d" || e.key === "Enter" || e.key === " ";
+    if (!decisive) return;
+    if (deciding || e.repeat || Date.now() < armedAt) {
+      e.preventDefault();
+      return;
+    }
     const noMod = !e.ctrlKey && !e.metaKey && !e.altKey;
     if (key === "a" && e.shiftKey && noMod) {
       e.preventDefault();
-      handleAlways();
+      handleDecision(req.reqId, "always");
     } else if (key === "a" && !e.shiftKey && noMod) {
       e.preventDefault();
       handleDecision(req.reqId, "allow");
@@ -101,11 +95,11 @@
   <!-- The approval card is docked at the bottom center. The App component keeps
        the sidebar and terminal active. The approval card is a labeled landmark
        region, not a modal. aria-modal="true" would wrongly tell assistive
-       technology that the rest of the page is inert. Initial focus lands on the
-       Allow button. This lets Enter approve and lets the single-key accelerators
-       work. The keydown handler on this section delegates to the focused action
-       buttons, which are interactive elements. The accelerators fire only while
-       the approval card owns focus. -->
+       technology that the rest of the page is inert. The Allow button takes
+       focus on arrival only when nothing else is focused. The keydown handler
+       on this section delegates to the focused action buttons, which are
+       interactive elements. The accelerators fire only while the approval card
+       owns focus. -->
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <section aria-label="approval card" class="approval-card"
            tabindex="-1" onkeydown={handleKeydown}>
@@ -127,28 +121,21 @@
         +{sessionCount - 1} more queued for this session
       </p>
     {/if}
-    {#if alwaysUndo}
-      <div class="always-undo" role="status" aria-live="polite">
-        <span class="undo-msg">Always-allow rule added for {req.tool}.</span>
-        <button class="btn btn-sm" onclick={undoAlways} use:focusOnMount>Undo</button>
+    <div class="approval-actions">
+      <button class="btn btn-primary" onclick={(e) => clickDecision(e, "allow")} disabled={deciding} use:focusIfIdle>Allow</button>
+      <button class="btn" onclick={(e) => clickDecision(e, "deny")} disabled={deciding}>Deny</button>
+      <button class="btn btn-always" onclick={(e) => clickDecision(e, "always")} disabled={deciding}
+              title="Adds a standing rule so this tool is auto-approved for this agent. You can undo it right after.">Always allow</button>
+    </div>
+    <p class="accel-hint" aria-hidden="true">
+      <kbd>a</kbd> allow · <kbd>d</kbd> deny · <kbd>⇧A</kbd> always allow
+    </p>
+    {#if queue.length > 1}
+      <div class="batch-actions">
+        <button class="btn btn-sm" onclick={approveAll}>Approve all</button>
+        <button class="btn btn-sm" onclick={denyAll}>Deny all</button>
+        <span class="batch-badge">{queue.length}</span>
       </div>
-    {:else}
-      <div class="approval-actions">
-        <button class="btn btn-primary" onclick={() => handleDecision(req.reqId, "allow")} disabled={deciding} use:focusOnMount>Allow</button>
-        <button class="btn" onclick={() => handleDecision(req.reqId, "deny")} disabled={deciding}>Deny</button>
-        <button class="btn btn-always" onclick={handleAlways} disabled={deciding}
-                title="Adds a standing rule so this tool is auto-approved for this agent. You can undo it right after.">Always allow</button>
-      </div>
-      <p class="accel-hint" aria-hidden="true">
-        <kbd>a</kbd> allow · <kbd>d</kbd> deny · <kbd>⇧A</kbd> always allow
-      </p>
-      {#if queue.length > 1}
-        <div class="batch-actions">
-          <button class="btn btn-sm" onclick={approveAll}>Approve all</button>
-          <button class="btn btn-sm" onclick={denyAll}>Deny all</button>
-          <span class="batch-badge">{queue.length}</span>
-        </div>
-      {/if}
     {/if}
   </section>
 {/if}
@@ -222,24 +209,6 @@
     white-space: pre-wrap;
     word-break: break-word;
     tab-size: 2;
-  }
-
-  /* This is the undo toast shown after the app grants the standing "Always
-     allow" rule. */
-  .always-undo {
-    display: flex;
-    align-items: center;
-    gap: var(--perch-sp-2);
-    margin-bottom: var(--perch-sp-1);
-    font-size: var(--perch-fs-body);
-  }
-
-  .undo-msg {
-    color: var(--perch-text);
-  }
-
-  .always-undo .btn-sm {
-    margin-left: auto;
   }
 
   /* Hint for the keyboard accelerators, shown under the action row */

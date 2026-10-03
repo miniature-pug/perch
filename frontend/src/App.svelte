@@ -26,13 +26,13 @@
   import { SvelteSet }      from "svelte/reactivity";
   import { layout }         from "./lib/stores/layout.svelte";
   import { mode }           from "./lib/stores/mode.svelte";
-  import { settings }       from "./lib/stores/settings.svelte";
+  import { settings, sameAlwaysRule } from "./lib/stores/settings.svelte";
   import ApprovalCard       from "./lib/ApprovalCard.svelte";
   import NotificationHub    from "./lib/NotificationHub.svelte";
   import { getDnd, setDnd, addBlocking, addAmbient, addRoutine, getItems, markRead, clearRead, markAllRead, markReadForWorkspace, dropForWorkspace, dropAwaitingInputForWorkspace } from "./lib/stores/notifications.svelte";
   import CleanupPanel from "./lib/CleanupPanel.svelte";
-  import { listWorkspaces, createWorkspace, setWorkspaceTitle, workspaceForBranch, removeWorkspace, openWorkspace, closeWorkspace, closeShell, revealInFiles, onAgentEvent, onNotify, onFsChanged, onWorkspaceAttach, onWorkspaceRelaunch, approve, pendingApprovals, branches, readFile, setWindowFocus, writeToPty, discoverRepos, diffStat, listStaleSessions, forceRemoveWorkspace, clipboardSetText, homeShellCwd as fetchHomeShellCwd } from "./lib/wails";
-  import type { WorkspaceVM, ApprovalReq, StaleSessionVM, AgentState, RepoInfo } from "./lib/wails";
+  import { listWorkspaces, createWorkspace, setWorkspaceTitle, workspaceForBranch, removeWorkspace, openWorkspace, closeWorkspace, closeShell, revealInFiles, onAgentEvent, onNotify, onFsChanged, onWorkspaceAttach, onWorkspaceRelaunch, approve, pendingApprovals, branches, readFile, setWindowFocus, writeToPty, discoverRepos, diffStat, listStaleSessions, forceRemoveWorkspace, clipboardSetText, getSettings, homeShellCwd as fetchHomeShellCwd } from "./lib/wails";
+  import type { WorkspaceVM, ApprovalReq, StaleSessionVM, AgentState, RepoInfo, AlwaysRule } from "./lib/wails";
   import { UNDO_REMOVE_DELAY_MS, GCHORD_TIMEOUT_MS, SIDEBAR_MIN_W, SIDEBAR_MAX_W, SHELL_MIN_H, SHELL_MAX_H, RESIZE_STEP_PX, THEMES, MIME_SESSION, MENTION_PREFIX, AGENT_CLAUDE, AGENT_OPENCODE } from "./lib/constants";
 
   let workspaces      = $state<WorkspaceVM[]>([]);
@@ -702,6 +702,7 @@
     // Cancel any pending deferred removals, to avoid use-after-unmount calls.
     for (const p of pendingRemovals) clearTimeout(p.timer);
     clearTimeout(pendingGTimer);
+    clearTimeout(alwaysToastTimer);
   });
 
   // Resume preview state: the session pending confirmation before opening.
@@ -1061,12 +1062,12 @@
   // Resolve ONE queued request by reqId. This calls approve(), then pops the
   // request from its owning session's queue and runs the attention backstop. It
   // guards against a concurrent in-flight decide of the same reqId.
-  async function decideOne(reqId: string, decision: "allow" | "deny" | "always"): Promise<void> {
-    if (decidingReqs.has(reqId)) return;
+  async function decideOne(reqId: string, decision: "allow" | "deny" | "always"): Promise<boolean> {
+    if (decidingReqs.has(reqId)) return false;
     // Locate the owning session, the queue that holds this reqId.
     const ownerEntry = Object.entries(approvals).find(([, q]) => q.some(r => r.reqId === reqId));
     const ownerWsId = ownerEntry?.[0] ?? activeId;
-    if (!ownerWsId) return;
+    if (!ownerWsId) return false;
     decidingReqs.add(reqId);
     try {
       await approve(reqId, decision);
@@ -1083,8 +1084,10 @@
         dropForWorkspace(ownerWsId);
       }
       clearAttentionBackstop(ownerWsId);
+      return true;
     } catch (e) {
       addBlocking(ownerWsId, "Approval failed", String(e), "error");
+      return false;
     } finally {
       decidingReqs.delete(reqId);
     }
@@ -1415,7 +1418,40 @@
   // wrong session.
   // ---------------------------------------------------------------------------
   async function onDecision(reqId: string, decision: "allow" | "deny" | "always") {
-    await decideOne(reqId, decision);
+    if (decision !== "always") { await decideOne(reqId, decision); return; }
+    // "Always allow" adds a standing rule in the backend. App hosts the Undo
+    // toast, because the card unmounts or moves to the next request as soon
+    // as the grant lands (FEC-15, FEX-9). The rule the grant added is the
+    // difference between the rule list before and after it, so Undo removes
+    // exactly that rule, matched by identity on a fresh read.
+    const tool = Object.values(approvals).flat().find(r => r.reqId === reqId)?.tool ?? "this tool";
+    const before = await getSettings().then(s => s.alwaysRules ?? []).catch(() => null);
+    if (!(await decideOne(reqId, "always"))) return; // the grant failed: no rule, nothing to undo
+    const after = await getSettings().then(s => s.alwaysRules ?? []).catch(() => null);
+    const added = before && after ? after.filter(r => !before.some(b => sameAlwaysRule(b, r))) : [];
+    showAlwaysToast(tool, added);
+  }
+
+  // Post-grant "Always allow" toast. `rules` is empty when the added rule
+  // could not be identified; the toast then points at Settings instead of
+  // offering an Undo that would do nothing.
+  let alwaysToast = $state<{ tool: string; rules: AlwaysRule[] } | null>(null);
+  let alwaysToastTimer: ReturnType<typeof setTimeout> | undefined;
+  function showAlwaysToast(tool: string, rules: AlwaysRule[]) {
+    clearTimeout(alwaysToastTimer);
+    alwaysToast = { tool, rules };
+    alwaysToastTimer = setTimeout(() => { alwaysToast = null; }, UNDO_REMOVE_DELAY_MS);
+  }
+  async function undoAlways() {
+    const t = alwaysToast;
+    clearTimeout(alwaysToastTimer);
+    alwaysToast = null;
+    if (!t || t.rules.length === 0) return;
+    try {
+      await settings.removeAlwaysRules(t.rules);
+    } catch (e) {
+      addBlocking("", "Could not undo the always-allow rule", `${String(e)}. Remove it in Settings.`, "error");
+    }
   }
 </script>
 
@@ -1791,15 +1827,20 @@
     {#if active && approvals[active.id]?.[0]}
       {@const headReq = approvals[active.id][0]}
       <div data-zone="approval-dock" class="approval-dock">
-        <ApprovalCard
-          req={headReq}
-          sessionCount={approvals[active.id].length}
-          queue={approvals[active.id] ?? []}
-          caps={active.caps}
-          {onDecision}
-          onApproveAll={() => decideAll("allow")}
-          onDenyAll={() => decideAll("deny")}
-        />
+        <!-- Keyed by request, so each request gets a fresh card: a fresh
+             keyboard arming delay, and no focus or pending keypress carried
+             over from the request before it (FEC-16). -->
+        {#key headReq.reqId}
+          <ApprovalCard
+            req={headReq}
+            sessionCount={approvals[active.id].length}
+            queue={approvals[active.id] ?? []}
+            caps={active.caps}
+            {onDecision}
+            onApproveAll={() => decideAll("allow")}
+            onDenyAll={() => decideAll("deny")}
+          />
+        {/key}
       </div>
     {/if}
 
@@ -1909,8 +1950,18 @@
 
     <SettingsPanel open={settingsOpen} onClose={() => { settingsOpen = false; }} />
 
-    {#if pendingRemovals.length > 0}
+    {#if alwaysToast || pendingRemovals.length > 0}
       <div class="undo-toast-stack" aria-live="polite">
+        {#if alwaysToast}
+          <div class="undo-toast" role="status" data-testid="always-toast">
+            {#if alwaysToast.rules.length > 0}
+              <span class="undo-toast-msg">Always-allow rule added for {alwaysToast.tool}</span>
+              <button class="undo-toast-btn" onclick={undoAlways}>Undo</button>
+            {:else}
+              <span class="undo-toast-msg">Always-allow rule added for {alwaysToast.tool}. Manage it in Settings.</span>
+            {/if}
+          </div>
+        {/if}
         {#each pendingRemovals as pending (pending.ws.id)}
           <div class="undo-toast" role="status" data-testid="undo-toast">
             <span class="undo-toast-msg">Session removed</span>

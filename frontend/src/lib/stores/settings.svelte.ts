@@ -1,4 +1,4 @@
-import { getSettings, saveSettings, type AppSettings } from "../wails";
+import { getSettings, saveSettings, type AppSettings, type AlwaysRule } from "../wails";
 import { DEFAULT_THEME, DEFAULT_DENSITY, DEFAULT_FONT } from "../constants";
 
 export type { AppSettings };
@@ -49,6 +49,24 @@ class SettingsStore {
   // appends rules; it only overwrites them, through the settings UI. Its
   // in-memory alwaysRules value is therefore authoritative here.
   async setAlwaysRules(v: AppSettings["alwaysRules"]): Promise<void>    { this.alwaysRules = v; await saveSettings(this.snap()); }
+
+  // Remove specific rules, matched by identity, from the backend's CURRENT
+  // list. A rule granted after this store (or a settings panel) last read the
+  // list survives, because the filter runs on a fresh read, not on a stale
+  // copy (FEX-13, FEC-15). Returns the list that was saved.
+  async removeAlwaysRules(remove: AlwaysRule[]): Promise<AlwaysRule[]> {
+    const fresh = await getSettings();
+    const keep = (fresh.alwaysRules ?? []).filter((r) => !remove.some((x) => sameAlwaysRule(x, r)));
+    this.alwaysRules = keep;
+    await saveSettings(this.snap());
+    return keep;
+  }
+}
+
+// Rule identity. The backend's hash covers the same fields when present.
+export function sameAlwaysRule(a: AlwaysRule, b: AlwaysRule): boolean {
+  if (a.hash && b.hash) return a.hash === b.hash;
+  return a.agent === b.agent && a.tool === b.tool && a.pattern === b.pattern;
 }
 
 export const settings = new SettingsStore();

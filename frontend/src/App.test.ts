@@ -122,7 +122,8 @@ vi.mock("./lib/wails", () => ({
 
 // NOTE: the layout and mode stores are not mocked. The tests use the real $state runes stores.
 // restore() calls getLayout(), which is mocked to return "{}". This makes onMount safe.
-vi.mock("./lib/stores/settings.svelte", () => ({
+vi.mock("./lib/stores/settings.svelte", async (importOriginal) => ({
+  sameAlwaysRule: ((await importOriginal()) as any).sameAlwaysRule,
   settings: {
     theme:   "gruvbox",
     density: "dense",
@@ -131,6 +132,7 @@ vi.mock("./lib/stores/settings.svelte", () => ({
     setDensity: vi.fn(async () => {}),
     setFont:    vi.fn(async () => {}),
     setDnd:     vi.fn(async () => {}),
+    removeAlwaysRules: vi.fn(async () => []),
   },
 }));
 
@@ -5300,6 +5302,80 @@ describe("audit regressions: App wiring", () => {
       expect(document.documentElement.getAttribute("data-glass")).toBe("off");
     } finally {
       delete (settings as any).glass;
+    }
+  });
+});
+
+describe("audit regressions: approvals", () => {
+  const approvalWs = [{
+    id: "ws-1", title: "Alpha", branch: "main", state: "idle" as const,
+    worktreePath: "/tmp/alpha", agent: "claude", paneId: "p1", lastActive: "",
+    repoPath: "/repo/repo-alpha",
+    caps: { approvals: true, attention: false },
+  }];
+
+  async function openAlphaWithApproval(approval: { reqId: string; tool: string; summary: string }) {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(approvalWs);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await fireEvent.click(await screen.findByRole("button", { name: /^Alpha\b/ }));
+    await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    await tick();
+    captured.agent.at(-1)!({ workspaceId: "ws-1", kind: "approval", state: "awaiting-approval", approval });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument());
+  }
+
+  it("FEC-15/FEX-9: Undo on the Always-allow toast removes exactly the rule the grant added", async () => {
+    const { getSettings, approve } = await import("./lib/wails");
+    const { settings } = await import("./lib/stores/settings.svelte");
+    const old = { agent: "claude", tool: "Read", pattern: "*" };
+    const added = { agent: "claude", tool: "Bash", pattern: "npm test" };
+    // The backend appends the rule when approve(..., "always") lands.
+    let granted = false;
+    (approve as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => { granted = true; });
+    (getSettings as ReturnType<typeof vi.fn>).mockImplementation(async () =>
+      ({ alwaysRules: granted ? [old, added] : [old] }));
+    await openAlphaWithApproval({ reqId: "req-a", tool: "Bash", summary: "npm test" });
+    await fireEvent.click(screen.getByRole("button", { name: /always allow/i }));
+    await waitFor(() => expect(approve).toHaveBeenCalledWith("req-a", "always"));
+    const toast = await screen.findByTestId("always-toast");
+    expect(toast.textContent).toContain("Bash");
+    await fireEvent.click(within(toast).getByRole("button", { name: /undo/i }));
+    await waitFor(() => expect(settings.removeAlwaysRules).toHaveBeenCalledWith([added]));
+    (getSettings as ReturnType<typeof vi.fn>).mockResolvedValue({});
+  });
+
+  it("FEX-9: a failed always-allow grant shows no Undo toast", async () => {
+    const { approve } = await import("./lib/wails");
+    (approve as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("agent gone"));
+    await openAlphaWithApproval({ reqId: "req-f", tool: "Bash", summary: "x" });
+    await fireEvent.click(screen.getByRole("button", { name: /always allow/i }));
+    await waitFor(() => expect(approve).toHaveBeenCalledWith("req-f", "always"));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByTestId("always-toast")).toBeNull();
+  });
+
+  it("FEC-3: an approval arriving while an input has focus does not take focus", async () => {
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    try {
+      const { listWorkspaces } = await import("./lib/wails");
+      (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(approvalWs);
+      const { default: App } = await import("./App.svelte");
+      render(App);
+      await fireEvent.click(await screen.findByRole("button", { name: /^Alpha\b/ }));
+      await waitFor(() => expect(screen.getByTestId("resume-preview")).toBeInTheDocument());
+      await fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+      await tick();
+      input.focus();
+      captured.agent.at(-1)!({ workspaceId: "ws-1", kind: "approval", state: "awaiting-approval",
+        approval: { reqId: "req-x", tool: "Bash", summary: "rm -rf build" } });
+      await waitFor(() => expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument());
+      expect(document.activeElement).toBe(input);
+    } finally {
+      input.remove();
     }
   });
 });

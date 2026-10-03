@@ -1,7 +1,7 @@
 // frontend/src/lib/ApprovalCard.test.ts
 import { render, screen, waitFor } from "@testing-library/svelte";
 import { fireEvent } from "@testing-library/svelte";
-import { vi } from "vitest";
+import { vi, afterEach } from "vitest";
 
 const singleReq  = { reqId: "req_1", tool: "Bash",     summary: "run: ls -la /tmp" };
 const batchQueue = [
@@ -77,38 +77,100 @@ test("renders the tool input text in the body for a large input", async () => {
   expect(body.textContent).toContain(bigInput);
 });
 
-// F25: Allow gets focus on open (Enter approves), and the single key 'a' fires allow.
+// The accelerators arm APPROVAL_ARM_MS after a request shows. These helpers
+// move the clock past that window, so a test can press keys as the user would.
+const T0 = 1_000_000;
+function freezeClock() { vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(T0); }
+function passArming() { vi.setSystemTime(T0 + 10_000); }
+afterEach(() => { vi.useRealTimers(); });
+
+// F25: Allow gets focus on open when nothing else is focused, and the single key 'a' fires allow.
 test("Allow is focused on mount and keydown 'a' fires allow", async () => {
+  freezeClock();
   const { default: ApprovalCard } = await import("./ApprovalCard.svelte");
   const onDecision = vi.fn();
   render(ApprovalCard, { props: { req: singleReq, queue: [singleReq], caps: capsOn, onDecision } });
   const allow = await screen.findByRole("button", { name: /^allow$/i });
   await waitFor(() => expect(document.activeElement).toBe(allow));
+  passArming();
   await fireEvent.keyDown(allow, { key: "a" });
   expect(onDecision).toHaveBeenCalledWith("req_1", "allow");
 });
 
 // F25: 'd' denies. The risky "always" action needs the Shift+A chord, never a lone key.
 test("keydown 'd' fires deny; plain 'a' never fires always", async () => {
+  freezeClock();
   const { default: ApprovalCard } = await import("./ApprovalCard.svelte");
   const onDecision = vi.fn();
   render(ApprovalCard, { props: { req: singleReq, queue: [singleReq], caps: capsOn, onDecision } });
   const allow = await screen.findByRole("button", { name: /^allow$/i });
+  passArming();
   await fireEvent.keyDown(allow, { key: "d" });
   expect(onDecision).toHaveBeenCalledWith("req_1", "deny");
   expect(onDecision).not.toHaveBeenCalledWith("req_1", "always");
 });
 
-// F28: "Always allow" grants immediately, shows a post-grant undo toast, and Undo
-// invokes the optional onUndoAlways hook.
-test("Always allow grants then offers Undo which calls onUndoAlways", async () => {
+test("Always allow reports the 'always' decision to the host", async () => {
   const { default: ApprovalCard } = await import("./ApprovalCard.svelte");
-  const onDecision   = vi.fn();
-  const onUndoAlways = vi.fn();
-  render(ApprovalCard, { props: { req: singleReq, queue: [singleReq], caps: capsOn, onDecision, onUndoAlways } });
+  const onDecision = vi.fn();
+  render(ApprovalCard, { props: { req: singleReq, queue: [singleReq], caps: capsOn, onDecision } });
   await fireEvent.click(await screen.findByRole("button", { name: /always allow/i }));
   expect(onDecision).toHaveBeenCalledWith("req_1", "always");
-  const undo = await screen.findByRole("button", { name: /^undo$/i });
-  await fireEvent.click(undo);
-  expect(onUndoAlways).toHaveBeenCalledWith("req_1");
+});
+
+// --- Audit regressions: focus theft and unread decisions (FEC-3, FEX-8, FEC-16) ---
+
+test("FEC-3: a card arriving while the user types in an input does not take focus", async () => {
+  const input = document.createElement("input");
+  document.body.appendChild(input);
+  input.focus();
+  try {
+    const { default: ApprovalCard } = await import("./ApprovalCard.svelte");
+    render(ApprovalCard, { props: { req: singleReq, queue: [singleReq], caps: capsOn, onDecision: vi.fn() } });
+    await screen.findByRole("button", { name: /^allow$/i });
+    expect(document.activeElement).toBe(input);
+  } finally {
+    input.remove();
+  }
+});
+
+test("FEC-3: accelerators and Enter are ignored until the card is armed", async () => {
+  freezeClock();
+  const { default: ApprovalCard } = await import("./ApprovalCard.svelte");
+  const onDecision = vi.fn();
+  render(ApprovalCard, { props: { req: singleReq, queue: [singleReq], caps: capsOn, onDecision } });
+  const allow = await screen.findByRole("button", { name: /^allow$/i });
+  const ev = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+  allow.dispatchEvent(ev);
+  expect(ev.defaultPrevented).toBe(true); // the button's Enter activation is held back
+  await fireEvent.keyDown(allow, { key: "a" });
+  await fireEvent.keyDown(allow, { key: "d" });
+  expect(onDecision).not.toHaveBeenCalled();
+  passArming();
+  await fireEvent.keyDown(allow, { key: "a" });
+  expect(onDecision).toHaveBeenCalledWith("req_1", "allow");
+});
+
+test("FEC-16: key repeat and the second click of a double-click never decide", async () => {
+  freezeClock();
+  const { default: ApprovalCard } = await import("./ApprovalCard.svelte");
+  const onDecision = vi.fn();
+  render(ApprovalCard, { props: { req: singleReq, queue: [singleReq], caps: capsOn, onDecision } });
+  const allow = await screen.findByRole("button", { name: /^allow$/i });
+  passArming();
+  await fireEvent.keyDown(allow, { key: "a", repeat: true });
+  await fireEvent.click(allow, { detail: 2 });
+  expect(onDecision).not.toHaveBeenCalled();
+});
+
+test("FEC-16: a new request in place re-arms the delay", async () => {
+  freezeClock();
+  const { default: ApprovalCard } = await import("./ApprovalCard.svelte");
+  const onDecision = vi.fn();
+  const { rerender } = render(ApprovalCard, { props: { req: batchQueue[0], queue: batchQueue, caps: capsOn, onDecision } });
+  passArming();
+  await rerender({ req: batchQueue[1], queue: [batchQueue[1]], caps: capsOn, onDecision });
+  const allow = await screen.findByRole("button", { name: /^allow$/i });
+  await fireEvent.keyDown(allow, { key: "a" });
+  expect(onDecision).not.toHaveBeenCalled();
 });
