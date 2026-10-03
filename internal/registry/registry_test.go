@@ -86,7 +86,7 @@ func TestAtomicWriteLeavesNoTemp(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, e := range entries {
-		if e.Name() != "workspaces.json" {
+		if e.Name() != "workspaces.json" && e.Name() != "workspaces.json.bak" {
 			t.Errorf("unexpected file after Upsert: %s", e.Name())
 		}
 	}
@@ -489,16 +489,18 @@ func TestUpdate_ConcurrentFieldsNoLostUpdate(t *testing.T) {
 }
 
 func TestFlushFailureRollsBackMemory(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("directory permissions are not enforced for root")
-	}
 	dir := t.TempDir()
 	s, _ := registry.Load(dir)
 	_ = s.Upsert(registry.Workspace{ID: "a", Title: "orig"})
-	if err := os.Chmod(dir, 0o500); err != nil {
+	// Make the rename onto workspaces.json fail even as root: replace the file
+	// with a non-empty directory.
+	p := filepath.Join(dir, "workspaces.json")
+	if err := os.Remove(p); err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chmod(dir, 0o700)
+	if err := os.MkdirAll(filepath.Join(p, "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.Upsert(registry.Workspace{ID: "b"}); err == nil {
 		t.Fatal("expected flush error")
 	}
@@ -523,7 +525,7 @@ func TestLoad_CorruptRecoversFromBackup(t *testing.T) {
 	dir := t.TempDir()
 	s, _ := registry.Load(dir)
 	_ = s.Upsert(registry.Workspace{ID: "a"})
-	_ = s.Upsert(registry.Workspace{ID: "b"}) // first flush's file becomes .bak
+	_ = s.Upsert(registry.Workspace{ID: "b"})
 	// Simulate a crash that left a zero-length main file.
 	if err := os.WriteFile(filepath.Join(dir, "workspaces.json"), nil, 0o600); err != nil {
 		t.Fatal(err)
@@ -535,6 +537,80 @@ func TestLoad_CorruptRecoversFromBackup(t *testing.T) {
 	if _, ok := s2.Get("a"); !ok {
 		t.Fatalf("expected record a recovered from .bak, got %+v", s2.List())
 	}
+	if _, ok := s2.Get("b"); !ok {
+		t.Fatalf("expected the latest record b recovered from .bak, got %+v", s2.List())
+	}
+}
+
+// Recovery must be persisted: a second Load without any intervening write must
+// still see the recovered records.
+func TestLoad_RecoveryPersistsAcrossLoads(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := registry.Load(dir)
+	_ = s.Upsert(registry.Workspace{ID: "a"})
+	if err := os.WriteFile(filepath.Join(dir, "workspaces.json"), []byte("{garbage"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s2, _ := registry.Load(dir)
+	if len(s2.List()) != 1 {
+		t.Fatalf("first load: want 1 recovered, got %+v", s2.List())
+	}
+	s3, err := registry.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s3.Get("a"); !ok || len(s3.List()) != 1 {
+		t.Fatalf("second load lost the recovery: %+v", s3.List())
+	}
+}
+
+// A missing main file with a good .bak (for example after a failed recovery
+// flush) falls back to the backup.
+func TestLoad_MissingMainFallsBackToBackup(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := registry.Load(dir)
+	_ = s.Upsert(registry.Workspace{ID: "a"})
+	if err := os.Remove(filepath.Join(dir, "workspaces.json")); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := registry.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s2.Get("a"); !ok {
+		t.Fatalf("expected a from .bak, got %+v", s2.List())
+	}
+}
+
+// .bak must hold the just-committed state, so recovery does not resurrect a
+// removed workspace or lose the latest write.
+func TestBackup_HoldsCommittedState(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := registry.Load(dir)
+	_ = s.Upsert(registry.Workspace{ID: "a"})
+	_ = s.Upsert(registry.Workspace{ID: "b"})
+	_ = s.Remove("a")
+	main, _ := os.ReadFile(filepath.Join(dir, "workspaces.json"))
+	bak, err := os.ReadFile(filepath.Join(dir, "workspaces.json.bak"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(main, bak) {
+		t.Fatalf(".bak differs from committed file:\nmain=%s\nbak=%s", main, bak)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "workspaces.json"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s2, _ := registry.Load(dir)
+	if _, ok := s2.Get("a"); ok {
+		t.Fatal("removed workspace a resurrected from .bak")
+	}
+	if _, ok := s2.Get("b"); !ok {
+		t.Fatal("latest record b missing after recovery")
+	}
+	if m, _ := filepath.Glob(filepath.Join(dir, ".workspaces-*.tmp")); len(m) != 0 {
+		t.Fatalf("temp files leaked: %v", m)
+	}
 }
 
 func TestFlushWritesSortedByID(t *testing.T) {
@@ -545,7 +621,7 @@ func TestFlushWritesSortedByID(t *testing.T) {
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, "workspaces.json"))
 	ia, ib, ic := bytes.Index(data, []byte(`"a"`)), bytes.Index(data, []byte(`"b"`)), bytes.Index(data, []byte(`"c"`))
-	if !(ia < ib && ib < ic) {
+	if ia >= ib || ib >= ic {
 		t.Fatalf("not sorted by ID: %s", data)
 	}
 }

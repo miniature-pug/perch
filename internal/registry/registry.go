@@ -92,6 +92,11 @@ func Load(configDir string) (*Store, error) {
 	removeStaleTemps(configDir)
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
+		// The main file may be missing because an earlier recovery was never
+		// persisted or the file was lost. Fall back to the backup if it exists.
+		if s.recoverFromBackup() {
+			s.persistRecovery()
+		}
 		return s, nil
 	}
 	if err != nil {
@@ -106,15 +111,9 @@ func Load(configDir string) (*Store, error) {
 			fmt.Fprintf(os.Stderr, "registry: %s was corrupt; quarantine to %s failed (%v)\n", path, backupPath, renameErr)
 		}
 		// Recover from the last-good copy that flush keeps, if it parses.
-		if bak, bakErr := os.ReadFile(path + backupSuffix); bakErr == nil {
-			var recovered []Workspace
-			if json.Unmarshal(bak, &recovered) == nil {
-				for _, w := range recovered {
-					s.items[w.ID] = w
-				}
-				fmt.Fprintf(os.Stderr, "registry: recovered %d workspace(s) from %s\n", len(recovered), path+backupSuffix)
-				return s, nil
-			}
+		if s.recoverFromBackup() {
+			s.persistRecovery()
+			return s, nil
 		}
 		fmt.Fprintf(os.Stderr, "registry: starting with an empty workspace list\n")
 		return s, nil
@@ -123,6 +122,34 @@ func Load(configDir string) (*Store, error) {
 		s.items[w.ID] = w
 	}
 	return s, nil
+}
+
+// recoverFromBackup fills s.items from the .bak file if it exists and parses.
+// It reports whether the backup was used.
+func (s *Store) recoverFromBackup() bool {
+	bak, err := os.ReadFile(s.path + backupSuffix)
+	if err != nil {
+		return false
+	}
+	var recovered []Workspace
+	if json.Unmarshal(bak, &recovered) != nil {
+		return false
+	}
+	for _, w := range recovered {
+		s.items[w.ID] = w
+	}
+	fmt.Fprintf(os.Stderr, "registry: recovered %d workspace(s) from %s\n", len(recovered), s.path+backupSuffix)
+	return true
+}
+
+// persistRecovery writes the recovered list back to workspaces.json so the
+// recovery survives a restart that makes no other write. Failure is logged and
+// otherwise ignored: the in-memory state is still correct, and the backup is
+// still on disk for the next Load.
+func (s *Store) persistRecovery() {
+	if err := s.flush(); err != nil {
+		fmt.Fprintf(os.Stderr, "registry: could not persist recovered workspaces: %v\n", err)
+	}
 }
 
 // List returns all workspaces sorted by LastActive descending, with the
@@ -247,8 +274,9 @@ func removeStaleTemps(dir string) {
 
 // flush writes all items to disk atomically: temp file, fsync, rename, then
 // fsync of the directory. Items are written sorted by ID so the file is
-// stable between writes. Before the rename, flush saves the current file as
-// workspaces.json.bak (best-effort) so Load can recover from corruption.
+// stable between writes. After the main file is committed, flush writes the
+// same bytes to workspaces.json.bak (best-effort, also atomically) so Load can
+// recover the latest state if the main file is later damaged.
 // The caller must hold s.mu before calling flush.
 func (s *Store) flush() error {
 	list := make([]Workspace, 0, len(s.items))
@@ -260,7 +288,18 @@ func (s *Store) flush() error {
 	if err != nil {
 		return fmt.Errorf("registry: marshal: %w", err)
 	}
-	dir := filepath.Dir(s.path)
+	if err := writeFileAtomic(s.path, data); err != nil {
+		return err
+	}
+	// Best-effort: the backup is a convenience, not a requirement.
+	_ = writeFileAtomic(s.path+backupSuffix, data)
+	return nil
+}
+
+// writeFileAtomic writes data to dest via a temp file in the same directory:
+// write, fsync, close, rename, then a best-effort fsync of the directory.
+func writeFileAtomic(dest string, data []byte) error {
+	dir := filepath.Dir(dest)
 	tmp, err := os.CreateTemp(dir, ".workspaces-*.json.tmp")
 	if err != nil {
 		return fmt.Errorf("registry: create temp: %w", err)
@@ -280,8 +319,7 @@ func (s *Store) flush() error {
 		_ = os.Remove(tmpName)
 		return fmt.Errorf("registry: close temp: %w", err)
 	}
-	s.saveBackup()
-	if err := os.Rename(tmpName, s.path); err != nil {
+	if err := os.Rename(tmpName, dest); err != nil {
 		_ = os.Remove(tmpName)
 		return fmt.Errorf("registry: rename: %w", err)
 	}
@@ -290,20 +328,4 @@ func (s *Store) flush() error {
 		_ = d.Close()
 	}
 	return nil
-}
-
-// saveBackup copies the current workspaces.json to workspaces.json.bak if the
-// current file parses as a workspace list. A corrupt current file is never
-// copied over a good backup. Failures are ignored: the backup is a
-// convenience, not a requirement.
-func (s *Store) saveBackup() {
-	cur, err := os.ReadFile(s.path)
-	if err != nil {
-		return
-	}
-	var probe []Workspace
-	if json.Unmarshal(cur, &probe) != nil {
-		return
-	}
-	_ = os.WriteFile(s.path+backupSuffix, cur, 0o600)
 }
