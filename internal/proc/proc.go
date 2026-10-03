@@ -9,8 +9,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Runner executes external commands. Every subprocess call in perch must go
@@ -45,17 +48,11 @@ type ExecRunner struct{}
 // stderr and the requested data to stdout). RunInDir returns the command's
 // error verbatim, so callers can inspect *exec.ExitError exit codes.
 // RunInDir always returns partial output, regardless of the error.
+//
+// See run for how ctx cancellation, process groups and the git environment
+// are handled.
 func (e ExecRunner) RunInDir(ctx context.Context, dir, name string, args ...string) ([]byte, []byte, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
-	// os/exec treats Dir=="" as the parent cwd. This guard makes that intent explicit.
-	if dir != "" {
-		cmd.Dir = dir
-	}
-	var outBuf, errBuf bytes.Buffer
-	cmd.Stdout = &outBuf
-	cmd.Stderr = &errBuf
-	err := cmd.Run()
-	return outBuf.Bytes(), errBuf.Bytes(), err
+	return e.run(ctx, dir, nil, name, args...)
 }
 
 // Run executes name with args. Run inherits the parent process working directory.
@@ -68,15 +65,71 @@ func (e ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byt
 // RunStdin captures stdout and stderr separately, and returns the command's
 // error verbatim.
 func (e ExecRunner) RunStdin(ctx context.Context, dir string, stdin []byte, name string, args ...string) ([]byte, []byte, error) {
+	if stdin == nil {
+		stdin = []byte{}
+	}
+	return e.run(ctx, dir, stdin, name, args...)
+}
+
+// pipeDrainDelay bounds how long run waits for the stdout and stderr pipes
+// to reach EOF after the command exits or ctx is done. A grandchild that
+// inherited the pipes (a backgrounded git hook, a credential helper) would
+// otherwise hold Wait open for as long as it lives, so ctx alone could not
+// bound the call.
+const pipeDrainDelay = 2 * time.Second
+
+// gitEnv is appended to the environment of every git command ExecRunner runs.
+//
+//   - GIT_OPTIONAL_LOCKS=0: perch runs read-only git commands (status, diff)
+//     in the background on every file change. Without this, `git status`
+//     refreshes the index and writes it back under index.lock, which makes
+//     the agent's own `git add` or `git commit` fail with "index.lock: File
+//     exists". The variable only drops OPTIONAL locks; commands that must
+//     write the index (apply --cached, worktree add) still take the lock.
+//   - GIT_TERMINAL_PROMPT=0: perch has no terminal to answer a credential
+//     prompt, so git fails fast instead of hanging until the timeout.
+//   - LANGUAGE=C, LC_MESSAGES=C: callers match a few git error messages
+//     (index lock contention, "already exists"). Forcing untranslated
+//     messages keeps those matches valid under any user locale. LC_CTYPE is
+//     left alone, so hooks still see the user's character set.
+var gitEnv = []string{
+	"GIT_OPTIONAL_LOCKS=0",
+	"GIT_TERMINAL_PROMPT=0",
+	"LANGUAGE=C",
+	"LC_MESSAGES=C",
+}
+
+// run is the shared body of RunInDir and RunStdin. A nil stdin means no
+// standard input.
+//
+// The command runs in its own process group. When ctx is done, run kills the
+// whole group, not just the direct child, so hook processes and other
+// helpers that git started die with it. After the command exits (or ctx is
+// done), run waits at most pipeDrainDelay for the output pipes to close. If
+// the command itself succeeded and only a lingering grandchild held the pipes
+// past that delay, run reports success with the output it collected.
+func (e ExecRunner) run(ctx context.Context, dir string, stdin []byte, name string, args ...string) ([]byte, []byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
+	// os/exec treats Dir=="" as the parent cwd. This guard makes that intent explicit.
 	if dir != "" {
 		cmd.Dir = dir
 	}
-	cmd.Stdin = bytes.NewReader(stdin)
+	if filepath.Base(name) == "git" {
+		cmd.Env = append(os.Environ(), gitEnv...)
+	}
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
+	setProcessGroup(cmd)
+	cmd.WaitDelay = pipeDrainDelay
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &errBuf
 	err := cmd.Run()
+	if errors.Is(err, exec.ErrWaitDelay) {
+		// The command exited successfully; only an inherited pipe outlived it.
+		err = nil
+	}
 	return outBuf.Bytes(), errBuf.Bytes(), err
 }
 
@@ -199,12 +252,13 @@ type exitCoder interface {
 	ExitCode() int
 }
 
-// ExitCode returns the process exit code that err carries, or -1 when err is
-// nil or exposes no exit code. Callers can then branch on exit status,
-// without matching version-fragile stderr text.
+// ExitCode returns the process exit code that err carries: 0 when err is nil
+// (the command succeeded), and -1 when err exposes no exit code (for
+// example, the command could not start). Callers can then branch on exit
+// status, without matching version-fragile stderr text.
 func ExitCode(err error) int {
 	if err == nil {
-		return -1
+		return 0
 	}
 	var ec exitCoder
 	if errors.As(err, &ec) {

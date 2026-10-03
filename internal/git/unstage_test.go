@@ -35,12 +35,14 @@ func TestUnstageHunk_GoesToRunnerSeam(t *testing.T) {
 	// Resolving the merged index reads the working-tree diff too; it is empty here
 	// so the only hunk is the staged one at merged index 0.
 	r.Respond(proc.FakeResult{Stdout: []byte("")},
-		"git", "-C", "/repo", "diff", "--unified=3", "--no-color", "--", "f.txt")
+		"git", "-C", "/repo", "diff", "--unified=3", "--no-color", "--no-ext-diff", "--no-textconv",
+		"--src-prefix=a/", "--dst-prefix=b/", "--", ":(literal)f.txt")
 	// The staged hunk is located in `git diff --cached ...` output by header match.
 	r.Respond(proc.FakeResult{Stdout: []byte(cachedDiff)},
-		"git", "-C", "/repo", "diff", "--cached", "--unified=3", "--no-color", "--", "f.txt")
+		"git", "-C", "/repo", "diff", "--cached", "--unified=3", "--no-color", "--no-ext-diff", "--no-textconv",
+		"--src-prefix=a/", "--dst-prefix=b/", "--", ":(literal)f.txt")
 	// The apply must be `git apply --reverse --cached -`.
-	r.Respond(proc.FakeResult{}, "git", "apply", "--reverse", "--cached", "-")
+	r.Respond(proc.FakeResult{}, "git", "apply", "--whitespace=nowarn", "--reverse", "--cached", "-")
 
 	if err := git.UnstageHunk(ctx, r, "/repo", "f.txt", 0); err != nil {
 		t.Fatalf("UnstageHunk: %v", err)
@@ -56,7 +58,7 @@ func TestUnstageHunk_GoesToRunnerSeam(t *testing.T) {
 	if applyCall == nil {
 		t.Fatal("git apply was never invoked through the runner — runner seam bypassed")
 	}
-	wantArgs := []string{"apply", "--reverse", "--cached", "-"}
+	wantArgs := []string{"apply", "--whitespace=nowarn", "--reverse", "--cached", "-"}
 	if strings.Join(applyCall.Args, " ") != strings.Join(wantArgs, " ") {
 		t.Errorf("apply argv = %v, want %v", applyCall.Args, wantArgs)
 	}

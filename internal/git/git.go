@@ -45,7 +45,7 @@ func ValidRef(name string) error {
 	}
 	// Scan rune by rune for forbidden sequences and characters.
 	prev := rune(0)
-	for i, r := range name {
+	for _, r := range name {
 		// Control characters (including NUL) and space.
 		if r < 0x20 || r == 0x7f || r == ' ' {
 			return fmt.Errorf("git: ref name %q contains forbidden character %q", name, r)
@@ -69,7 +69,6 @@ func ValidRef(name string) error {
 		// git check-ref-format also forbids a leading dot in a ref
 		// component; ValidRef does not enforce that stricter rule here, only
 		// the ".." sequence ban.
-		_ = i
 		prev = r
 	}
 	// git check-ref-format forbids a trailing '.'.
@@ -231,9 +230,13 @@ func ListWorktrees(ctx context.Context, r proc.Runner, repoRoot string) ([]Workt
 // if none exists. This index is the canonical main worktree position.
 //
 // Rule: the main worktree is the first non-bare entry. Git always lists it
-// first in normal repositories. In a bare repository with attached
-// worktrees, the bare entry comes first, and the main working checkout is
-// the next non-bare entry.
+// first in normal repositories.
+//
+// Caveat: a bare repository has no main working checkout. Its main worktree
+// IS the bare directory, which git lists first, and every other entry is a
+// linked worktree. firstNonBare then picks the first LINKED worktree, so
+// MainWorktree and ToTrees report that worktree as "main". Callers that care
+// about the distinction must check for a bare first entry themselves.
 func firstNonBare(wts []Worktree) int {
 	for i := range wts {
 		if !wts[i].Bare {
@@ -248,9 +251,9 @@ func firstNonBare(wts []Worktree) int {
 //
 // Git always places the main worktree first in the porcelain output,
 // regardless of which worktree directory the caller ran the command from.
-// So index 0 is normally the main checkout. The non-bare check makes
-// MainWorktree safe for the rare case of a bare repository with linked
-// working worktrees.
+// So index 0 is normally the main checkout. In a bare repository with
+// linked worktrees, MainWorktree returns the first linked worktree instead
+// (see firstNonBare), which is a usable checkout but not a true main one.
 func MainWorktree(wts []Worktree) (Worktree, bool) {
 	i := firstNonBare(wts)
 	if i < 0 {

@@ -2,6 +2,7 @@
 package fs_test
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,16 +61,11 @@ func TestReadFile_OversizedRejected(t *testing.T) {
 func TestReadFile_AtCapOK(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
-	path := filepath.Join(dir, "atcap.bin")
-	f, err := os.Create(path)
-	if err != nil {
+	path := filepath.Join(dir, "atcap.txt")
+	// Text content: a file of NUL bytes would be rejected as binary.
+	if err := os.WriteFile(path, bytes.Repeat([]byte("a"), fs.MaxReadFileBytes), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.Truncate(fs.MaxReadFileBytes); err != nil {
-		_ = f.Close()
-		t.Fatal(err)
-	}
-	_ = f.Close()
 
 	got, err := fs.ReadFile(path)
 	if err != nil {
