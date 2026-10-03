@@ -1,20 +1,26 @@
-# Release: minimal, linux/amd64 only.
+# Release: linux binaries for amd64 and arm64.
 #
-# This is deliberately the smallest correct path, per the maintainer's
-# decision: one production GUI binary for linux/amd64, a SHA256SUMS file, a
-# build provenance attestation, and a GitHub Release. No arm64, no other OS,
+# This is the smallest correct path, per the maintainer's decision: one
+# production GUI binary per linux architecture, a single SHA256SUMS file, a
+# build provenance attestation, and a GitHub Release. No macOS, no Windows,
 # no code signing, no AppImage.
 #
-# A push of a tag that matches v* triggers this workflow (for example,
-# `git tag v1.0.0 && git push --tags`). The build stamps the binary version
-# from the tag, so the tag drives `perch version`. This is why the checkout
-# below fetches full history and tags.
+# A push of a tag that matches v* builds both architectures and publishes the
+# release (for example, `git tag v1.0.0 && git push --tags`). The build stamps
+# the binary version from the tag, so the tag drives `perch version`. This is
+# why the checkout below fetches full history and tags.
 #
-# The GUI binary builds inside the pinned perch-dev image, the same image the
-# test gates use. The image bakes in Node, the WebKitGTK 4.1 and GTK3 dev
-# libraries, and the C toolchain, all pinned from .tool-versions and the
-# Containerfile. So the release binary and the test gates share one
-# toolchain, and the runner installs no build libraries of its own.
+# workflow_dispatch runs the same build on both architectures but publishes
+# nothing (the release job is gated on a tag ref). Use it to dry-run the build
+# after a change to this workflow or the Containerfile.
+#
+# Each binary builds inside the pinned perch-dev image, on a runner of its own
+# architecture (amd64 on ubuntu-24.04, arm64 on ubuntu-24.04-arm). The image
+# bakes in Node, the WebKitGTK 4.1 and GTK3 dev libraries, and the C toolchain,
+# all pinned from .tool-versions and the Containerfile. So the release binaries
+# and the test gates share one toolchain, and each runner installs no build
+# libraries of its own. The builds are native, not cross-compiled, because the
+# cgo WebKitGTK binary needs its target's C toolchain and GUI libraries.
 
 name: Release
 
@@ -22,20 +28,26 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch: {}
 
-# contents: write creates the release and uploads the assets. id-token: write
-# and attestations: write let the provenance step sign and store the
-# attestation.
+# The default is read-only. The release job below grants itself the writes it
+# needs.
 permissions:
-  contents: write
-  id-token: write
-  attestations: write
+  contents: read
 
 jobs:
-  release:
-    runs-on: ubuntu-24.04
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
     # Fail fast on a hung step instead of running to the 6-hour default.
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -43,8 +55,7 @@ jobs:
           # Fetch full history and tags, so `git describe --tags` resolves the
           # pushed tag into the binary version below.
           fetch-depth: 0
-          # The release action uses GITHUB_TOKEN through its own input, not the
-          # git config, so do not persist the token.
+          # The build never pushes, so do not persist the token.
           persist-credentials: false
 
       # The pinned Go version comes from .tool-versions, the same source the
@@ -59,32 +70,63 @@ jobs:
         with:
           go-version: ${{ steps.tools.outputs.go }}
 
-      # Build the perch-dev image once, so the GUI build below runs inside it.
+      # Build the perch-dev image once, natively for this runner's architecture.
       - name: Build perch-dev image
         run: make image
 
       # Build the frontend and the cgo GUI binary inside perch-dev, into
-      # bin/perch. The host computes the version from the tag and passes it as
-      # a make override. A command-line VERSION overrides the Makefile default,
-      # so the build never depends on git ownership inside the container.
-      # PERCH_MASK_DIST keeps the build off the checked-out frontend/dist stub.
-      # The real frontend still builds into the masked volume and embeds into
-      # the binary.
-      - name: Build production GUI binary (linux/amd64)
+      # bin/perch. The host computes the version from the tag and passes it as a
+      # make override, so the build never depends on git ownership inside the
+      # container. PERCH_MASK_DIST keeps the build off the checked-out
+      # frontend/dist stub; the real frontend still builds into the masked
+      # volume and embeds into the binary.
+      - name: Build production GUI binary (linux/${{ matrix.arch }})
         env:
           PERCH_MASK_DIST: 1
         run: |
           bash containers/run.sh dev make CONTAINERIZE=0 gui-build \
             VERSION="$(git describe --tags --always --dirty)"
 
-      - name: Package binary and checksums
+      - name: Package binary
         run: |
-          install -m 0755 bin/perch perch-linux-amd64
-          sha256sum perch-linux-amd64 > SHA256SUMS
+          install -m 0755 bin/perch perch-linux-${{ matrix.arch }}
           # Check that the tag flowed into the binary version. Run inside
           # perch-dev, which has the WebKitGTK runtime libraries the binary
-          # links against.
+          # links against, on this runner's own architecture.
           bash containers/run.sh dev ./bin/perch version
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: perch-linux-${{ matrix.arch }}
+          path: perch-linux-${{ matrix.arch }}
+          retention-days: 1
+          if-no-files-found: error
+
+  release:
+    needs: build
+    # Publish only for a tag push. A workflow_dispatch run stops after build.
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      # contents: write creates the release and uploads the assets. id-token
+      # and attestations let the provenance step sign and store the attestation.
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download built binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS
+        run: |
+          cd dist
+          sha256sum perch-linux-* > SHA256SUMS
+          cat SHA256SUMS
 
       # Build provenance is a signed SLSA attestation. It proves this workflow
       # built these files. It is not code signing. `gh attestation verify`
@@ -92,15 +134,15 @@ jobs:
       #
       # GitHub offers artifact attestations free on public repositories. A
       # private repository needs a Team or Enterprise plan for the attestation
-      # API, so this step runs only when the repository is public. It activates
-      # on its own when perch goes public for its first tagged release.
+      # API, so this step runs only when the repository is public.
       - name: Generate build provenance
         if: ${{ !github.event.repository.private }}
         uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
-            perch-linux-amd64
-            SHA256SUMS
+            dist/perch-linux-amd64
+            dist/perch-linux-arm64
+            dist/SHA256SUMS
 
       # This third-party action is pinned to a full commit SHA, for
       # supply-chain hardening. The trailing comment records the
@@ -109,7 +151,8 @@ jobs:
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           files: |
-            perch-linux-amd64
-            SHA256SUMS
+            dist/perch-linux-amd64
+            dist/perch-linux-arm64
+            dist/SHA256SUMS
           fail_on_unmatched_files: true
           generate_release_notes: true

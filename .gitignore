@@ -20,6 +20,13 @@ profile.cov
 # Dependency directories (remove the comment below to include it)
 # vendor/
 
+# `go mod vendor` output must be committed in full. The binary and coverage
+# patterns above (*.exe, *.dll, coverage.*) otherwise silently drop vendored
+# third-party files, such as x/text/.../coverage.go and the Windows WebView2
+# loaders. A clean checkout then fails the production build. This negation
+# keeps every vendored file tracked.
+!vendor/**
+
 # Go workspace file
 go.work
 go.work.sum

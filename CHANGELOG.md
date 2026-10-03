@@ -70,6 +70,10 @@ tagged a release yet, so everything to date sits under Unreleased.
 - The production release binary builds inside that same pinned `perch-dev`
   image, so the release and the test gates share one toolchain. The release
   runner installs no GUI libraries or Node of its own.
+- Prebuilt linux binaries for both `amd64` and `arm64`. Each architecture
+  builds natively inside `perch-dev` on a runner of its own architecture, not
+  cross-compiled. The Containerfile resolves the Go and Node architecture from
+  the build host.
 - A window and taskbar icon embedded in the binary, and a `.desktop` entry
   installed on Linux so the app switcher shows it too.
 - One-key session actions in NORMAL mode: `n` for a new session, `x` to remove
