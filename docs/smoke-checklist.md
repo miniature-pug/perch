@@ -44,6 +44,12 @@ checklist is what the gate cannot see.
 - [ ] Re-running `--upgrade` reports nothing to upgrade and changes nothing.
 - [ ] From a clean clone, `./install.sh --upgrade` builds the newest `v*` tag
       and swaps it in. With an uncommitted change it refuses to start.
+      `sudo ./install.sh --upgrade` in your own clone refuses, and changes
+      nothing.
+- [ ] After any of the above, `~/.local/share/icons/hicolor/icon-theme.cache`
+      exists only if it existed before.
+- [ ] On v0.1.0 (no `install-desktop`), the README fallback (`sh install.sh
+      --upgrade --prefix="$HOME/.local/bin"`) writes the entry and icon.
 
 ## Environment
 

@@ -102,7 +102,34 @@ under `~/.local/share` (or `$XDG_DATA_HOME`), pointing at the binary you ran
 it with. GNOME on Wayland takes the dock and app-switcher icon only from that
 entry, so without it the dock shows a generic icon. It also adds perch to the
 app menu. Run it as yourself, not with `sudo`, and run it again if you move
-the binary. If `perch` is not found, add `~/.local/bin` to your `PATH`.
+the binary. If `perch` is not found, add `~/.local/bin` to your `PATH`. Keep
+the binary in a directory whose path has no `%` in it, because GNOME cannot
+launch such a path from a `.desktop` entry.
+
+Releases up to v0.1.0 predate `install-desktop`. On those, the command
+prints `perch: "install-desktop" is not an existing directory` followed by
+the usage. If you see that, install the entry with `install.sh` instead. It
+writes the same entry for any release:
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/miniature-pug/perch/main/install.sh
+sh install.sh --upgrade --prefix="$HOME/.local/bin"
+```
+
+If you are already on the newest release, the script changes no binary and
+only writes the entry. You can also write the entry by hand:
+
+```sh
+mkdir -p ~/.local/share/icons/hicolor/512x512/apps ~/.local/share/applications
+curl -fsSL -o ~/.local/share/icons/hicolor/512x512/apps/perch.png \
+  https://raw.githubusercontent.com/miniature-pug/perch/main/app/appicon.png
+printf '[Desktop Entry]\nType=Application\nName=perch\nComment=Cockpit for AI coding agents\nExec="%s"\nIcon=perch\nTerminal=false\nCategories=Development;\nStartupWMClass=perch\n' \
+  "$HOME/.local/bin/perch" > ~/.local/share/applications/perch.desktop
+touch ~/.local/share/icons/hicolor
+```
+
+The `Exec` line holds the path exactly as written. If that path contains a
+`"`, `` ` ``, `$`, or `\`, use `install.sh`, which escapes them.
 
 Each release also ships a signed build provenance attestation. To check that
 GitHub built the binary from this repository's release workflow, use the
@@ -186,19 +213,29 @@ release. It works in two modes:
   ```
 
   It resolves the newest release, downloads `perch-linux-<arch>` and
-  `SHA256SUMS`, and checks the binary against its checksum line.
+  `SHA256SUMS`, and checks the binary against its checksum line. If the
+  installed perch reports no release version (a commit hash or `dev`, from a
+  source build), the script cannot compare versions. It says so and installs
+  the release.
 - **Source mode** builds the newest release tag. It is the default when you
   run `./install.sh --upgrade` from a clone, or pick it with
   `--upgrade=source`. It refuses a checkout with uncommitted changes, runs
-  `git fetch --tags`, checks out the newest `v*` tag (pre-release tags are
-  skipped), and builds it with the same toolchain checks as a fresh install.
-  Your clone stays on that tag. The script prints the `git checkout` command
-  that returns you to your branch.
+  `git fetch --tags`, and picks the newest `v*` tag (pre-release tags are
+  skipped). It stops when the installed build already contains that tag. For
+  a build that reports a commit hash, it asks git, using the hash or your
+  checkout's `HEAD`. It runs the toolchain checks before it checks out the
+  tag. It then builds the tag with the same steps as a fresh install. If
+  anything fails after the checkout, the clone returns to your branch. On
+  success, your clone stays on the tag. The script prints the `git checkout`
+  command that returns you to your branch. Run source mode as the clone's
+  owner. The script refuses it under `sudo`, because git, npm, and Go would
+  leave root-owned files in your clone. Use `--prefix="$HOME/.local/bin"`, or
+  `sudo ./install.sh --upgrade=release` for a system-wide perch.
 
 Both modes upgrade the `perch` first on your `PATH`, or the binary in
 `--prefix=DIR`. Both stop without changes when that binary is already the
 newest release. Before the swap, the new binary must run `perch version` and
-report the expected tag. A failed download, a checksum mismatch, or a failed
+report exactly the expected tag. A failed download, a checksum mismatch, or a failed
 smoke test leaves the installed binary untouched. The previous binary stays
 next to the new one as `perch.prev`. To roll back, run `mv -f perch.prev
 perch` in that directory. The script then refreshes the desktop entry and
