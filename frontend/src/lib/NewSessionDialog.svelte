@@ -113,6 +113,10 @@
   // blocks Create in new-branch mode, so a fast repo switch cannot submit a
   // stale baseRef.
   let branchesLoading = $state(false);
+  // Bumped on every open. The branch-load effect reads it, so reopening the
+  // dialog on the same repo reloads the branch list (including the branch the
+  // previous session just created) and re-seeds the base ref (FEX-5).
+  let openNonce = $state(0);
 
   // Reset the dialog state when it opens. The reset is wrapped in untrack, so
   // the write to `agent` (and the later reads of `agent` inside suggestBranch)
@@ -130,7 +134,15 @@
       branchName  = suggestBranch(agent, "", branches);
       branchSel   = "";
       baseRef     = "";
+      openNonce++;
     });
+  });
+
+  // The repo list can arrive after the dialog opened (discovery is async on a
+  // first run). Default to its first entry then, instead of leaving the picker
+  // blank with Create disabled (FEX-26).
+  $effect(() => {
+    if (open && !repo && repos.length) repo = repos[0];
   });
 
   // Keep the suggested new-branch name in sync with the agent, the name field,
@@ -151,6 +163,7 @@
   // loads.
   $effect(() => {
     const currentRepo = repo;
+    openNonce; // track: every open reloads the list, even for the same repo
     // Clear the fields at once, so no stale branch data survives the switch.
     untrack(() => {
       branches  = [];
@@ -186,7 +199,7 @@
     !!repo &&
     (!worktree || useExisting
       ? !!branchSel
-      : (!!branchName && nameValid && newBranchReady))
+      : (!!branchName && !!baseRef && nameValid && newBranchReady))
   );
 
   async function handleCreate() {

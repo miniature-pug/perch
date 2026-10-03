@@ -394,11 +394,12 @@
     layout.setOrder(next);
   }
 
-  // Derived repo list for NewSessionDialog. It is the union of session-derived
-  // paths and any paths discoverRepos() returns. discoverRepos() fills lazily,
-  // on dialog open.
+  // Derived repo list for NewSessionDialog. It is the union of the sessions'
+  // repo paths and any paths discoverRepos() returns. discoverRepos() fills
+  // lazily, on dialog open. A worktree session's worktreePath is another
+  // session's checkout, not a repo, so it must never be offered (FEC-9).
   const repos = $derived([...new Set([
-    ...workspaces.map(w => w.worktreePath),
+    ...workspaces.map(w => w.repoPath),
     ...discoveredRepos.map(r => r.path),
   ])]);
 
@@ -903,45 +904,59 @@
 
   async function handleCreate(agent: string, repo: string, baseRef: string, branch: string, title: string, worktree: boolean) {
     createError = null; // clear any prior inline error on a fresh attempt
-    // Guard: if the branch already belongs to a perch session, offer resume instead.
-    const existing = await workspaceForBranch(repo, branch);
-    if (existing.found) {
-      // The branch is already in use. Resume that session instead of creating a
-      // duplicate.
-      newSessionOpen = false;
-      newSessionInitialAgent = null;
-      await onSelect(existing.id);
-      return;
-    }
     try {
+      // Guard: if the branch already belongs to a perch session, offer resume
+      // instead. The backend only tracks branches for worktree sessions. The
+      // call sits inside the try, so a failure lands in the inline error
+      // instead of an unhandled rejection (FEC-26).
+      if (worktree) {
+        const existing = await workspaceForBranch(repo, branch);
+        if (existing.found) {
+          // The branch is already in use. Resume that session instead of
+          // creating a duplicate.
+          newSessionOpen = false;
+          newSessionInitialAgent = null;
+          await onSelect(existing.id);
+          return;
+        }
+      }
       const vm = await createWorkspace(agent, repo, baseRef, branch, title, worktree);
       workspaces = await listWorkspaces();
       newSessionOpen = false;
-      // Creating a session spawns its pty right away. onSelect sets activeId
-      // and opens the session in one step, so the new session comes up live,
-      // instead of sitting as a selected-but-dead row.
-      await onSelect(vm.id);
+      // Creating a session spawns its pty right away. A new session is cold
+      // (never opened this run), so onSelect would only show the resume
+      // preview; open it directly (FEC-18).
+      await openSession(vm.id);
     } catch (e) {
-      const msg = String(e);
       // Never show the raw error to the user, since it is git output noise, for
       // example "exit status 128: fatal: ...". Log it for diagnosis, and show a
-      // human-readable message instead.
+      // human-readable message inline, where the user can act on it (FEC-27).
       console.error("create session failed:", e);
-      if (msg.includes("uncommitted changes")) {
-        // ErrWorktreeDirty: a non-worktree session cannot switch to a different
-        // branch while the working tree has uncommitted changes.
-        addBlocking("", "Cannot switch branch",
-          "Your working tree has uncommitted changes. Commit or stash them before switching to a different branch.", "error");
-      } else if (/already exists/i.test(msg)) {
-        // ErrBranchExists at the git layer, from a new-branch-mode name collision.
-        // This is a genuine user error, so it MUST surface as actionable copy,
-        // inline in the dialog, not as raw git output (F26a).
-        createError = `A branch named "${branch}" already exists. Choose a different name, or turn on "Use existing branch" to resume it.`;
-      } else {
-        createError = "Could not create the session. Check the repo and branch, then try again.";
-      }
+      createError = createErrorMessage(String(e), branch);
       // Keep the dialog open, so the user can correct their choice.
     }
+  }
+
+  // Map the backend's create sentinels to actionable copy (F26a, FEC-27).
+  function createErrorMessage(msg: string, branch: string): string {
+    if (msg.includes("uncommitted changes")) {
+      // ErrWorktreeDirty: a non-worktree session cannot switch to a different
+      // branch while the working tree has uncommitted changes.
+      return "The repo has uncommitted changes. Commit or stash them before switching to a different branch, or turn on Worktree.";
+    }
+    if (msg.includes("already checked out by a session")) {
+      // ErrBranchInUse: another session already has this branch checked out.
+      return `The branch "${branch}" is already checked out by another session. Open that session, or choose a different branch.`;
+    }
+    if (msg.includes("has no commits yet")) {
+      // ErrNoCommits: a worktree needs a commit to branch from.
+      return "This repository has no commits yet. Make a first commit, then create the session.";
+    }
+    if (/already exists/i.test(msg)) {
+      // ErrBranchExists at the git layer, from a new-branch-mode name collision.
+      return `A branch named "${branch}" already exists. Choose a different name, or turn on "Use existing branch" to resume it.`;
+    }
+    return "Could not create the session. Check the repo and branch, then try again.";
   }
 
   function requestRemove(ws: WorkspaceVM) {

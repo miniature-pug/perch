@@ -1793,7 +1793,8 @@ describe("App.svelte NewSessionDialog", () => {
 
     // Select the repo. The new dialog defaults to worktree=true, new-branch mode.
     // baseRef will be "main" (first branch from the mock). Set branch name manually.
-    await fireEvent.change(screen.getByLabelText(/^repo$/i), { target: { value: "/tmp/alpha" } });
+    // The repo list offers the session's repoPath, never its worktree (FEC-9).
+    await fireEvent.change(screen.getByLabelText(/^repo$/i), { target: { value: "/repo/repo-alpha" } });
     // Wait for branches to load for new repo
     await waitFor(() => {
       const startingPointSelect = screen.getByLabelText(/starting point/i) as HTMLSelectElement;
@@ -1808,8 +1809,9 @@ describe("App.svelte NewSessionDialog", () => {
     await tick();
 
     // createWorkspace must have been called with the 6-arg signature:
-    // agent="claude", repo="/tmp/alpha", baseRef="main" (first branch from mock), branch="feat/x", title="" (no name entered), worktree=true
-    expect(createWorkspace).toHaveBeenCalledWith("claude", "/tmp/alpha", "main", expect.stringMatching(/^[A-Za-z0-9._\/-]+$/), "", true);
+    // agent="claude", repo="/repo/repo-alpha", baseRef="main" (first branch from mock), branch="feat/x", title="" (no name entered), worktree=true
+    await waitFor(() => expect(createWorkspace).toHaveBeenCalled());
+    expect(createWorkspace).toHaveBeenCalledWith("claude", "/repo/repo-alpha", "main", expect.stringMatching(/^[A-Za-z0-9._\/-]+$/), "", true);
 
     // Dialog must close
     await waitFor(() =>
@@ -1817,7 +1819,7 @@ describe("App.svelte NewSessionDialog", () => {
     );
   });
 
-  it("handleCreate surfaces ErrWorktreeDirty as a blocking notification and keeps dialog open", async () => {
+  it("handleCreate surfaces ErrWorktreeDirty inline in the dialog and keeps it open (FEC-27)", async () => {
     const { listWorkspaces, createWorkspace } = await import("./lib/wails");
     (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([
       {
@@ -1858,13 +1860,12 @@ describe("App.svelte NewSessionDialog", () => {
     await fireEvent.click(createBtn);
     await tick();
 
-    // A blocking notification must appear with a clean-tree message
+    // The clean-tree message shows inline, in the open dialog, not in the hub.
     await waitFor(() => {
-      const items = getItems();
-      expect(items.length).toBeGreaterThan(notifBefore);
-      const dirty = items.find(n => n.title === "Cannot switch branch");
-      expect(dirty).toBeDefined();
+      const dialog = screen.getByRole("dialog", { name: "new session" });
+      expect(dialog.textContent).toMatch(/uncommitted changes/i);
     });
+    expect(getItems().length).toBe(notifBefore);
 
     // Dialog must STAY open so the user can correct their choice
     await waitFor(() =>
@@ -1896,7 +1897,7 @@ describe("App.svelte NewSessionDialog", () => {
   });
 
   it("repo dropdown shows a friendly name for discovered repos and falls back to the raw path for workspace-derived entries", async () => {
-    // fakeWorkspaces[0].worktreePath ("/tmp/alpha") has no matching RepoInfo.
+    // fakeWorkspaces[0].repoPath ("/repo/repo-alpha") has no matching RepoInfo.
     // It only enters `repos` through the workspace-derived union, so it must fall back to its raw path.
     // discoverRepos(), mocked module-wide, resolves "/discovered/repo-a" with name "repo-a" and branch "main".
     // This entry must render as a friendly label.
@@ -1917,9 +1918,11 @@ describe("App.svelte NewSessionDialog", () => {
     });
     const options = Array.from(repoSelect.options);
     const discovered = options.find((o) => o.value === "/discovered/repo-a");
-    const fallback   = options.find((o) => o.value === "/tmp/alpha");
+    const fallback   = options.find((o) => o.value === "/repo/repo-alpha");
     expect(discovered?.textContent).toBe("repo-a · main");
-    expect(fallback?.textContent).toBe("/tmp/alpha");
+    expect(fallback?.textContent).toBe("/repo/repo-alpha");
+    // FEC-9: a session's worktree is never offered as a repo.
+    expect(options.some((o) => o.value === "/tmp/alpha")).toBe(false);
   });
 
   it("handleCreate calls onSelect with existing session id when WorkspaceForBranch returns found=true", async () => {
@@ -5461,5 +5464,55 @@ describe("audit regressions: preview content", () => {
     expect(screen.getByTestId("preview").dataset.content).toBe("");
     release("graph TD; A-->B");
     await waitFor(() => expect(screen.getByTestId("preview").dataset.content).toBe("graph TD; A-->B"));
+  });
+});
+
+describe("audit regressions: create session", () => {
+  async function openDialogAndCreate() {
+    const { listWorkspaces } = await import("./lib/wails");
+    (listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([fakeWorkspaces[0]]);
+    const { default: App } = await import("./App.svelte");
+    render(App);
+    await screen.findByRole("button", { name: /^Alpha\b/ });
+    await fireEvent.click(screen.getByRole("button", { name: "New session" }));
+    await waitFor(() => expect(screen.getByRole("dialog", { name: "new session" })).toBeInTheDocument());
+    await waitFor(() => {
+      const sp = screen.getByLabelText(/starting point/i) as HTMLSelectElement;
+      expect(sp.value).not.toBe("");
+    });
+    await fireEvent.click(screen.getByRole("button", { name: "Create" }));
+  }
+
+  it("FEC-18: a created session opens directly, without the resume preview", async () => {
+    const { openWorkspace } = await import("./lib/wails");
+    await openDialogAndCreate();
+    await waitFor(() => expect(openWorkspace).toHaveBeenCalledWith("ws-new"));
+    expect(screen.queryByTestId("resume-preview")).toBeNull();
+  });
+
+  it("FEC-27: ErrBranchInUse shows an actionable inline message", async () => {
+    const { createWorkspace } = await import("./lib/wails");
+    vi.mocked(createWorkspace).mockRejectedValueOnce(new Error("create: branch already checked out by a session"));
+    await openDialogAndCreate();
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "new session" }).textContent).toMatch(/already checked out by another session/));
+  });
+
+  it("FEC-27: ErrNoCommits shows an actionable inline message", async () => {
+    const { createWorkspace } = await import("./lib/wails");
+    vi.mocked(createWorkspace).mockRejectedValueOnce(new Error("git: repository has no commits yet"));
+    await openDialogAndCreate();
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "new session" }).textContent).toMatch(/no commits yet/));
+  });
+
+  it("FEC-26: a failing WorkspaceForBranch lands in the inline error, not an unhandled rejection", async () => {
+    const { workspaceForBranch, createWorkspace } = await import("./lib/wails");
+    vi.mocked(createWorkspace).mockClear();
+    vi.mocked(workspaceForBranch).mockRejectedValueOnce(new Error("registry unavailable"));
+    await openDialogAndCreate();
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "new session" }).textContent).toMatch(/Could not create the session/));
+    expect(createWorkspace).not.toHaveBeenCalled();
   });
 });
