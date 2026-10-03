@@ -12,9 +12,10 @@ import (
 
 // ── ExitCode ──────────────────────────────────────────────────────────────────
 
-func TestExitCode_NilIsMinusOne(t *testing.T) {
-	if got := proc.ExitCode(nil); got != -1 {
-		t.Errorf("ExitCode(nil) = %d, want -1", got)
+// A nil error is a successful run, so its exit code is 0, not -1.
+func TestExitCode_NilIsZero(t *testing.T) {
+	if got := proc.ExitCode(nil); got != 0 {
+		t.Errorf("ExitCode(nil) = %d, want 0", got)
 	}
 }
 
