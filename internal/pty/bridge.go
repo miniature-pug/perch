@@ -107,6 +107,25 @@ func (b *Bridge) SuppressExit() {
 	b.mu.Unlock()
 }
 
+// killSessionLocked SIGKILLs the shell's process group and every other
+// process in its session. The caller holds b.mu. The reaper sets b.reaped
+// under b.mu before it reaps the shell, so while b.reaped is false the
+// shell is alive or an unreaped zombie: its pid, process group id and
+// session id cannot belong to anyone else. Once reaped, it does nothing.
+func (b *Bridge) killSessionLocked(cmd *exec.Cmd) {
+	if cmd.Process == nil || b.reaped {
+		return
+	}
+	pid := cmd.Process.Pid
+	if perr := syscall.Kill(-pid, syscall.SIGKILL); perr != nil {
+		_ = cmd.Process.Kill()
+	}
+	// creack/pty makes the shell a session leader, so the session id is its
+	// pid. Background jobs live in other process groups of that session and
+	// survive the group kill above.
+	killSession(pid)
+}
+
 const (
 	maxChunk     = 16 * 1024
 	defaultShell = "/bin/bash"
@@ -162,35 +181,35 @@ func spawn(ctx context.Context, cwd string, argv []string, env []string, dataEve
 	if env != nil {
 		cmd.Env = env
 	}
+	b := &Bridge{}
+	// ctx cancellation kills exactly what Close kills. os/exec's default would
+	// SIGKILL only the shell; the reaper could then reap it before Close runs,
+	// and Close would (correctly) no longer signal anything, leaving the
+	// shell's background jobs alive. Cancel must be set before Start; it
+	// can fire as soon as Start returns, so it locks b.mu, which guards the
+	// fields set below.
+	cmd.Cancel = func() error {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		b.killSessionLocked(cmd)
+		return nil
+	}
 	f, err := creackpty.StartWithSize(cmd, &creackpty.Winsize{Cols: cols, Rows: rows})
 	if err != nil {
 		return nil, fmt.Errorf("pty Spawn: start %q: %w", argv[0], err)
 	}
-	b := &Bridge{
-		ptyFile: f,
-		pid:     cmd.Process.Pid,
-		setsize: func(c, r uint16) error {
-			return creackpty.Setsize(f, &creackpty.Winsize{Cols: c, Rows: r})
-		},
+	b.mu.Lock()
+	b.ptyFile = f
+	b.pid = cmd.Process.Pid
+	b.setsize = func(c, r uint16) error {
+		return creackpty.Setsize(f, &creackpty.Winsize{Cols: c, Rows: r})
 	}
 	// closer runs with b.mu held (see Close).
 	b.closer = func() error {
 		// Kill BEFORE closing the pty master fd. Closing first would unblock
 		// pumpReader, and the reaper could reap the shell, freeing its pid
-		// for reuse before the signals land. The reaper sets b.reaped under
-		// b.mu before it reaps, so while b.reaped is false the shell is
-		// still alive or an unreaped zombie: its pid, process group id and
-		// session id cannot belong to anyone else.
-		if cmd.Process != nil && !b.reaped {
-			pid := cmd.Process.Pid
-			if perr := syscall.Kill(-pid, syscall.SIGKILL); perr != nil {
-				_ = cmd.Process.Kill()
-			}
-			// creack/pty makes the shell a session leader, so the session id
-			// is its pid. Background jobs live in other process groups of
-			// that session and survive the group kill above.
-			killSession(pid)
-		}
+		// for reuse before the signals land.
+		b.killSessionLocked(cmd)
 		// Close the pty master fd after the kill, so pumpReader unblocks and
 		// the reaper goroutine can proceed with cmd.Wait().
 		// NOTE: cmd.Wait() is NOT called here. The reaper goroutine below is
@@ -199,6 +218,7 @@ func spawn(ctx context.Context, cwd string, argv []string, env []string, dataEve
 		// never call Wait.
 		return f.Close()
 	}
+	b.mu.Unlock()
 	go func() {
 		defer safe.Recover("pty-reaper")
 		// pumpReader blocks until the pty fd returns EOF. This happens when

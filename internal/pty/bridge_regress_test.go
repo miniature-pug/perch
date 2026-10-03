@@ -102,6 +102,40 @@ func TestSpawn_CloseKillsBackgroundJobInOwnGroup(t *testing.T) {
 	}
 }
 
+// The app cancels the pane ctx before it calls Close. By then the reaper may
+// already have reaped the shell, so Close signals nothing; ctx cancellation
+// itself must therefore kill the session, including a background job that
+// does not hold the tty (review finding 1).
+func TestSpawn_CancelThenCloseKillsBackgroundJobs(t *testing.T) {
+	for _, cmdline := range []string{
+		"sleep 31337 & echo BGPID=$!\n",
+		"sleep 31337 </dev/null >/dev/null 2>&1 & echo BGPID=$!\n",
+	} {
+		t.Run(strings.TrimSpace(cmdline), func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			var o outputCollector
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			b, err := Spawn(ctx, t.TempDir(),
+				[]string{"bash", "--norc", "--noprofile", "-i"}, nil, "d", "x", o.emit, 80, 24)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := b.Write([]byte(cmdline)); err != nil {
+				t.Fatal(err)
+			}
+			pid := o.waitPID(t, "BGPID=")
+			cancel()
+			time.Sleep(300 * time.Millisecond) // the app tears down the monitor here
+			_ = b.Close()
+			if !processGone(pid, 2*time.Second) {
+				_ = syscall.Kill(pid, syscall.SIGKILL)
+				t.Fatalf("background job %d survived cancel then Close", pid)
+			}
+		})
+	}
+}
+
 // GFS-22: once the shell has exited and been reaped, the bridge is marked
 // reaped, so a later Close does not signal a pid the kernel may reuse.
 func TestSpawn_MarksReapedAfterNaturalExit(t *testing.T) {
