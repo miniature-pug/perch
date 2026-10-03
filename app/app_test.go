@@ -1420,7 +1420,7 @@ func TestApp_WriteToPty_RoutesToBridge(t *testing.T) {
 		bridges:  map[string]*internalpty.Bridge{"pane-ws1": br},
 		monitors: map[string]agent.Monitor{},
 	}
-	if err := a.WriteToPty("pane-ws1", []int{104, 101, 108, 108, 111}); err != nil {
+	if err := a.WriteToPty("pane-ws1", []byte("hello")); err != nil {
 		t.Fatalf("WriteToPty: %v", err)
 	}
 	mu.Lock()
@@ -1436,7 +1436,7 @@ func TestApp_WriteToPty_UnknownPane(t *testing.T) {
 		bridges:  map[string]*internalpty.Bridge{},
 		monitors: map[string]agent.Monitor{},
 	}
-	if err := a.WriteToPty("no-pane", []int{65}); err == nil {
+	if err := a.WriteToPty("no-pane", []byte("A")); err == nil {
 		t.Fatal("must error for unknown pane")
 	}
 }

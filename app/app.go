@@ -278,7 +278,7 @@ func NewApp(store *registry.Store, roots []string) *App {
 		monitors:     map[string]agent.Monitor{},
 		pending:      map[string]agent.ApprovalReq{},
 		cancels:      map[string]context.CancelFunc{},
-		spawnPty:     internalpty.Spawn,
+		spawnPty:     internalpty.SpawnBase64,
 		newMonitor:   agent.NewMonitor,
 		newWatcher:   fspkg.Watch,
 		newAdapter:   agentAdapter,
@@ -1549,9 +1549,11 @@ func (a *App) dispatchNotify(evt agent.Event) {
 	}
 }
 
-// WriteToPty forwards keystrokes (a JSON number array from xterm.js) to the
-// pane's pty. The []int→[]byte conversion is the inverse of the data pump.
-func (a *App) WriteToPty(paneID string, data []int) error {
+// WriteToPty forwards keystrokes from xterm.js to the pane's pty. Wails
+// decodes a JSON string argument into data as standard base64, the same
+// encoding pty:data uses in the other direction (internalpty.SpawnBase64);
+// a JSON number array also still decodes.
+func (a *App) WriteToPty(paneID string, data []byte) error {
 	if err := validateSessionID(paneID); err != nil {
 		return fmt.Errorf("invalid pane id: %w", err)
 	}
@@ -1561,11 +1563,7 @@ func (a *App) WriteToPty(paneID string, data []int) error {
 	if !ok {
 		return fmt.Errorf("unknown pane %q", paneID)
 	}
-	b := make([]byte, len(data))
-	for i, v := range data {
-		b[i] = byte(v)
-	}
-	_, err := br.Write(b)
+	_, err := br.Write(data)
 	return err
 }
 
