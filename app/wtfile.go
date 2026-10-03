@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 // wtFilePrefix is the asset-server path under which the image preview loads
@@ -54,7 +55,10 @@ func (a *App) worktreeFileHandler() http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		f, err := os.Open(abs)
+		// O_NONBLOCK: a FIFO named *.png must not hang this goroutine.
+		// O_NOFOLLOW: a symlink swapped in after resolvePreviewImage checked
+		// the path is refused rather than followed out of the worktree.
+		f, err := os.OpenFile(abs, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
 		if err != nil {
 			http.NotFound(w, r)
 			return

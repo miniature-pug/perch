@@ -604,13 +604,16 @@
       // the agent's own TUI) or taken away (close, reopen, reload, exit). Retract
       // its card. The same id can arrive more than once; removal is idempotent.
       if (ev.resolvedReqId) retractApproval(ev.workspaceId, ev.resolvedReqId);
+      // "approval-resolved" carries no state: nothing else to do. It is not a
+      // sign of life from a new launch either (a reopen retracts old cards).
+      if (ev.kind === "approval-resolved") return;
       // The agent is running: "Retype launch" no longer applies to this launch.
-      if (!agentReported.has(ev.workspaceId)) {
+      // An error is not proof it started: opencode reports "server did not
+      // start" while the shell is still stuck on an rc prompt.
+      if (ev.state !== "errored" && !agentReported.has(ev.workspaceId)) {
         agentReported.add(ev.workspaceId);
         clearActionForWorkspace(ev.workspaceId, "retype-launch");
       }
-      // "approval-resolved" carries no state: nothing else to do.
-      if (ev.kind === "approval-resolved") return;
       const ws = workspaces.find(w => w.id === ev.workspaceId);
       if (!ws) return;
       const prev = ws.state;

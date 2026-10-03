@@ -365,10 +365,63 @@ func TestRetypeLaunch_TypesAgainBeforeTheAgentStarts(t *testing.T) {
 	}
 	line := "\x15claude --resume abc\n"
 	h.waitWrites(t, line)
+	// Outside the dedupe window, a retype types the line again.
+	l := h.a.currentLaunch("ws-l")
+	l.mu.Lock()
+	l.typedAt = time.Now().Add(-2 * retypeDedupe)
+	l.mu.Unlock()
 	if err := h.a.RetypeLaunch("ws-l"); err != nil {
 		t.Fatal(err)
 	}
 	h.waitWrites(t, line+line)
+}
+
+// A second Retype right after a typing (double click, palette plus
+// notification) must not type the line into the agent that is starting.
+func TestRetypeLaunch_DedupesRapidRetypes(t *testing.T) {
+	h := newLaunchHarness(t)
+	if err := h.a.OpenWorkspace("ws-l"); err != nil {
+		t.Fatal(err)
+	}
+	line := "\x15claude --resume abc\n"
+	h.waitWrites(t, line)
+	if err := h.a.RetypeLaunch("ws-l"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(retypeMaxWait + 500*time.Millisecond)
+	if got := h.writes(); got != line {
+		t.Errorf("a retype inside the dedupe window typed again: %q", got)
+	}
+}
+
+// Only a real sign of life after the line was typed ends the Retype window:
+// not an event before typing (opencode's own "server did not start" while the
+// shell is stuck on an rc prompt), not an error, not an approval retraction.
+func TestNoteAgentEvent_OnlyCountsRealEventsAfterTyping(t *testing.T) {
+	a := &App{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	l := newLaunchState(ctx, nil, "claude\n")
+	a.mu.Lock()
+	a.setLaunchLocked("ws", l)
+	a.mu.Unlock()
+
+	a.noteAgentEvent(ctx, "ws", agent.Event{Kind: "state", State: agent.StateRunning})
+	if l.hasStarted() {
+		t.Fatal("an event before the line was typed marked the agent started")
+	}
+	l.mu.Lock()
+	l.typed = true
+	l.mu.Unlock()
+	a.noteAgentEvent(ctx, "ws", agent.Event{Kind: "state", State: agent.StateErrored})
+	a.noteAgentEvent(ctx, "ws", agent.Event{Kind: "approval-resolved"})
+	if l.hasStarted() {
+		t.Fatal("an error or an approval retraction marked the agent started")
+	}
+	a.noteAgentEvent(ctx, "ws", agent.Event{Kind: "state", State: agent.StateRunning})
+	if !l.hasStarted() {
+		t.Fatal("a real event after typing did not mark the agent started")
+	}
 }
 
 // The Terminal's first ResizePty must find the pane even while the fs

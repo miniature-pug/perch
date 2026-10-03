@@ -1293,7 +1293,7 @@ func (a *App) pumpEvents(wctx context.Context, id string, mon agent.Monitor) {
 			if !ok {
 				return
 			}
-			a.noteAgentEvent(wctx, id)
+			a.noteAgentEvent(wctx, id, evt)
 			a.forwardEvent(id, mon, evt)
 		}
 	}

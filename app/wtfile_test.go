@@ -5,7 +5,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/miniature-pug/perch/internal/registry"
 )
@@ -129,5 +131,23 @@ func TestWorktreeFileHandler_WorktreeOutsideRootsIsRefused(t *testing.T) {
 	a.roots = []string{t.TempDir()} // the worktree is no longer under a root
 	if rec := get(t, a.worktreeFileHandler(), http.MethodGet, "/wt-file/ws-img/a.png"); rec.Code != http.StatusNotFound {
 		t.Fatalf("status %d, want 404", rec.Code)
+	}
+}
+
+// A FIFO named like an image must not hang the handler goroutine on open.
+func TestWorktreeFileHandler_FifoDoesNotHang(t *testing.T) {
+	a, wt, _ := newWtFileTestApp(t)
+	if err := syscall.Mkfifo(filepath.Join(wt, "pipe.png"), 0o644); err != nil {
+		t.Skipf("mkfifo: %v", err)
+	}
+	done := make(chan int, 1)
+	go func() { done <- get(t, a.worktreeFileHandler(), http.MethodGet, "/wt-file/ws-img/pipe.png").Code }()
+	select {
+	case code := <-done:
+		if code != http.StatusNotFound {
+			t.Fatalf("status %d, want 404", code)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler hung opening a FIFO")
 	}
 }

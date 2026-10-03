@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/miniature-pug/perch/internal/agent"
 	fspkg "github.com/miniature-pug/perch/internal/fs"
 	internalpty "github.com/miniature-pug/perch/internal/pty"
 	"github.com/miniature-pug/perch/internal/safe"
@@ -32,6 +33,9 @@ const (
 	// ready before it types anyway: the user asked explicitly and can see
 	// the terminal.
 	retypeMaxWait = 3 * time.Second
+
+	// retypeDedupe is how soon after a typing a further Retype is refused.
+	retypeDedupe = 5 * time.Second
 
 	launchBusyTitle = "Agent didn't start"
 	launchBusyBody  = "The shell is still busy (for example a prompt in your shell startup files). " +
@@ -116,8 +120,9 @@ type launchState struct {
 	started     chan struct{} // closed on the agent's first event
 	startedOnce sync.Once
 
-	mu    sync.Mutex // serialises writes and guards typed
-	typed bool       // the launch line was typed (auto or retype)
+	mu      sync.Mutex // serialises writes and guards typed and typedAt
+	typed   bool       // the launch line was typed (auto or retype)
+	typedAt time.Time  // when it was last typed
 }
 
 func newLaunchState(ctx context.Context, br *internalpty.Bridge, cmd string) *launchState {
@@ -144,7 +149,13 @@ func (l *launchState) typeLine(force bool) bool {
 	if l.ctx.Err() != nil || l.hasStarted() || (l.typed && !force) {
 		return false
 	}
+	// A second Retype (double click, palette plus notification) right after
+	// a typing would land in the agent that is still starting up.
+	if force && l.typed && time.Since(l.typedAt) < retypeDedupe {
+		return false
+	}
 	l.typed = true
+	l.typedAt = time.Now()
 	_, _ = l.br.Write([]byte(launchKillLine + l.cmd))
 	return true
 }
@@ -226,12 +237,25 @@ func (a *App) RetypeLaunch(id string) error {
 }
 
 // noteAgentEvent records that the agent of the open bound to wctx reported
-// in, which ends the window in which RetypeLaunch is allowed.
-func (a *App) noteAgentEvent(wctx context.Context, id string) {
+// in, which ends the window in which RetypeLaunch is allowed. Only an event
+// after the launch line was typed counts, and neither an approval retraction
+// nor an error does: opencode's monitor reports "server did not start" on its
+// own when the shell is still stuck on an rc prompt, and that must not block
+// the launch line from ever being typed.
+func (a *App) noteAgentEvent(wctx context.Context, id string, evt agent.Event) {
+	if evt.Kind == "approval-resolved" || evt.State == agent.StateErrored {
+		return
+	}
 	a.mu.Lock()
 	l := a.launches[id]
 	a.mu.Unlock()
-	if l != nil && l.ctx == wctx {
+	if l == nil || l.ctx != wctx {
+		return
+	}
+	l.mu.Lock()
+	typed := l.typed
+	l.mu.Unlock()
+	if typed {
 		l.markStarted()
 	}
 }
