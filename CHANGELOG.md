@@ -84,6 +84,23 @@ tagged a release yet, so everything to date sits under Unreleased.
   crashes, distinct from a running or errored one.
 - First-run guidance on the empty screen: what a session needs, a plain-word
   note on worktrees, and a pointer to `perch doctor` and the usage guide.
+- `perch install-desktop` installs the perch icon and a `perch.desktop` entry
+  for the running binary under `~/.local/share` (or `$XDG_DATA_HOME`), then
+  refreshes the icon theme and desktop database. A release binary now gets the
+  perch dock icon on GNOME Wayland instead of the generic one. It bumps the
+  theme directory and refreshes only an existing icon cache. It never creates
+  a cache, because a new user-level cache would hide icons that other apps add
+  later.
+- `install.sh --upgrade` replaces an installed perch with the newest stable
+  release. Release mode downloads `perch-linux-<arch>` and verifies it against
+  `SHA256SUMS`. Source mode checks out and builds the newest `v*` tag. It runs
+  its prerequisite checks first, and it returns the clone to your branch if
+  the build fails. It refuses to run as root in a clone another user owns.
+  Both modes smoke-test the new binary before the swap and keep the previous
+  one as `perch.prev`. Both print the old and new versions, and warn when
+  perch is still running or another `perch` shadows it on `PATH`. A source
+  build that reports a commit hash is compared through git ancestry, never as
+  a number.
 
 ### Changed
 
@@ -114,6 +131,23 @@ tagged a release yet, so everything to date sits under Unreleased.
 
 ### Fixed
 
+- The documented release install left GNOME's generic icon in the dock, because
+  nothing installed a `perch.desktop` entry. The README now runs `perch
+  install-desktop` after placing the binary at `~/.local/bin/perch`. For
+  v0.1.0, which predates the subcommand, it gives an `install.sh` or manual
+  fallback.
+- `install.sh` wrote the desktop entry without refreshing the desktop
+  database, and under `sudo` it wrote the entry into root's home. It now
+  refreshes the desktop database and installs the entry for the user who ran
+  `sudo`. Its `Exec=` line now escapes quotes, backslashes, and `$` as the
+  Desktop Entry spec requires. It skips, with a warning, a path containing
+  `%`, which GNOME cannot launch.
+- `make desktop` created a user-level GTK icon cache, which hid icons other
+  apps installed later. It now only bumps the theme directory and refreshes a
+  cache that already exists.
+- Tag builds stamp the exact tag into `perch version`, and the release
+  workflow checks that line exactly. Before, `git describe` could pick an
+  annotated pre-release tag on the same commit.
 - A double approval prompt and a stuck approval card for opencode. opencode's
   `attach` terminal runs its own permission prompt that perch cannot suppress,
   and opencode emits no resolution event when you answer it, so perch's own card

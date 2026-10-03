@@ -79,7 +79,11 @@ desktop:              ## Install a user .desktop entry and icon. GNOME on Waylan
 	@mkdir -p $(HOME)/.local/share/icons/hicolor/512x512/apps $(HOME)/.local/share/applications
 	@cp app/appicon.png $(HOME)/.local/share/icons/hicolor/512x512/apps/perch.png
 	@printf '[Desktop Entry]\nType=Application\nName=perch\nComment=Cockpit for AI coding agents\nExec=%s\nIcon=perch\nTerminal=false\nCategories=Development;\nStartupWMClass=perch\n' "$(abspath $(BIN_DIR)/$(BIN))" > $(HOME)/.local/share/applications/perch.desktop
-	@command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -f -t $(HOME)/.local/share/icons/hicolor >/dev/null 2>&1 || true
+	@# Bump the theme dir mtime and refresh only an existing icon cache, as
+	@# xdg-icon-resource does. Creating a new user-level cache would hide icons
+	@# other apps add later (GTK checks a cache against the dir mtime only).
+	@touch $(HOME)/.local/share/icons/hicolor
+	@if [ -f $(HOME)/.local/share/icons/hicolor/icon-theme.cache ] && command -v gtk-update-icon-cache >/dev/null 2>&1; then gtk-update-icon-cache -f -t $(HOME)/.local/share/icons/hicolor >/dev/null 2>&1 || true; fi
 	@command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database $(HOME)/.local/share/applications >/dev/null 2>&1 || true
 	@echo "==> installed perch.desktop (StartupWMClass=perch). Log out/in if the icon does not refresh."
 
