@@ -19,7 +19,10 @@ echo "${FILE_OUTPUT}" | grep -q "executable" || { echo "ERROR: not executable" >
 # The production build must link WebKitGTK 4.1 (the webkit2_41 tag). A build
 # without the tag, or against the end-of-life 4.0, fails here instead of at
 # the first launch.
-if ! ldd "${BIN}" 2>/dev/null | grep -q 'libwebkit2gtk-4\.1'; then
+# Capture ldd first: under pipefail, grep -q exiting early can SIGPIPE ldd and
+# fail the pipeline on a good binary.
+LDD_OUTPUT="$(ldd "${BIN}" 2>/dev/null || true)"
+if ! grep -q 'libwebkit2gtk-4\.1' <<<"${LDD_OUTPUT}"; then
   echo "ERROR: binary does not link libwebkit2gtk-4.1" >&2; exit 1
 fi
 
