@@ -132,6 +132,12 @@ jobs:
           path: /tmp/perch-dev-image.tar
           key: ${{ steps.img-cache.outputs.cache-primary-key }}
 
+      # The tarball is redundant once saved. Remove it so it does not occupy
+      # disk through the test gates.
+      - name: Remove perch-dev image tarball
+        if: steps.img-cache.outputs.cache-hit != 'true'
+        run: rm -f /tmp/perch-dev-image.tar
+
       # The full contributor gate: test, test-integration, test-front, lint,
       # vet, vulncheck, test-e2e. Each runs in its own perch-dev container
       # with the right masks.
