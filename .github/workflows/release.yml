@@ -48,7 +48,28 @@ jobs:
     runs-on: ${{ matrix.runner }}
     # Fail fast on a hung step instead of running to the 6-hour default.
     timeout-minutes: 45
+    permissions:
+      contents: read
+      # Read the CI check run of the tagged commit (gate step below).
+      checks: read
     steps:
+      # A tag push must not publish a commit that never passed CI. The CI
+      # workflow's `gate` job is the required check, so require a successful
+      # run of it on this exact commit. If the tag was pushed before CI
+      # finished, wait for CI and re-run this workflow.
+      - name: Require a passing CI gate on the tagged commit
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          conclusion="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100" \
+            --jq '[.check_runs[] | select(.name == "gate" or .name == "CI / gate")] | sort_by(.completed_at) | last | .conclusion // "none"')"
+          echo "CI gate conclusion for ${GITHUB_SHA}: ${conclusion}"
+          if [ "${conclusion}" != "success" ]; then
+            echo "::error::CI gate has not passed on ${GITHUB_SHA} (${conclusion}). Refusing to release."
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@v7
         with:
@@ -93,7 +114,14 @@ jobs:
           # Check that the tag flowed into the binary version. Run inside
           # perch-dev, which has the WebKitGTK runtime libraries the binary
           # links against, on this runner's own architecture.
-          bash containers/run.sh dev ./bin/perch version
+          out="$(bash containers/run.sh dev ./bin/perch version)"
+          echo "$out"
+          # Only a tag run must carry the tag. A workflow_dispatch dry run
+          # builds an arbitrary ref.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            printf '%s\n' "$out" | grep -F -- "${GITHUB_REF_NAME}" \
+              || { echo "::error::perch version does not report ${GITHUB_REF_NAME}"; exit 1; }
+          fi
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
@@ -156,3 +184,5 @@ jobs:
             dist/SHA256SUMS
           fail_on_unmatched_files: true
           generate_release_notes: true
+          # A tag with a pre-release suffix (v1.0.0-rc1) is not a stable release.
+          prerelease: ${{ contains(github.ref_name, '-') }}

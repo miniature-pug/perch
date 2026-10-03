@@ -88,42 +88,56 @@ jobs:
         with:
           go-version: ${{ steps.tools.outputs.go }}
 
-      # Cache the built perch-dev image as a tarball. The cache rebuilds the
-      # image only when the Containerfile, the pinned versions, the frontend
-      # lockfile, or the Makefile change. On a cache hit, the loaded image
-      # already satisfies `make image`: its `podman image exists` guard skips
-      # the build, so the gate reuses the loaded image instead of rebuilding
-      # it. On a cache miss, the image builds fresh and saves for next time.
-      # Caching affects speed only, never correctness.
-      - name: Cache perch-dev image
+      # Cache the built perch-dev image as a tarball. The key hashes only what
+      # the image build reads: the Containerfile, the pinned versions in
+      # .tool-versions, the frontend lockfile (Playwright), and the
+      # golangci-lint and govulncheck pins in the Makefile. An unrelated
+      # Makefile edit does not bust the cache. Caching affects speed only,
+      # never correctness: on a hit, the loaded image satisfies `make image`
+      # through its `podman image exists` guard.
+      #
+      # Restore and save are separate steps on purpose. The save step runs right
+      # after the image build, before the gates, so a failing gate (the common
+      # state of a pull request) still seeds the cache for the next push.
+      - name: Compute image cache key inputs
+        id: imgkey
+        run: echo "tools=$(grep -E '^(GOLANGCI|GOVULN)[[:space:]]*:?=' Makefile | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore perch-dev image cache
         id: img-cache
-        uses: actions/cache@v6
+        uses: actions/cache/restore@v6
         with:
           path: /tmp/perch-dev-image.tar
-          key: perch-dev-${{ runner.os }}-${{ hashFiles('containers/dev/Containerfile', '.tool-versions', 'frontend/package-lock.json', 'Makefile') }}
+          key: perch-dev-${{ runner.os }}-${{ hashFiles('containers/dev/Containerfile', '.tool-versions', 'frontend/package-lock.json') }}-${{ steps.imgkey.outputs.tools }}
 
       - name: Load cached perch-dev image
         if: steps.img-cache.outputs.cache-hit == 'true'
         run: |
           podman load -i /tmp/perch-dev-image.tar
           # The tarball is redundant once loaded. Remove it to reclaim disk.
-          # The cache key already exists, so actions/cache does not re-save it.
           rm -f /tmp/perch-dev-image.tar
+
+      # Build the image (a no-op when the cache loaded it).
+      - name: Build perch-dev image
+        run: make image
+
+      - name: Export perch-dev image for cache
+        if: steps.img-cache.outputs.cache-hit != 'true'
+        run: podman save -o /tmp/perch-dev-image.tar perch-dev:latest
+
+      - name: Save perch-dev image cache
+        if: steps.img-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: /tmp/perch-dev-image.tar
+          key: ${{ steps.img-cache.outputs.cache-primary-key }}
 
       # The full contributor gate: test, test-integration, test-front, lint,
       # vet, vulncheck, test-e2e. Each runs in its own perch-dev container
-      # with the right masks. `make test-all` builds the image, through its
-      # `make image` order-only prerequisite, if the image is not already
-      # present.
+      # with the right masks.
       - name: make test-all
         run: make test-all
 
       # This runs `go mod verify` against go.sum directly, like a contributor's `make verify`.
       - name: make verify
         run: make verify
-
-      # On a cache miss, save the freshly built image, so the cache post-step
-      # uploads it under the key computed above.
-      - name: Save perch-dev image for cache
-        if: steps.img-cache.outputs.cache-hit != 'true'
-        run: podman save -o /tmp/perch-dev-image.tar perch-dev:latest
