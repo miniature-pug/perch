@@ -3,8 +3,9 @@
 # Changelog
 
 This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
-and [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Perch has not
-tagged a release yet, so everything to date sits under Unreleased.
+and [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The only
+published release so far is v0.1.0 on GitHub, which predates most of the
+entries below; they sit under Unreleased until the next tag.
 
 ## [Unreleased]
 
