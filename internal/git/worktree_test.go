@@ -111,7 +111,7 @@ func TestAddWorktree_ValidBase_StillWorks(t *testing.T) {
 	for _, base := range validBases {
 		t.Run(base, func(t *testing.T) {
 			r := proc.NewFakeRunner()
-			wantArgs := []string{"-C", "/repos/proj", "worktree", "add", "-b", "perch/feat-x", "/repos/proj__worktrees/feat-x", base}
+			wantArgs := []string{"-C", "/repos/proj", "worktree", "add", "-b", "perch/feat-x", "--", "/repos/proj__worktrees/feat-x", base}
 			r.Respond(proc.FakeResult{}, "git", wantArgs...)
 
 			err := AddWorktree(context.Background(), r,
@@ -119,8 +119,9 @@ func TestAddWorktree_ValidBase_StillWorks(t *testing.T) {
 			if err != nil {
 				t.Fatalf("AddWorktree with valid base=%q returned unexpected error: %v", base, err)
 			}
-			if len(r.Calls) != 1 {
-				t.Fatalf("want exactly 1 git call for valid base=%q, got %d", base, len(r.Calls))
+			// One branch-existence probe, then the worktree add.
+			if len(r.Calls) != 2 {
+				t.Fatalf("want exactly 2 git calls for valid base=%q, got %d", base, len(r.Calls))
 			}
 		})
 	}
@@ -250,12 +251,12 @@ func TestAddWorktree_CallArgs(t *testing.T) {
 		{
 			name:     "base HEAD",
 			base:     "HEAD",
-			wantArgs: []string{"-C", "/repos/proj", "worktree", "add", "-b", "feat-x", "/repos/proj__worktrees/feat-x", "HEAD"},
+			wantArgs: []string{"-C", "/repos/proj", "worktree", "add", "-b", "feat-x", "--", "/repos/proj__worktrees/feat-x", "HEAD"},
 		},
 		{
 			name:     "base main",
 			base:     "main",
-			wantArgs: []string{"-C", "/repos/proj", "worktree", "add", "-b", "feat-x", "/repos/proj__worktrees/feat-x", "main"},
+			wantArgs: []string{"-C", "/repos/proj", "worktree", "add", "-b", "feat-x", "--", "/repos/proj__worktrees/feat-x", "main"},
 		},
 	}
 
@@ -270,32 +271,57 @@ func TestAddWorktree_CallArgs(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 
-			if len(r.Calls) != 1 {
-				t.Fatalf("want 1 call, got %d", len(r.Calls))
+			if len(r.Calls) != 2 {
+				t.Fatalf("want 2 calls (branch probe, worktree add), got %d", len(r.Calls))
+			}
+			probe := proc.Call{Name: "git", Args: []string{"-C", "/repos/proj", "rev-parse", "--verify", "--quiet", "refs/heads/feat-x"}}
+			if !reflect.DeepEqual(r.Calls[0], probe) {
+				t.Errorf("Calls[0] = %+v, want %+v", r.Calls[0], probe)
 			}
 			want := proc.Call{Name: "git", Args: tt.wantArgs}
-			if !reflect.DeepEqual(r.Calls[0], want) {
-				t.Errorf("Calls[0] = %+v, want %+v", r.Calls[0], want)
+			if !reflect.DeepEqual(r.Calls[1], want) {
+				t.Errorf("Calls[1] = %+v, want %+v", r.Calls[1], want)
 			}
 		})
 	}
 }
 
 func TestAddWorktree_BranchExists(t *testing.T) {
-	// Real git stderr: "fatal: a branch named 'feat/test' already exists"
+	// The probe finds refs/heads/feat-x, so AddWorktree never runs worktree add.
 	r := proc.NewFakeRunner()
-	r.Respond(proc.FakeResult{
-		Stderr: []byte("fatal: a branch named 'feat-x' already exists"),
-		Err:    proc.FakeExitError{Code: 128},
-	}, "git", "-C", "/repos/proj", "worktree", "add", "-b", "feat-x", "/repos/proj__worktrees/feat-x", "HEAD")
+	r.Respond(proc.FakeResult{Stdout: []byte("abc123\n")},
+		"git", "-C", "/repos/proj", "rev-parse", "--verify", "--quiet", "refs/heads/feat-x")
 
 	err := AddWorktree(context.Background(), r, "/repos/proj", "feat-x",
 		"/repos/proj__worktrees/feat-x", "HEAD")
 
-	if err == nil {
-		t.Fatal("want error, got nil")
-	}
 	if !errors.Is(err, ErrBranchExists) {
 		t.Errorf("errors.Is(err, ErrBranchExists) = false; err = %v", err)
+	}
+	if len(r.Calls) != 1 {
+		t.Errorf("want only the probe call, got %+v", r.Calls)
+	}
+}
+
+func TestAddWorktree_BranchCreatedConcurrently(t *testing.T) {
+	// The probe misses the branch, but git then reports it exists: another
+	// process created it in between. That branch is not ours to delete.
+	r := proc.NewFakeRunner()
+	r.Respond(proc.FakeResult{Err: proc.FakeExitError{Code: 1}},
+		"git", "-C", "/repos/proj", "rev-parse", "--verify", "--quiet", "refs/heads/feat-x")
+	r.Respond(proc.FakeResult{
+		Stderr: []byte("fatal: a branch named 'feat-x' already exists"),
+		Err:    proc.FakeExitError{Code: 128},
+	}, "git", "-C", "/repos/proj", "worktree", "add", "-b", "feat-x", "--", "/repos/proj__worktrees/feat-x", "HEAD")
+
+	err := AddWorktree(context.Background(), r, "/repos/proj", "feat-x",
+		"/repos/proj__worktrees/feat-x", "HEAD")
+	if !errors.Is(err, ErrBranchExists) {
+		t.Errorf("errors.Is(err, ErrBranchExists) = false; err = %v", err)
+	}
+	for _, c := range r.Calls {
+		if len(c.Args) > 2 && c.Args[2] == "branch" {
+			t.Errorf("AddWorktree must not delete a branch it did not create: %+v", c)
+		}
 	}
 }

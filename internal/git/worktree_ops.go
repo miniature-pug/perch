@@ -44,7 +44,7 @@ func HasCommits(ctx context.Context, r proc.Runner, repoRoot string) (bool, erro
 	return true, nil
 }
 
-// AddWorktreeExisting runs `git -C <repoRoot> worktree add <treePath> <branch>`.
+// AddWorktreeExisting runs `git -C <repoRoot> worktree add -- <treePath> <branch>`.
 // It checks out an existing branch into a new linked worktree (no -b; the branch
 // must already exist). AddWorktreeExisting validates branch with ValidRef for
 // flag-injection parity with AddWorktree.
@@ -52,7 +52,7 @@ func AddWorktreeExisting(ctx context.Context, r proc.Runner, repoRoot, branch, t
 	if err := ValidRef(branch); err != nil {
 		return fmt.Errorf("git: AddWorktreeExisting: invalid branch: %w: %w", ErrInvalidRef, err)
 	}
-	_, stderr, err := r.Run(ctx, "git", "-C", repoRoot, "worktree", "add", treePath, branch)
+	_, stderr, err := r.Run(ctx, "git", "-C", repoRoot, "worktree", "add", "--", treePath, branch)
 	if err != nil {
 		msg := string(bytes.TrimSpace(stderr))
 		if msg != "" {
@@ -83,6 +83,24 @@ func RemoveWorktree(ctx context.Context, r proc.Runner, repoRoot, treePath strin
 	return nil
 }
 
+// PruneWorktrees runs `git -C <repoRoot> worktree prune`, which drops git's
+// administrative records for linked worktrees whose directories no longer
+// exist. Until they are pruned, git still treats the branch of a deleted
+// worktree as checked out ("is already used by worktree at ..."), and
+// refuses to add a new worktree at the old path ("is a missing but already
+// registered worktree"). Locked worktrees are never pruned.
+func PruneWorktrees(ctx context.Context, r proc.Runner, repoRoot string) error {
+	_, stderr, err := r.Run(ctx, "git", "-C", repoRoot, "worktree", "prune")
+	if err != nil {
+		msg := string(bytes.TrimSpace(stderr))
+		if msg != "" {
+			return fmt.Errorf("git: worktree prune %s: %w (stderr: %s)", repoRoot, err, msg)
+		}
+		return fmt.Errorf("git: worktree prune %s: %w", repoRoot, err)
+	}
+	return nil
+}
+
 // WorktreeDirty reports whether the working tree at treePath has any uncommitted
 // changes. It runs `git -C <treePath> status --porcelain`. Non-empty output means dirty.
 func WorktreeDirty(ctx context.Context, r proc.Runner, treePath string) (bool, error) {
@@ -103,6 +121,10 @@ func WorktreeDirty(ctx context.Context, r proc.Runner, treePath string) (bool, e
 // leading "* " marker on the current branch that `git branch --merged` emits
 // in default format. BranchMerged validates both branch and base with
 // ValidRef for flag-injection parity.
+//
+// %(refname:short) prints "heads/<branch>" instead of "<branch>" when a tag
+// or remote-tracking ref shares the branch's name, so BranchMerged accepts
+// both spellings.
 func BranchMerged(ctx context.Context, r proc.Runner, repoRoot, branch, base string) (bool, error) {
 	if err := ValidRef(branch); err != nil {
 		return false, fmt.Errorf("git: BranchMerged: invalid branch: %w: %w", ErrInvalidRef, err)
@@ -120,7 +142,7 @@ func BranchMerged(ctx context.Context, r proc.Runner, repoRoot, branch, base str
 		return false, fmt.Errorf("git: branch --merged %s %s: %w", repoRoot, base, err)
 	}
 	for _, line := range strings.Split(string(stdout), "\n") {
-		if strings.TrimSpace(line) == branch {
+		if l := strings.TrimSpace(line); l == branch || l == "heads/"+branch {
 			return true, nil
 		}
 	}
@@ -165,15 +187,21 @@ func CurrentBranch(ctx context.Context, r proc.Runner, repoRoot string) (string,
 	return string(bytes.TrimSpace(stdout)), nil
 }
 
-// CheckoutBranch runs `git -C <repoRoot> checkout <branch>`. git fails (and
-// returns a non-zero exit) if the current working tree has changes that conflict
-// with the target branch. CheckoutBranch validates branch with ValidRef for
-// flag-injection parity.
+// CheckoutBranch runs `git -C <repoRoot> switch --no-guess <branch>`. git
+// fails (and returns a non-zero exit) if the current working tree has
+// changes that conflict with the target branch. CheckoutBranch validates
+// branch with ValidRef for flag-injection parity.
+//
+// `git switch` only ever switches to a local branch. `git checkout <name>`
+// would instead restore a FILE called <name> when no such branch exists, or
+// detach HEAD at a tag or commit, and still exit 0, so the caller would
+// record a branch that is not checked out. --no-guess also stops git from
+// silently creating a local branch from a same-named remote branch.
 func CheckoutBranch(ctx context.Context, r proc.Runner, repoRoot, branch string) error {
 	if err := ValidRef(branch); err != nil {
 		return fmt.Errorf("git: CheckoutBranch: invalid branch: %w: %w", ErrInvalidRef, err)
 	}
-	_, stderr, err := r.Run(ctx, "git", "-C", repoRoot, "checkout", branch)
+	_, stderr, err := r.Run(ctx, "git", "-C", repoRoot, "switch", "--no-guess", branch)
 	if err != nil {
 		msg := string(bytes.TrimSpace(stderr))
 		if msg != "" {
