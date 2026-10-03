@@ -17,7 +17,7 @@ set -euo pipefail
 # toolchain, so a masked path stays empty unless the run writes to it:
 #   - frontend/node_modules : always masked. The host copy is built for the
 #     host OS, so the container runs `npm ci` again into the empty volume.
-#   - frontend/dist         : masked only when PERCH_MASK_DIST is set, for
+#   - frontend/dist         : masked only when PERCH_MASK_DIST=1, for
 #     the frontend-building targets that run `vite build`. Go targets must
 #     not mask this path, or `//go:embed frontend/dist` finds an empty
 #     directory and the build fails. By default the path stays unmasked: the
@@ -31,10 +31,15 @@ if [ "$#" -lt 2 ]; then
 fi
 
 image="$1"; shift
-ROOT="$(git rev-parse --show-toplevel)"
+# The repo root is the parent of containers/, found without git (a tarball has no .git).
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # An opt-in dist mask, set by test-e2e and gui-build in the Makefile.
-mask_dist=${PERCH_MASK_DIST:+-v /work/frontend/dist}
+# Only the value 1 enables it, so PERCH_MASK_DIST=0 really means "no mask".
+mask_dist=""
+if [ "${PERCH_MASK_DIST:-0}" = "1" ]; then
+  mask_dist="-v /work/frontend/dist"
+fi
 
 # Allocate a TTY only when attached to one, so pipelines (no TTY) still work.
 tty_flags=""
@@ -44,11 +49,14 @@ fi
 
 # :Z requests an SELinux relabel. On this AppArmor host, the relabel request
 # is a harmless no-op: the request touches xattrs only, never file content.
-# The go-build cache persists between runs for speed.
+# The go-build cache and the npm download cache persist between runs for
+# speed. The npm cache is what lets the per-run `npm ci` into the masked
+# node_modules volume skip the network.
 exec podman run --rm $tty_flags \
   -v "$ROOT":/work:Z \
   -v /work/frontend/node_modules \
   $mask_dist \
   -v perch-go-build:/root/.cache/go-build \
+  -v perch-npm-cache:/root/.npm \
   -w /work \
   "perch-${image}:latest" "$@"

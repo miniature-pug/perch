@@ -61,7 +61,7 @@ run: build            ## Build, then run. This needs an X or Wayland display for
 	@$(BIN_DIR)/$(BIN)
 
 gui-build:            ## Build the production GUI binary: the frontend build, then go build -tags '$(TAGS)'.
-	npm --prefix frontend ci
+	npm --prefix frontend ci --prefer-offline
 	npm --prefix frontend run build
 	@mkdir -p $(BIN_DIR)
 	@go build -tags '$(TAGS)' -trimpath -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/$(BIN) ./cmd/perch
@@ -107,8 +107,8 @@ $(DZ): | image
 else
 test:             ; go test -race -count=1 $(PKG)
 test-integration: ; go test -race -count=1 -tags=integration $(PKG)
-test-front:       ; npm --prefix frontend ci && npm --prefix frontend audit --omit=dev --audit-level=high && npm --prefix frontend run check && npm --prefix frontend test
-test-e2e:         ; npm --prefix frontend ci && npm --prefix frontend run test:e2e
+test-front:       ; npm --prefix frontend ci --prefer-offline && npm --prefix frontend audit --omit=dev --audit-level=high && npm --prefix frontend run check && npm --prefix frontend test
+test-e2e:         ; npm --prefix frontend ci --prefer-offline && npm --prefix frontend run test:e2e
 lint:             ; golangci-lint run
 vet:              ; go vet $(PKG)
 vulncheck:        ; govulncheck ./...
