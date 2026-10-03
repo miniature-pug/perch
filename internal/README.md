@@ -9,7 +9,7 @@ exposes them to the frontend. For how the packages interact, see
 | Package | What it owns | Notable exports |
 |---------|--------------|-----------------|
 | `pty` | One direct pseudo-terminal per pane, with no multiplexer. Runs a login shell, forwards output as Wails events, and routes keystrokes and resize back. | `Bridge`, `Spawn`, `LoginShellArgv` |
-| `registry` | The thread-safe, file-backed session registry under the XDG config directory, with atomic writes. | `Store` (`Load`, `List`, `Get`, `Upsert`, `Remove`), `Workspace`, `DefaultConfigDir`, `ConfigDirMode` |
+| `registry` | The thread-safe, file-backed session registry under the XDG config directory, with atomic writes. | `Store` (`Load`, `List`, `Get`, `Upsert`, `Update`, `Remove`), `ErrNotFound`, `Workspace`, `DefaultConfigDir`, `ConfigDirMode` |
 | `git` | git operations behind a `proc.Runner`: ref validation, worktree management, and diff and hunk staging. | `ValidRef`, `AddWorktree`, `AddWorktreeExisting`, `RemoveWorktree`, `WorktreeDirty`, `BranchMerged`, `DiffStat`, `Hunks`, `StageHunk`, `DiscardHunk`, and the `Err*` sentinels |
 | `agent` | The Monitor and Adapter seams, with concrete monitors for the two agents. | `Monitor`, `Adapter`, `NewMonitor`, `NewClaude`, `NewOpencode`, `State`, `Caps`, `Event` |
 | `hooklistener` | The per-session loopback listener that receives Claude hook posts and blocks `PreToolUse` until a verdict. | `Listener`, `New`, `LoopbackHost`, `HookEvent`, `Decision` |
