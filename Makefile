@@ -128,7 +128,13 @@ coverage:             ## Show a coverage report for the internal/ packages.
 	@go tool cover -func=coverage.out | tail -1
 
 fmt:                  ## Run gofmt and goimports.
-	@files=$$(find . -path ./vendor -prune -o -path ./frontend/node_modules -prune -o -name '*.go' -print) && gofmt -w $$files && (command -v goimports >/dev/null && goimports -w $$files || true)
+	@if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
+		gofiles() { git ls-files -z '*.go' ':!:vendor/**'; }; \
+	else \
+		gofiles() { find . \( -name vendor -o -name node_modules -o \( -name '.*' ! -name . \) \) -prune -o -name '*.go' -print0; }; \
+	fi; \
+	gofiles | xargs -0 -r gofmt -w; \
+	if command -v goimports >/dev/null; then gofiles | xargs -0 -r goimports -w; fi
 
 tidy:                 ## Tidy go.mod and go.sum, then refresh the vendor tree.
 	@GOFLAGS= go mod tidy && go mod vendor
