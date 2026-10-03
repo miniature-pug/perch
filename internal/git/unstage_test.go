@@ -35,10 +35,12 @@ func TestUnstageHunk_GoesToRunnerSeam(t *testing.T) {
 	// Resolving the merged index reads the working-tree diff too; it is empty here
 	// so the only hunk is the staged one at merged index 0.
 	r.Respond(proc.FakeResult{Stdout: []byte("")},
-		"git", "-C", "/repo", "diff", "--unified=3", "--no-color", "--", "f.txt")
+		"git", "-C", "/repo", "diff", "--unified=3", "--no-color", "--no-ext-diff", "--no-textconv",
+		"--src-prefix=a/", "--dst-prefix=b/", "--", ":(literal)f.txt")
 	// The staged hunk is located in `git diff --cached ...` output by header match.
 	r.Respond(proc.FakeResult{Stdout: []byte(cachedDiff)},
-		"git", "-C", "/repo", "diff", "--cached", "--unified=3", "--no-color", "--", "f.txt")
+		"git", "-C", "/repo", "diff", "--cached", "--unified=3", "--no-color", "--no-ext-diff", "--no-textconv",
+		"--src-prefix=a/", "--dst-prefix=b/", "--", ":(literal)f.txt")
 	// The apply must be `git apply --reverse --cached -`.
 	r.Respond(proc.FakeResult{}, "git", "apply", "--reverse", "--cached", "-")
 

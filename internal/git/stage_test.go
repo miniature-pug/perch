@@ -237,7 +237,8 @@ func TestStageHunk_GoesToRunnerSeam(t *testing.T) {
 	r := proc.NewFakeRunner()
 	// git diff call returns the canned diff.
 	r.Respond(proc.FakeResult{Stdout: []byte(diffOut)},
-		"git", "-C", "/repo", "diff", "--unified=3", "--no-color", "--", "f.txt")
+		"git", "-C", "/repo", "diff", "--unified=3", "--no-color", "--no-ext-diff", "--no-textconv",
+		"--src-prefix=a/", "--dst-prefix=b/", "--", ":(literal)f.txt")
 	// git apply call succeeds (empty stdout/stderr, no error).
 	r.Respond(proc.FakeResult{}, "git", "apply", "--cached", "-")
 
